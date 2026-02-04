@@ -1,0 +1,592 @@
+//! Workflow repository for database operations
+
+use crate::models::{enums::ExecutionStatus, workflow::*, Id, JsonDict, JsonSchema};
+use crate::Result;
+use sqlx::{Executor, Postgres, QueryBuilder};
+
+use super::{Create, Delete, FindById, FindByRef, List, Repository, Update};
+
+// ============================================================================
+// WORKFLOW DEFINITION REPOSITORY
+// ============================================================================
+
+pub struct WorkflowDefinitionRepository;
+
+impl Repository for WorkflowDefinitionRepository {
+    type Entity = WorkflowDefinition;
+    fn table_name() -> &'static str {
+        "workflow_definition"
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateWorkflowDefinitionInput {
+    pub r#ref: String,
+    pub pack: Id,
+    pub pack_ref: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub version: String,
+    pub param_schema: Option<JsonSchema>,
+    pub out_schema: Option<JsonSchema>,
+    pub definition: JsonDict,
+    pub tags: Vec<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct UpdateWorkflowDefinitionInput {
+    pub label: Option<String>,
+    pub description: Option<String>,
+    pub version: Option<String>,
+    pub param_schema: Option<JsonSchema>,
+    pub out_schema: Option<JsonSchema>,
+    pub definition: Option<JsonDict>,
+    pub tags: Option<Vec<String>>,
+    pub enabled: Option<bool>,
+}
+
+#[async_trait::async_trait]
+impl FindById for WorkflowDefinitionRepository {
+    async fn find_by_id<'e, E>(executor: E, id: i64) -> Result<Option<Self::Entity>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowDefinition>(
+            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated
+             FROM workflow_definition
+             WHERE id = $1"
+        )
+        .bind(id)
+        .fetch_optional(executor)
+        .await
+        .map_err(Into::into)
+    }
+}
+
+#[async_trait::async_trait]
+impl FindByRef for WorkflowDefinitionRepository {
+    async fn find_by_ref<'e, E>(executor: E, ref_str: &str) -> Result<Option<Self::Entity>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowDefinition>(
+            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated
+             FROM workflow_definition
+             WHERE ref = $1"
+        )
+        .bind(ref_str)
+        .fetch_optional(executor)
+        .await
+        .map_err(Into::into)
+    }
+}
+
+#[async_trait::async_trait]
+impl List for WorkflowDefinitionRepository {
+    async fn list<'e, E>(executor: E) -> Result<Vec<Self::Entity>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowDefinition>(
+            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated
+             FROM workflow_definition
+             ORDER BY created DESC
+             LIMIT 1000"
+        )
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+}
+
+#[async_trait::async_trait]
+impl Create for WorkflowDefinitionRepository {
+    type CreateInput = CreateWorkflowDefinitionInput;
+
+    async fn create<'e, E>(executor: E, input: Self::CreateInput) -> Result<Self::Entity>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowDefinition>(
+            "INSERT INTO workflow_definition
+             (ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             RETURNING id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated"
+        )
+        .bind(&input.r#ref)
+        .bind(input.pack)
+        .bind(&input.pack_ref)
+        .bind(&input.label)
+        .bind(&input.description)
+        .bind(&input.version)
+        .bind(&input.param_schema)
+        .bind(&input.out_schema)
+        .bind(&input.definition)
+        .bind(&input.tags)
+        .bind(input.enabled)
+        .fetch_one(executor)
+        .await
+        .map_err(Into::into)
+    }
+}
+
+#[async_trait::async_trait]
+impl Update for WorkflowDefinitionRepository {
+    type UpdateInput = UpdateWorkflowDefinitionInput;
+
+    async fn update<'e, E>(executor: E, id: i64, input: Self::UpdateInput) -> Result<Self::Entity>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let mut query = QueryBuilder::new("UPDATE workflow_definition SET ");
+        let mut has_updates = false;
+
+        if let Some(label) = &input.label {
+            query.push("label = ").push_bind(label);
+            has_updates = true;
+        }
+        if let Some(description) = &input.description {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("description = ").push_bind(description);
+            has_updates = true;
+        }
+        if let Some(version) = &input.version {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("version = ").push_bind(version);
+            has_updates = true;
+        }
+        if let Some(param_schema) = &input.param_schema {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("param_schema = ").push_bind(param_schema);
+            has_updates = true;
+        }
+        if let Some(out_schema) = &input.out_schema {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("out_schema = ").push_bind(out_schema);
+            has_updates = true;
+        }
+        if let Some(definition) = &input.definition {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("definition = ").push_bind(definition);
+            has_updates = true;
+        }
+        if let Some(tags) = &input.tags {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("tags = ").push_bind(tags);
+            has_updates = true;
+        }
+        if let Some(enabled) = input.enabled {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("enabled = ").push_bind(enabled);
+            has_updates = true;
+        }
+
+        if !has_updates {
+            return Self::get_by_id(executor, id).await;
+        }
+
+        query.push(", updated = NOW() WHERE id = ").push_bind(id);
+        query.push(" RETURNING id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated");
+
+        query
+            .build_query_as::<WorkflowDefinition>()
+            .fetch_one(executor)
+            .await
+            .map_err(Into::into)
+    }
+}
+
+#[async_trait::async_trait]
+impl Delete for WorkflowDefinitionRepository {
+    async fn delete<'e, E>(executor: E, id: i64) -> Result<bool>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = sqlx::query("DELETE FROM workflow_definition WHERE id = $1")
+            .bind(id)
+            .execute(executor)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+impl WorkflowDefinitionRepository {
+    /// Find all workflows for a specific pack by pack ID
+    pub async fn find_by_pack<'e, E>(executor: E, pack_id: Id) -> Result<Vec<WorkflowDefinition>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowDefinition>(
+            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated
+             FROM workflow_definition
+             WHERE pack = $1
+             ORDER BY label"
+        )
+        .bind(pack_id)
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+
+    /// Find all workflows for a specific pack by pack reference
+    pub async fn find_by_pack_ref<'e, E>(
+        executor: E,
+        pack_ref: &str,
+    ) -> Result<Vec<WorkflowDefinition>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowDefinition>(
+            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated
+             FROM workflow_definition
+             WHERE pack_ref = $1
+             ORDER BY label"
+        )
+        .bind(pack_ref)
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+
+    /// Count workflows for a specific pack by pack reference
+    pub async fn count_by_pack<'e, E>(executor: E, pack_ref: &str) -> Result<i64>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM workflow_definition WHERE pack_ref = $1")
+                .bind(pack_ref)
+                .fetch_one(executor)
+                .await?;
+        Ok(result.0)
+    }
+
+    /// Find all enabled workflows
+    pub async fn find_enabled<'e, E>(executor: E) -> Result<Vec<WorkflowDefinition>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowDefinition>(
+            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated
+             FROM workflow_definition
+             WHERE enabled = true
+             ORDER BY label"
+        )
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+
+    /// Find workflows by tag
+    pub async fn find_by_tag<'e, E>(executor: E, tag: &str) -> Result<Vec<WorkflowDefinition>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowDefinition>(
+            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated
+             FROM workflow_definition
+             WHERE $1 = ANY(tags)
+             ORDER BY label"
+        )
+        .bind(tag)
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+}
+
+// ============================================================================
+// WORKFLOW EXECUTION REPOSITORY
+// ============================================================================
+
+pub struct WorkflowExecutionRepository;
+
+impl Repository for WorkflowExecutionRepository {
+    type Entity = WorkflowExecution;
+    fn table_name() -> &'static str {
+        "workflow_execution"
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateWorkflowExecutionInput {
+    pub execution: Id,
+    pub workflow_def: Id,
+    pub task_graph: JsonDict,
+    pub variables: JsonDict,
+    pub status: ExecutionStatus,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct UpdateWorkflowExecutionInput {
+    pub current_tasks: Option<Vec<String>>,
+    pub completed_tasks: Option<Vec<String>>,
+    pub failed_tasks: Option<Vec<String>>,
+    pub skipped_tasks: Option<Vec<String>>,
+    pub variables: Option<JsonDict>,
+    pub status: Option<ExecutionStatus>,
+    pub error_message: Option<String>,
+    pub paused: Option<bool>,
+    pub pause_reason: Option<String>,
+}
+
+#[async_trait::async_trait]
+impl FindById for WorkflowExecutionRepository {
+    async fn find_by_id<'e, E>(executor: E, id: i64) -> Result<Option<Self::Entity>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowExecution>(
+            "SELECT id, execution, workflow_def, current_tasks, completed_tasks, failed_tasks, skipped_tasks,
+                    variables, task_graph, status, error_message, paused, pause_reason, created, updated
+             FROM workflow_execution
+             WHERE id = $1"
+        )
+        .bind(id)
+        .fetch_optional(executor)
+        .await
+        .map_err(Into::into)
+    }
+}
+
+#[async_trait::async_trait]
+impl List for WorkflowExecutionRepository {
+    async fn list<'e, E>(executor: E) -> Result<Vec<Self::Entity>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowExecution>(
+            "SELECT id, execution, workflow_def, current_tasks, completed_tasks, failed_tasks, skipped_tasks,
+                    variables, task_graph, status, error_message, paused, pause_reason, created, updated
+             FROM workflow_execution
+             ORDER BY created DESC
+             LIMIT 1000"
+        )
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+}
+
+#[async_trait::async_trait]
+impl Create for WorkflowExecutionRepository {
+    type CreateInput = CreateWorkflowExecutionInput;
+
+    async fn create<'e, E>(executor: E, input: Self::CreateInput) -> Result<Self::Entity>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowExecution>(
+            "INSERT INTO workflow_execution
+             (execution, workflow_def, task_graph, variables, status)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING id, execution, workflow_def, current_tasks, completed_tasks, failed_tasks, skipped_tasks,
+                       variables, task_graph, status, error_message, paused, pause_reason, created, updated"
+        )
+        .bind(input.execution)
+        .bind(input.workflow_def)
+        .bind(&input.task_graph)
+        .bind(&input.variables)
+        .bind(input.status)
+        .fetch_one(executor)
+        .await
+        .map_err(Into::into)
+    }
+}
+
+#[async_trait::async_trait]
+impl Update for WorkflowExecutionRepository {
+    type UpdateInput = UpdateWorkflowExecutionInput;
+
+    async fn update<'e, E>(executor: E, id: i64, input: Self::UpdateInput) -> Result<Self::Entity>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let mut query = QueryBuilder::new("UPDATE workflow_execution SET ");
+        let mut has_updates = false;
+
+        if let Some(current_tasks) = &input.current_tasks {
+            query.push("current_tasks = ").push_bind(current_tasks);
+            has_updates = true;
+        }
+        if let Some(completed_tasks) = &input.completed_tasks {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("completed_tasks = ").push_bind(completed_tasks);
+            has_updates = true;
+        }
+        if let Some(failed_tasks) = &input.failed_tasks {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("failed_tasks = ").push_bind(failed_tasks);
+            has_updates = true;
+        }
+        if let Some(skipped_tasks) = &input.skipped_tasks {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("skipped_tasks = ").push_bind(skipped_tasks);
+            has_updates = true;
+        }
+        if let Some(variables) = &input.variables {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("variables = ").push_bind(variables);
+            has_updates = true;
+        }
+        if let Some(status) = input.status {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("status = ").push_bind(status);
+            has_updates = true;
+        }
+        if let Some(error_message) = &input.error_message {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("error_message = ").push_bind(error_message);
+            has_updates = true;
+        }
+        if let Some(paused) = input.paused {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("paused = ").push_bind(paused);
+            has_updates = true;
+        }
+        if let Some(pause_reason) = &input.pause_reason {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("pause_reason = ").push_bind(pause_reason);
+            has_updates = true;
+        }
+
+        if !has_updates {
+            return Self::get_by_id(executor, id).await;
+        }
+
+        query.push(", updated = NOW() WHERE id = ").push_bind(id);
+        query.push(" RETURNING id, execution, workflow_def, current_tasks, completed_tasks, failed_tasks, skipped_tasks, variables, task_graph, status, error_message, paused, pause_reason, created, updated");
+
+        query
+            .build_query_as::<WorkflowExecution>()
+            .fetch_one(executor)
+            .await
+            .map_err(Into::into)
+    }
+}
+
+#[async_trait::async_trait]
+impl Delete for WorkflowExecutionRepository {
+    async fn delete<'e, E>(executor: E, id: i64) -> Result<bool>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = sqlx::query("DELETE FROM workflow_execution WHERE id = $1")
+            .bind(id)
+            .execute(executor)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+impl WorkflowExecutionRepository {
+    /// Find workflow execution by the parent execution ID
+    pub async fn find_by_execution<'e, E>(
+        executor: E,
+        execution_id: Id,
+    ) -> Result<Option<WorkflowExecution>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowExecution>(
+            "SELECT id, execution, workflow_def, current_tasks, completed_tasks, failed_tasks, skipped_tasks,
+                    variables, task_graph, status, error_message, paused, pause_reason, created, updated
+             FROM workflow_execution
+             WHERE execution = $1"
+        )
+        .bind(execution_id)
+        .fetch_optional(executor)
+        .await
+        .map_err(Into::into)
+    }
+
+    /// Find all workflow executions by status
+    pub async fn find_by_status<'e, E>(
+        executor: E,
+        status: ExecutionStatus,
+    ) -> Result<Vec<WorkflowExecution>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowExecution>(
+            "SELECT id, execution, workflow_def, current_tasks, completed_tasks, failed_tasks, skipped_tasks,
+                    variables, task_graph, status, error_message, paused, pause_reason, created, updated
+             FROM workflow_execution
+             WHERE status = $1
+             ORDER BY created DESC"
+        )
+        .bind(status)
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+
+    /// Find all paused workflow executions
+    pub async fn find_paused<'e, E>(executor: E) -> Result<Vec<WorkflowExecution>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowExecution>(
+            "SELECT id, execution, workflow_def, current_tasks, completed_tasks, failed_tasks, skipped_tasks,
+                    variables, task_graph, status, error_message, paused, pause_reason, created, updated
+             FROM workflow_execution
+             WHERE paused = true
+             ORDER BY created DESC"
+        )
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+
+    /// Find workflow executions by workflow definition
+    pub async fn find_by_workflow_def<'e, E>(
+        executor: E,
+        workflow_def_id: Id,
+    ) -> Result<Vec<WorkflowExecution>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowExecution>(
+            "SELECT id, execution, workflow_def, current_tasks, completed_tasks, failed_tasks, skipped_tasks,
+                    variables, task_graph, status, error_message, paused, pause_reason, created, updated
+             FROM workflow_execution
+             WHERE workflow_def = $1
+             ORDER BY created DESC"
+        )
+        .bind(workflow_def_id)
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+}

@@ -1,0 +1,131 @@
+# docker-compose.override.yml.example
+#
+# Example override file for local development customizations
+# Copy this file to docker-compose.override.yml and customize as needed
+#
+# Docker Compose automatically reads docker-compose.override.yml if it exists
+# and merges it with docker-compose.yaml
+#
+# Use cases:
+# - Mount local source code for live development
+# - Override ports to avoid conflicts
+# - Add debug/development tools
+# - Customize resource limits
+# - Enable additional services
+
+services:
+  # ===========================================================================
+  # Development Overrides
+  # ===========================================================================
+
+  # API service with live code reload
+  api:
+    # Build from local source instead of using cached image
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        SERVICE: api
+
+    # Mount source code for development
+    volumes:
+      - ./crates:/opt/attune/crates:ro
+      - ./config.development.yaml:/opt/attune/config.yaml:ro
+      - ./packs:/opt/attune/packs:ro
+      - api_logs:/opt/attune/logs
+
+    # Override environment for development
+    environment:
+      RUST_LOG: debug
+      RUST_BACKTRACE: 1
+
+    # Expose debugger port
+    ports:
+      - "8080:8080"
+      - "9229:9229"  # Debugger port
+
+  # Worker with local code
+  worker:
+    volumes:
+      - ./crates:/opt/attune/crates:ro
+      - ./packs:/opt/attune/packs:ro
+      - worker_logs:/opt/attune/logs
+      - worker_temp:/tmp/attune-worker
+
+    environment:
+      RUST_LOG: debug
+      RUST_BACKTRACE: 1
+
+  # Executor with local code
+  executor:
+    volumes:
+      - ./crates:/opt/attune/crates:ro
+      - ./packs:/opt/attune/packs:ro
+      - executor_logs:/opt/attune/logs
+
+    environment:
+      RUST_LOG: debug
+      RUST_BACKTRACE: 1
+
+  # ===========================================================================
+  # Infrastructure Customizations
+  # ===========================================================================
+
+  # Expose PostgreSQL on different port to avoid conflicts
+  # postgres:
+  #   ports:
+  #     - "5433:5432"
+
+  # Expose RabbitMQ management on different port
+  # rabbitmq:
+  #   ports:
+  #     - "5673:5672"
+  #     - "15673:15672"
+
+  # ===========================================================================
+  # Additional Development Services
+  # ===========================================================================
+
+  # Adminer - Database management UI
+  # adminer:
+  #   image: adminer:latest
+  #   container_name: attune-adminer
+  #   ports:
+  #     - "8081:8080"
+  #   networks:
+  #     - attune-network
+  #   environment:
+  #     ADMINER_DEFAULT_SERVER: postgres
+  #     ADMINER_DESIGN: dracula
+
+  # pgAdmin - PostgreSQL administration
+  # pgadmin:
+  #   image: dpage/pgadmin4:latest
+  #   container_name: attune-pgadmin
+  #   ports:
+  #     - "5050:80"
+  #   networks:
+  #     - attune-network
+  #   environment:
+  #     PGADMIN_DEFAULT_EMAIL: admin@example.com
+  #     PGADMIN_DEFAULT_PASSWORD: admin
+  #   volumes:
+  #     - pgadmin_data:/var/lib/pgadmin
+
+  # Redis Commander - Redis management UI
+  # redis-commander:
+  #   image: rediscommander/redis-commander:latest
+  #   container_name: attune-redis-commander
+  #   ports:
+  #     - "8082:8081"
+  #   networks:
+  #     - attune-network
+  #   environment:
+  #     REDIS_HOSTS: local:redis:6379
+
+# ===========================================================================
+# Additional Volumes
+# ===========================================================================
+# volumes:
+#   pgadmin_data:
+#     driver: local

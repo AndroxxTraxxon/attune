@@ -1,0 +1,245 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any, TypeVar, BinaryIO, TextIO, TYPE_CHECKING, Generator
+
+from attrs import define as _attrs_define
+from attrs import field as _attrs_field
+
+from ..types import UNSET, Unset
+
+from ..models.enforcement_condition import EnforcementCondition
+from ..models.enforcement_status import EnforcementStatus
+from ..types import UNSET, Unset
+from dateutil.parser import isoparse
+from typing import cast
+import datetime
+
+if TYPE_CHECKING:
+  from ..models.api_response_enforcement_response_data_conditions import ApiResponseEnforcementResponseDataConditions
+  from ..models.api_response_enforcement_response_data_config_type_0 import ApiResponseEnforcementResponseDataConfigType0
+  from ..models.api_response_enforcement_response_data_payload import ApiResponseEnforcementResponseDataPayload
+
+
+
+
+
+T = TypeVar("T", bound="ApiResponseEnforcementResponseData")
+
+
+
+@_attrs_define
+class ApiResponseEnforcementResponseData:
+    """ Full enforcement response with all details
+
+        Attributes:
+            condition (EnforcementCondition):
+            conditions (ApiResponseEnforcementResponseDataConditions): Enforcement conditions (rule evaluation criteria)
+            config (ApiResponseEnforcementResponseDataConfigType0 | None): Enforcement configuration
+            created (datetime.datetime): Creation timestamp Example: 2024-01-13T10:30:00Z.
+            id (int):
+            payload (ApiResponseEnforcementResponseDataPayload): Enforcement payload
+            rule_ref (str): Rule reference Example: slack.notify_on_error.
+            status (EnforcementStatus):
+            trigger_ref (str): Trigger reference Example: system.error_event.
+            updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:30:00Z.
+            event (int | None | Unset):
+            rule (int | None | Unset):
+     """
+
+    condition: EnforcementCondition
+    conditions: ApiResponseEnforcementResponseDataConditions
+    config: ApiResponseEnforcementResponseDataConfigType0 | None
+    created: datetime.datetime
+    id: int
+    payload: ApiResponseEnforcementResponseDataPayload
+    rule_ref: str
+    status: EnforcementStatus
+    trigger_ref: str
+    updated: datetime.datetime
+    event: int | None | Unset = UNSET
+    rule: int | None | Unset = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
+
+
+
+
+
+    def to_dict(self) -> dict[str, Any]:
+        from ..models.api_response_enforcement_response_data_payload import ApiResponseEnforcementResponseDataPayload
+        from ..models.api_response_enforcement_response_data_conditions import ApiResponseEnforcementResponseDataConditions
+        from ..models.api_response_enforcement_response_data_config_type_0 import ApiResponseEnforcementResponseDataConfigType0
+        condition = self.condition.value
+
+        conditions = self.conditions.to_dict()
+
+        config: dict[str, Any] | None
+        if isinstance(self.config, ApiResponseEnforcementResponseDataConfigType0):
+            config = self.config.to_dict()
+        else:
+            config = self.config
+
+        created = self.created.isoformat()
+
+        id = self.id
+
+        payload = self.payload.to_dict()
+
+        rule_ref = self.rule_ref
+
+        status = self.status.value
+
+        trigger_ref = self.trigger_ref
+
+        updated = self.updated.isoformat()
+
+        event: int | None | Unset
+        if isinstance(self.event, Unset):
+            event = UNSET
+        else:
+            event = self.event
+
+        rule: int | None | Unset
+        if isinstance(self.rule, Unset):
+            rule = UNSET
+        else:
+            rule = self.rule
+
+
+        field_dict: dict[str, Any] = {}
+        field_dict.update(self.additional_properties)
+        field_dict.update({
+            "condition": condition,
+            "conditions": conditions,
+            "config": config,
+            "created": created,
+            "id": id,
+            "payload": payload,
+            "rule_ref": rule_ref,
+            "status": status,
+            "trigger_ref": trigger_ref,
+            "updated": updated,
+        })
+        if event is not UNSET:
+            field_dict["event"] = event
+        if rule is not UNSET:
+            field_dict["rule"] = rule
+
+        return field_dict
+
+
+
+    @classmethod
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.api_response_enforcement_response_data_conditions import ApiResponseEnforcementResponseDataConditions
+        from ..models.api_response_enforcement_response_data_config_type_0 import ApiResponseEnforcementResponseDataConfigType0
+        from ..models.api_response_enforcement_response_data_payload import ApiResponseEnforcementResponseDataPayload
+        d = dict(src_dict)
+        condition = EnforcementCondition(d.pop("condition"))
+
+
+
+
+        conditions = ApiResponseEnforcementResponseDataConditions.from_dict(d.pop("conditions"))
+
+
+
+
+        def _parse_config(data: object) -> ApiResponseEnforcementResponseDataConfigType0 | None:
+            if data is None:
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                config_type_0 = ApiResponseEnforcementResponseDataConfigType0.from_dict(data)
+
+
+
+                return config_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(ApiResponseEnforcementResponseDataConfigType0 | None, data)
+
+        config = _parse_config(d.pop("config"))
+
+
+        created = isoparse(d.pop("created"))
+
+
+
+
+        id = d.pop("id")
+
+        payload = ApiResponseEnforcementResponseDataPayload.from_dict(d.pop("payload"))
+
+
+
+
+        rule_ref = d.pop("rule_ref")
+
+        status = EnforcementStatus(d.pop("status"))
+
+
+
+
+        trigger_ref = d.pop("trigger_ref")
+
+        updated = isoparse(d.pop("updated"))
+
+
+
+
+        def _parse_event(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        event = _parse_event(d.pop("event", UNSET))
+
+
+        def _parse_rule(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        rule = _parse_rule(d.pop("rule", UNSET))
+
+
+        api_response_enforcement_response_data = cls(
+            condition=condition,
+            conditions=conditions,
+            config=config,
+            created=created,
+            id=id,
+            payload=payload,
+            rule_ref=rule_ref,
+            status=status,
+            trigger_ref=trigger_ref,
+            updated=updated,
+            event=event,
+            rule=rule,
+        )
+
+
+        api_response_enforcement_response_data.additional_properties = d
+        return api_response_enforcement_response_data
+
+    @property
+    def additional_keys(self) -> list[str]:
+        return list(self.additional_properties.keys())
+
+    def __getitem__(self, key: str) -> Any:
+        return self.additional_properties[key]
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self.additional_properties[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        del self.additional_properties[key]
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.additional_properties

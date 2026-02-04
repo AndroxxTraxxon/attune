@@ -1,0 +1,710 @@
+# Complete Workflow Example
+# This workflow demonstrates all features of the Attune workflow system
+
+ref: examples.complete_deployment_workflow
+label: "Complete Application Deployment Workflow"
+description: |
+  A comprehensive example workflow that demonstrates:
+  - Sequential and parallel execution
+  - Conditional branching
+  - Iteration and batching
+  - Variable scoping and templating
+  - Error handling and retry
+  - Human-in-the-loop (inquiries)
+  - Subworkflow invocation
+version: "1.0.0"
+
+# Input parameters accepted by this workflow
+parameters:
+  app_name:
+    type: string
+    required: true
+    description: "Name of the application to deploy"
+
+  version:
+    type: string
+    required: true
+    description: "Version to deploy"
+
+  environment:
+    type: string
+    enum: [dev, staging, production]
+    default: dev
+    description: "Target environment"
+
+  regions:
+    type: array
+    items:
+      type: string
+    default: ["us-east-1"]
+    description: "AWS regions to deploy to"
+
+  enable_canary:
+    type: boolean
+    default: false
+    description: "Enable canary deployment"
+
+  rollback_on_failure:
+    type: boolean
+    default: true
+    description: "Automatically rollback on failure"
+
+# Output schema - what this workflow produces
+output:
+  type: object
+  properties:
+    deployment_id:
+      type: string
+    status:
+      type: string
+      enum: [success, failed, rolled_back]
+    deployed_version:
+      type: string
+    deployment_urls:
+      type: array
+      items:
+        type: string
+    duration_seconds:
+      type: integer
+
+# Workflow-scoped variables
+vars:
+  deployment_id: null
+  start_time: null
+  health_check_urls: []
+  failed_regions: []
+  successful_regions: []
+  canary_passed: false
+  approval_granted: false
+  rollback_initiated: false
+
+# Task execution graph
+tasks:
+  # ============================================================================
+  # PHASE 1: VALIDATION & PREPARATION
+  # ============================================================================
+
+  - name: start_workflow
+    action: core.noop
+    input: {}
+    publish:
+      - start_time: "{{ system.timestamp }}"
+    on_success: validate_inputs
+
+  - name: validate_inputs
+    action: validation.validate_deployment_params
+    input:
+      app_name: "{{ parameters.app_name }}"
+      version: "{{ parameters.version }}"
+      environment: "{{ parameters.environment }}"
+      regions: "{{ parameters.regions }}"
+    retry:
+      count: 2
+      delay: 5
+    on_success: check_environment_type
+    on_failure: notify_validation_failed
+
+  # Conditional: Production deployments require approval
+  - name: check_environment_type
+    action: core.noop
+    input: {}
+    decision:
+      - when: "{{ parameters.environment == 'production' }}"
+        next: require_production_approval
+      - default: create_deployment_record
+
+  # Human-in-the-loop: Require approval for production
+  - name: require_production_approval
+    action: core.inquiry
+    input:
+      prompt: |
+        Approve production deployment?
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Regions: {{ parameters.regions | join(', ') }}
+      schema:
+        type: object
+        properties:
+          approved:
+            type: boolean
+          approver_notes:
+            type: string
+      assigned_to: "deployment-approvers"
+      timeout: 3600  # 1 hour timeout
+    publish:
+      - approval_granted: "{{ task.require_production_approval.result.approved }}"
+    decision:
+      - when: "{{ vars.approval_granted == true }}"
+        next: create_deployment_record
+      - default: cancel_deployment
+    on_timeout: deployment_approval_timeout
+
+  # ============================================================================
+  # PHASE 2: DEPLOYMENT PREPARATION
+  # ============================================================================
+
+  - name: create_deployment_record
+    action: deployments.create_record
+    input:
+      app_name: "{{ parameters.app_name }}"
+      version: "{{ parameters.version }}"
+      environment: "{{ parameters.environment }}"
+      regions: "{{ parameters.regions }}"
+      initiated_by: "{{ system.identity.login }}"
+    publish:
+      - deployment_id: "{{ task.create_deployment_record.result.id }}"
+    on_success: parallel_pre_deployment_checks
+    on_failure: notify_deployment_failed
+
+  # Parallel execution: Run multiple checks concurrently
+  - name: parallel_pre_deployment_checks
+    type: parallel
+    tasks:
+      - name: check_docker_registry
+        action: docker.check_registry_health
+        input:
+          registry: "{{ pack.config.docker_registry }}"
+
+      - name: check_kubernetes_clusters
+        action: kubernetes.check_clusters
+        input:
+          regions: "{{ parameters.regions }}"
+
+      - name: check_database_migrations
+        action: database.check_pending_migrations
+        input:
+          app_name: "{{ parameters.app_name }}"
+          environment: "{{ parameters.environment }}"
+
+      - name: verify_secrets
+        action: secrets.verify_availability
+        input:
+          app_name: "{{ parameters.app_name }}"
+          environment: "{{ parameters.environment }}"
+    on_success: build_and_test
+    on_failure: cleanup_failed_deployment
+
+  # ============================================================================
+  # PHASE 3: BUILD & TEST
+  # ============================================================================
+
+  - name: build_and_test
+    action: ci.build_and_test
+    input:
+      app_name: "{{ parameters.app_name }}"
+      version: "{{ parameters.version }}"
+      registry: "{{ pack.config.docker_registry }}"
+      run_tests: true
+    timeout: 1800  # 30 minutes
+    retry:
+      count: 2
+      delay: 60
+      backoff: exponential
+    on_success: push_container_image
+    on_failure: notify_build_failed
+    on_timeout: notify_build_timeout
+
+  - name: push_container_image
+    action: docker.push_image
+    input:
+      image: "{{ task.build_and_test.result.image_name }}"
+      tag: "{{ parameters.version }}"
+      registry: "{{ pack.config.docker_registry }}"
+    on_success: check_canary_enabled
+    on_failure: notify_push_failed
+
+  # ============================================================================
+  # PHASE 4: CANARY DEPLOYMENT (CONDITIONAL)
+  # ============================================================================
+
+  - name: check_canary_enabled
+    action: core.noop
+    input: {}
+    decision:
+      - when: "{{ parameters.enable_canary == true }}"
+        next: deploy_canary
+      - default: deploy_to_all_regions
+
+  - name: deploy_canary
+    action: kubernetes.deploy_canary
+    input:
+      app_name: "{{ parameters.app_name }}"
+      image: "{{ task.build_and_test.result.image_uri }}"
+      region: "{{ parameters.regions | first }}"
+      traffic_percentage: 10
+    on_success: monitor_canary
+    on_failure: handle_canary_failure
+
+  - name: monitor_canary
+    action: monitoring.analyze_canary
+    input:
+      app_name: "{{ parameters.app_name }}"
+      duration: 300  # 5 minutes
+      error_threshold: 0.01
+    publish:
+      - canary_passed: "{{ task.monitor_canary.result.success }}"
+    decision:
+      - when: "{{ vars.canary_passed == true }}"
+        next: promote_canary
+      - default: rollback_canary
+
+  - name: promote_canary
+    action: kubernetes.promote_canary
+    input:
+      app_name: "{{ parameters.app_name }}"
+      region: "{{ parameters.regions | first }}"
+    on_success: deploy_to_remaining_regions
+    on_failure: rollback_canary
+
+  - name: rollback_canary
+    action: kubernetes.rollback_canary
+    input:
+      app_name: "{{ parameters.app_name }}"
+      region: "{{ parameters.regions | first }}"
+    publish:
+      - rollback_initiated: true
+    on_complete: notify_canary_failed
+
+  # ============================================================================
+  # PHASE 5: MULTI-REGION DEPLOYMENT (WITH ITERATION)
+  # ============================================================================
+
+  - name: deploy_to_all_regions
+    action: kubernetes.deploy
+    with_items: "{{ parameters.regions }}"
+    input:
+      app_name: "{{ parameters.app_name }}"
+      image: "{{ task.build_and_test.result.image_uri }}"
+      region: "{{ item }}"
+      replicas: 3
+      environment: "{{ parameters.environment }}"
+    retry:
+      count: 2
+      delay: 30
+    publish:
+      - health_check_urls: "{{ task.deploy_to_all_regions.results | map(attribute='health_url') | list }}"
+    on_success: parallel_health_checks
+    on_failure: handle_deployment_failures
+
+  - name: deploy_to_remaining_regions
+    action: kubernetes.deploy
+    # Filter out first region (already has canary)
+    with_items: "{{ parameters.regions | slice(start=1) }}"
+    input:
+      app_name: "{{ parameters.app_name }}"
+      image: "{{ task.build_and_test.result.image_uri }}"
+      region: "{{ item }}"
+      replicas: 3
+      environment: "{{ parameters.environment }}"
+    on_success: parallel_health_checks
+    on_failure: handle_deployment_failures
+
+  # ============================================================================
+  # PHASE 6: VERIFICATION
+  # ============================================================================
+
+  - name: parallel_health_checks
+    action: http.get
+    with_items: "{{ vars.health_check_urls }}"
+    batch_size: 5  # Check 5 URLs at a time
+    input:
+      url: "{{ item }}"
+      expected_status: 200
+      timeout: 30
+    retry:
+      count: 10
+      delay: 10
+      backoff: linear
+    on_success: run_smoke_tests
+    on_failure: handle_health_check_failures
+
+  - name: run_smoke_tests
+    action: testing.run_smoke_tests
+    input:
+      app_name: "{{ parameters.app_name }}"
+      environment: "{{ parameters.environment }}"
+      base_urls: "{{ vars.health_check_urls }}"
+    timeout: 600
+    on_success: verify_metrics
+    on_failure: handle_smoke_test_failures
+
+  - name: verify_metrics
+    action: monitoring.verify_deployment_metrics
+    input:
+      app_name: "{{ parameters.app_name }}"
+      environment: "{{ parameters.environment }}"
+      thresholds:
+        error_rate: 0.01
+        latency_p99: 1000
+        cpu_usage: 80
+    on_success: update_load_balancer
+    on_failure: handle_metrics_failures
+
+  # ============================================================================
+  # PHASE 7: TRAFFIC ROUTING
+  # ============================================================================
+
+  - name: update_load_balancer
+    action: aws.update_load_balancer
+    with_items: "{{ parameters.regions }}"
+    input:
+      app_name: "{{ parameters.app_name }}"
+      region: "{{ item }}"
+      target_version: "{{ parameters.version }}"
+    on_success: finalize_deployment
+    on_failure: handle_lb_update_failure
+
+  # ============================================================================
+  # PHASE 8: FINALIZATION
+  # ============================================================================
+
+  - name: finalize_deployment
+    action: deployments.update_status
+    input:
+      deployment_id: "{{ vars.deployment_id }}"
+      status: "success"
+      metadata:
+        version: "{{ parameters.version }}"
+        regions: "{{ parameters.regions }}"
+        duration: "{{ system.timestamp - vars.start_time }}"
+    publish:
+      - successful_regions: "{{ parameters.regions }}"
+    on_success: post_deployment_tasks
+
+  - name: post_deployment_tasks
+    type: parallel
+    tasks:
+      - name: update_service_catalog
+        action: catalog.update_service_version
+        input:
+          app_name: "{{ parameters.app_name }}"
+          version: "{{ parameters.version }}"
+          environment: "{{ parameters.environment }}"
+
+      - name: trigger_integration_tests
+        action: testing.trigger_integration_suite
+        input:
+          app_name: "{{ parameters.app_name }}"
+          environment: "{{ parameters.environment }}"
+
+      - name: update_documentation
+        action: docs.update_deployment_history
+        input:
+          app_name: "{{ parameters.app_name }}"
+          version: "{{ parameters.version }}"
+          deployment_id: "{{ vars.deployment_id }}"
+    on_complete: notify_deployment_success
+
+  # ============================================================================
+  # FAILURE HANDLERS
+  # ============================================================================
+
+  - name: handle_deployment_failures
+    action: deployments.analyze_failures
+    input:
+      deployment_id: "{{ vars.deployment_id }}"
+      failed_tasks: "{{ task.deploy_to_all_regions.failed_items }}"
+    publish:
+      - failed_regions: "{{ task.handle_deployment_failures.result.failed_regions }}"
+    decision:
+      - when: "{{ parameters.rollback_on_failure == true }}"
+        next: rollback_all_regions
+      - default: notify_partial_deployment
+
+  - name: handle_health_check_failures
+    action: diagnostics.analyze_health_failures
+    input:
+      deployment_id: "{{ vars.deployment_id }}"
+      failed_urls: "{{ task.parallel_health_checks.failed_items }}"
+    decision:
+      - when: "{{ parameters.rollback_on_failure == true }}"
+        next: rollback_all_regions
+      - default: notify_health_check_failures
+
+  - name: handle_smoke_test_failures
+    action: testing.capture_smoke_test_results
+    input:
+      deployment_id: "{{ vars.deployment_id }}"
+      results: "{{ task.run_smoke_tests.result }}"
+    decision:
+      - when: "{{ parameters.rollback_on_failure == true }}"
+        next: rollback_all_regions
+      - default: notify_smoke_test_failures
+
+  - name: handle_metrics_failures
+    action: monitoring.capture_metric_violations
+    input:
+      deployment_id: "{{ vars.deployment_id }}"
+      violations: "{{ task.verify_metrics.result.violations }}"
+    decision:
+      - when: "{{ parameters.rollback_on_failure == true }}"
+        next: rollback_all_regions
+      - default: notify_metrics_failures
+
+  - name: handle_lb_update_failure
+    action: aws.diagnose_lb_failure
+    input:
+      regions: "{{ parameters.regions }}"
+      error: "{{ task.update_load_balancer.error }}"
+    on_complete: rollback_all_regions
+
+  # ============================================================================
+  # ROLLBACK PROCEDURES
+  # ============================================================================
+
+  - name: rollback_all_regions
+    action: kubernetes.rollback_deployment
+    with_items: "{{ parameters.regions }}"
+    input:
+      app_name: "{{ parameters.app_name }}"
+      region: "{{ item }}"
+      target_version: "previous"
+    publish:
+      - rollback_initiated: true
+    on_success: update_deployment_rolled_back
+    on_failure: notify_rollback_failed
+
+  - name: update_deployment_rolled_back
+    action: deployments.update_status
+    input:
+      deployment_id: "{{ vars.deployment_id }}"
+      status: "rolled_back"
+      metadata:
+        reason: "deployment_failure"
+        failed_regions: "{{ vars.failed_regions }}"
+    on_complete: notify_deployment_rolled_back
+
+  # ============================================================================
+  # CANCELLATION HANDLERS
+  # ============================================================================
+
+  - name: cancel_deployment
+    action: deployments.update_status
+    input:
+      deployment_id: "{{ vars.deployment_id }}"
+      status: "cancelled"
+      metadata:
+        reason: "approval_denied"
+    on_complete: notify_deployment_cancelled
+
+  - name: deployment_approval_timeout
+    action: deployments.update_status
+    input:
+      deployment_id: "{{ vars.deployment_id }}"
+      status: "cancelled"
+      metadata:
+        reason: "approval_timeout"
+    on_complete: notify_approval_timeout
+
+  - name: cleanup_failed_deployment
+    action: deployments.cleanup_resources
+    input:
+      deployment_id: "{{ vars.deployment_id }}"
+      reason: "pre_deployment_checks_failed"
+    on_complete: notify_deployment_failed
+
+  # ============================================================================
+  # NOTIFICATION TASKS
+  # ============================================================================
+
+  - name: notify_deployment_success
+    action: notifications.send_multi_channel
+    input:
+      channels: ["slack", "email"]
+      message: |
+        ✅ Deployment Successful
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Environment: {{ parameters.environment }}
+        Regions: {{ vars.successful_regions | join(', ') }}
+        Duration: {{ system.timestamp - vars.start_time }}s
+        Deployment ID: {{ vars.deployment_id }}
+      metadata:
+        severity: "info"
+        deployment_id: "{{ vars.deployment_id }}"
+
+  - name: notify_deployment_failed
+    action: notifications.send_multi_channel
+    input:
+      channels: ["slack", "email", "pagerduty"]
+      message: |
+        ❌ Deployment Failed
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Environment: {{ parameters.environment }}
+        Failed Regions: {{ vars.failed_regions | join(', ') }}
+        Deployment ID: {{ vars.deployment_id }}
+      metadata:
+        severity: "error"
+        deployment_id: "{{ vars.deployment_id }}"
+
+  - name: notify_deployment_rolled_back
+    action: notifications.send_multi_channel
+    input:
+      channels: ["slack", "email", "pagerduty"]
+      message: |
+        ⚠️ Deployment Rolled Back
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Environment: {{ parameters.environment }}
+        Rollback completed for all regions
+        Deployment ID: {{ vars.deployment_id }}"
+      metadata:
+        severity: "warning"
+        deployment_id: "{{ vars.deployment_id }}"
+
+  - name: notify_deployment_cancelled
+    action: notifications.send_multi_channel
+    input:
+      channels: ["slack", "email"]
+      message: |
+        🚫 Deployment Cancelled
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Environment: {{ parameters.environment }}
+        Reason: Approval denied
+      metadata:
+        severity: "info"
+
+  - name: notify_approval_timeout
+    action: notifications.send_multi_channel
+    input:
+      channels: ["slack", "email"]
+      message: |
+        ⏱️ Deployment Approval Timeout
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Environment: {{ parameters.environment }}
+        No approval received within 1 hour
+      metadata:
+        severity: "warning"
+
+  - name: notify_validation_failed
+    action: notifications.send_multi_channel
+    input:
+      channels: ["slack"]
+      message: |
+        ⚠️ Deployment Validation Failed
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Error: {{ task.validate_inputs.error.message }}
+      metadata:
+        severity: "warning"
+
+  - name: notify_build_failed
+    action: notifications.send_multi_channel
+    input:
+      channels: ["slack", "email"]
+      message: |
+        🔨 Build Failed
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Error: {{ task.build_and_test.error.message }}
+      metadata:
+        severity: "error"
+
+  - name: notify_build_timeout
+    action: notifications.send_multi_channel
+    input:
+      channels: ["slack", "email"]
+      message: |
+        ⏱️ Build Timeout
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Build exceeded 30 minute timeout
+      metadata:
+        severity: "error"
+
+  - name: notify_push_failed
+    action: notifications.send_multi_channel
+    input:
+      channels: ["slack"]
+      message: |
+        📦 Container Push Failed
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Error: {{ task.push_container_image.error.message }}
+      metadata:
+        severity: "error"
+
+  - name: notify_canary_failed
+    action: notifications.send_multi_channel
+    input:
+      channels: ["slack", "email"]
+      message: |
+        🐦 Canary Deployment Failed
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Canary has been rolled back
+        Metrics: {{ task.monitor_canary.result }}
+      metadata:
+        severity: "warning"
+
+  - name: notify_partial_deployment
+    action: notifications.send_multi_channel
+    input:
+      channels: ["slack", "email", "pagerduty"]
+      message: |
+        ⚠️ Partial Deployment
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Successful Regions: {{ vars.successful_regions | join(', ') }}
+        Failed Regions: {{ vars.failed_regions | join(', ') }}
+      metadata:
+        severity: "error"
+
+  - name: notify_health_check_failures
+    action: notifications.send_multi_channel
+    input:
+      channels: ["slack", "email"]
+      message: |
+        💔 Health Check Failures
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Failed URLs: {{ task.parallel_health_checks.failed_items | length }}
+      metadata:
+        severity: "error"
+
+  - name: notify_smoke_test_failures
+    action: notifications.send_multi_channel
+    input:
+      channels: ["slack", "email"]
+      message: |
+        🧪 Smoke Tests Failed
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Results: {{ task.run_smoke_tests.result.summary }}
+      metadata:
+        severity: "error"
+
+  - name: notify_metrics_failures
+    action: notifications.send_multi_channel
+    input:
+      channels: ["slack", "email"]
+      message: |
+        📊 Metrics Verification Failed
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Violations: {{ task.verify_metrics.result.violations | length }}
+      metadata:
+        severity: "error"
+
+  - name: notify_rollback_failed
+    action: notifications.send_multi_channel
+    input:
+      channels: ["slack", "email", "pagerduty"]
+      message: |
+        🚨 CRITICAL: Rollback Failed
+        Application: {{ parameters.app_name }}
+        Version: {{ parameters.version }}
+        Manual intervention required!
+      metadata:
+        severity: "critical"
+
+# Workflow output mapping
+output_map:
+  deployment_id: "{{ vars.deployment_id }}"
+  status: "{{ vars.rollback_initiated ? 'rolled_back' : 'success' }}"
+  deployed_version: "{{ parameters.version }}"
+  deployment_urls: "{{ vars.health_check_urls }}"
+  duration_seconds: "{{ system.timestamp - vars.start_time }}"

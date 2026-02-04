@@ -1,0 +1,220 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any, TypeVar, BinaryIO, TextIO, TYPE_CHECKING, Generator
+
+from attrs import define as _attrs_define
+from attrs import field as _attrs_field
+
+from ..types import UNSET, Unset
+
+from ..types import UNSET, Unset
+from dateutil.parser import isoparse
+from typing import cast
+import datetime
+
+if TYPE_CHECKING:
+  from ..models.event_response_config_type_0 import EventResponseConfigType0
+  from ..models.event_response_payload import EventResponsePayload
+
+
+
+
+
+T = TypeVar("T", bound="EventResponse")
+
+
+
+@_attrs_define
+class EventResponse:
+    """ Full event response with all details
+
+        Attributes:
+            config (EventResponseConfigType0 | None): Event configuration
+            created (datetime.datetime): Creation timestamp Example: 2024-01-13T10:30:00Z.
+            id (int):
+            payload (EventResponsePayload): Event payload data
+            trigger_ref (str): Trigger reference Example: core.webhook.
+            updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:30:00Z.
+            source (int | None | Unset):
+            source_ref (None | str | Unset): Source reference Example: monitoring.webhook_sensor.
+            trigger (int | None | Unset):
+     """
+
+    config: EventResponseConfigType0 | None
+    created: datetime.datetime
+    id: int
+    payload: EventResponsePayload
+    trigger_ref: str
+    updated: datetime.datetime
+    source: int | None | Unset = UNSET
+    source_ref: None | str | Unset = UNSET
+    trigger: int | None | Unset = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
+
+
+
+
+
+    def to_dict(self) -> dict[str, Any]:
+        from ..models.event_response_payload import EventResponsePayload
+        from ..models.event_response_config_type_0 import EventResponseConfigType0
+        config: dict[str, Any] | None
+        if isinstance(self.config, EventResponseConfigType0):
+            config = self.config.to_dict()
+        else:
+            config = self.config
+
+        created = self.created.isoformat()
+
+        id = self.id
+
+        payload = self.payload.to_dict()
+
+        trigger_ref = self.trigger_ref
+
+        updated = self.updated.isoformat()
+
+        source: int | None | Unset
+        if isinstance(self.source, Unset):
+            source = UNSET
+        else:
+            source = self.source
+
+        source_ref: None | str | Unset
+        if isinstance(self.source_ref, Unset):
+            source_ref = UNSET
+        else:
+            source_ref = self.source_ref
+
+        trigger: int | None | Unset
+        if isinstance(self.trigger, Unset):
+            trigger = UNSET
+        else:
+            trigger = self.trigger
+
+
+        field_dict: dict[str, Any] = {}
+        field_dict.update(self.additional_properties)
+        field_dict.update({
+            "config": config,
+            "created": created,
+            "id": id,
+            "payload": payload,
+            "trigger_ref": trigger_ref,
+            "updated": updated,
+        })
+        if source is not UNSET:
+            field_dict["source"] = source
+        if source_ref is not UNSET:
+            field_dict["source_ref"] = source_ref
+        if trigger is not UNSET:
+            field_dict["trigger"] = trigger
+
+        return field_dict
+
+
+
+    @classmethod
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.event_response_config_type_0 import EventResponseConfigType0
+        from ..models.event_response_payload import EventResponsePayload
+        d = dict(src_dict)
+        def _parse_config(data: object) -> EventResponseConfigType0 | None:
+            if data is None:
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                config_type_0 = EventResponseConfigType0.from_dict(data)
+
+
+
+                return config_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(EventResponseConfigType0 | None, data)
+
+        config = _parse_config(d.pop("config"))
+
+
+        created = isoparse(d.pop("created"))
+
+
+
+
+        id = d.pop("id")
+
+        payload = EventResponsePayload.from_dict(d.pop("payload"))
+
+
+
+
+        trigger_ref = d.pop("trigger_ref")
+
+        updated = isoparse(d.pop("updated"))
+
+
+
+
+        def _parse_source(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        source = _parse_source(d.pop("source", UNSET))
+
+
+        def _parse_source_ref(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        source_ref = _parse_source_ref(d.pop("source_ref", UNSET))
+
+
+        def _parse_trigger(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        trigger = _parse_trigger(d.pop("trigger", UNSET))
+
+
+        event_response = cls(
+            config=config,
+            created=created,
+            id=id,
+            payload=payload,
+            trigger_ref=trigger_ref,
+            updated=updated,
+            source=source,
+            source_ref=source_ref,
+            trigger=trigger,
+        )
+
+
+        event_response.additional_properties = d
+        return event_response
+
+    @property
+    def additional_keys(self) -> list[str]:
+        return list(self.additional_properties.keys())
+
+    def __getitem__(self, key: str) -> Any:
+        return self.additional_properties[key]
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self.additional_properties[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        del self.additional_properties[key]
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.additional_properties

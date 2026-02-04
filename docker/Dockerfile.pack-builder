@@ -1,0 +1,102 @@
+# Dockerfile for building Attune pack binaries with maximum GLIBC compatibility
+#
+# This builds native pack binaries (sensors, etc.) using an older GLIBC version
+# to ensure forward compatibility across different deployment environments.
+#
+# GLIBC compatibility:
+# - Binaries built with GLIBC 2.36 work on 2.36, 2.38, 2.39, etc. (forward compatible)
+# - Binaries built with GLIBC 2.39 only work on 2.39+ (not backward compatible)
+#
+# Usage:
+#   docker build -f docker/Dockerfile.pack-builder -t attune-pack-builder .
+#   docker run --rm -v $(pwd)/packs:/output attune-pack-builder
+#
+# This will build all pack binaries and copy them to ./packs with GLIBC 2.36 compatibility
+
+ARG RUST_VERSION=1.92
+ARG DEBIAN_VERSION=bookworm
+
+# ============================================================================
+# Stage 1: Build Environment
+# ============================================================================
+FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy workspace files
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
+COPY .sqlx/ ./.sqlx/
+
+# Build all pack binaries in release mode with BuildKit cache
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/build/target,sharing=locked \
+    cargo build --release --bin attune-core-timer-sensor && \
+    cargo build --release --bin attune-timer-sensor && \
+    mkdir -p /build/binaries && \
+    cp /build/target/release/attune-core-timer-sensor /build/binaries/ && \
+    cp /build/target/release/attune-timer-sensor /build/binaries/
+
+# Verify GLIBC version used
+RUN ldd --version | head -1 && \
+    echo "Binaries built with the above GLIBC version for maximum compatibility"
+
+# ============================================================================
+# Stage 2: Output Stage
+# ============================================================================
+FROM debian:${DEBIAN_VERSION}-slim AS output
+
+WORKDIR /output
+
+# Copy built binaries
+COPY --from=builder /build/binaries/* ./
+
+# Create a script to copy binaries to the correct pack locations
+RUN cat > /copy-to-packs.sh << 'EOF'
+#!/bin/bash
+set -e
+
+OUTPUT_DIR=${OUTPUT_DIR:-/output}
+PACKS_DIR=${PACKS_DIR:-/packs}
+
+echo "Copying pack binaries from /build to $PACKS_DIR..."
+
+# Copy timer sensor binaries
+if [ -f /build/attune-core-timer-sensor ]; then
+    mkdir -p "$PACKS_DIR/core/sensors"
+    cp /build/attune-core-timer-sensor "$PACKS_DIR/core/sensors/"
+    chmod +x "$PACKS_DIR/core/sensors/attune-core-timer-sensor"
+    echo "✓ Copied attune-core-timer-sensor to core pack"
+fi
+
+if [ -f /build/attune-timer-sensor ]; then
+    mkdir -p "$PACKS_DIR/core/sensors"
+    cp /build/attune-timer-sensor "$PACKS_DIR/core/sensors/"
+    chmod +x "$PACKS_DIR/core/sensors/attune-timer-sensor"
+    echo "✓ Copied attune-timer-sensor to core pack"
+fi
+
+# Verify GLIBC requirements
+echo ""
+echo "Verifying GLIBC compatibility..."
+ldd /build/attune-core-timer-sensor 2>/dev/null | grep GLIBC || echo "Built with GLIBC $(ldd --version | head -1)"
+
+echo ""
+echo "Pack binaries built successfully with GLIBC 2.36 compatibility"
+echo "These binaries will work on any system with GLIBC 2.36 or newer"
+EOF
+
+RUN chmod +x /copy-to-packs.sh
+
+# Copy binaries to /build for the script
+COPY --from=builder /build/binaries/* /build/
+
+CMD ["/copy-to-packs.sh"]

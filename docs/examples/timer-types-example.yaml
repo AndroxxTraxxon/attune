@@ -1,0 +1,211 @@
+# Timer Types Example
+# This file demonstrates all three timer types with practical use cases
+
+---
+# Example 1: Interval Timer - Health Check
+# Use case: Monitor service health every 30 seconds
+name: health_check_rule
+ref: monitoring.health_check
+description: "Periodic health check every 30 seconds"
+enabled: true
+trigger:
+  type: core.intervaltimer
+  parameters:
+    unit: seconds
+    interval: 30
+action:
+  ref: core.http_request
+  parameters:
+    url: "https://api.example.com/health"
+    method: GET
+    timeout: 5
+
+---
+# Example 2: Interval Timer - Backup
+# Use case: Run backups every 6 hours
+name: database_backup_rule
+ref: backup.database
+description: "Backup database every 6 hours"
+enabled: true
+trigger:
+  type: core.intervaltimer
+  parameters:
+    unit: hours
+    interval: 6
+action:
+  ref: backup.run_backup
+  parameters:
+    backup_type: full
+    retention_days: 30
+
+---
+# Example 3: Cron Timer - Business Hours Report
+# Use case: Generate report weekdays at 5 PM
+name: daily_report_rule
+ref: reports.daily
+description: "Generate daily report at 5 PM on weekdays"
+enabled: true
+trigger:
+  type: core.crontimer
+  parameters:
+    expression: "0 0 17 * * 1-5"  # 5 PM Monday-Friday
+    timezone: "America/New_York"
+    description: "End of business day"
+action:
+  ref: reports.generate
+  parameters:
+    report_type: daily_summary
+    recipients:
+      - ops@example.com
+      - management@example.com
+
+---
+# Example 4: Cron Timer - Cleanup Task
+# Use case: Clean up old logs daily at midnight
+name: log_cleanup_rule
+ref: maintenance.cleanup
+description: "Clean up old logs daily at midnight"
+enabled: true
+trigger:
+  type: core.crontimer
+  parameters:
+    expression: "0 0 0 * * *"  # Midnight UTC
+    timezone: "UTC"
+action:
+  ref: core.shell
+  parameters:
+    cmd: |
+      find /var/log/app -type f -mtime +30 -delete
+      echo "Cleaned up logs older than 30 days"
+
+---
+# Example 5: Cron Timer - Complex Schedule
+# Use case: Run intensive task during off-peak hours only
+name: data_processing_rule
+ref: processing.intensive
+description: "Process data only during off-peak hours"
+enabled: true
+trigger:
+  type: core.crontimer
+  parameters:
+    # Every 2 hours between 10 PM and 6 AM (22, 0, 2, 4 hours)
+    expression: "0 0 22,0,2,4 * * *"
+    timezone: "UTC"
+action:
+  ref: processing.run_job
+  parameters:
+    job_type: intensive_processing
+    max_duration_minutes: 90
+
+---
+# Example 6: DateTime Timer - Scheduled Deployment
+# Use case: Deploy to production at specific date/time
+name: production_deployment_rule
+ref: deployment.production
+description: "Deploy version 2.0 to production"
+enabled: true
+trigger:
+  type: core.datetimetimer
+  parameters:
+    fire_at: "2024-06-15T02:00:00Z"
+    timezone: "UTC"
+    description: "Version 2.0 production release"
+action:
+  ref: deployment.deploy
+  parameters:
+    environment: production
+    version: "2.0.0"
+    rollback_on_error: true
+
+---
+# Example 7: DateTime Timer - Event Reminder
+# Use case: Send reminder before important event
+name: meeting_reminder_rule
+ref: notifications.reminder
+description: "Send reminder 15 minutes before meeting"
+enabled: true
+trigger:
+  type: core.datetimetimer
+  parameters:
+    fire_at: "2024-03-20T13:45:00Z"  # 1:45 PM, 15 min before 2 PM meeting
+    timezone: "America/New_York"
+    description: "Board meeting reminder"
+action:
+  ref: notifications.send
+  parameters:
+    recipients:
+      - team@example.com
+    subject: "Reminder: Board Meeting in 15 minutes"
+    message: "The quarterly board meeting starts at 2:00 PM in Conference Room A"
+
+---
+# Example 8: DateTime Timer - License Renewal
+# Use case: Reminder for upcoming license expiration
+name: license_renewal_reminder
+ref: admin.license_renewal
+description: "Remind about license expiration"
+enabled: true
+trigger:
+  type: core.datetimetimer
+  parameters:
+    fire_at: "2024-11-15T09:00:00Z"  # 30 days before expiration
+    timezone: "UTC"
+    description: "30-day license renewal reminder"
+action:
+  ref: notifications.send
+  parameters:
+    recipients:
+      - admin@example.com
+      - finance@example.com
+    subject: "Action Required: Software License Expires in 30 Days"
+    message: "Please renew the production software license before Dec 15, 2024"
+    priority: high
+
+---
+# Example 9: Combined Pattern - Monitoring with Escalation
+# Use case: Regular checks with scheduled review
+name: monitoring_with_review
+ref: monitoring.combined
+description: "Regular health checks with weekly review"
+# Note: This would actually be two separate rules
+# Rule 9a: Interval check
+enabled: true
+trigger:
+  type: core.intervaltimer
+  parameters:
+    unit: minutes
+    interval: 5
+action:
+  ref: monitoring.check_and_alert
+  parameters:
+    service: payment_api
+    alert_threshold: 3
+
+# Rule 9b would be a separate rule:
+# name: monitoring_weekly_review
+# trigger:
+#   type: core.crontimer
+#   parameters:
+#     expression: "0 0 9 * * 1"  # Monday 9 AM
+# action:
+#   ref: reports.weekly_summary
+
+---
+# Best Practices Demonstrated:
+
+# Interval Timers:
+# - Use for continuous monitoring (health checks, metrics)
+# - Use for regular maintenance (backups, cleanup)
+# - Simple, predictable schedules
+
+# Cron Timers:
+# - Use for business-hour operations
+# - Use for complex recurring schedules
+# - Use when you need specific times (not just intervals)
+
+# DateTime Timers:
+# - Use for one-time events (deployments, migrations)
+# - Use for reminders and notifications
+# - Use for scheduled cutover events
+# - Remember: These fire once and are automatically removed
+

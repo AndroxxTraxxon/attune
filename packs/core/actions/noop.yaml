@@ -1,0 +1,52 @@
+# No Operation Action
+# Does nothing - useful for testing and placeholder workflows
+
+name: noop
+ref: core.noop
+description: "Does nothing - useful for testing and placeholder workflows"
+enabled: true
+
+# Runner type determines how the action is executed
+runner_type: shell
+
+# Entry point is the shell command or script to execute
+entry_point: noop.sh
+
+# Action parameters schema (standard JSON Schema format)
+parameters:
+  type: object
+  properties:
+    message:
+      type: string
+      description: "Optional message to log (for debugging)"
+    exit_code:
+      type: integer
+      description: "Exit code to return (default: 0 for success)"
+      default: 0
+      minimum: 0
+      maximum: 255
+  required: []
+
+# Output schema
+output_schema:
+  type: object
+  properties:
+    stdout:
+      type: string
+      description: "Standard output (empty unless message provided)"
+    stderr:
+      type: string
+      description: "Standard error output (usually empty)"
+    exit_code:
+      type: integer
+      description: "Exit code of the command"
+    result:
+      type: string
+      description: "Operation result"
+
+# Tags for categorization
+tags:
+  - utility
+  - testing
+  - placeholder
+  - noop

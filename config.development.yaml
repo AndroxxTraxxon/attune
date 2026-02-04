@@ -1,0 +1,88 @@
+# Attune Development Environment Configuration
+# This file overrides base config.yaml settings for development
+
+environment: development
+
+# Development database
+database:
+  url: postgresql://postgres:postgres@localhost:5432/attune
+  log_statements: true # Enable SQL logging for debugging
+  schema: "public" # Explicit schema for development
+
+# Development message queue
+message_queue:
+  url: amqp://guest:guest@localhost:5672
+
+# Development server
+server:
+  host: 127.0.0.1
+  port: 8080
+  cors_origins:
+    - http://localhost:3000
+    - http://localhost:3001
+    - http://localhost:3002
+    - http://localhost:5173
+    - http://127.0.0.1:3000
+    - http://127.0.0.1:3001
+    - http://127.0.0.1:3002
+    - http://127.0.0.1:5173
+
+# Development logging
+log:
+  level: debug
+  format: pretty # Human-readable logs for development
+  console: true
+
+# Development security (weaker settings OK for dev)
+security:
+  jwt_secret: dev-secret-not-for-production
+  jwt_access_expiration: 86400 # 24 hours (longer for dev convenience)
+  jwt_refresh_expiration: 2592000 # 30 days
+  encryption_key: test-encryption-key-32-chars-okay
+  enable_auth: true
+
+# Packs directory (where pack action files are located)
+packs_base_dir: ./packs
+
+# Worker service configuration
+worker:
+  service_name: attune-worker-e2e
+  worker_type: local
+  max_concurrent_tasks: 10
+  heartbeat_interval: 10
+  task_timeout: 120 # 2 minutes default
+  cleanup_interval: 60
+  work_dir: ./tests/artifacts
+  python:
+    executable: python3
+    venv_dir: ./tests/venvs
+    requirements_timeout: 120
+  nodejs:
+    executable: node
+    npm_executable: npm
+    modules_dir: ./tests/node_modules
+    install_timeout: 120
+  shell:
+    executable: /bin/bash
+    allowed_shells:
+      - /bin/bash
+      - /bin/sh
+
+# Sensor service configuration
+sensor:
+  service_name: attune-sensor-e2e
+  heartbeat_interval: 10
+  max_concurrent_sensors: 20
+  sensor_timeout: 120
+  polling_interval: 5 # Check for new sensors every 5 seconds
+  cleanup_interval: 60
+
+# Notifier service configuration
+notifier:
+  service_name: attune-notifier-e2e
+  websocket_host: 127.0.0.1
+  websocket_port: 8081
+  heartbeat_interval: 30
+  connection_timeout: 60
+  max_connections: 100
+  message_buffer_size: 1000

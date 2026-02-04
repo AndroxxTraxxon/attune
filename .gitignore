@@ -1,0 +1,81 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Configuration files (keep *.example.yaml)
+config.yaml
+config.*.yaml
+!config.example.yaml
+!config.development.yaml
+!config.test.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+dist/
+build/
+
+# Testing
+coverage/
+*.profdata
+
+# Documentation
+target/doc/
+
+# Backup files
+*.bak
+*.backup
+
+# OS specific
+Thumbs.db
+.DS_Store
+
+# Temporary files
+*.tmp
+temp/
+tmp/
+
+# Python (for reference models)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Node (if used for tooling)
+node_modules/
+package-lock.json
+yarn.lock
+tests/pids/*
+
+# Docker
+.env
+.env.docker
+docker-compose.override.yml
+*.pid

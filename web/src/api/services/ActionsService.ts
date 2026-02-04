@@ -1,0 +1,433 @@
+/* generated using openapi-typescript-codegen -- do not edit */
+/* istanbul ignore file */
+/* tslint:disable */
+/* eslint-disable */
+import type { CreateActionRequest } from '../models/CreateActionRequest';
+import type { PaginatedResponse_ActionSummary } from '../models/PaginatedResponse_ActionSummary';
+import type { SuccessResponse } from '../models/SuccessResponse';
+import type { UpdateActionRequest } from '../models/UpdateActionRequest';
+import type { CancelablePromise } from '../core/CancelablePromise';
+import { OpenAPI } from '../core/OpenAPI';
+import { request as __request } from '../core/request';
+export class ActionsService {
+    /**
+     * List all actions with pagination
+     * @returns PaginatedResponse_ActionSummary List of actions
+     * @throws ApiError
+     */
+    public static listActions({
+        page,
+        pageSize,
+    }: {
+        /**
+         * Page number (1-based)
+         */
+        page?: number,
+        /**
+         * Number of items per page
+         */
+        pageSize?: number,
+    }): CancelablePromise<PaginatedResponse_ActionSummary> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/actions',
+            query: {
+                'page': page,
+                'page_size': pageSize,
+            },
+        });
+    }
+    /**
+     * Create a new action
+     * @returns any Action created successfully
+     * @throws ApiError
+     */
+    public static createAction({
+        requestBody,
+    }: {
+        requestBody: CreateActionRequest,
+    }): CancelablePromise<{
+        /**
+         * Response DTO for action information
+         */
+        data: {
+            /**
+             * Creation timestamp
+             */
+            created: string;
+            /**
+             * Action description
+             */
+            description: string;
+            /**
+             * Entry point
+             */
+            entrypoint: string;
+            /**
+             * Action ID
+             */
+            id: number;
+            /**
+             * Whether this is an ad-hoc action (not from pack installation)
+             */
+            is_adhoc: boolean;
+            /**
+             * Human-readable label
+             */
+            label: string;
+            /**
+             * Output schema
+             */
+            out_schema: any | null;
+            /**
+             * Pack ID
+             */
+            pack: number;
+            /**
+             * Pack reference
+             */
+            pack_ref: string;
+            /**
+             * Parameter schema
+             */
+            param_schema: any | null;
+            /**
+             * Unique reference identifier
+             */
+            ref: string;
+            /**
+             * Runtime ID
+             */
+            runtime?: number | null;
+            /**
+             * Last update timestamp
+             */
+            updated: string;
+        };
+        /**
+         * Optional message
+         */
+        message?: string | null;
+    }> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/actions',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                400: `Validation error`,
+                404: `Pack not found`,
+                409: `Action with same ref already exists`,
+            },
+        });
+    }
+    /**
+     * Get a single action by reference
+     * @returns any Action details
+     * @throws ApiError
+     */
+    public static getAction({
+        ref,
+    }: {
+        /**
+         * Action reference identifier
+         */
+        ref: string,
+    }): CancelablePromise<{
+        /**
+         * Response DTO for action information
+         */
+        data: {
+            /**
+             * Creation timestamp
+             */
+            created: string;
+            /**
+             * Action description
+             */
+            description: string;
+            /**
+             * Entry point
+             */
+            entrypoint: string;
+            /**
+             * Action ID
+             */
+            id: number;
+            /**
+             * Whether this is an ad-hoc action (not from pack installation)
+             */
+            is_adhoc: boolean;
+            /**
+             * Human-readable label
+             */
+            label: string;
+            /**
+             * Output schema
+             */
+            out_schema: any | null;
+            /**
+             * Pack ID
+             */
+            pack: number;
+            /**
+             * Pack reference
+             */
+            pack_ref: string;
+            /**
+             * Parameter schema
+             */
+            param_schema: any | null;
+            /**
+             * Unique reference identifier
+             */
+            ref: string;
+            /**
+             * Runtime ID
+             */
+            runtime?: number | null;
+            /**
+             * Last update timestamp
+             */
+            updated: string;
+        };
+        /**
+         * Optional message
+         */
+        message?: string | null;
+    }> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/actions/{ref}',
+            path: {
+                'ref': ref,
+            },
+            errors: {
+                404: `Action not found`,
+            },
+        });
+    }
+    /**
+     * Update an existing action
+     * @returns any Action updated successfully
+     * @throws ApiError
+     */
+    public static updateAction({
+        ref,
+        requestBody,
+    }: {
+        /**
+         * Action reference identifier
+         */
+        ref: string,
+        requestBody: UpdateActionRequest,
+    }): CancelablePromise<{
+        /**
+         * Response DTO for action information
+         */
+        data: {
+            /**
+             * Creation timestamp
+             */
+            created: string;
+            /**
+             * Action description
+             */
+            description: string;
+            /**
+             * Entry point
+             */
+            entrypoint: string;
+            /**
+             * Action ID
+             */
+            id: number;
+            /**
+             * Whether this is an ad-hoc action (not from pack installation)
+             */
+            is_adhoc: boolean;
+            /**
+             * Human-readable label
+             */
+            label: string;
+            /**
+             * Output schema
+             */
+            out_schema: any | null;
+            /**
+             * Pack ID
+             */
+            pack: number;
+            /**
+             * Pack reference
+             */
+            pack_ref: string;
+            /**
+             * Parameter schema
+             */
+            param_schema: any | null;
+            /**
+             * Unique reference identifier
+             */
+            ref: string;
+            /**
+             * Runtime ID
+             */
+            runtime?: number | null;
+            /**
+             * Last update timestamp
+             */
+            updated: string;
+        };
+        /**
+         * Optional message
+         */
+        message?: string | null;
+    }> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/api/v1/actions/{ref}',
+            path: {
+                'ref': ref,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                400: `Validation error`,
+                404: `Action not found`,
+            },
+        });
+    }
+    /**
+     * Delete an action
+     * @returns SuccessResponse Action deleted successfully
+     * @throws ApiError
+     */
+    public static deleteAction({
+        ref,
+    }: {
+        /**
+         * Action reference identifier
+         */
+        ref: string,
+    }): CancelablePromise<SuccessResponse> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/actions/{ref}',
+            path: {
+                'ref': ref,
+            },
+            errors: {
+                404: `Action not found`,
+            },
+        });
+    }
+    /**
+     * Get queue statistics for an action
+     * @returns any Queue statistics
+     * @throws ApiError
+     */
+    public static getQueueStats({
+        ref,
+    }: {
+        /**
+         * Action reference identifier
+         */
+        ref: string,
+    }): CancelablePromise<{
+        /**
+         * Response DTO for queue statistics
+         */
+        data: {
+            /**
+             * Action ID
+             */
+            action_id: number;
+            /**
+             * Action reference
+             */
+            action_ref: string;
+            /**
+             * Number of currently running executions
+             */
+            active_count: number;
+            /**
+             * Timestamp of last statistics update
+             */
+            last_updated: string;
+            /**
+             * Maximum concurrent executions allowed
+             */
+            max_concurrent: number;
+            /**
+             * Timestamp of oldest queued execution (if any)
+             */
+            oldest_enqueued_at?: string | null;
+            /**
+             * Number of executions waiting in queue
+             */
+            queue_length: number;
+            /**
+             * Total executions completed since queue creation
+             */
+            total_completed: number;
+            /**
+             * Total executions enqueued since queue creation
+             */
+            total_enqueued: number;
+        };
+        /**
+         * Optional message
+         */
+        message?: string | null;
+    }> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/actions/{ref}/queue-stats',
+            path: {
+                'ref': ref,
+            },
+            errors: {
+                404: `Action not found or no queue statistics available`,
+            },
+        });
+    }
+    /**
+     * List actions by pack reference
+     * @returns PaginatedResponse_ActionSummary List of actions for pack
+     * @throws ApiError
+     */
+    public static listActionsByPack({
+        packRef,
+        page,
+        pageSize,
+    }: {
+        /**
+         * Pack reference identifier
+         */
+        packRef: string,
+        /**
+         * Page number (1-based)
+         */
+        page?: number,
+        /**
+         * Number of items per page
+         */
+        pageSize?: number,
+    }): CancelablePromise<PaginatedResponse_ActionSummary> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/packs/{pack_ref}/actions',
+            path: {
+                'pack_ref': packRef,
+            },
+            query: {
+                'page': page,
+                'page_size': pageSize,
+            },
+            errors: {
+                404: `Pack not found`,
+            },
+        });
+    }
+}

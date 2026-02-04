@@ -1,0 +1,51 @@
+# Echo Action
+# Outputs a message to stdout
+
+name: echo
+ref: core.echo
+description: "Echo a message to stdout"
+enabled: true
+
+# Runner type determines how the action is executed
+runner_type: shell
+
+# Entry point is the shell command or script to execute
+entry_point: echo.sh
+
+# Action parameters schema (standard JSON Schema format)
+parameters:
+  type: object
+  properties:
+    message:
+      type: string
+      description: "Message to echo"
+      default: "Hello, World!"
+    uppercase:
+      type: boolean
+      description: "Convert message to uppercase before echoing"
+      default: false
+  required:
+    - message
+
+# Output schema
+output_schema:
+  type: object
+  properties:
+    stdout:
+      type: string
+      description: "Standard output from the echo command"
+    stderr:
+      type: string
+      description: "Standard error output (usually empty)"
+    exit_code:
+      type: integer
+      description: "Exit code of the command (0 = success)"
+    result:
+      type: string
+      description: "The echoed message"
+
+# Tags for categorization
+tags:
+  - utility
+  - testing
+  - debug

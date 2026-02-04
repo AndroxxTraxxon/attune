@@ -1,0 +1,68 @@
+# Simple Workflow Example
+# This is a minimal example to demonstrate basic workflow concepts
+
+ref: examples.simple_sequential_workflow
+label: "Simple Sequential Workflow"
+description: "A basic workflow that runs three tasks in sequence"
+version: "1.0.0"
+
+# Input parameters
+parameters:
+  message:
+    type: string
+    required: true
+    description: "Message to process"
+
+  uppercase:
+    type: boolean
+    default: false
+    description: "Convert message to uppercase"
+
+# Output schema
+output:
+  type: object
+  properties:
+    original:
+      type: string
+    processed:
+      type: string
+    final:
+      type: string
+
+# Workflow variables
+vars:
+  processed_message: null
+  timestamp: null
+
+# Task definitions
+tasks:
+  # Task 1: Log the input
+  - name: log_input
+    action: core.echo
+    input:
+      message: "Starting workflow with: {{ parameters.message }}"
+    publish:
+      - timestamp: "{{ system.timestamp }}"
+    on_success: process_message
+
+  # Task 2: Process the message
+  - name: process_message
+    action: string.transform
+    input:
+      text: "{{ parameters.message }}"
+      uppercase: "{{ parameters.uppercase }}"
+    publish:
+      - processed_message: "{{ task.process_message.result.text }}"
+    on_success: finalize
+
+  # Task 3: Finalize and log result
+  - name: finalize
+    action: core.echo
+    input:
+      message: "Workflow complete. Result: {{ vars.processed_message }}"
+
+# Map workflow outputs
+output_map:
+  original: "{{ parameters.message }}"
+  processed: "{{ vars.processed_message }}"
+  final: "{{ task.finalize.result.message }}"

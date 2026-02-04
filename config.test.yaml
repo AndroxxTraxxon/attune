@@ -1,0 +1,67 @@
+# Attune Test Environment Configuration
+# This file overrides base config.yaml settings for testing
+
+environment: test
+
+# Test database (uses separate database to avoid conflicts)
+database:
+  url: postgresql://postgres:postgres@localhost:5432/attune_test
+  max_connections: 10
+  min_connections: 2
+  connect_timeout: 10
+  idle_timeout: 60
+  log_statements: false # Usually disabled in tests for cleaner output
+  schema: null # Will be set per-test in test context
+
+# Test Redis (optional)
+redis:
+  url: redis://localhost:6379/1 # Use database 1 for tests
+  pool_size: 5
+
+# Test message queue (optional)
+message_queue:
+  url: amqp://guest:guest@localhost:5672/%2f
+  exchange: attune_test
+  enable_dlq: false
+  message_ttl: 300
+
+# Test server
+server:
+  host: 127.0.0.1
+  port: 0 # Use random available port for tests
+  request_timeout: 10
+  enable_cors: true
+  cors_origins:
+    - http://localhost:3000
+  max_body_size: 1048576 # 1MB (smaller for tests)
+
+# Test logging (minimal for cleaner test output)
+log:
+  level: warn # Only show warnings and errors during tests
+  format: pretty
+  console: true
+
+# Test security (use fixed values for reproducible tests)
+security:
+  jwt_secret: test-secret-for-testing-only-not-secure
+  jwt_access_expiration: 300 # 5 minutes
+  jwt_refresh_expiration: 3600 # 1 hour
+  encryption_key: test-encryption-key-32-chars-okay
+  enable_auth: true
+
+# Test packs directory (use /tmp for tests to avoid permission issues)
+packs_base_dir: /tmp/attune-test-packs
+
+# Test pack registry
+pack_registry:
+  enabled: true
+  default_registry: https://registry.attune.example.com
+  cache_ttl: 300
+
+# Test worker configuration
+# worker:
+#   name: attune-test-worker
+#   worker_type: local
+#   max_concurrent_tasks: 2
+#   heartbeat_interval: 5
+#   task_timeout: 30

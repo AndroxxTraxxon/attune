@@ -1,0 +1,232 @@
+//! PostgreSQL LISTEN/NOTIFY integration for real-time notifications
+
+use anyhow::{Context, Result};
+use sqlx::postgres::PgListener;
+use tokio::sync::broadcast;
+use tracing::{debug, error, info, warn};
+
+use crate::service::Notification;
+
+/// Channels to listen on for PostgreSQL notifications
+const NOTIFICATION_CHANNELS: &[&str] = &[
+    "attune_notifications",
+    "execution_status_changed",
+    "execution_created",
+    "inquiry_created",
+    "inquiry_responded",
+    "enforcement_created",
+    "event_created",
+    "workflow_execution_status_changed",
+];
+
+/// PostgreSQL listener that receives NOTIFY events and broadcasts them
+pub struct PostgresListener {
+    database_url: String,
+    notification_tx: broadcast::Sender<Notification>,
+}
+
+impl PostgresListener {
+    /// Create a new PostgreSQL listener
+    pub async fn new(
+        database_url: String,
+        notification_tx: broadcast::Sender<Notification>,
+    ) -> Result<Self> {
+        Ok(Self {
+            database_url,
+            notification_tx,
+        })
+    }
+
+    /// Start listening for PostgreSQL notifications
+    pub async fn listen(&self) -> Result<()> {
+        info!(
+            "Starting PostgreSQL LISTEN on channels: {:?}",
+            NOTIFICATION_CHANNELS
+        );
+
+        // Create a dedicated listener connection
+        let mut listener = PgListener::connect(&self.database_url)
+            .await
+            .context("Failed to connect PostgreSQL listener")?;
+
+        // Listen on all notification channels
+        for channel in NOTIFICATION_CHANNELS {
+            listener
+                .listen(channel)
+                .await
+                .context(format!("Failed to LISTEN on channel '{}'", channel))?;
+            info!("Listening on PostgreSQL channel: {}", channel);
+        }
+
+        // Process notifications in a loop
+        loop {
+            match listener.recv().await {
+                Ok(pg_notification) => {
+                    debug!(
+                        "Received PostgreSQL notification: channel={}, payload={}",
+                        pg_notification.channel(),
+                        pg_notification.payload()
+                    );
+
+                    // Parse and broadcast notification
+                    if let Err(e) = self
+                        .process_notification(pg_notification.channel(), pg_notification.payload())
+                    {
+                        error!(
+                            "Failed to process notification from channel '{}': {}",
+                            pg_notification.channel(),
+                            e
+                        );
+                    }
+                }
+                Err(e) => {
+                    error!("Error receiving PostgreSQL notification: {}", e);
+
+                    // Sleep briefly before retrying to avoid tight loop on persistent errors
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+                    // Try to reconnect
+                    warn!("Attempting to reconnect PostgreSQL listener...");
+                    match PgListener::connect(&self.database_url).await {
+                        Ok(new_listener) => {
+                            listener = new_listener;
+                            // Re-subscribe to all channels
+                            for channel in NOTIFICATION_CHANNELS {
+                                if let Err(e) = listener.listen(channel).await {
+                                    error!(
+                                        "Failed to re-subscribe to channel '{}': {}",
+                                        channel, e
+                                    );
+                                }
+                            }
+                            info!("PostgreSQL listener reconnected successfully");
+                        }
+                        Err(e) => {
+                            error!("Failed to reconnect PostgreSQL listener: {}", e);
+                            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Process a PostgreSQL notification and broadcast it to WebSocket clients
+    fn process_notification(&self, channel: &str, payload: &str) -> Result<()> {
+        // Parse the JSON payload
+        let payload_json: serde_json::Value = serde_json::from_str(payload)
+            .context("Failed to parse notification payload as JSON")?;
+
+        // Extract common fields
+        let entity_type = payload_json
+            .get("entity_type")
+            .and_then(|v| v.as_str())
+            .context("Missing 'entity_type' in notification payload")?
+            .to_string();
+
+        let entity_id = payload_json
+            .get("entity_id")
+            .and_then(|v| v.as_i64())
+            .context("Missing 'entity_id' in notification payload")?;
+
+        let user_id = payload_json.get("user_id").and_then(|v| v.as_i64());
+
+        // Create notification
+        let notification = Notification {
+            notification_type: channel.to_string(),
+            entity_type,
+            entity_id,
+            user_id,
+            payload: payload_json,
+            timestamp: chrono::Utc::now(),
+        };
+
+        // Broadcast to all subscribers (ignore errors if no receivers)
+        match self.notification_tx.send(notification) {
+            Ok(receiver_count) => {
+                debug!(
+                    "Broadcast notification to {} receivers: type={}, entity_id={}",
+                    receiver_count, channel, entity_id
+                );
+            }
+            Err(_) => {
+                // No active receivers, this is fine
+                debug!("No active receivers for notification: type={}", channel);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_notification_channels_defined() {
+        assert!(!NOTIFICATION_CHANNELS.is_empty());
+        assert!(NOTIFICATION_CHANNELS.contains(&"execution_status_changed"));
+        assert!(NOTIFICATION_CHANNELS.contains(&"inquiry_created"));
+    }
+
+    #[test]
+    fn test_process_notification_valid_payload() {
+        let (tx, mut rx) = broadcast::channel(10);
+        let listener = PostgresListener {
+            database_url: "postgresql://test".to_string(),
+            notification_tx: tx,
+        };
+
+        let payload = serde_json::json!({
+            "entity_type": "execution",
+            "entity_id": 123,
+            "user_id": 456,
+            "status": "succeeded"
+        });
+
+        let result =
+            listener.process_notification("execution_status_changed", &payload.to_string());
+
+        assert!(result.is_ok());
+
+        // Should receive the notification
+        let notification = rx.try_recv().unwrap();
+        assert_eq!(notification.notification_type, "execution_status_changed");
+        assert_eq!(notification.entity_type, "execution");
+        assert_eq!(notification.entity_id, 123);
+        assert_eq!(notification.user_id, Some(456));
+    }
+
+    #[test]
+    fn test_process_notification_missing_fields() {
+        let (tx, _rx) = broadcast::channel(10);
+        let listener = PostgresListener {
+            database_url: "postgresql://test".to_string(),
+            notification_tx: tx,
+        };
+
+        // Missing entity_id
+        let payload = serde_json::json!({
+            "entity_type": "execution"
+        });
+
+        let result =
+            listener.process_notification("execution_status_changed", &payload.to_string());
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_process_notification_invalid_json() {
+        let (tx, _rx) = broadcast::channel(10);
+        let listener = PostgresListener {
+            database_url: "postgresql://test".to_string(),
+            notification_tx: tx,
+        };
+
+        let result = listener.process_notification("execution_status_changed", "not valid json");
+
+        assert!(result.is_err());
+    }
+}

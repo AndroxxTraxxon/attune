@@ -1,0 +1,117 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/common",
+    "crates/api",
+    "crates/executor",
+    "crates/sensor",
+    "crates/core-timer-sensor",
+    "crates/worker",
+    "crates/notifier",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Attune Team"]
+license = "MIT"
+repository = "https://github.com/yourusername/attune"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.42", features = ["full"] }
+tokio-util = "0.7"
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+# Web framework
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "json", "chrono", "uuid"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml_ng = "0.10"
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Configuration
+config = "0.15"
+
+# Date/Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1.11", features = ["v4", "serde"] }
+
+# Validation
+validator = { version = "0.20", features = ["derive"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Message queue / PubSub
+# RabbitMQ
+lapin = "3.7"
+# Redis
+redis = { version = "1.0", features = ["tokio-comp", "connection-manager"] }
+
+# JSON Schema
+schemars = { version = "1.2", features = ["chrono04"] }
+jsonschema = "0.38"
+
+# OpenAPI/Swagger
+utoipa = { version = "5.4", features = ["chrono", "uuid"] }
+
+# Encryption
+argon2 = "0.5"
+ring = "0.17"
+base64 = "0.22"
+aes-gcm = "0.10"
+sha2 = "0.10"
+
+# Regular expressions
+regex = "1.11"
+
+# HTTP client
+reqwest = { version = "0.13", features = ["json"] }
+reqwest-eventsource = "0.6"
+hyper = { version = "1.0", features = ["full"] }
+
+# File system utilities
+walkdir = "2.4"
+
+# Async utilities
+async-trait = "0.1"
+futures = "0.3"
+
+# Testing
+mockall = "0.14"
+tempfile = "3.8"
+serial_test = "3.2"
+
+# Concurrent data structures
+dashmap = "6.1"
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.test]
+opt-level = 1

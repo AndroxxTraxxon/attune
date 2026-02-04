@@ -1,0 +1,447 @@
+import { Link } from "react-router-dom";
+import { useEnforcements } from "@/hooks/useEvents";
+import { useEnforcementStream } from "@/hooks/useEnforcementStream";
+import { EnforcementStatus } from "@/api";
+import { useState, useMemo, memo, useCallback, useEffect } from "react";
+import { Search, X } from "lucide-react";
+import MultiSelect from "@/components/common/MultiSelect";
+
+// Memoized filter input component to prevent re-render on WebSocket updates
+const FilterInput = memo(
+  ({
+    label,
+    value,
+    onChange,
+    placeholder,
+  }: {
+    label: string;
+    value: string;
+    onChange: (value: string) => void;
+    placeholder: string;
+  }) => (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 mb-1">
+        {label}
+      </label>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+      />
+    </div>
+  ),
+);
+
+FilterInput.displayName = "FilterInput";
+
+// Status options moved outside component to prevent recreation
+const STATUS_OPTIONS = [
+  { value: EnforcementStatus.CREATED, label: "Created" },
+  { value: EnforcementStatus.PROCESSED, label: "Processed" },
+  { value: EnforcementStatus.DISABLED, label: "Disabled" },
+];
+
+export default function EnforcementsPage() {
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+  const [searchFilters, setSearchFilters] = useState({
+    rule: "",
+    trigger: "",
+    event: "",
+  });
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+
+  // Debounced filter state for API calls
+  const [debouncedFilters, setDebouncedFilters] = useState(searchFilters);
+  const [debouncedStatuses, setDebouncedStatuses] = useState(selectedStatuses);
+
+  // Debounce filter changes (500ms delay)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedFilters(searchFilters);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [searchFilters]);
+
+  // Debounce status changes (300ms delay - shorter since it's a selection)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedStatuses(selectedStatuses);
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [selectedStatuses]);
+
+  const queryParams = useMemo(() => {
+    const params: any = { page, pageSize };
+    if (debouncedFilters.trigger) params.triggerRef = debouncedFilters.trigger;
+    if (debouncedFilters.event) {
+      const eventId = parseInt(debouncedFilters.event, 10);
+      if (!isNaN(eventId)) {
+        params.event = eventId;
+      }
+    }
+
+    // Include status filter if exactly one status is selected
+    // API only supports single status, so we use the first one for filtering
+    // and show all results if multiple are selected
+    if (debouncedStatuses.length === 1) {
+      params.status = debouncedStatuses[0] as EnforcementStatus;
+    }
+
+    return params;
+  }, [page, pageSize, debouncedFilters, debouncedStatuses]);
+
+  const { data, isLoading, error } = useEnforcements(queryParams);
+
+  // Subscribe to real-time updates for all enforcements
+  const { isConnected } = useEnforcementStream({ enabled: true });
+
+  const enforcements = data?.data || [];
+  const total = data?.pagination?.total_items || 0;
+  const totalPages = Math.ceil(total / pageSize);
+
+  // Client-side filtering for multiple status selection and rule_ref (when > 1 status selected)
+  const filteredEnforcements = useMemo(() => {
+    let filtered = enforcements;
+
+    // Filter by rule_ref (client-side since API doesn't support it)
+    if (debouncedFilters.rule) {
+      filtered = filtered.filter((enf: any) =>
+        enf.rule_ref
+          .toLowerCase()
+          .includes(debouncedFilters.rule.toLowerCase()),
+      );
+    }
+
+    // If multiple statuses selected, filter client-side
+    if (debouncedStatuses.length > 1) {
+      filtered = filtered.filter((enf: any) =>
+        debouncedStatuses.includes(enf.status),
+      );
+    }
+
+    return filtered;
+  }, [enforcements, debouncedFilters.rule, debouncedStatuses]);
+
+  const handleFilterChange = useCallback((field: string, value: string) => {
+    setSearchFilters((prev) => ({ ...prev, [field]: value }));
+    setPage(1); // Reset to first page on filter change
+  }, []);
+
+  const clearFilters = useCallback(() => {
+    setSearchFilters({
+      rule: "",
+      trigger: "",
+      event: "",
+    });
+    setSelectedStatuses([]);
+    setPage(1); // Reset to first page
+  }, []);
+
+  const hasActiveFilters =
+    Object.values(searchFilters).some((v) => v !== "") ||
+    selectedStatuses.length > 0;
+
+  if (isLoading) {
+    return (
+      <div className="p-6">
+        <div className="flex items-center justify-center h-64">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6">
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+          <p>Error: {(error as Error).message}</p>
+        </div>
+      </div>
+    );
+  }
+
+  const getStatusColor = (status: EnforcementStatus) => {
+    switch (status) {
+      case EnforcementStatus.PROCESSED:
+        return "bg-green-100 text-green-800";
+      case EnforcementStatus.DISABLED:
+        return "bg-gray-100 text-gray-800";
+      case EnforcementStatus.CREATED:
+        return "bg-blue-100 text-blue-800";
+      default:
+        return "bg-gray-100 text-gray-800";
+    }
+  };
+
+  const getConditionBadge = (condition: string) => {
+    const colors = {
+      all: "bg-purple-100 text-purple-800",
+      any: "bg-indigo-100 text-indigo-800",
+    };
+    return (
+      colors[condition as keyof typeof colors] || "bg-gray-100 text-gray-800"
+    );
+  };
+
+  const formatTime = (timestamp: string) => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+
+    if (diff < 60000) return "just now";
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+    return date.toLocaleDateString();
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleString();
+  };
+
+  return (
+    <div className="p-6">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-3xl font-bold">Enforcements</h1>
+          {isLoading && hasActiveFilters && (
+            <p className="text-sm text-gray-500 mt-1">
+              Searching enforcements...
+            </p>
+          )}
+        </div>
+        {isConnected && (
+          <div className="flex items-center gap-2 text-sm text-green-600">
+            <div className="h-2 w-2 rounded-full bg-green-600 animate-pulse" />
+            <span>Live Updates</span>
+          </div>
+        )}
+      </div>
+
+      {/* Search Filters */}
+      <div className="bg-white shadow rounded-lg p-4 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Search className="h-5 w-5 text-gray-400" />
+            <h2 className="text-lg font-semibold">Filter Enforcements</h2>
+          </div>
+          {hasActiveFilters && (
+            <button
+              onClick={clearFilters}
+              className="flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900"
+            >
+              <X className="h-4 w-4" />
+              Clear Filters
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <FilterInput
+            label="Rule"
+            value={searchFilters.rule}
+            onChange={(value) => handleFilterChange("rule", value)}
+            placeholder="e.g., core.on_timer"
+          />
+          <FilterInput
+            label="Trigger"
+            value={searchFilters.trigger}
+            onChange={(value) => handleFilterChange("trigger", value)}
+            placeholder="e.g., core.webhook"
+          />
+          <FilterInput
+            label="Event ID"
+            value={searchFilters.event}
+            onChange={(value) => handleFilterChange("event", value)}
+            placeholder="e.g., 123"
+          />
+          <div>
+            <MultiSelect
+              label="Status"
+              options={STATUS_OPTIONS}
+              value={selectedStatuses}
+              onChange={setSelectedStatuses}
+              placeholder="All Statuses"
+            />
+          </div>
+        </div>
+      </div>
+
+      {filteredEnforcements.length === 0 ? (
+        <div className="bg-white p-12 text-center rounded-lg shadow">
+          <p>
+            {enforcements.length === 0
+              ? "No enforcements found"
+              : "No enforcements match the selected filters"}
+          </p>
+          {enforcements.length > 0 && hasActiveFilters && (
+            <button
+              onClick={clearFilters}
+              className="mt-3 text-sm text-blue-600 hover:text-blue-800"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          <div className="bg-white shadow rounded-lg overflow-hidden">
+            <table className="min-w-full">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    ID
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Rule
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Trigger
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Event
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Condition
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Status
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Created
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {filteredEnforcements.map((enforcement: any) => (
+                  <tr key={enforcement.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 font-mono text-sm">
+                      <Link
+                        to={`/enforcements/${enforcement.id}`}
+                        className="text-blue-600 hover:text-blue-800"
+                      >
+                        #{enforcement.id}
+                      </Link>
+                    </td>
+                    <td className="px-6 py-4">
+                      {enforcement.rule ? (
+                        <Link
+                          to={`/rules/${enforcement.rule}`}
+                          className="text-sm text-blue-600 hover:text-blue-800"
+                        >
+                          {enforcement.rule_ref}
+                        </Link>
+                      ) : (
+                        <span className="text-sm text-gray-900">
+                          {enforcement.rule_ref}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="text-sm text-gray-700">
+                        {enforcement.trigger_ref}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      {enforcement.event ? (
+                        <Link
+                          to={`/events/${enforcement.event}`}
+                          className="text-sm font-mono text-blue-600 hover:text-blue-800"
+                        >
+                          #{enforcement.event}
+                        </Link>
+                      ) : (
+                        <span className="text-sm text-gray-400 italic">-</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span
+                        className={`px-2 py-1 text-xs rounded ${getConditionBadge(enforcement.condition)}`}
+                      >
+                        {enforcement.condition}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span
+                        className={`px-2 py-1 text-xs rounded ${getStatusColor(enforcement.status)}`}
+                      >
+                        {enforcement.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-sm text-gray-900">
+                        {formatTime(enforcement.created)}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        {formatDate(enforcement.created)}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="bg-gray-50 px-6 py-4 flex items-center justify-between border-t border-gray-200">
+              <div className="flex-1 flex justify-between sm:hidden">
+                <button
+                  onClick={() => setPage(page - 1)}
+                  disabled={page === 1}
+                  className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => setPage(page + 1)}
+                  disabled={page === totalPages}
+                  className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+              <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm text-gray-700">
+                    Showing{" "}
+                    <span className="font-medium">
+                      {(page - 1) * pageSize + 1}
+                    </span>{" "}
+                    to{" "}
+                    <span className="font-medium">
+                      {Math.min(page * pageSize, total)}
+                    </span>{" "}
+                    of <span className="font-medium">{total}</span> enforcements
+                  </p>
+                </div>
+                <div>
+                  <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
+                    <button
+                      onClick={() => setPage(page - 1)}
+                      disabled={page === 1}
+                      className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      onClick={() => setPage(page + 1)}
+                      disabled={page === totalPages}
+                      className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Next
+                    </button>
+                  </nav>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}

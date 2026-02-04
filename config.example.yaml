@@ -1,0 +1,110 @@
+# Attune Configuration Example
+# Copy this file to config.yaml and customize for your environment
+# For production, use environment variables to override sensitive values
+
+# Service metadata
+service_name: attune
+environment: development
+
+# Database configuration
+database:
+  # PostgreSQL connection URL
+  # Format: postgresql://username:password@host:port/database
+  url: postgresql://postgres:postgres@localhost:5432/attune
+
+  # Connection pool settings
+  max_connections: 50
+  min_connections: 5
+  connect_timeout: 30 # seconds
+  idle_timeout: 600 # seconds
+
+  # Enable SQL statement logging (useful for debugging)
+  log_statements: false
+
+  # PostgreSQL schema name (defaults to "attune" if not specified)
+  schema: "attune"
+
+# Redis configuration (optional, for caching and pub/sub)
+redis:
+  url: redis://localhost:6379
+  pool_size: 10
+
+# Message queue configuration (optional, for async processing)
+message_queue:
+  url: amqp://guest:guest@localhost:5672/%2f
+  exchange: attune
+  enable_dlq: true
+  message_ttl: 3600 # seconds
+
+# Server configuration
+server:
+  host: 0.0.0.0
+  port: 8080
+  request_timeout: 30 # seconds
+  enable_cors: true
+
+  # Allowed CORS origins
+  # Add your frontend URLs here
+  cors_origins:
+    - http://localhost:3000
+    - http://localhost:5173
+    - http://127.0.0.1:3000
+    - http://127.0.0.1:5173
+
+  # Maximum request body size (bytes)
+  max_body_size: 10485760 # 10MB
+
+# Logging configuration
+log:
+  # Log level: trace, debug, info, warn, error
+  level: info
+
+  # Log format: json (for production), pretty (for development)
+  format: json
+
+  # Enable console logging
+  console: true
+
+  # Optional: log to file
+  # file: /var/log/attune/attune.log
+
+# Security configuration
+security:
+  # JWT secret key - CHANGE THIS!
+  # Generate with: openssl rand -base64 64
+  jwt_secret: your-secret-key-change-this
+
+  # JWT token expiration times (seconds)
+  jwt_access_expiration: 3600 # 1 hour
+  jwt_refresh_expiration: 604800 # 7 days
+
+  # Encryption key for secrets - CHANGE THIS!
+  # Must be at least 32 characters
+  # Generate with: openssl rand -base64 32
+  encryption_key: dev-encryption-key-at-least-32-characters-long-change-this
+
+  # Enable authentication
+  enable_auth: true
+
+# Worker configuration (optional, for worker services)
+# Uncomment and configure if running worker processes
+# worker:
+#   name: attune-worker-1
+#   worker_type: local
+#   max_concurrent_tasks: 10
+#   heartbeat_interval: 30  # seconds
+#   task_timeout: 300       # seconds
+
+# Environment Variable Overrides
+# ==============================
+# You can override any setting using environment variables with the ATTUNE__ prefix.
+# Use double underscores (__) to separate nested keys.
+#
+# Examples:
+#   ATTUNE__DATABASE__URL=postgresql://user:pass@localhost/attune
+#   ATTUNE__SERVER__PORT=3000
+#   ATTUNE__LOG__LEVEL=debug
+#   ATTUNE__SECURITY__JWT_SECRET=your-secret-here
+#   ATTUNE__SERVER__CORS_ORIGINS=https://app.com,https://www.app.com
+#
+# For production deployments, use environment variables for all sensitive values!

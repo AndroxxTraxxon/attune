@@ -1,0 +1,52 @@
+# Test Pack for End-to-End Integration Testing
+# This pack contains simple actions and workflows for testing the Attune platform
+
+ref: test_pack
+name: "E2E Test Pack"
+label: "E2E Test Pack"
+description: "Test pack for end-to-end integration testing"
+version: "1.0.0"
+author: "Attune Team"
+email: "test@attune.example.com"
+
+# Pack configuration schema
+conf_schema:
+  type: object
+  properties:
+    test_mode:
+      type: boolean
+      default: true
+    timeout:
+      type: integer
+      default: 30
+  required: []
+
+# Default pack configuration
+config:
+  test_mode: true
+  timeout: 30
+
+# Pack metadata
+meta:
+  category: "testing"
+  keywords:
+    - "test"
+    - "e2e"
+    - "integration"
+
+  # Python dependencies for this pack
+  python_dependencies:
+    - "requests>=2.28.0"
+
+# Pack tags for discovery
+tags:
+  - test
+  - integration
+  - e2e
+
+# Runtime dependencies
+runtime_deps:
+  - python3
+
+# Standard pack flag
+is_standard: false

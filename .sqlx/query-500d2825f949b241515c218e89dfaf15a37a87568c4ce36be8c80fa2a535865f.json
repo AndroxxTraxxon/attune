@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                id,\n                trigger,\n                trigger_ref,\n                config,\n                payload,\n                source,\n                source_ref,\n                created,\n                updated,\n                rule,\n                rule_ref\n            FROM event\n            WHERE id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "trigger",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "trigger_ref",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "config",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "payload",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "source",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "source_ref",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "created",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "updated",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "rule",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 10,
+        "name": "rule_ref",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "500d2825f949b241515c218e89dfaf15a37a87568c4ce36be8c80fa2a535865f"
+}

@@ -1,0 +1,43 @@
+# Simple Echo Action for Testing
+# Echoes the input message back to verify action execution
+
+name: echo
+description: "Echo a message back - simple test action"
+enabled: true
+runner_type: python
+
+parameters:
+  message:
+    type: string
+    description: "Message to echo back"
+    required: true
+    default: "Hello from Attune!"
+
+  delay:
+    type: integer
+    description: "Delay in seconds before echoing (for testing timing)"
+    required: false
+    default: 0
+    minimum: 0
+    maximum: 30
+
+  fail:
+    type: boolean
+    description: "Force the action to fail (for testing error handling)"
+    required: false
+    default: false
+
+entry_point: actions/echo.py
+
+output_schema:
+  type: object
+  properties:
+    message:
+      type: string
+      description: "The echoed message"
+    timestamp:
+      type: string
+      description: "Timestamp when the message was echoed"
+    execution_time:
+      type: number
+      description: "Time taken to execute in seconds"

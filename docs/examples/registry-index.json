@@ -1,0 +1,300 @@
+{
+  "registry_name": "Example Attune Pack Registry",
+  "registry_url": "https://registry.example.com",
+  "version": "1.0",
+  "last_updated": "2024-01-20T12:00:00Z",
+  "packs": [
+    {
+      "ref": "slack",
+      "label": "Slack Integration",
+      "description": "Send messages, upload files, and monitor Slack channels for events",
+      "version": "2.1.0",
+      "author": "Attune Community",
+      "email": "community@attune.io",
+      "homepage": "https://github.com/attune-io/pack-slack",
+      "repository": "https://github.com/attune-io/pack-slack",
+      "license": "Apache-2.0",
+      "keywords": ["slack", "messaging", "notifications", "chat"],
+      "runtime_deps": ["python3"],
+      "install_sources": [
+        {
+          "type": "git",
+          "url": "https://github.com/attune-io/pack-slack.git",
+          "ref": "v2.1.0",
+          "checksum": "sha256:abc123def456789012345678901234567890123456789012345678901234abcd"
+        },
+        {
+          "type": "archive",
+          "url": "https://github.com/attune-io/pack-slack/archive/refs/tags/v2.1.0.zip",
+          "checksum": "sha256:def456abc789012345678901234567890123456789012345678901234567890ab"
+        }
+      ],
+      "contents": {
+        "actions": [
+          {
+            "name": "send_message",
+            "description": "Send a message to a Slack channel"
+          },
+          {
+            "name": "upload_file",
+            "description": "Upload a file to a Slack channel"
+          },
+          {
+            "name": "create_channel",
+            "description": "Create a new Slack channel"
+          }
+        ],
+        "sensors": [
+          {
+            "name": "message_sensor",
+            "description": "Monitor Slack channels for new messages"
+          }
+        ],
+        "triggers": [
+          {
+            "name": "message_received",
+            "description": "Fires when a message is received in a monitored channel"
+          },
+          {
+            "name": "reaction_added",
+            "description": "Fires when a reaction is added to a message"
+          }
+        ],
+        "rules": [],
+        "workflows": []
+      },
+      "dependencies": {
+        "attune_version": ">=0.1.0",
+        "python_version": ">=3.9",
+        "packs": []
+      },
+      "meta": {
+        "downloads": 1543,
+        "stars": 87,
+        "tested_attune_versions": ["0.1.0", "0.2.0"]
+      }
+    },
+    {
+      "ref": "aws",
+      "label": "AWS Integration",
+      "description": "Interact with AWS services including EC2, S3, Lambda, and more",
+      "version": "1.5.2",
+      "author": "Attune Community",
+      "email": "community@attune.io",
+      "homepage": "https://github.com/attune-io/pack-aws",
+      "repository": "https://github.com/attune-io/pack-aws",
+      "license": "Apache-2.0",
+      "keywords": ["aws", "cloud", "ec2", "s3", "lambda"],
+      "runtime_deps": ["python3"],
+      "install_sources": [
+        {
+          "type": "git",
+          "url": "https://github.com/attune-io/pack-aws.git",
+          "ref": "v1.5.2",
+          "checksum": "sha256:123abc456def789012345678901234567890123456789012345678901234cdef"
+        },
+        {
+          "type": "archive",
+          "url": "https://github.com/attune-io/pack-aws/archive/refs/tags/v1.5.2.tar.gz",
+          "checksum": "sha256:456def123abc789012345678901234567890123456789012345678901234fedc"
+        }
+      ],
+      "contents": {
+        "actions": [
+          {
+            "name": "ec2_start_instance",
+            "description": "Start an EC2 instance"
+          },
+          {
+            "name": "ec2_stop_instance",
+            "description": "Stop an EC2 instance"
+          },
+          {
+            "name": "s3_upload",
+            "description": "Upload a file to S3"
+          },
+          {
+            "name": "s3_download",
+            "description": "Download a file from S3"
+          },
+          {
+            "name": "lambda_invoke",
+            "description": "Invoke a Lambda function"
+          }
+        ],
+        "sensors": [
+          {
+            "name": "cloudwatch_alarm_sensor",
+            "description": "Monitor CloudWatch alarms"
+          }
+        ],
+        "triggers": [
+          {
+            "name": "cloudwatch_alarm",
+            "description": "Fires when a CloudWatch alarm changes state"
+          }
+        ],
+        "rules": [],
+        "workflows": []
+      },
+      "dependencies": {
+        "attune_version": ">=0.1.0",
+        "python_version": ">=3.9",
+        "packs": []
+      },
+      "meta": {
+        "downloads": 2341,
+        "stars": 124,
+        "tested_attune_versions": ["0.1.0", "0.2.0"]
+      }
+    },
+    {
+      "ref": "github",
+      "label": "GitHub Integration",
+      "description": "Automate GitHub workflows, manage issues, pull requests, and repositories",
+      "version": "1.3.0",
+      "author": "Attune Community",
+      "email": "community@attune.io",
+      "homepage": "https://github.com/attune-io/pack-github",
+      "repository": "https://github.com/attune-io/pack-github",
+      "license": "MIT",
+      "keywords": ["github", "git", "ci", "vcs", "version-control"],
+      "runtime_deps": ["python3"],
+      "install_sources": [
+        {
+          "type": "git",
+          "url": "https://github.com/attune-io/pack-github.git",
+          "ref": "v1.3.0",
+          "checksum": "sha256:789abc123def456012345678901234567890123456789012345678901234bcde"
+        },
+        {
+          "type": "archive",
+          "url": "https://github.com/attune-io/pack-github/releases/download/v1.3.0/pack-github-1.3.0.zip",
+          "checksum": "sha256:abc789def123456012345678901234567890123456789012345678901234edcb"
+        }
+      ],
+      "contents": {
+        "actions": [
+          {
+            "name": "create_issue",
+            "description": "Create a new issue in a repository"
+          },
+          {
+            "name": "create_pr",
+            "description": "Create a new pull request"
+          },
+          {
+            "name": "merge_pr",
+            "description": "Merge a pull request"
+          },
+          {
+            "name": "add_comment",
+            "description": "Add a comment to an issue or PR"
+          }
+        ],
+        "sensors": [
+          {
+            "name": "webhook_sensor",
+            "description": "Receive GitHub webhook events"
+          }
+        ],
+        "triggers": [
+          {
+            "name": "push",
+            "description": "Fires when code is pushed to a repository"
+          },
+          {
+            "name": "pull_request",
+            "description": "Fires when a pull request is opened, closed, or updated"
+          },
+          {
+            "name": "issue",
+            "description": "Fires when an issue is created or updated"
+          }
+        ],
+        "rules": [],
+        "workflows": []
+      },
+      "dependencies": {
+        "attune_version": ">=0.1.0",
+        "python_version": ">=3.8",
+        "packs": []
+      },
+      "meta": {
+        "downloads": 1876,
+        "stars": 98,
+        "tested_attune_versions": ["0.1.0", "0.2.0"]
+      }
+    },
+    {
+      "ref": "monitoring",
+      "label": "Monitoring Pack",
+      "description": "Monitor system metrics, check service health, and send alerts",
+      "version": "1.0.0",
+      "author": "Attune Community",
+      "email": "community@attune.io",
+      "homepage": "https://github.com/attune-io/pack-monitoring",
+      "repository": "https://github.com/attune-io/pack-monitoring",
+      "license": "Apache-2.0",
+      "keywords": ["monitoring", "alerting", "metrics", "health-check"],
+      "runtime_deps": ["python3", "shell"],
+      "install_sources": [
+        {
+          "type": "git",
+          "url": "https://github.com/attune-io/pack-monitoring.git",
+          "ref": "v1.0.0",
+          "checksum": "sha256:def123abc456789012345678901234567890123456789012345678901234fade"
+        },
+        {
+          "type": "archive",
+          "url": "https://github.com/attune-io/pack-monitoring/archive/refs/tags/v1.0.0.tar.gz",
+          "checksum": "sha256:123def456abc789012345678901234567890123456789012345678901234defa"
+        }
+      ],
+      "contents": {
+        "actions": [
+          {
+            "name": "check_http",
+            "description": "Check if an HTTP endpoint is responding"
+          },
+          {
+            "name": "check_tcp_port",
+            "description": "Check if a TCP port is open"
+          },
+          {
+            "name": "get_cpu_usage",
+            "description": "Get current CPU usage"
+          },
+          {
+            "name": "get_memory_usage",
+            "description": "Get current memory usage"
+          }
+        ],
+        "sensors": [
+          {
+            "name": "metric_threshold_sensor",
+            "description": "Monitor metrics and fire when thresholds are crossed"
+          }
+        ],
+        "triggers": [
+          {
+            "name": "metric_threshold",
+            "description": "Fires when a metric crosses a threshold"
+          }
+        ],
+        "rules": [],
+        "workflows": []
+      },
+      "dependencies": {
+        "attune_version": ">=0.1.0",
+        "python_version": ">=3.9",
+        "packs": []
+      },
+      "meta": {
+        "downloads": 892,
+        "stars": 56,
+        "tested_attune_versions": ["0.1.0", "0.2.0"]
+      }
+    }
+  ]
+}

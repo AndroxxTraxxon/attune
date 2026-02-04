@@ -1,0 +1,65 @@
+[package]
+name = "attune-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "attune"
+path = "src/main.rs"
+
+[dependencies]
+# Internal dependencies
+attune-common = { path = "../common" }
+attune-worker = { path = "../worker" }
+
+# Async runtime
+tokio = { workspace = true }
+
+# CLI framework
+clap = { workspace = true, features = ["derive", "env", "string"] }
+
+# HTTP client
+reqwest = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Date/Time
+chrono = { workspace = true }
+
+# Configuration
+config = { workspace = true }
+dirs = "5.0"
+
+# URL encoding
+urlencoding = "2.1"
+
+# Terminal UI
+colored = "2.1"
+comfy-table = "7.1"
+indicatif = "0.17"
+dialoguer = "0.11"
+
+# Authentication
+jsonwebtoken = { version = "10.2", features = ["rust_crypto"] }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+wiremock = "0.6"
+assert_cmd = "2.0"
+predicates = "3.0"
+mockito = "1.2"
+tokio-test = "0.4"

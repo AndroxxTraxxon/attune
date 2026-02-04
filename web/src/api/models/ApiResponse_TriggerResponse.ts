@@ -1,0 +1,75 @@
+/* generated using openapi-typescript-codegen -- do not edit */
+/* istanbul ignore file */
+/* tslint:disable */
+/* eslint-disable */
+/**
+ * Standard API response wrapper
+ */
+export type ApiResponse_TriggerResponse = {
+    /**
+     * Response DTO for trigger information
+     */
+    data: {
+        /**
+         * Creation timestamp
+         */
+        created: string;
+        /**
+         * Trigger description
+         */
+        description?: string | null;
+        /**
+         * Whether the trigger is enabled
+         */
+        enabled: boolean;
+        /**
+         * Trigger ID
+         */
+        id: number;
+        /**
+         * Whether this is an ad-hoc trigger (not from pack installation)
+         */
+        is_adhoc: boolean;
+        /**
+         * Human-readable label
+         */
+        label: string;
+        /**
+         * Output schema
+         */
+        out_schema: any | null;
+        /**
+         * Pack ID (optional)
+         */
+        pack?: number | null;
+        /**
+         * Pack reference (optional)
+         */
+        pack_ref?: string | null;
+        /**
+         * Parameter schema
+         */
+        param_schema: any | null;
+        /**
+         * Unique reference identifier
+         */
+        ref: string;
+        /**
+         * Last update timestamp
+         */
+        updated: string;
+        /**
+         * Whether webhooks are enabled for this trigger
+         */
+        webhook_enabled: boolean;
+        /**
+         * Webhook key (only present if webhooks are enabled)
+         */
+        webhook_key?: string | null;
+    };
+    /**
+     * Optional message
+     */
+    message?: string | null;
+};
+

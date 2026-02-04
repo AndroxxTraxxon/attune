@@ -1,0 +1,358 @@
+"""
+Pytest Configuration and Shared Fixtures for E2E Tests
+
+This module provides shared fixtures and configuration for all
+end-to-end tests.
+"""
+
+import os
+import subprocess
+import sys
+import time
+from typing import Generator
+
+import pytest
+
+# Add project root to path for imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from helpers import AttuneClient, create_test_pack, unique_ref
+
+# ============================================================================
+# Session-scoped Fixtures
+# ============================================================================
+
+
+@pytest.fixture(scope="session")
+def api_base_url() -> str:
+    """Get API base URL from environment"""
+    return os.getenv("ATTUNE_API_URL", "http://localhost:8080")
+
+
+@pytest.fixture(scope="session")
+def test_timeout() -> int:
+    """Get test timeout from environment"""
+    return int(os.getenv("TEST_TIMEOUT", "60"))
+
+
+@pytest.fixture(scope="session")
+def test_user_credentials() -> dict:
+    """Get test user credentials"""
+    return {
+        "login": os.getenv("TEST_USER_LOGIN", "test@attune.local"),
+        "password": os.getenv("TEST_USER_PASSWORD", "TestPass123!"),
+        "display_name": "E2E Test User",
+    }
+
+
+# ============================================================================
+# Function-scoped Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def client(api_base_url: str, test_timeout: int) -> Generator[AttuneClient, None, None]:
+    """
+    Create authenticated Attune API client
+
+    This fixture creates a new client for each test function and automatically
+    logs in. The client is cleaned up after the test completes.
+    """
+    client = AttuneClient(base_url=api_base_url, timeout=test_timeout)
+
+    # Auto-login with test credentials
+    try:
+        client.login()
+    except Exception as e:
+        pytest.fail(f"Failed to authenticate client: {e}")
+
+    yield client
+
+    # Cleanup: logout
+    client.logout()
+
+
+@pytest.fixture
+def unique_user_client(
+    api_base_url: str, test_timeout: int
+) -> Generator[AttuneClient, None, None]:
+    """
+    Create client with unique test user
+
+    This fixture creates a new user for each test, ensuring complete isolation
+    between tests. Useful for multi-tenancy tests.
+    """
+    client = AttuneClient(base_url=api_base_url, timeout=test_timeout, auto_login=False)
+
+    # Generate unique credentials
+    timestamp = int(time.time())
+    login = f"test_{timestamp}_{unique_ref()}@attune.local"
+    password = "TestPass123!"
+
+    # Register and login
+    try:
+        client.register(
+            login=login, password=password, display_name=f"Test User {timestamp}"
+        )
+        client.login(login=login, password=password)
+    except Exception as e:
+        pytest.fail(f"Failed to create unique user: {e}")
+
+    yield client
+
+    # Cleanup
+    client.logout()
+
+
+@pytest.fixture
+def test_pack(client: AttuneClient) -> dict:
+    """
+    Create or get test pack
+
+    This fixture ensures the test pack is available for tests.
+    """
+    try:
+        pack = create_test_pack(client, pack_dir="tests/fixtures/packs/test_pack")
+        return pack
+    except Exception as e:
+        pytest.fail(f"Failed to create test pack: {e}")
+
+
+@pytest.fixture
+def pack_ref(test_pack: dict) -> str:
+    """Get pack reference from test pack"""
+    return test_pack["ref"]
+
+
+@pytest.fixture(scope="function")
+def clean_test_data(request):
+    """
+    Clean test data after each test to prevent interference with next test
+
+    This fixture runs after each test function and cleans up
+    test-related data to ensure isolation between tests.
+
+    Usage: Add 'clean_test_data' to test function parameters to enable cleanup
+    """
+    # Run the test first
+    yield
+
+    # Only clean if running E2E tests (not unit tests)
+    if "e2e" not in request.node.nodeid:
+        return
+
+    db_url = os.getenv(
+        "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/attune_e2e"
+    )
+
+    try:
+        # Clean up test data but preserve core pack and test user
+        # Only clean events, enforcements, and executions from recent test runs
+        subprocess.run(
+            [
+                "psql",
+                db_url,
+                "-c",
+                """
+                -- Delete recent test-created events and enforcements
+                DELETE FROM attune.event WHERE created > NOW() - INTERVAL '5 minutes';
+                DELETE FROM attune.enforcement WHERE created > NOW() - INTERVAL '5 minutes';
+                DELETE FROM attune.execution WHERE created > NOW() - INTERVAL '5 minutes';
+                DELETE FROM attune.inquiry WHERE created > NOW() - INTERVAL '5 minutes';
+                """,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as e:
+        # Don't fail tests if cleanup fails
+        print(f"Warning: Test data cleanup failed: {e}")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_database():
+    """
+    Ensure database is properly set up before running tests
+
+    This runs once per test session to verify runtimes are seeded.
+    """
+    db_url = os.getenv(
+        "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/attune_e2e"
+    )
+
+    # Check if runtimes exist
+    result = subprocess.run(
+        [
+            "psql",
+            db_url,
+            "-t",
+            "-c",
+            "SELECT COUNT(*) FROM attune.runtime WHERE pack_ref = 'core';",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    runtime_count = int(result.stdout.strip()) if result.returncode == 0 else 0
+
+    if runtime_count == 0:
+        print("\n⚠ No runtimes found, seeding default runtimes...")
+        # Seed runtimes
+        scripts_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"
+        )
+        seed_file = os.path.join(scripts_dir, "seed_runtimes.sql")
+
+        if os.path.exists(seed_file):
+            subprocess.run(
+                ["psql", db_url, "-f", seed_file],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            print("✓ Runtimes seeded successfully")
+        else:
+            print(f"✗ Seed file not found: {seed_file}")
+
+    yield
+
+
+# ============================================================================
+# Helper Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def wait_time() -> dict:
+    """
+    Standard wait times for various operations
+
+    Returns a dict with common wait times to keep tests consistent.
+    """
+    return {
+        "quick": 2,  # Quick operations (API calls)
+        "short": 5,  # Short operations (simple executions)
+        "medium": 15,  # Medium operations (workflows)
+        "long": 30,  # Long operations (multi-step workflows)
+        "extended": 60,  # Extended operations (slow timers)
+    }
+
+
+# ============================================================================
+# Pytest Hooks
+# ============================================================================
+
+
+def pytest_configure(config):
+    """
+    Pytest configuration hook
+
+    Called before test collection starts.
+    """
+    # Add custom markers
+    config.addinivalue_line("markers", "tier1: Tier 1 core tests")
+    config.addinivalue_line("markers", "tier2: Tier 2 orchestration tests")
+    config.addinivalue_line("markers", "tier3: Tier 3 advanced tests")
+
+
+def pytest_collection_modifyitems(config, items):
+    """
+    Modify test collection
+
+    Called after test collection to modify or re-order tests.
+    """
+    # Sort tests by marker priority (tier1 -> tier2 -> tier3)
+    tier_order = {"tier1": 0, "tier2": 1, "tier3": 2, None: 3}
+
+    def get_tier_priority(item):
+        for marker in item.iter_markers():
+            if marker.name in tier_order:
+                return tier_order[marker.name]
+        return tier_order[None]
+
+    items.sort(key=get_tier_priority)
+
+
+def pytest_report_header(config):
+    """
+    Add custom header to test report
+
+    Returns list of strings to display at top of test run.
+    """
+    api_url = os.getenv("ATTUNE_API_URL", "http://localhost:8080")
+    return [
+        f"Attune E2E Test Suite",
+        f"API URL: {api_url}",
+        f"Test Timeout: {os.getenv('TEST_TIMEOUT', '60')}s",
+    ]
+
+
+def pytest_runtest_setup(item):
+    """
+    Hook called before each test
+
+    Can be used for test-specific setup or to skip tests based on conditions.
+    """
+    # Check if API is reachable before running tests
+    api_url = os.getenv("ATTUNE_API_URL", "http://localhost:8080")
+
+    # Only check on first test
+    if not hasattr(pytest_runtest_setup, "_api_checked"):
+        import requests
+
+        try:
+            response = requests.get(f"{api_url}/health", timeout=5)
+            if response.status_code != 200:
+                pytest.exit(f"API health check failed: {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            pytest.exit(f"Cannot reach Attune API at {api_url}: {e}")
+
+        pytest_runtest_setup._api_checked = True
+
+
+def pytest_runtest_teardown(item, nextitem):
+    """
+    Hook called after each test
+
+    Can be used for cleanup or logging.
+    """
+    pass
+
+
+# ============================================================================
+# Cleanup Helpers
+# ============================================================================
+
+
+@pytest.fixture(autouse=True)
+def cleanup_on_failure(request):
+    """
+    Auto-cleanup fixture that captures test state on failure
+
+    This fixture runs for every test and captures useful debug info
+    if the test fails.
+    """
+    yield
+
+    # If test failed, capture additional debug info
+    if request.node.rep_call.failed if hasattr(request.node, "rep_call") else False:
+        print("\n=== Test Failed - Debug Info ===")
+        print(f"Test: {request.node.name}")
+        print(f"Location: {request.node.location}")
+        # Add more debug info as needed
+
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """
+    Hook to capture test results for use in fixtures
+
+    This allows fixtures to check if test passed/failed.
+    """
+    outcome = yield
+    rep = outcome.get_result()
+    setattr(item, f"rep_{rep.when}", rep)

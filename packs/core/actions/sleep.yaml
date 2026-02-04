@@ -1,0 +1,53 @@
+# Sleep Action
+# Pauses execution for a specified duration
+
+name: sleep
+ref: core.sleep
+description: "Sleep for a specified number of seconds"
+enabled: true
+
+# Runner type determines how the action is executed
+runner_type: shell
+
+# Entry point is the shell command or script to execute
+entry_point: sleep.sh
+
+# Action parameters schema (standard JSON Schema format)
+parameters:
+  type: object
+  properties:
+    seconds:
+      type: integer
+      description: "Number of seconds to sleep"
+      default: 1
+      minimum: 0
+      maximum: 3600
+    message:
+      type: string
+      description: "Optional message to display before sleeping"
+  required:
+    - seconds
+
+# Output schema
+output_schema:
+  type: object
+  properties:
+    stdout:
+      type: string
+      description: "Standard output (empty unless message provided)"
+    stderr:
+      type: string
+      description: "Standard error output (usually empty)"
+    exit_code:
+      type: integer
+      description: "Exit code of the command (0 = success)"
+    duration:
+      type: integer
+      description: "Number of seconds slept"
+
+# Tags for categorization
+tags:
+  - utility
+  - testing
+  - delay
+  - timing

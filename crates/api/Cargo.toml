@@ -1,0 +1,91 @@
+[package]
+name = "attune-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "attune_api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "attune-api"
+path = "src/main.rs"
+
+[dependencies]
+# Internal dependencies
+attune-common = { path = "../common" }
+attune-worker = { path = "../worker" }
+
+# Async runtime
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tokio-stream = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Web framework
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+# Database
+sqlx = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+
+# Logging and tracing
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Configuration
+config = { workspace = true }
+
+# Date/Time
+chrono = { workspace = true }
+
+# UUID
+uuid = { workspace = true }
+
+# Validation
+validator = { workspace = true }
+
+# CLI
+clap = { workspace = true }
+
+# JSON Schema
+schemars = { workspace = true }
+jsonschema = { workspace = true }
+
+# HTTP client
+reqwest = { workspace = true }
+
+# Authentication
+jsonwebtoken = { version = "10.2", features = ["rust_crypto"] }
+argon2 = { workspace = true }
+rand = "0.9"
+
+# HMAC and cryptography
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = { workspace = true }
+hex = "0.4"
+
+# OpenAPI/Swagger
+utoipa = { workspace = true, features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
+
+[dev-dependencies]
+mockall = { workspace = true }
+tower = { workspace = true }
+tempfile = { workspace = true }
+reqwest-eventsource = { workspace = true }

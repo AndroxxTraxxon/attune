@@ -1,0 +1,62 @@
+[package]
+name = "attune-notifier"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "attune-notifier"
+path = "src/main.rs"
+
+[dependencies]
+attune-common = { path = "../common" }
+
+# Async runtime
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Database
+sqlx = { workspace = true }
+
+# Web framework & WebSocket
+axum = { workspace = true, features = ["ws"] }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Logging and tracing
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Configuration
+config = { workspace = true }
+
+# Date/Time
+chrono = { workspace = true }
+
+# CLI
+clap = { workspace = true }
+
+# Redis (optional, for distributed notifications)
+redis = { workspace = true }
+
+# UUID
+uuid = { workspace = true }
+
+# Concurrent data structures
+dashmap = { workspace = true }
+
+[dev-dependencies]
+mockall = { workspace = true }
+tempfile = { workspace = true }

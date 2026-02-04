@@ -1,0 +1,80 @@
+# Interval Timer Trigger
+# Fires at regular intervals based on time unit and interval
+
+name: intervaltimer
+ref: core.intervaltimer
+description: "Fires at regular intervals based on specified time unit and interval"
+enabled: true
+
+# Trigger type
+type: interval
+
+# Parameter schema - configuration for the trigger instance (standard JSON Schema format)
+parameters:
+  type: object
+  properties:
+    unit:
+      type: string
+      enum:
+        - seconds
+        - minutes
+        - hours
+      description: "Time unit for the interval"
+      default: "seconds"
+    interval:
+      type: integer
+      description: "Number of time units between each trigger"
+      default: 60
+  required:
+    - unit
+    - interval
+
+# Payload schema - data emitted when trigger fires
+output:
+  type: object
+  properties:
+    type:
+      type: string
+      const: interval
+      description: "Trigger type identifier"
+    interval_seconds:
+      type: integer
+      description: "Total interval in seconds"
+    fired_at:
+      type: string
+      format: date-time
+      description: "Timestamp when the trigger fired"
+    execution_count:
+      type: integer
+      description: "Number of times this trigger has fired"
+    sensor_ref:
+      type: string
+      description: "Reference to the sensor that generated this event"
+  required:
+    - type
+    - interval_seconds
+    - fired_at
+
+# Tags for categorization
+tags:
+  - timer
+  - interval
+  - periodic
+  - scheduler
+
+# Documentation
+examples:
+  - description: "Fire every 10 seconds"
+    parameters:
+      unit: "seconds"
+      interval: 10
+
+  - description: "Fire every 5 minutes"
+    parameters:
+      unit: "minutes"
+      interval: 5
+
+  - description: "Fire every hour"
+    parameters:
+      unit: "hours"
+      interval: 1

@@ -1,0 +1,222 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any, TypeVar, BinaryIO, TextIO, TYPE_CHECKING, Generator
+
+from attrs import define as _attrs_define
+from attrs import field as _attrs_field
+
+from ..types import UNSET, Unset
+
+from ..types import UNSET, Unset
+from dateutil.parser import isoparse
+from typing import cast
+import datetime
+
+if TYPE_CHECKING:
+  from ..models.update_pack_response_200_data_conf_schema import UpdatePackResponse200DataConfSchema
+  from ..models.update_pack_response_200_data_config import UpdatePackResponse200DataConfig
+  from ..models.update_pack_response_200_data_meta import UpdatePackResponse200DataMeta
+
+
+
+
+
+T = TypeVar("T", bound="UpdatePackResponse200Data")
+
+
+
+@_attrs_define
+class UpdatePackResponse200Data:
+    """ Response DTO for pack information
+
+        Attributes:
+            conf_schema (UpdatePackResponse200DataConfSchema): Configuration schema
+            config (UpdatePackResponse200DataConfig): Pack configuration
+            created (datetime.datetime): Creation timestamp Example: 2024-01-13T10:30:00Z.
+            id (int): Pack ID Example: 1.
+            is_standard (bool): Is standard pack
+            label (str): Human-readable label Example: Slack Integration.
+            meta (UpdatePackResponse200DataMeta): Pack metadata
+            ref (str): Unique reference identifier Example: slack.
+            runtime_deps (list[str]): Runtime dependencies Example: ['core'].
+            tags (list[str]): Tags Example: ['messaging', 'collaboration'].
+            updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:30:00Z.
+            version (str): Pack version Example: 1.0.0.
+            description (None | str | Unset): Pack description Example: Integration with Slack for messaging and
+                notifications.
+     """
+
+    conf_schema: UpdatePackResponse200DataConfSchema
+    config: UpdatePackResponse200DataConfig
+    created: datetime.datetime
+    id: int
+    is_standard: bool
+    label: str
+    meta: UpdatePackResponse200DataMeta
+    ref: str
+    runtime_deps: list[str]
+    tags: list[str]
+    updated: datetime.datetime
+    version: str
+    description: None | str | Unset = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
+
+
+
+
+
+    def to_dict(self) -> dict[str, Any]:
+        from ..models.update_pack_response_200_data_meta import UpdatePackResponse200DataMeta
+        from ..models.update_pack_response_200_data_conf_schema import UpdatePackResponse200DataConfSchema
+        from ..models.update_pack_response_200_data_config import UpdatePackResponse200DataConfig
+        conf_schema = self.conf_schema.to_dict()
+
+        config = self.config.to_dict()
+
+        created = self.created.isoformat()
+
+        id = self.id
+
+        is_standard = self.is_standard
+
+        label = self.label
+
+        meta = self.meta.to_dict()
+
+        ref = self.ref
+
+        runtime_deps = self.runtime_deps
+
+
+
+        tags = self.tags
+
+
+
+        updated = self.updated.isoformat()
+
+        version = self.version
+
+        description: None | str | Unset
+        if isinstance(self.description, Unset):
+            description = UNSET
+        else:
+            description = self.description
+
+
+        field_dict: dict[str, Any] = {}
+        field_dict.update(self.additional_properties)
+        field_dict.update({
+            "conf_schema": conf_schema,
+            "config": config,
+            "created": created,
+            "id": id,
+            "is_standard": is_standard,
+            "label": label,
+            "meta": meta,
+            "ref": ref,
+            "runtime_deps": runtime_deps,
+            "tags": tags,
+            "updated": updated,
+            "version": version,
+        })
+        if description is not UNSET:
+            field_dict["description"] = description
+
+        return field_dict
+
+
+
+    @classmethod
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.update_pack_response_200_data_conf_schema import UpdatePackResponse200DataConfSchema
+        from ..models.update_pack_response_200_data_config import UpdatePackResponse200DataConfig
+        from ..models.update_pack_response_200_data_meta import UpdatePackResponse200DataMeta
+        d = dict(src_dict)
+        conf_schema = UpdatePackResponse200DataConfSchema.from_dict(d.pop("conf_schema"))
+
+
+
+
+        config = UpdatePackResponse200DataConfig.from_dict(d.pop("config"))
+
+
+
+
+        created = isoparse(d.pop("created"))
+
+
+
+
+        id = d.pop("id")
+
+        is_standard = d.pop("is_standard")
+
+        label = d.pop("label")
+
+        meta = UpdatePackResponse200DataMeta.from_dict(d.pop("meta"))
+
+
+
+
+        ref = d.pop("ref")
+
+        runtime_deps = cast(list[str], d.pop("runtime_deps"))
+
+
+        tags = cast(list[str], d.pop("tags"))
+
+
+        updated = isoparse(d.pop("updated"))
+
+
+
+
+        version = d.pop("version")
+
+        def _parse_description(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        description = _parse_description(d.pop("description", UNSET))
+
+
+        update_pack_response_200_data = cls(
+            conf_schema=conf_schema,
+            config=config,
+            created=created,
+            id=id,
+            is_standard=is_standard,
+            label=label,
+            meta=meta,
+            ref=ref,
+            runtime_deps=runtime_deps,
+            tags=tags,
+            updated=updated,
+            version=version,
+            description=description,
+        )
+
+
+        update_pack_response_200_data.additional_properties = d
+        return update_pack_response_200_data
+
+    @property
+    def additional_keys(self) -> list[str]:
+        return list(self.additional_properties.keys())
+
+    def __getitem__(self, key: str) -> Any:
+        return self.additional_properties[key]
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self.additional_properties[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        del self.additional_properties[key]
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.additional_properties

@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+    /* Input field with non-editable prefix */
+    .input-with-prefix {
+        @apply relative flex items-stretch;
+    }
+
+    .input-with-prefix .prefix {
+        @apply flex items-center px-3 bg-gray-50 border border-r-0 border-gray-300 rounded-l-lg text-gray-600 font-mono text-sm whitespace-nowrap;
+    }
+
+    .input-with-prefix input {
+        @apply flex-1 px-3 py-2 border border-gray-300 rounded-r-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500;
+    }
+
+    .input-with-prefix input:disabled {
+        @apply bg-gray-100 cursor-not-allowed;
+    }
+
+    .input-with-prefix input.error {
+        @apply border-red-500;
+    }
+
+    .input-with-prefix .prefix.error {
+        @apply border-red-500;
+    }
+}

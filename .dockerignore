@@ -1,0 +1,67 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+*.pdb
+
+# Development artifacts
+.env
+.env.*
+*.log
+logs/
+
+# Test artifacts
+tests/artifacts/
+tests/venvs/
+tests/node_modules/
+
+# Database files
+*.db
+*.sqlite
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# Documentation and work summaries
+docs/
+work-summary/
+reference/
+PROBLEM.md
+*.md
+!README.md
+
+# CI/CD
+.github/
+
+# Backup files
+*.backup
+migrations.backup/
+
+# Node modules (web UI builds separately)
+web/node_modules/
+web/dist/
+web/.vite/
+
+# SQLx offline data (generated at build time)
+#.sqlx/
+
+# Configuration files (copied selectively)
+config.development.yaml
+config.test.yaml
+config.e2e.yaml
+config.example.yaml
+
+# Scripts (not needed in runtime)
+scripts/
+
+# Cargo lock (workspace handles this)
+# Uncomment if you want deterministic builds:
+# !Cargo.lock

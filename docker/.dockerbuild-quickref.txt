@@ -1,0 +1,32 @@
+┌─────────────────────────────────────────────────────────────┐
+│                 DOCKER BUILD QUICK REFERENCE                │
+│              Fixing Build Race Conditions                   │
+└─────────────────────────────────────────────────────────────┘
+
+🚀 FASTEST & MOST RELIABLE (Recommended):
+───────────────────────────────────────────────────────────────
+  make docker-cache-warm      # ~5-6 min
+  make docker-build           # ~15-20 min
+  make docker-up              # Start services
+
+📋 ALTERNATIVE (Simple but slower):
+───────────────────────────────────────────────────────────────
+  docker compose build        # ~25-30 min (sequential)
+  docker compose up -d
+
+⚡ SINGLE SERVICE (Development):
+───────────────────────────────────────────────────────────────
+  docker compose build api
+  docker compose up -d api
+
+❌ ERROR: "File exists (os error 17)"
+───────────────────────────────────────────────────────────────
+  docker builder prune -af
+  make docker-cache-warm
+  make docker-build
+
+📚 MORE INFO:
+───────────────────────────────────────────────────────────────
+  docker/BUILD_QUICKSTART.md
+  docker/DOCKER_BUILD_RACE_CONDITIONS.md
+

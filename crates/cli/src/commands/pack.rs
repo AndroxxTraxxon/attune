@@ -1,0 +1,1427 @@
+use anyhow::Result;
+use clap::Subcommand;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+use crate::client::ApiClient;
+use crate::commands::pack_index;
+use crate::config::CliConfig;
+use crate::output::{self, OutputFormat};
+
+#[derive(Subcommand)]
+pub enum PackCommands {
+    /// List all installed packs
+    List {
+        /// Filter by pack name
+        #[arg(short, long)]
+        name: Option<String>,
+    },
+    /// Show details of a specific pack
+    Show {
+        /// Pack reference (name or ID)
+        pack_ref: String,
+    },
+    /// Install a pack from various sources (registry, git, URL, or local)
+    Install {
+        /// Source (git URL, archive URL, local path, or registry reference)
+        #[arg(value_name = "SOURCE")]
+        source: String,
+
+        /// Git reference (branch, tag, or commit) for git sources
+        #[arg(short, long)]
+        ref_spec: Option<String>,
+
+        /// Force reinstall even if pack already exists
+        #[arg(short, long)]
+        force: bool,
+
+        /// Skip running pack tests after installation
+        #[arg(long)]
+        skip_tests: bool,
+
+        /// Skip dependency validation (not recommended)
+        #[arg(long)]
+        skip_deps: bool,
+
+        /// Don't search registries (treat source as explicit URL/path)
+        #[arg(long)]
+        no_registry: bool,
+    },
+    /// Update a pack
+    Update {
+        /// Pack reference (name or ID)
+        pack_ref: String,
+
+        /// Update label
+        #[arg(long)]
+        label: Option<String>,
+
+        /// Update description
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Update version
+        #[arg(long)]
+        version: Option<String>,
+
+        /// Update enabled status
+        #[arg(long)]
+        enabled: Option<bool>,
+    },
+    /// Uninstall a pack
+    Uninstall {
+        /// Pack reference (name or ID)
+        pack_ref: String,
+
+        /// Skip confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// Register a pack from a local directory
+    Register {
+        /// Path to pack directory
+        path: String,
+
+        /// Force re-registration if pack already exists
+        #[arg(short, long)]
+        force: bool,
+
+        /// Skip running pack tests during registration
+        #[arg(long)]
+        skip_tests: bool,
+    },
+    /// Test a pack's test suite
+    Test {
+        /// Pack reference (name) or path to pack directory
+        pack: String,
+
+        /// Show verbose test output
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Show detailed test results
+        #[arg(short, long)]
+        detailed: bool,
+    },
+    /// List configured registries
+    Registries,
+    /// Search for packs in registries
+    Search {
+        /// Search keyword
+        keyword: String,
+
+        /// Search in specific registry only
+        #[arg(short, long)]
+        registry: Option<String>,
+    },
+    /// Calculate checksum of a pack directory or archive
+    Checksum {
+        /// Path to pack directory or archive file
+        path: String,
+
+        /// Output format for registry index entry
+        #[arg(long)]
+        json: bool,
+    },
+    /// Generate registry index entry from pack.yaml
+    IndexEntry {
+        /// Path to pack directory
+        path: String,
+
+        /// Git repository URL for the pack
+        #[arg(short = 'g', long)]
+        git_url: Option<String>,
+
+        /// Git ref (tag/branch) for the pack
+        #[arg(short = 'r', long)]
+        git_ref: Option<String>,
+
+        /// Archive URL for the pack
+        #[arg(short, long)]
+        archive_url: Option<String>,
+
+        /// Output format (JSON by default)
+        #[arg(short, long, default_value = "json")]
+        format: String,
+    },
+    /// Update a registry index file with a new pack entry
+    IndexUpdate {
+        /// Path to existing index.json file
+        #[arg(short, long)]
+        index: String,
+
+        /// Path to pack directory
+        path: String,
+
+        /// Git repository URL for the pack
+        #[arg(short = 'g', long)]
+        git_url: Option<String>,
+
+        /// Git ref (tag/branch) for the pack
+        #[arg(short = 'r', long)]
+        git_ref: Option<String>,
+
+        /// Archive URL for the pack
+        #[arg(short, long)]
+        archive_url: Option<String>,
+
+        /// Update existing entry if pack ref already exists
+        #[arg(short, long)]
+        update: bool,
+    },
+    /// Merge multiple registry index files into one
+    IndexMerge {
+        /// Output file path for merged index
+        #[arg(short = 'o', long = "file")]
+        file: String,
+
+        /// Input index files to merge
+        #[arg(required = true)]
+        inputs: Vec<String>,
+
+        /// Overwrite output file if it exists
+        #[arg(short, long)]
+        force: bool,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Pack {
+    id: i64,
+    #[serde(rename = "ref")]
+    pack_ref: String,
+    label: String,
+    description: Option<String>,
+    version: String,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    keywords: Option<Vec<String>>,
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    metadata: Option<serde_json::Value>,
+    created: String,
+    updated: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PackInstallResponse {
+    pack: Pack,
+    test_result: Option<serde_json::Value>,
+    tests_skipped: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PackDetail {
+    id: i64,
+    #[serde(rename = "ref")]
+    pack_ref: String,
+    label: String,
+    description: Option<String>,
+    version: String,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    keywords: Option<Vec<String>>,
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    metadata: Option<serde_json::Value>,
+    created: String,
+    updated: String,
+    #[serde(default)]
+    action_count: Option<i64>,
+    #[serde(default)]
+    trigger_count: Option<i64>,
+    #[serde(default)]
+    rule_count: Option<i64>,
+    #[serde(default)]
+    sensor_count: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct InstallPackRequest {
+    source: String,
+    ref_spec: Option<String>,
+    force: bool,
+    skip_tests: bool,
+    skip_deps: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct RegisterPackRequest {
+    path: String,
+    force: bool,
+    skip_tests: bool,
+}
+
+pub async fn handle_pack_command(
+    profile: &Option<String>,
+    command: PackCommands,
+    api_url: &Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    match command {
+        PackCommands::List { name } => handle_list(profile, name, api_url, output_format).await,
+        PackCommands::Show { pack_ref } => {
+            handle_show(profile, pack_ref, api_url, output_format).await
+        }
+        PackCommands::Install {
+            source,
+            ref_spec,
+            force,
+            skip_tests,
+            skip_deps,
+            no_registry,
+        } => {
+            handle_install(
+                profile,
+                source,
+                ref_spec,
+                force,
+                skip_tests,
+                skip_deps,
+                no_registry,
+                api_url,
+                output_format,
+            )
+            .await
+        }
+        PackCommands::Uninstall { pack_ref, yes } => {
+            handle_uninstall(profile, pack_ref, yes, api_url, output_format).await
+        }
+        PackCommands::Register {
+            path,
+            force,
+            skip_tests,
+        } => handle_register(profile, path, force, skip_tests, api_url, output_format).await,
+        PackCommands::Test {
+            pack,
+            verbose,
+            detailed,
+        } => handle_test(pack, verbose, detailed, output_format).await,
+        PackCommands::Registries => handle_registries(output_format).await,
+        PackCommands::Search { keyword, registry } => {
+            handle_search(profile, keyword, registry, output_format).await
+        }
+        PackCommands::Update {
+            pack_ref,
+            label,
+            description,
+            version,
+            enabled,
+        } => {
+            handle_update(
+                profile,
+                pack_ref,
+                label,
+                description,
+                version,
+                enabled,
+                api_url,
+                output_format,
+            )
+            .await
+        }
+        PackCommands::Checksum { path, json } => handle_checksum(path, json, output_format).await,
+        PackCommands::IndexEntry {
+            path,
+            git_url,
+            git_ref,
+            archive_url,
+            format,
+        } => {
+            handle_index_entry(
+                profile,
+                path,
+                git_url,
+                git_ref,
+                archive_url,
+                format,
+                output_format,
+            )
+            .await
+        }
+        PackCommands::IndexUpdate {
+            index,
+            path,
+            git_url,
+            git_ref,
+            archive_url,
+            update,
+        } => {
+            pack_index::handle_index_update(
+                index,
+                path,
+                git_url,
+                git_ref,
+                archive_url,
+                update,
+                output_format,
+            )
+            .await
+        }
+        PackCommands::IndexMerge {
+            file,
+            inputs,
+            force,
+        } => pack_index::handle_index_merge(file, inputs, force, output_format).await,
+    }
+}
+
+async fn handle_list(
+    profile: &Option<String>,
+    name: Option<String>,
+    api_url: &Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let config = CliConfig::load_with_profile(profile.as_deref())?;
+    let mut client = ApiClient::from_config(&config, api_url);
+
+    let mut path = "/packs".to_string();
+    if let Some(name_filter) = name {
+        path = format!("{}?name={}", path, name_filter);
+    }
+
+    let packs: Vec<Pack> = client.get(&path).await?;
+
+    match output_format {
+        OutputFormat::Json | OutputFormat::Yaml => {
+            output::print_output(&packs, output_format)?;
+        }
+        OutputFormat::Table => {
+            if packs.is_empty() {
+                output::print_info("No packs found");
+            } else {
+                let mut table = output::create_table();
+                output::add_header(
+                    &mut table,
+                    vec!["ID", "Name", "Version", "Enabled", "Description"],
+                );
+
+                for pack in packs {
+                    table.add_row(vec![
+                        pack.id.to_string(),
+                        pack.pack_ref,
+                        pack.version,
+                        output::format_bool(pack.enabled.unwrap_or(true)),
+                        output::truncate(&pack.description.unwrap_or_default(), 50),
+                    ]);
+                }
+
+                println!("{}", table);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_show(
+    profile: &Option<String>,
+    pack_ref: String,
+    api_url: &Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let config = CliConfig::load_with_profile(profile.as_deref())?;
+    let mut client = ApiClient::from_config(&config, api_url);
+
+    let path = format!("/packs/{}", pack_ref);
+    let pack: PackDetail = client.get(&path).await?;
+
+    match output_format {
+        OutputFormat::Json | OutputFormat::Yaml => {
+            output::print_output(&pack, output_format)?;
+        }
+        OutputFormat::Table => {
+            output::print_section(&format!("Pack: {}", pack.label));
+            output::print_key_value_table(vec![
+                ("ID", pack.id.to_string()),
+                ("Ref", pack.pack_ref.clone()),
+                ("Label", pack.label.clone()),
+                ("Version", pack.version),
+                (
+                    "Author",
+                    pack.author.unwrap_or_else(|| "Unknown".to_string()),
+                ),
+                (
+                    "Description",
+                    pack.description.unwrap_or_else(|| "None".to_string()),
+                ),
+                ("Enabled", output::format_bool(pack.enabled.unwrap_or(true))),
+                ("Actions", pack.action_count.unwrap_or(0).to_string()),
+                ("Triggers", pack.trigger_count.unwrap_or(0).to_string()),
+                ("Rules", pack.rule_count.unwrap_or(0).to_string()),
+                ("Sensors", pack.sensor_count.unwrap_or(0).to_string()),
+                ("Created", output::format_timestamp(&pack.created)),
+                ("Updated", output::format_timestamp(&pack.updated)),
+            ]);
+
+            if let Some(keywords) = pack.keywords {
+                if !keywords.is_empty() {
+                    output::print_section("Keywords");
+                    output::print_list(keywords);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_install(
+    profile: &Option<String>,
+    source: String,
+    ref_spec: Option<String>,
+    force: bool,
+    skip_tests: bool,
+    skip_deps: bool,
+    no_registry: bool,
+    api_url: &Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let config = CliConfig::load_with_profile(profile.as_deref())?;
+    let mut client = ApiClient::from_config(&config, api_url);
+
+    // Detect source type
+    let source_type = detect_source_type(&source, ref_spec.as_deref(), no_registry);
+
+    match output_format {
+        OutputFormat::Table => {
+            output::print_info(&format!(
+                "Installing pack from: {} ({})",
+                source, source_type
+            ));
+            output::print_info("Starting installation...");
+            if skip_deps {
+                output::print_info("⚠ Dependency validation will be skipped");
+            }
+        }
+        _ => {}
+    }
+
+    let request = InstallPackRequest {
+        source: source.clone(),
+        ref_spec,
+        force,
+        skip_tests: skip_tests || skip_deps, // Skip tests implies skip deps
+        skip_deps,
+    };
+
+    // Note: Progress reporting will be added when API supports streaming
+    // For now, we show a simple message during the potentially long operation
+    let response: PackInstallResponse = client.post("/packs/install", &request).await?;
+
+    match output_format {
+        OutputFormat::Json | OutputFormat::Yaml => {
+            output::print_output(&response, output_format)?;
+        }
+        OutputFormat::Table => {
+            println!(); // Add spacing after progress messages
+            output::print_success(&format!(
+                "✓ Pack '{}' installed successfully",
+                response.pack.pack_ref
+            ));
+            output::print_info(&format!("  Version: {}", response.pack.version));
+            output::print_info(&format!("  ID: {}", response.pack.id));
+
+            if response.tests_skipped {
+                output::print_info("  ⚠ Tests were skipped");
+            } else if let Some(test_result) = &response.test_result {
+                if let Some(status) = test_result.get("status").and_then(|s| s.as_str()) {
+                    if status == "passed" {
+                        output::print_success("  ✓ All tests passed");
+                    } else if status == "failed" {
+                        output::print_error("  ✗ Some tests failed");
+                    }
+                    if let Some(summary) = test_result.get("summary") {
+                        if let (Some(passed), Some(total)) = (
+                            summary.get("passed").and_then(|p| p.as_u64()),
+                            summary.get("total").and_then(|t| t.as_u64()),
+                        ) {
+                            output::print_info(&format!("  Tests: {}/{} passed", passed, total));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_uninstall(
+    profile: &Option<String>,
+    pack_ref: String,
+    yes: bool,
+    api_url: &Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let config = CliConfig::load_with_profile(profile.as_deref())?;
+    let mut client = ApiClient::from_config(&config, api_url);
+
+    // Confirm deletion unless --yes is provided
+    if !yes && matches!(output_format, OutputFormat::Table) {
+        let confirm = dialoguer::Confirm::new()
+            .with_prompt(format!(
+                "Are you sure you want to uninstall pack '{}'?",
+                pack_ref
+            ))
+            .default(false)
+            .interact()?;
+
+        if !confirm {
+            output::print_info("Uninstall cancelled");
+            return Ok(());
+        }
+    }
+
+    let path = format!("/packs/{}", pack_ref);
+    client.delete_no_response(&path).await?;
+
+    match output_format {
+        OutputFormat::Json | OutputFormat::Yaml => {
+            let msg = serde_json::json!({"message": "Pack uninstalled successfully"});
+            output::print_output(&msg, output_format)?;
+        }
+        OutputFormat::Table => {
+            output::print_success(&format!("Pack '{}' uninstalled successfully", pack_ref));
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_register(
+    profile: &Option<String>,
+    path: String,
+    force: bool,
+    skip_tests: bool,
+    api_url: &Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let config = CliConfig::load_with_profile(profile.as_deref())?;
+    let mut client = ApiClient::from_config(&config, api_url);
+
+    let request = RegisterPackRequest {
+        path: path.clone(),
+        force,
+        skip_tests,
+    };
+
+    match output_format {
+        OutputFormat::Table => {
+            output::print_info(&format!("Registering pack from: {}", path));
+        }
+        _ => {}
+    }
+
+    let response: PackInstallResponse = client.post("/packs/register", &request).await?;
+
+    match output_format {
+        OutputFormat::Json | OutputFormat::Yaml => {
+            output::print_output(&response, output_format)?;
+        }
+        OutputFormat::Table => {
+            println!(); // Add spacing
+            output::print_success(&format!(
+                "✓ Pack '{}' registered successfully",
+                response.pack.pack_ref
+            ));
+            output::print_info(&format!("  Version: {}", response.pack.version));
+            output::print_info(&format!("  ID: {}", response.pack.id));
+
+            if response.tests_skipped {
+                output::print_info("  ⚠ Tests were skipped");
+            } else if let Some(test_result) = &response.test_result {
+                if let Some(status) = test_result.get("status").and_then(|s| s.as_str()) {
+                    if status == "passed" {
+                        output::print_success("  ✓ All tests passed");
+                    } else if status == "failed" {
+                        output::print_error("  ✗ Some tests failed");
+                    }
+                    if let Some(summary) = test_result.get("summary") {
+                        if let (Some(passed), Some(total)) = (
+                            summary.get("passed").and_then(|p| p.as_u64()),
+                            summary.get("total").and_then(|t| t.as_u64()),
+                        ) {
+                            output::print_info(&format!("  Tests: {}/{} passed", passed, total));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_test(
+    pack: String,
+    verbose: bool,
+    detailed: bool,
+    output_format: OutputFormat,
+) -> Result<()> {
+    use attune_worker::{TestConfig, TestExecutor};
+    use std::path::{Path, PathBuf};
+
+    // Determine if pack is a path or a pack name
+    let pack_path = Path::new(&pack);
+    let (pack_dir, pack_ref, pack_version) = if pack_path.exists() && pack_path.is_dir() {
+        // Local pack directory
+        output::print_info(&format!("Testing pack from local directory: {}", pack));
+
+        // Load pack.yaml to get ref and version
+        let pack_yaml_path = pack_path.join("pack.yaml");
+        if !pack_yaml_path.exists() {
+            anyhow::bail!("pack.yaml not found in directory: {}", pack);
+        }
+
+        let pack_yaml_content = std::fs::read_to_string(&pack_yaml_path)?;
+        let pack_yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&pack_yaml_content)?;
+
+        let ref_val = pack_yaml
+            .get("ref")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("'ref' field not found in pack.yaml"))?;
+        let version_val = pack_yaml
+            .get("version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+
+        (
+            pack_path.to_path_buf(),
+            ref_val.to_string(),
+            version_val.to_string(),
+        )
+    } else {
+        // Installed pack - look in standard location
+        let packs_dir = PathBuf::from("./packs");
+        let pack_dir = packs_dir.join(&pack);
+
+        if !pack_dir.exists() {
+            anyhow::bail!(
+                "Pack '{}' not found. Provide a pack name or path to a pack directory.",
+                pack
+            );
+        }
+
+        // Load pack.yaml
+        let pack_yaml_path = pack_dir.join("pack.yaml");
+        if !pack_yaml_path.exists() {
+            anyhow::bail!("pack.yaml not found for pack: {}", pack);
+        }
+
+        let pack_yaml_content = std::fs::read_to_string(&pack_yaml_path)?;
+        let pack_yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&pack_yaml_content)?;
+
+        let version_val = pack_yaml
+            .get("version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+
+        (pack_dir, pack.clone(), version_val.to_string())
+    };
+
+    // Load pack.yaml and extract test configuration
+    let pack_yaml_path = pack_dir.join("pack.yaml");
+    let pack_yaml_content = std::fs::read_to_string(&pack_yaml_path)?;
+    let pack_yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&pack_yaml_content)?;
+
+    let testing_config = pack_yaml
+        .get("testing")
+        .ok_or_else(|| anyhow::anyhow!("No 'testing' configuration found in pack.yaml"))?;
+
+    let test_config: TestConfig = serde_yaml_ng::from_value(testing_config.clone())?;
+
+    if !test_config.enabled {
+        output::print_warning("Testing is disabled for this pack");
+        return Ok(());
+    }
+
+    // Create test executor
+    let pack_base_dir = pack_dir
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Invalid pack directory"))?
+        .to_path_buf();
+
+    let executor = TestExecutor::new(pack_base_dir);
+
+    // Print test start message
+    match output_format {
+        OutputFormat::Table => {
+            println!();
+            output::print_section(&format!("🧪 Testing Pack: {} v{}", pack_ref, pack_version));
+            println!();
+        }
+        _ => {}
+    }
+
+    // Execute tests
+    let result = executor
+        .execute_pack_tests(&pack_ref, &pack_version, &test_config)
+        .await?;
+
+    // Display results
+    match output_format {
+        OutputFormat::Json => {
+            output::print_output(&result, OutputFormat::Json)?;
+        }
+        OutputFormat::Yaml => {
+            output::print_output(&result, OutputFormat::Yaml)?;
+        }
+        OutputFormat::Table => {
+            // Print summary
+            println!("Test Results:");
+            println!("─────────────────────────────────────────────");
+            println!("  Total Tests:  {}", result.total_tests);
+            println!("  ✓ Passed:     {}", result.passed);
+            println!("  ✗ Failed:     {}", result.failed);
+            println!("  ○ Skipped:    {}", result.skipped);
+            println!("  Pass Rate:    {:.1}%", result.pass_rate * 100.0);
+            println!("  Duration:     {}ms", result.duration_ms);
+            println!("─────────────────────────────────────────────");
+            println!();
+
+            // Print suite results
+            if detailed || verbose {
+                for suite in &result.test_suites {
+                    println!("Test Suite: {} ({})", suite.name, suite.runner_type);
+                    println!(
+                        "  Total: {}, Passed: {}, Failed: {}, Skipped: {}",
+                        suite.total, suite.passed, suite.failed, suite.skipped
+                    );
+                    println!("  Duration: {}ms", suite.duration_ms);
+
+                    if verbose {
+                        for test_case in &suite.test_cases {
+                            let status_icon = match test_case.status {
+                                attune_common::models::pack_test::TestStatus::Passed => "✓",
+                                attune_common::models::pack_test::TestStatus::Failed => "✗",
+                                attune_common::models::pack_test::TestStatus::Skipped => "○",
+                                attune_common::models::pack_test::TestStatus::Error => "⚠",
+                            };
+                            println!(
+                                "    {} {} ({}ms)",
+                                status_icon, test_case.name, test_case.duration_ms
+                            );
+
+                            if let Some(error) = &test_case.error_message {
+                                println!("      Error: {}", error);
+                            }
+
+                            if detailed {
+                                if let Some(stdout) = &test_case.stdout {
+                                    if !stdout.is_empty() {
+                                        println!("      Stdout:");
+                                        for line in stdout.lines().take(10) {
+                                            println!("        {}", line);
+                                        }
+                                    }
+                                }
+                                if let Some(stderr) = &test_case.stderr {
+                                    if !stderr.is_empty() {
+                                        println!("      Stderr:");
+                                        for line in stderr.lines().take(10) {
+                                            println!("        {}", line);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    println!();
+                }
+            }
+
+            // Final status
+            if result.failed > 0 {
+                output::print_error(&format!(
+                    "❌ Tests failed: {}/{}",
+                    result.failed, result.total_tests
+                ));
+                std::process::exit(1);
+            } else {
+                output::print_success(&format!(
+                    "✅ All tests passed: {}/{}",
+                    result.passed, result.total_tests
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_registries(output_format: OutputFormat) -> Result<()> {
+    // Load Attune configuration to get registry settings
+    let config = attune_common::config::Config::load()?;
+
+    if !config.pack_registry.enabled {
+        output::print_warning("Pack registry system is disabled in configuration");
+        return Ok(());
+    }
+
+    let registries = config.pack_registry.indices;
+
+    if registries.is_empty() {
+        output::print_warning("No registries configured");
+        return Ok(());
+    }
+
+    match output_format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&registries)?);
+        }
+        OutputFormat::Yaml => {
+            println!("{}", serde_yaml_ng::to_string(&registries)?);
+        }
+        OutputFormat::Table => {
+            use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+
+            let mut table = Table::new();
+            table.load_preset(UTF8_FULL);
+            table.set_header(vec![
+                Cell::new("Priority").fg(Color::Green),
+                Cell::new("Name").fg(Color::Green),
+                Cell::new("URL").fg(Color::Green),
+                Cell::new("Status").fg(Color::Green),
+            ]);
+
+            for registry in registries {
+                let status = if registry.enabled {
+                    Cell::new("✓ Enabled").fg(Color::Green)
+                } else {
+                    Cell::new("✗ Disabled").fg(Color::Red)
+                };
+
+                let name = registry.name.unwrap_or_else(|| "-".to_string());
+
+                table.add_row(vec![
+                    Cell::new(registry.priority.to_string()),
+                    Cell::new(name),
+                    Cell::new(registry.url),
+                    status,
+                ]);
+            }
+
+            println!("{table}");
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_search(
+    _profile: &Option<String>,
+    keyword: String,
+    registry_name: Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    // Load Attune configuration to get registry settings
+    let config = attune_common::config::Config::load()?;
+
+    if !config.pack_registry.enabled {
+        output::print_error("Pack registry system is disabled in configuration");
+        std::process::exit(1);
+    }
+
+    // Create registry client
+    let client = attune_common::pack_registry::RegistryClient::new(config.pack_registry)?;
+
+    // Search for packs
+    let results = if let Some(reg_name) = registry_name {
+        // Search specific registry
+        output::print_info(&format!(
+            "Searching registry '{}' for '{}'...",
+            reg_name, keyword
+        ));
+
+        // Find all registries with this name and search them
+        let mut all_results = Vec::new();
+        for registry in client.get_registries() {
+            if registry.name.as_deref() == Some(&reg_name) {
+                match client.fetch_index(&registry).await {
+                    Ok(index) => {
+                        let keyword_lower = keyword.to_lowercase();
+                        for pack in index.packs {
+                            let matches = pack.pack_ref.to_lowercase().contains(&keyword_lower)
+                                || pack.label.to_lowercase().contains(&keyword_lower)
+                                || pack.description.to_lowercase().contains(&keyword_lower)
+                                || pack
+                                    .keywords
+                                    .iter()
+                                    .any(|k| k.to_lowercase().contains(&keyword_lower));
+
+                            if matches {
+                                all_results.push((pack, registry.url.clone()));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        output::print_error(&format!("Failed to fetch registry: {}", e));
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+        all_results
+    } else {
+        // Search all registries
+        output::print_info(&format!("Searching all registries for '{}'...", keyword));
+        client.search_packs(&keyword).await?
+    };
+
+    if results.is_empty() {
+        output::print_warning(&format!("No packs found matching '{}'", keyword));
+        return Ok(());
+    }
+
+    match output_format {
+        OutputFormat::Json => {
+            let json_results: Vec<_> = results
+                .iter()
+                .map(|(pack, registry_url)| {
+                    serde_json::json!({
+                        "ref": pack.pack_ref,
+                        "label": pack.label,
+                        "version": pack.version,
+                        "description": pack.description,
+                        "author": pack.author,
+                        "keywords": pack.keywords,
+                        "registry": registry_url,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&json_results)?);
+        }
+        OutputFormat::Yaml => {
+            let yaml_results: Vec<_> = results
+                .iter()
+                .map(|(pack, registry_url)| {
+                    serde_json::json!({
+                        "ref": pack.pack_ref,
+                        "label": pack.label,
+                        "version": pack.version,
+                        "description": pack.description,
+                        "author": pack.author,
+                        "keywords": pack.keywords,
+                        "registry": registry_url,
+                    })
+                })
+                .collect();
+            println!("{}", serde_yaml_ng::to_string(&yaml_results)?);
+        }
+        OutputFormat::Table => {
+            use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+
+            let mut table = Table::new();
+            table.load_preset(UTF8_FULL);
+            table.set_header(vec![
+                Cell::new("Ref").fg(Color::Green),
+                Cell::new("Version").fg(Color::Green),
+                Cell::new("Description").fg(Color::Green),
+                Cell::new("Author").fg(Color::Green),
+            ]);
+
+            for (pack, _) in results.iter() {
+                table.add_row(vec![
+                    Cell::new(&pack.pack_ref),
+                    Cell::new(&pack.version),
+                    Cell::new(&pack.description),
+                    Cell::new(&pack.author),
+                ]);
+            }
+
+            println!("{table}");
+            output::print_success(&format!("Found {} pack(s)", results.len()));
+        }
+    }
+
+    Ok(())
+}
+
+/// Detect the source type from the provided source string
+fn detect_source_type(source: &str, ref_spec: Option<&str>, no_registry: bool) -> &'static str {
+    // If no_registry flag is set, skip registry detection
+    if no_registry {
+        if source.starts_with("http://") || source.starts_with("https://") {
+            if source.ends_with(".git") {
+                return "git repository";
+            } else if source.ends_with(".zip")
+                || source.ends_with(".tar.gz")
+                || source.ends_with(".tgz")
+            {
+                return "archive URL";
+            }
+            return "URL";
+        } else if std::path::Path::new(source).exists() {
+            if std::path::Path::new(source).is_file() {
+                return "local archive";
+            }
+            return "local directory";
+        }
+        return "unknown source";
+    }
+
+    // Check if it's a URL
+    if source.starts_with("http://") || source.starts_with("https://") {
+        if source.ends_with(".git") || ref_spec.is_some() {
+            return "git repository";
+        }
+        return "archive URL";
+    }
+
+    // Check if it's a local path
+    if std::path::Path::new(source).exists() {
+        if std::path::Path::new(source).is_file() {
+            return "local archive";
+        }
+        return "local directory";
+    }
+
+    // Check if it looks like a git SSH URL
+    if source.starts_with("git@") || source.contains("git://") {
+        return "git repository";
+    }
+
+    // Otherwise assume it's a registry reference
+    "registry reference"
+}
+
+async fn handle_checksum(path: String, json: bool, output_format: OutputFormat) -> Result<()> {
+    use attune_common::pack_registry::{calculate_directory_checksum, calculate_file_checksum};
+
+    let path_obj = Path::new(&path);
+
+    if !path_obj.exists() {
+        output::print_error(&format!("Path does not exist: {}", path));
+        std::process::exit(1);
+    }
+
+    // Only print info message in table format
+    if output_format == OutputFormat::Table {
+        output::print_info(&format!("Calculating checksum for '{}'...", path));
+    }
+
+    let checksum = if path_obj.is_dir() {
+        calculate_directory_checksum(path_obj)?
+    } else if path_obj.is_file() {
+        calculate_file_checksum(path_obj)?
+    } else {
+        output::print_error(&format!("Invalid path type: {}", path));
+        std::process::exit(1);
+    };
+
+    if json {
+        // Output in registry index format
+        let install_source = if path_obj.is_file()
+            && (path.ends_with(".zip") || path.ends_with(".tar.gz") || path.ends_with(".tgz"))
+        {
+            serde_json::json!({
+                "type": "archive",
+                "url": "https://example.com/path/to/pack.zip",
+                "checksum": format!("sha256:{}", checksum)
+            })
+        } else {
+            serde_json::json!({
+                "type": "git",
+                "url": "https://github.com/example/pack",
+                "ref": "v1.0.0",
+                "checksum": format!("sha256:{}", checksum)
+            })
+        };
+
+        match output_format {
+            OutputFormat::Json => {
+                println!("{}", serde_json::to_string_pretty(&install_source)?);
+            }
+            OutputFormat::Yaml => {
+                println!("{}", serde_yaml_ng::to_string(&install_source)?);
+            }
+            OutputFormat::Table => {
+                println!("{}", serde_json::to_string_pretty(&install_source)?);
+            }
+        }
+
+        // Only print note in table format
+        if output_format == OutputFormat::Table {
+            output::print_info("\nNote: Update the URL and ref fields with actual values");
+        }
+    } else {
+        // Simple output
+        match output_format {
+            OutputFormat::Json => {
+                let result = serde_json::json!({
+                    "path": path,
+                    "checksum": format!("sha256:{}", checksum)
+                });
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            OutputFormat::Yaml => {
+                let result = serde_json::json!({
+                    "path": path,
+                    "checksum": format!("sha256:{}", checksum)
+                });
+                println!("{}", serde_yaml_ng::to_string(&result)?);
+            }
+            OutputFormat::Table => {
+                println!("\nChecksum for: {}", path);
+                println!("Algorithm: SHA256");
+                println!("Hash: {}", checksum);
+                println!("\nFormatted: sha256:{}", checksum);
+                output::print_success("✓ Checksum calculated successfully");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_index_entry(
+    _profile: &Option<String>,
+    path: String,
+    git_url: Option<String>,
+    git_ref: Option<String>,
+    archive_url: Option<String>,
+    _format: String,
+    output_format: OutputFormat,
+) -> Result<()> {
+    use attune_common::pack_registry::calculate_directory_checksum;
+
+    let path_obj = Path::new(&path);
+
+    if !path_obj.exists() {
+        output::print_error(&format!("Path does not exist: {}", path));
+        std::process::exit(1);
+    }
+
+    if !path_obj.is_dir() {
+        output::print_error(&format!("Path is not a directory: {}", path));
+        std::process::exit(1);
+    }
+
+    // Look for pack.yaml
+    let pack_yaml_path = path_obj.join("pack.yaml");
+    if !pack_yaml_path.exists() {
+        output::print_error(&format!("pack.yaml not found in: {}", path));
+        std::process::exit(1);
+    }
+
+    // Only print info message in table format
+    if output_format == OutputFormat::Table {
+        output::print_info("Parsing pack.yaml...");
+    }
+
+    // Read and parse pack.yaml
+    let pack_yaml_content = std::fs::read_to_string(&pack_yaml_path)?;
+    let pack_yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&pack_yaml_content)?;
+
+    // Extract metadata
+    let pack_ref = pack_yaml["ref"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing 'ref' field in pack.yaml"))?;
+    let label = pack_yaml["label"].as_str().unwrap_or(pack_ref);
+    let description = pack_yaml["description"].as_str().unwrap_or("");
+    let version = pack_yaml["version"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing 'version' field in pack.yaml"))?;
+    let author = pack_yaml["author"].as_str().unwrap_or("Unknown");
+    let email = pack_yaml["email"].as_str();
+    let homepage = pack_yaml["homepage"].as_str();
+    let repository = pack_yaml["repository"].as_str();
+    let license = pack_yaml["license"].as_str().unwrap_or("UNLICENSED");
+
+    // Extract keywords
+    let keywords: Vec<String> = pack_yaml["keywords"]
+        .as_sequence()
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Extract runtime dependencies
+    let runtime_deps: Vec<String> = pack_yaml["runtime_deps"]
+        .as_sequence()
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Only print info message in table format
+    if output_format == OutputFormat::Table {
+        output::print_info("Calculating checksum...");
+    }
+    let checksum = calculate_directory_checksum(path_obj)?;
+
+    // Build install sources
+    let mut install_sources = Vec::new();
+
+    if let Some(ref git) = git_url {
+        let default_ref = format!("v{}", version);
+        let ref_value = git_ref.as_ref().map(|s| s.as_str()).unwrap_or(&default_ref);
+        let git_source = serde_json::json!({
+            "type": "git",
+            "url": git,
+            "ref": ref_value,
+            "checksum": format!("sha256:{}", checksum)
+        });
+        install_sources.push(git_source);
+    }
+
+    if let Some(ref archive) = archive_url {
+        let archive_source = serde_json::json!({
+            "type": "archive",
+            "url": archive,
+            "checksum": format!("sha256:{}", checksum)
+        });
+        install_sources.push(archive_source);
+    }
+
+    // If no sources provided, generate templates
+    if install_sources.is_empty() {
+        output::print_warning("No git-url or archive-url provided. Generating templates...");
+        install_sources.push(serde_json::json!({
+            "type": "git",
+            "url": format!("https://github.com/your-org/{}", pack_ref),
+            "ref": format!("v{}", version),
+            "checksum": format!("sha256:{}", checksum)
+        }));
+    }
+
+    // Count components
+    let actions_count = pack_yaml["actions"]
+        .as_mapping()
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let sensors_count = pack_yaml["sensors"]
+        .as_mapping()
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let triggers_count = pack_yaml["triggers"]
+        .as_mapping()
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    // Build index entry
+    let mut index_entry = serde_json::json!({
+        "ref": pack_ref,
+        "label": label,
+        "description": description,
+        "version": version,
+        "author": author,
+        "license": license,
+        "keywords": keywords,
+        "runtime_deps": runtime_deps,
+        "install_sources": install_sources,
+        "contents": {
+            "actions": actions_count,
+            "sensors": sensors_count,
+            "triggers": triggers_count,
+            "rules": 0,
+            "workflows": 0
+        }
+    });
+
+    // Add optional fields
+    if let Some(e) = email {
+        index_entry["email"] = serde_json::Value::String(e.to_string());
+    }
+    if let Some(h) = homepage {
+        index_entry["homepage"] = serde_json::Value::String(h.to_string());
+    }
+    if let Some(r) = repository {
+        index_entry["repository"] = serde_json::Value::String(r.to_string());
+    }
+
+    // Output
+    match output_format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&index_entry)?);
+        }
+        OutputFormat::Yaml => {
+            println!("{}", serde_yaml_ng::to_string(&index_entry)?);
+        }
+        OutputFormat::Table => {
+            println!("\n{}", serde_json::to_string_pretty(&index_entry)?);
+        }
+    }
+
+    // Only print success message in table format
+    if output_format == OutputFormat::Table {
+        output::print_success("✓ Index entry generated successfully");
+
+        if git_url.is_none() && archive_url.is_none() {
+            output::print_info(
+                "\nNote: Update the install source URLs before adding to your registry index",
+            );
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_update(
+    profile: &Option<String>,
+    pack_ref: String,
+    label: Option<String>,
+    description: Option<String>,
+    version: Option<String>,
+    enabled: Option<bool>,
+    api_url: &Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let config = CliConfig::load_with_profile(profile.as_deref())?;
+    let mut client = ApiClient::from_config(&config, api_url);
+
+    // Check that at least one field is provided
+    if label.is_none() && description.is_none() && version.is_none() && enabled.is_none() {
+        anyhow::bail!("At least one field must be provided to update");
+    }
+
+    #[derive(Serialize)]
+    struct UpdatePackRequest {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        enabled: Option<bool>,
+    }
+
+    let request = UpdatePackRequest {
+        label,
+        description,
+        version,
+        enabled,
+    };
+
+    let path = format!("/packs/{}", pack_ref);
+    let pack: PackDetail = client.put(&path, &request).await?;
+
+    match output_format {
+        OutputFormat::Json | OutputFormat::Yaml => {
+            output::print_output(&pack, output_format)?;
+        }
+        OutputFormat::Table => {
+            output::print_success(&format!("Pack '{}' updated successfully", pack.pack_ref));
+            output::print_key_value_table(vec![
+                ("ID", pack.id.to_string()),
+                ("Ref", pack.pack_ref.clone()),
+                ("Label", pack.label.clone()),
+                ("Version", pack.version.clone()),
+                ("Enabled", output::format_bool(pack.enabled.unwrap_or(true))),
+                ("Updated", output::format_timestamp(&pack.updated)),
+            ]);
+        }
+    }
+
+    Ok(())
+}

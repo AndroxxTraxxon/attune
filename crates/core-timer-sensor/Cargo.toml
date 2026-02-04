@@ -1,0 +1,52 @@
+[package]
+name = "core-timer-sensor"
+version = "0.1.0"
+edition = "2021"
+authors = ["Attune Contributors"]
+description = "Standalone timer sensor runtime for Attune core pack"
+
+[[bin]]
+name = "attune-core-timer-sensor"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.41", features = ["full"] }
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# Message queue
+lapin = "2.3"
+futures = "0.3"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Cron scheduling
+tokio-cron-scheduler = "0.15"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Utilities
+uuid = { version = "1.11", features = ["v4", "serde"] }
+urlencoding = "2.1"
+base64 = "0.21"
+
+[dev-dependencies]
+mockall = "0.13"
+tempfile = "3.13"

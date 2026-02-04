@@ -1,0 +1,100 @@
+# Attune Core Pack
+# Built-in core functionality including timers, utilities, and basic actions
+
+ref: core
+label: "Core Pack"
+description: "Built-in core functionality including timer triggers, HTTP utilities, and basic shell actions"
+version: "1.0.0"
+author: "Attune Team"
+email: "core@attune.io"
+
+# Pack is a system pack (shipped with Attune)
+system: true
+
+# Pack configuration schema (minimal for core pack)
+conf_schema:
+  type: object
+  properties:
+    max_action_timeout:
+      type: integer
+      description: "Maximum timeout for action execution in seconds"
+      default: 300
+      minimum: 1
+      maximum: 3600
+    enable_debug_logging:
+      type: boolean
+      description: "Enable debug logging for core pack actions"
+      default: false
+  required: []
+
+# Default pack configuration
+config:
+  max_action_timeout: 300
+  enable_debug_logging: false
+
+# Pack metadata
+meta:
+  category: "system"
+  keywords:
+    - "core"
+    - "utilities"
+    - "timers"
+    - "http"
+    - "shell"
+
+  # Python dependencies for Python-based actions
+  python_dependencies:
+    - "requests>=2.28.0"
+    - "croniter>=1.4.0"
+
+  # Documentation
+  documentation_url: "https://docs.attune.io/packs/core"
+  repository_url: "https://github.com/attune-io/attune"
+
+# Pack tags for discovery
+tags:
+  - core
+  - system
+  - utilities
+  - timers
+
+# Runtime dependencies
+runtime_deps:
+  - shell
+  - python3
+
+# Enabled by default
+enabled: true
+
+# Pack Testing Configuration
+testing:
+  # Enable testing during installation
+  enabled: true
+
+  # Test discovery method
+  discovery:
+    method: "directory"
+    path: "tests"
+
+  # Test runners by runtime type
+  runners:
+    shell:
+      type: "script"
+      entry_point: "tests/run_tests.sh"
+      timeout: 60
+      result_format: "simple"
+
+    python:
+      type: "unittest"
+      entry_point: "tests/test_actions.py"
+      timeout: 120
+      result_format: "simple"
+
+  # Test result expectations
+  result_path: "tests/results/"
+
+  # Minimum passing criteria (100% tests must pass)
+  min_pass_rate: 1.0
+
+  # Block installation if tests fail
+  on_failure: "block"
