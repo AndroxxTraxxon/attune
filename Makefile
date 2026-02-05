@@ -167,13 +167,13 @@ db-reset: db-drop db-create db-migrate
 
 # Test database operations
 db-test-create:
-	createdb attune_test || true
+	psql postgresql://postgres:postgres@localhost:5432 -c "CREATE DATABASE attune_test"
 
 db-test-migrate:
 	DATABASE_URL=postgresql://postgres:postgres@localhost:5432/attune_test sqlx migrate run
 
 db-test-drop:
-	dropdb attune_test || true
+	psql postgresql://postgres:postgres@localhost:5432 -c "DROP DATABASE attune_test"
 
 db-test-reset: db-test-drop db-test-create db-test-migrate
 	@echo "Test database reset complete"

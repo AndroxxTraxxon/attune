@@ -1,13 +1,14 @@
 //! Shared types for timer sensor
 //!
 //! Defines timer configurations and common data structures.
+//! Updated: 2026-02-05 - Fixed TimerConfig parsing to use trigger_ref
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Timer configuration for different timer types
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(untagged)]
 pub enum TimerConfig {
     /// Interval-based timer (fires every N seconds/minutes/hours)
     Interval {
@@ -44,6 +45,75 @@ pub enum TimeUnit {
 }
 
 impl TimerConfig {
+    /// Deserialize TimerConfig from JSON value based on trigger_ref
+    ///
+    /// Maps trigger_ref to the appropriate TimerConfig variant:
+    /// - "core.intervaltimer" -> TimerConfig::Interval
+    /// - "core.crontimer" -> TimerConfig::Cron
+    /// - "core.datetimetimer" -> TimerConfig::DateTime
+    pub fn from_trigger_params(
+        trigger_ref: &str,
+        params: serde_json::Value,
+    ) -> anyhow::Result<Self> {
+        match trigger_ref {
+            "core.intervaltimer" => {
+                // Parse interval and unit from params
+                let interval =
+                    params
+                        .get("interval")
+                        .and_then(|v| v.as_u64())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Missing or invalid 'interval' field in params: {}",
+                                serde_json::to_string(&params)
+                                    .unwrap_or_else(|_| "<invalid>".to_string())
+                            )
+                        })?;
+
+                let unit = if let Some(unit_val) = params.get("unit") {
+                    serde_json::from_value(unit_val.clone())
+                        .map_err(|e| anyhow::anyhow!("Failed to parse 'unit' field: {}", e))?
+                } else {
+                    TimeUnit::Seconds
+                };
+
+                Ok(TimerConfig::Interval { interval, unit })
+            }
+            "core.crontimer" => {
+                let expression = params
+                    .get("expression")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Missing or invalid 'expression' field in params: {}",
+                            serde_json::to_string(&params)
+                                .unwrap_or_else(|_| "<invalid>".to_string())
+                        )
+                    })?
+                    .to_string();
+
+                Ok(TimerConfig::Cron { expression })
+            }
+            "core.datetimetimer" => {
+                let fire_at = params.get("fire_at").ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Missing 'fire_at' field in params: {}",
+                        serde_json::to_string(&params).unwrap_or_else(|_| "<invalid>".to_string())
+                    )
+                })?;
+
+                let fire_at: DateTime<Utc> = serde_json::from_value(fire_at.clone())
+                    .map_err(|e| anyhow::anyhow!("Failed to parse 'fire_at' as DateTime: {}", e))?;
+
+                Ok(TimerConfig::DateTime { fire_at })
+            }
+            _ => Err(anyhow::anyhow!(
+                "Unknown timer trigger type: {}",
+                trigger_ref
+            )),
+        }
+    }
+
     /// Calculate total interval in seconds
     #[allow(dead_code)]
     pub fn interval_seconds(&self) -> Option<u64> {
@@ -204,37 +274,55 @@ mod tests {
     }
 
     #[test]
-    fn test_timer_config_deserialization_interval() {
-        let json = r#"{
-            "type": "interval",
+    fn test_timer_config_from_trigger_params_interval() {
+        let params = serde_json::json!({
             "interval": 30,
             "unit": "seconds"
-        }"#;
+        });
 
-        let config: TimerConfig = serde_json::from_str(json).unwrap();
+        let config = TimerConfig::from_trigger_params("core.intervaltimer", params).unwrap();
         assert_eq!(config.interval_seconds(), Some(30));
     }
 
     #[test]
-    fn test_timer_config_deserialization_interval_default_unit() {
-        let json = r#"{
-            "type": "interval",
+    fn test_timer_config_from_trigger_params_interval_default_unit() {
+        let params = serde_json::json!({
             "interval": 60
-        }"#;
+        });
 
-        let config: TimerConfig = serde_json::from_str(json).unwrap();
+        let config = TimerConfig::from_trigger_params("core.intervaltimer", params).unwrap();
         assert_eq!(config.interval_seconds(), Some(60));
     }
 
     #[test]
-    fn test_timer_config_deserialization_cron() {
-        let json = r#"{
-            "type": "cron",
+    fn test_timer_config_from_trigger_params_cron() {
+        let params = serde_json::json!({
             "expression": "0 0 * * *"
-        }"#;
+        });
 
-        let config: TimerConfig = serde_json::from_str(json).unwrap();
+        let config = TimerConfig::from_trigger_params("core.crontimer", params).unwrap();
         assert_eq!(config.cron_expression(), Some("0 0 * * *"));
+    }
+
+    #[test]
+    fn test_timer_config_from_trigger_params_datetime() {
+        let fire_at = chrono::Utc::now();
+        let params = serde_json::json!({
+            "fire_at": fire_at
+        });
+
+        let config = TimerConfig::from_trigger_params("core.datetimetimer", params).unwrap();
+        assert_eq!(config.fire_time(), Some(fire_at));
+    }
+
+    #[test]
+    fn test_timer_config_from_trigger_params_unknown_trigger() {
+        let params = serde_json::json!({
+            "interval": 30
+        });
+
+        let result = TimerConfig::from_trigger_params("unknown.trigger", params);
+        assert!(result.is_err());
     }
 
     #[test]

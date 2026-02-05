@@ -95,10 +95,15 @@ for pack_dir in "$SOURCE_PACKS_DIR"/*; do
             target_pack_dir="$TARGET_PACKS_DIR/$pack_name"
 
             if [ -d "$target_pack_dir" ]; then
-                # Pack exists, check if we should update
-                # For now, we'll skip if it exists (idempotent on restart)
-                echo -e "${YELLOW}  ⊘${NC} Pack already exists at: $target_pack_dir"
-                echo -e "${BLUE}  ℹ${NC} Skipping copy (use fresh volume to reload)"
+                # Pack exists, update files to ensure we have latest (especially binaries)
+                echo -e "${YELLOW}  ⟳${NC} Pack exists at: $target_pack_dir, updating files..."
+                cp -rf "$pack_dir"/* "$target_pack_dir"/
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}  ✓${NC} Updated pack files at: $target_pack_dir"
+                else
+                    echo -e "${RED}  ✗${NC} Failed to update pack"
+                    exit 1
+                fi
             else
                 # Copy pack to target directory
                 echo -e "${YELLOW}  →${NC} Copying pack files..."

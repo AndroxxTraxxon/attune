@@ -1,5 +1,5 @@
 -- Migration: Event System
--- Description: Creates trigger, sensor, event, and rule tables (with webhook_config, is_adhoc from start)
+-- Description: Creates trigger, sensor, event, and enforcement tables (with webhook_config, is_adhoc from start)
 -- Version: 20250101000003
 
 -- ============================================================================
@@ -71,6 +71,7 @@ CREATE TABLE sensor (
     trigger BIGINT NOT NULL REFERENCES trigger(id) ON DELETE CASCADE,
     trigger_ref TEXT NOT NULL,
     enabled BOOLEAN NOT NULL,
+    is_adhoc BOOLEAN NOT NULL DEFAULT FALSE,
     param_schema JSONB,
     config JSONB,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -80,6 +81,31 @@ CREATE TABLE sensor (
     CONSTRAINT sensor_ref_lowercase CHECK (ref = LOWER(ref)),
     CONSTRAINT sensor_ref_format CHECK (ref ~ '^[^.]+\.[^.]+$')
 );
+
+-- Indexes
+CREATE INDEX idx_sensor_ref ON sensor(ref);
+CREATE INDEX idx_sensor_pack ON sensor(pack);
+CREATE INDEX idx_sensor_runtime ON sensor(runtime);
+CREATE INDEX idx_sensor_trigger ON sensor(trigger);
+CREATE INDEX idx_sensor_enabled ON sensor(enabled) WHERE enabled = TRUE;
+CREATE INDEX idx_sensor_is_adhoc ON sensor(is_adhoc) WHERE is_adhoc = true;
+CREATE INDEX idx_sensor_created ON sensor(created DESC);
+
+-- Trigger
+CREATE TRIGGER update_sensor_updated
+    BEFORE UPDATE ON sensor
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_column();
+
+-- Comments
+COMMENT ON TABLE sensor IS 'Sensors monitor for events and create trigger instances';
+COMMENT ON COLUMN sensor.ref IS 'Unique sensor reference (format: pack.name)';
+COMMENT ON COLUMN sensor.label IS 'Human-readable sensor name';
+COMMENT ON COLUMN sensor.entrypoint IS 'Script or command to execute';
+COMMENT ON COLUMN sensor.runtime IS 'Runtime environment for execution';
+COMMENT ON COLUMN sensor.trigger IS 'Trigger type this sensor creates events for';
+COMMENT ON COLUMN sensor.enabled IS 'Whether this sensor is active';
+COMMENT ON COLUMN sensor.is_adhoc IS 'True if sensor was manually created (ad-hoc), false if installed from pack';
 
 -- ============================================================================
 -- EVENT TABLE
@@ -173,3 +199,6 @@ COMMENT ON COLUMN enforcement.status IS 'Processing status';
 COMMENT ON COLUMN enforcement.payload IS 'Event payload for rule evaluation';
 COMMENT ON COLUMN enforcement.condition IS 'Logical operator for conditions (any=OR, all=AND)';
 COMMENT ON COLUMN enforcement.conditions IS 'Condition expressions to evaluate';
+
+-- Note: Rule table will be created in migration 20250101000006 after action table exists
+-- Note: Foreign key constraints for enforcement.rule and event.rule will be added in that migration

@@ -52,6 +52,37 @@ impl SensorService {
         let mq = MessageQueue::connect(&mq_config.url).await?;
         info!("Message queue connection established");
 
+        // Setup common message queue infrastructure (exchanges and DLX)
+        let mq_setup_config = attune_common::mq::MessageQueueConfig::default();
+        match mq
+            .get_connection()
+            .setup_common_infrastructure(&mq_setup_config)
+            .await
+        {
+            Ok(_) => info!("Common message queue infrastructure setup completed"),
+            Err(e) => {
+                warn!(
+                    "Failed to setup common MQ infrastructure (may already exist): {}",
+                    e
+                );
+            }
+        }
+
+        // Setup sensor-specific queues and bindings
+        match mq
+            .get_connection()
+            .setup_sensor_infrastructure(&mq_setup_config)
+            .await
+        {
+            Ok(_) => info!("Sensor message queue infrastructure setup completed"),
+            Err(e) => {
+                warn!(
+                    "Failed to setup sensor MQ infrastructure (may already exist): {}",
+                    e
+                );
+            }
+        }
+
         // Create service components
         info!("Creating service components...");
 

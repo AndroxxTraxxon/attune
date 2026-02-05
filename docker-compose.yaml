@@ -456,7 +456,7 @@ services:
       ATTUNE_MQ_URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE_PACKS_BASE_DIR: /opt/attune/packs
     volumes:
-      - packs_data:/opt/attune/packs:ro
+      - packs_data:/opt/attune/packs:rw
       - ./packs.dev:/opt/attune/packs.dev:rw
       - sensor_logs:/opt/attune/logs
     depends_on:

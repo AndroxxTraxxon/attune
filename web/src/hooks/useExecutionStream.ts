@@ -88,10 +88,8 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
         return;
       }
 
-      // Extract execution data from notification payload
-      // The payload has a nested "data" field with the actual execution data
-      const executionData =
-        (notification.payload as any).data || notification.payload;
+      // Extract execution data from notification payload (flat structure)
+      const executionData = notification.payload as any;
 
       // Update specific execution query if it exists
       queryClient.setQueryData(

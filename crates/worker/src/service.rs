@@ -77,13 +77,13 @@ impl WorkerService {
             .map_err(|e| Error::Internal(format!("Failed to connect to message queue: {}", e)))?;
         info!("Message queue connection established");
 
-        // Setup message queue infrastructure (exchanges, queues, bindings)
+        // Setup common message queue infrastructure (exchanges and DLX)
         let mq_config = MqConfig::default();
-        match mq_connection.setup_infrastructure(&mq_config).await {
-            Ok(_) => info!("Message queue infrastructure setup completed"),
+        match mq_connection.setup_common_infrastructure(&mq_config).await {
+            Ok(_) => info!("Common message queue infrastructure setup completed"),
             Err(e) => {
                 warn!(
-                    "Failed to setup MQ infrastructure (may already exist): {}",
+                    "Failed to setup common MQ infrastructure (may already exist): {}",
                     e
                 );
             }
@@ -278,6 +278,16 @@ impl WorkerService {
 
         info!("Worker registered with ID: {}", worker_id);
 
+        // Setup worker-specific message queue infrastructure
+        let mq_config = MqConfig::default();
+        self.mq_connection
+            .setup_worker_infrastructure(worker_id, &mq_config)
+            .await
+            .map_err(|e| {
+                Error::Internal(format!("Failed to setup worker MQ infrastructure: {}", e))
+            })?;
+        info!("Worker-specific message queue infrastructure setup completed");
+
         // Start heartbeat
         self.heartbeat.start().await?;
 
@@ -316,40 +326,10 @@ impl WorkerService {
             .worker_id
             .ok_or_else(|| Error::Internal("Worker not registered".to_string()))?;
 
-        // Create queue name for this worker
+        // Queue name for this worker (already created in setup_worker_infrastructure)
         let queue_name = format!("worker.{}.executions", worker_id);
 
-        info!("Creating worker-specific queue: {}", queue_name);
-
-        // Create the worker-specific queue
-        let worker_queue = QueueConfig {
-            name: queue_name.clone(),
-            durable: false, // Worker queues are temporary
-            exclusive: false,
-            auto_delete: true, // Delete when worker disconnects
-        };
-
-        self.mq_connection
-            .declare_queue(&worker_queue)
-            .await
-            .map_err(|e| Error::Internal(format!("Failed to declare queue: {}", e)))?;
-
-        info!("Worker queue created: {}", queue_name);
-
-        // Bind the queue to the executions exchange with worker-specific routing key
-        self.mq_connection
-            .bind_queue(
-                &queue_name,
-                "attune.executions",
-                &format!("worker.{}", worker_id),
-            )
-            .await
-            .map_err(|e| Error::Internal(format!("Failed to bind queue: {}", e)))?;
-
-        info!(
-            "Queue bound to exchange with routing key 'worker.{}'",
-            worker_id
-        );
+        info!("Starting consumer for worker queue: {}", queue_name);
 
         // Create consumer
         let consumer = Consumer::new(

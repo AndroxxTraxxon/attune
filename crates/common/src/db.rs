@@ -30,15 +30,6 @@ impl Database {
         Self::validate_schema_name(&schema)?;
 
         // Log schema configuration prominently
-        if schema != "attune" {
-            warn!(
-                "Using non-standard schema: '{}'. Production should use 'attune'",
-                schema
-            );
-        } else {
-            info!("Using production schema: {}", schema);
-        }
-
         info!(
             "Connecting to database with max_connections={}, schema={}",
             config.max_connections, schema

@@ -75,7 +75,7 @@ async fn test_whoami_authenticated() {
     fixture.write_authenticated_config("valid_token", "refresh_token");
 
     // Mock whoami endpoint
-    mock_whoami_success(&fixture.mock_server, "testuser", "test@example.com").await;
+    mock_whoami_success(&fixture.mock_server, "testuser", "Test User").await;
 
     let mut cmd = Command::cargo_bin("attune").unwrap();
     cmd.env("XDG_CONFIG_HOME", fixture.config_dir_path())
@@ -88,7 +88,7 @@ async fn test_whoami_authenticated() {
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("testuser"))
-        .stdout(predicate::str::contains("test@example.com"));
+        .stdout(predicate::str::contains("Test User"));
 }
 
 #[tokio::test]
@@ -97,7 +97,7 @@ async fn test_whoami_unauthenticated() {
     fixture.write_default_config();
 
     // Mock unauthorized response
-    mock_unauthorized(&fixture.mock_server, "/auth/whoami").await;
+    mock_unauthorized(&fixture.mock_server, "/auth/me").await;
 
     let mut cmd = Command::cargo_bin("attune").unwrap();
     cmd.env("XDG_CONFIG_HOME", fixture.config_dir_path())
@@ -185,7 +185,7 @@ async fn test_whoami_json_output() {
     fixture.write_authenticated_config("valid_token", "refresh_token");
 
     // Mock whoami endpoint
-    mock_whoami_success(&fixture.mock_server, "testuser", "test@example.com").await;
+    mock_whoami_success(&fixture.mock_server, "testuser", "Test User").await;
 
     let mut cmd = Command::cargo_bin("attune").unwrap();
     cmd.env("XDG_CONFIG_HOME", fixture.config_dir_path())
@@ -198,7 +198,7 @@ async fn test_whoami_json_output() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains(r#""username":"#))
+        .stdout(predicate::str::contains(r#""login":"#))
         .stdout(predicate::str::contains("testuser"));
 }
 
@@ -208,7 +208,7 @@ async fn test_whoami_yaml_output() {
     fixture.write_authenticated_config("valid_token", "refresh_token");
 
     // Mock whoami endpoint
-    mock_whoami_success(&fixture.mock_server, "testuser", "test@example.com").await;
+    mock_whoami_success(&fixture.mock_server, "testuser", "Test User").await;
 
     let mut cmd = Command::cargo_bin("attune").unwrap();
     cmd.env("XDG_CONFIG_HOME", fixture.config_dir_path())
@@ -221,6 +221,6 @@ async fn test_whoami_yaml_output() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("username:"))
+        .stdout(predicate::str::contains("login:"))
         .stdout(predicate::str::contains("testuser"));
 }

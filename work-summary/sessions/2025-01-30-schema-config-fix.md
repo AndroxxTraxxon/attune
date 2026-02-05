@@ -102,7 +102,6 @@ Configuration:
   • Database schema: public
 
 # Services now show:
-WARN Using non-standard schema: 'public'. Production should use 'attune'
 INFO Connecting to database with max_connections=50, schema=public
 ```
 

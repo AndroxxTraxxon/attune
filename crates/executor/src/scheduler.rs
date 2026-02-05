@@ -276,7 +276,7 @@ impl ExecutionScheduler {
             MessageEnvelope::new(MessageType::ExecutionRequested, payload).with_source("executor");
 
         // Publish to worker-specific queue with routing key
-        let routing_key = format!("worker.{}", worker_id);
+        let routing_key = format!("execution.dispatch.worker.{}", worker_id);
         let exchange = "attune.executions";
 
         publisher

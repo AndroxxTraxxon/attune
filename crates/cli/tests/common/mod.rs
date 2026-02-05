@@ -135,19 +135,14 @@ pub async fn mock_login_failure(server: &MockServer) {
 
 /// Mock a whoami response
 #[allow(dead_code)]
-pub async fn mock_whoami_success(server: &MockServer, username: &str, email: &str) {
+pub async fn mock_whoami_success(server: &MockServer, username: &str, display_name: &str) {
     Mock::given(method("GET"))
-        .and(path("/auth/whoami"))
+        .and(path("/auth/me"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "data": {
                 "id": 1,
-                "name": "Test User",
-                "username": username,
-                "email": email,
-                "identity_type": "user",
-                "enabled": true,
-                "created": "2024-01-01T00:00:00Z",
-                "updated": "2024-01-01T00:00:00Z"
+                "login": username,
+                "display_name": display_name
             }
         })))
         .mount(server)

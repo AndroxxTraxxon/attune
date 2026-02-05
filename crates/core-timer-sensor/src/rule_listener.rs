@@ -126,7 +126,11 @@ impl RuleLifecycleListener {
                 for rule in rules {
                     if rule.enabled {
                         if let Err(e) = self
-                            .start_timer_from_params(rule.id, Some(rule.trigger_params))
+                            .start_timer_from_params(
+                                rule.id,
+                                "core.intervaltimer",
+                                Some(rule.trigger_params),
+                            )
                             .await
                         {
                             error!("Failed to start timer for rule {}: {}", rule.id, e);
@@ -232,7 +236,7 @@ impl RuleLifecycleListener {
                 );
 
                 if enabled {
-                    self.start_timer_from_params(rule_id, trigger_params)
+                    self.start_timer_from_params(rule_id, &trigger_type, trigger_params)
                         .await?;
                 } else {
                     info!("Rule {} is disabled, not starting timer", rule_id);
@@ -241,6 +245,7 @@ impl RuleLifecycleListener {
             RuleLifecycleEvent::RuleEnabled {
                 rule_id,
                 rule_ref,
+                trigger_type,
                 trigger_params,
                 ..
             } => {
@@ -249,7 +254,7 @@ impl RuleLifecycleListener {
                     rule_id, rule_ref
                 );
 
-                self.start_timer_from_params(rule_id, trigger_params)
+                self.start_timer_from_params(rule_id, &trigger_type, trigger_params)
                     .await?;
             }
             RuleLifecycleEvent::RuleDisabled {
@@ -281,13 +286,21 @@ impl RuleLifecycleListener {
     async fn start_timer_from_params(
         &self,
         rule_id: i64,
+        trigger_ref: &str,
         trigger_params: Option<JsonValue>,
     ) -> Result<()> {
         let params = trigger_params.ok_or_else(|| {
             anyhow::anyhow!("Timer trigger requires trigger_params but none provided")
         })?;
 
-        let config: TimerConfig = serde_json::from_value(params)
+        info!(
+            "Parsing timer config for rule {}: trigger_ref='{}', params={}",
+            rule_id,
+            trigger_ref,
+            serde_json::to_string(&params).unwrap_or_else(|_| "<invalid json>".to_string())
+        );
+
+        let config = TimerConfig::from_trigger_params(trigger_ref, params)
             .context("Failed to parse trigger_params as TimerConfig")?;
 
         info!(

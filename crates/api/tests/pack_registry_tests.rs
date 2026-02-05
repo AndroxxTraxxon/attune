@@ -12,7 +12,7 @@ mod helpers;
 use attune_common::{
     models::Pack,
     pack_registry::calculate_directory_checksum,
-    repositories::{pack::PackRepository, List},
+    repositories::{pack::PackRepository, FindById, List},
 };
 use helpers::{Result, TestContext};
 use serde_json::json;

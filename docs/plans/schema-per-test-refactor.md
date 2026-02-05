@@ -795,14 +795,7 @@ impl Database {
         Self::validate_schema_name(&schema)?;
         
         // Log prominently
-        if schema != "attune" {
-            tracing::warn!(
-                "Using non-standard schema: {}. Production should use 'attune'",
-                schema
-            );
-        } else {
-            tracing::info!("Using production schema: {}", schema);
-        }
+        tracing::info!("Using schema: {}", schema);
         
         // ... rest of implementation
     }

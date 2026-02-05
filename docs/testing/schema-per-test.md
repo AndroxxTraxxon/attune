@@ -163,38 +163,6 @@ async fn test_something() {
 }
 ```
 
-## Production vs. Test Configuration
-
-### Production Configuration
-
-Production always uses the `attune` schema:
-
-```yaml
-# config.production.yaml
-database:
-  schema: "attune"  # REQUIRED: Do not change
-```
-
-The database layer validates and logs schema usage:
-
-```rust
-if schema != "attune" {
-    tracing::warn!("Using non-standard schema: '{}'. Production should use 'attune'", schema);
-} else {
-    tracing::info!("Using production schema: {}", schema);
-}
-```
-
-### Test Configuration
-
-Tests use dynamic schemas:
-
-```yaml
-# config.test.yaml
-database:
-  schema: null  # Will be set per-test in TestContext
-```
-
 Each test creates its own unique schema at runtime.
 
 ## Code Structure
@@ -259,11 +227,7 @@ impl Database {
         Self::validate_schema_name(&schema)?;
         
         // Log schema usage
-        if schema != "attune" {
-            warn!("Using non-standard schema: '{}'", schema);
-        } else {
-            info!("Using production schema: {}", schema);
-        }
+        info!("Using schema: {}", schema);
         
         // Create pool with search_path hook
         let pool = PgPoolOptions::new()

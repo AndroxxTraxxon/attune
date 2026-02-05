@@ -1,5 +1,5 @@
 -- Migration: Execution System
--- Description: Creates execution (with workflow columns) and inquiry tables
+-- Description: Creates execution (with workflow columns), inquiry, and rule tables
 -- Version: 20250101000006
 
 -- ============================================================================
@@ -103,5 +103,78 @@ COMMENT ON COLUMN inquiry.status IS 'Current inquiry lifecycle status';
 COMMENT ON COLUMN inquiry.response IS 'User response data';
 COMMENT ON COLUMN inquiry.timeout_at IS 'When this inquiry expires';
 COMMENT ON COLUMN inquiry.responded_at IS 'When the response was received';
+
+-- ============================================================================
+
+-- ============================================================================
+-- RULE TABLE
+-- ============================================================================
+
+CREATE TABLE rule (
+    id BIGSERIAL PRIMARY KEY,
+    ref TEXT NOT NULL UNIQUE,
+    pack BIGINT NOT NULL REFERENCES pack(id) ON DELETE CASCADE,
+    pack_ref TEXT NOT NULL,
+    label TEXT NOT NULL,
+    description TEXT NOT NULL,
+    action BIGINT NOT NULL REFERENCES action(id),
+    action_ref TEXT NOT NULL,
+    trigger BIGINT NOT NULL REFERENCES trigger(id),
+    trigger_ref TEXT NOT NULL,
+    conditions JSONB NOT NULL DEFAULT '[]'::jsonb,
+    action_params JSONB DEFAULT '{}'::jsonb,
+    trigger_params JSONB DEFAULT '{}'::jsonb,
+    enabled BOOLEAN NOT NULL,
+    is_adhoc BOOLEAN NOT NULL DEFAULT FALSE,
+    created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    -- Constraints
+    CONSTRAINT rule_ref_lowercase CHECK (ref = LOWER(ref)),
+    CONSTRAINT rule_ref_format CHECK (ref ~ '^[^.]+\.[^.]+$')
+);
+
+-- Indexes
+CREATE INDEX idx_rule_ref ON rule(ref);
+CREATE INDEX idx_rule_pack ON rule(pack);
+CREATE INDEX idx_rule_action ON rule(action);
+CREATE INDEX idx_rule_trigger ON rule(trigger);
+CREATE INDEX idx_rule_enabled ON rule(enabled) WHERE enabled = TRUE;
+CREATE INDEX idx_rule_is_adhoc ON rule(is_adhoc) WHERE is_adhoc = true;
+CREATE INDEX idx_rule_created ON rule(created DESC);
+CREATE INDEX idx_rule_trigger_enabled ON rule(trigger, enabled);
+CREATE INDEX idx_rule_action_enabled ON rule(action, enabled);
+CREATE INDEX idx_rule_pack_enabled ON rule(pack, enabled);
+CREATE INDEX idx_rule_action_params_gin ON rule USING GIN (action_params);
+CREATE INDEX idx_rule_trigger_params_gin ON rule USING GIN (trigger_params);
+
+-- Trigger
+CREATE TRIGGER update_rule_updated
+    BEFORE UPDATE ON rule
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_column();
+
+-- Comments
+COMMENT ON TABLE rule IS 'Rules link triggers to actions with conditions';
+COMMENT ON COLUMN rule.ref IS 'Unique rule reference (format: pack.name)';
+COMMENT ON COLUMN rule.label IS 'Human-readable rule name';
+COMMENT ON COLUMN rule.action IS 'Action to execute when rule triggers';
+COMMENT ON COLUMN rule.trigger IS 'Trigger that activates this rule';
+COMMENT ON COLUMN rule.conditions IS 'Condition expressions to evaluate before executing action';
+COMMENT ON COLUMN rule.action_params IS 'Parameter overrides for the action';
+COMMENT ON COLUMN rule.trigger_params IS 'Parameter overrides for the trigger';
+COMMENT ON COLUMN rule.enabled IS 'Whether this rule is active';
+COMMENT ON COLUMN rule.is_adhoc IS 'True if rule was manually created (ad-hoc), false if installed from pack';
+
+-- ============================================================================
+
+-- Add foreign key constraints now that rule table exists
+ALTER TABLE enforcement
+    ADD CONSTRAINT enforcement_rule_fkey
+    FOREIGN KEY (rule) REFERENCES rule(id) ON DELETE SET NULL;
+
+ALTER TABLE event
+    ADD CONSTRAINT event_rule_fkey
+    FOREIGN KEY (rule) REFERENCES rule(id) ON DELETE SET NULL;
 
 -- ============================================================================

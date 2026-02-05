@@ -240,7 +240,7 @@ impl Update for ActionRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(" RETURNING id, ref, pack, pack_ref, label, description, entrypoint, runtime, param_schema, out_schema, is_workflow, workflow_def, created, updated");
+        query.push(" RETURNING id, ref, pack, pack_ref, label, description, entrypoint, runtime, param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated");
 
         let action = query
             .build_query_as::<Action>()

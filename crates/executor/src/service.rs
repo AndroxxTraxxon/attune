@@ -88,13 +88,27 @@ impl ExecutorService {
         let mq_connection = Connection::connect(mq_url).await?;
         info!("Message queue connection established");
 
-        // Setup message queue infrastructure (exchanges, queues, bindings)
+        // Setup common message queue infrastructure (exchanges and DLX)
         let mq_config = MessageQueueConfig::default();
-        match mq_connection.setup_infrastructure(&mq_config).await {
-            Ok(_) => info!("Message queue infrastructure setup completed"),
+        match mq_connection.setup_common_infrastructure(&mq_config).await {
+            Ok(_) => info!("Common message queue infrastructure setup completed"),
             Err(e) => {
                 warn!(
-                    "Failed to setup MQ infrastructure (may already exist): {}",
+                    "Failed to setup common MQ infrastructure (may already exist): {}",
+                    e
+                );
+            }
+        }
+
+        // Setup executor-specific queues and bindings
+        match mq_connection
+            .setup_executor_infrastructure(&mq_config)
+            .await
+        {
+            Ok(_) => info!("Executor message queue infrastructure setup completed"),
+            Err(e) => {
+                warn!(
+                    "Failed to setup executor MQ infrastructure (may already exist): {}",
                     e
                 );
             }

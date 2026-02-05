@@ -314,9 +314,15 @@ impl Connection {
         Ok(())
     }
 
-    /// Setup complete infrastructure (exchanges, queues, bindings)
-    pub async fn setup_infrastructure(&self, config: &MessageQueueConfig) -> MqResult<()> {
-        info!("Setting up RabbitMQ infrastructure");
+    /// Setup common infrastructure (exchanges, DLX) - safe to call from any service
+    ///
+    /// This sets up the shared infrastructure that all services need:
+    /// - All exchanges (events, executions, notifications)
+    /// - Dead letter exchange (if enabled)
+    ///
+    /// This is idempotent and can be called by multiple services safely.
+    pub async fn setup_common_infrastructure(&self, config: &MessageQueueConfig) -> MqResult<()> {
+        info!("Setting up common RabbitMQ infrastructure (exchanges and DLX)");
 
         // Declare exchanges
         self.declare_exchange(&config.rabbitmq.exchanges.events)
@@ -335,83 +341,63 @@ impl Connection {
                 auto_delete: false,
             };
             self.declare_exchange(&dlx_config).await?;
+
+            // Declare dead letter queue (derive name from exchange)
+            let dlq_name = format!("{}.queue", config.rabbitmq.dead_letter.exchange);
+            let dlq_config = QueueConfig {
+                name: dlq_name.clone(),
+                durable: true,
+                exclusive: false,
+                auto_delete: false,
+            };
+            self.declare_queue(&dlq_config).await?;
+
+            // Bind DLQ to DLX
+            self.bind_queue(&dlq_name, &config.rabbitmq.dead_letter.exchange, "#")
+                .await?;
         }
 
-        // Declare queues with or without DLX
-        let dlx_exchange = if config.rabbitmq.dead_letter.enabled {
+        info!("Common RabbitMQ infrastructure setup complete");
+        Ok(())
+    }
+
+    /// Setup executor-specific queues and bindings
+    pub async fn setup_executor_infrastructure(&self, config: &MessageQueueConfig) -> MqResult<()> {
+        info!("Setting up Executor infrastructure");
+
+        let dlx = if config.rabbitmq.dead_letter.enabled {
             Some(config.rabbitmq.dead_letter.exchange.as_str())
         } else {
             None
         };
 
-        if let Some(dlx) = dlx_exchange {
-            self.declare_queue_with_dlx(&config.rabbitmq.queues.events, dlx)
-                .await?;
-            self.declare_queue_with_dlx(&config.rabbitmq.queues.executions, dlx)
-                .await?;
-            self.declare_queue_with_dlx(&config.rabbitmq.queues.enforcements, dlx)
-                .await?;
-            self.declare_queue_with_dlx(&config.rabbitmq.queues.execution_requests, dlx)
-                .await?;
-            self.declare_queue_with_dlx(&config.rabbitmq.queues.execution_status, dlx)
-                .await?;
-            self.declare_queue_with_dlx(&config.rabbitmq.queues.execution_completed, dlx)
-                .await?;
-            self.declare_queue_with_dlx(&config.rabbitmq.queues.inquiry_responses, dlx)
-                .await?;
-            self.declare_queue_with_dlx(&config.rabbitmq.queues.notifications, dlx)
-                .await?;
-        } else {
-            self.declare_queue(&config.rabbitmq.queues.events).await?;
-            self.declare_queue(&config.rabbitmq.queues.executions)
-                .await?;
-            self.declare_queue(&config.rabbitmq.queues.enforcements)
-                .await?;
-            self.declare_queue(&config.rabbitmq.queues.execution_requests)
-                .await?;
-            self.declare_queue(&config.rabbitmq.queues.execution_status)
-                .await?;
-            self.declare_queue(&config.rabbitmq.queues.execution_completed)
-                .await?;
-            self.declare_queue(&config.rabbitmq.queues.inquiry_responses)
-                .await?;
-            self.declare_queue(&config.rabbitmq.queues.notifications)
-                .await?;
-        }
+        // Declare executor queues
+        self.declare_queue_with_optional_dlx(&config.rabbitmq.queues.enforcements, dlx)
+            .await?;
+        self.declare_queue_with_optional_dlx(&config.rabbitmq.queues.execution_requests, dlx)
+            .await?;
+        self.declare_queue_with_optional_dlx(&config.rabbitmq.queues.execution_status, dlx)
+            .await?;
+        self.declare_queue_with_optional_dlx(&config.rabbitmq.queues.execution_completed, dlx)
+            .await?;
+        self.declare_queue_with_optional_dlx(&config.rabbitmq.queues.inquiry_responses, dlx)
+            .await?;
 
         // Bind queues to exchanges
         self.bind_queue(
-            &config.rabbitmq.queues.events.name,
-            &config.rabbitmq.exchanges.events.name,
-            "#", // All events (topic exchange)
-        )
-        .await?;
-
-        // LEGACY BINDING DISABLED: This was causing all messages to go to the legacy queue
-        // instead of being routed to the new specific queues (execution_requests, enforcements, etc.)
-        // self.bind_queue(
-        //     &config.rabbitmq.queues.executions.name,
-        //     &config.rabbitmq.exchanges.executions.name,
-        //     "#", // All execution-related messages (topic exchange) - legacy, to be deprecated
-        // )
-        // .await?;
-
-        // Bind new executor-specific queues
-        self.bind_queue(
             &config.rabbitmq.queues.enforcements.name,
             &config.rabbitmq.exchanges.executions.name,
-            "enforcement.#", // Enforcement messages
+            "enforcement.#",
         )
         .await?;
 
         self.bind_queue(
             &config.rabbitmq.queues.execution_requests.name,
             &config.rabbitmq.exchanges.executions.name,
-            "execution.requested", // Execution request messages
+            "execution.requested",
         )
         .await?;
 
-        // Bind execution_status queue to status changed messages for ExecutionManager
         self.bind_queue(
             &config.rabbitmq.queues.execution_status.name,
             &config.rabbitmq.exchanges.executions.name,
@@ -419,7 +405,6 @@ impl Connection {
         )
         .await?;
 
-        // Bind execution_completed queue to completed messages for CompletionListener
         self.bind_queue(
             &config.rabbitmq.queues.execution_completed.name,
             &config.rabbitmq.exchanges.executions.name,
@@ -427,7 +412,6 @@ impl Connection {
         )
         .await?;
 
-        // Bind inquiry_responses queue to inquiry responded messages for InquiryHandler
         self.bind_queue(
             &config.rabbitmq.queues.inquiry_responses.name,
             &config.rabbitmq.exchanges.executions.name,
@@ -435,15 +419,114 @@ impl Connection {
         )
         .await?;
 
+        info!("Executor infrastructure setup complete");
+        Ok(())
+    }
+
+    /// Setup worker-specific queue for a worker instance
+    pub async fn setup_worker_infrastructure(
+        &self,
+        worker_id: i64,
+        config: &MessageQueueConfig,
+    ) -> MqResult<()> {
+        info!(
+            "Setting up Worker infrastructure for worker ID {}",
+            worker_id
+        );
+
+        let queue_name = format!("worker.{}.executions", worker_id);
+        let queue_config = QueueConfig {
+            name: queue_name.clone(),
+            durable: true,
+            exclusive: false,
+            auto_delete: false,
+        };
+
+        let dlx = if config.rabbitmq.dead_letter.enabled {
+            Some(config.rabbitmq.dead_letter.exchange.as_str())
+        } else {
+            None
+        };
+
+        self.declare_queue_with_optional_dlx(&queue_config, dlx)
+            .await?;
+
+        // Bind to execution dispatch routing key
         self.bind_queue(
-            &config.rabbitmq.queues.notifications.name,
-            &config.rabbitmq.exchanges.notifications.name,
-            "", // Fanout doesn't use routing key
+            &queue_name,
+            &config.rabbitmq.exchanges.executions.name,
+            &format!("execution.dispatch.worker.{}", worker_id),
         )
         .await?;
 
-        info!("RabbitMQ infrastructure setup complete");
+        info!(
+            "Worker infrastructure setup complete for worker ID {}",
+            worker_id
+        );
         Ok(())
+    }
+
+    /// Setup sensor-specific queues and bindings
+    pub async fn setup_sensor_infrastructure(&self, config: &MessageQueueConfig) -> MqResult<()> {
+        info!("Setting up Sensor infrastructure");
+
+        let dlx = if config.rabbitmq.dead_letter.enabled {
+            Some(config.rabbitmq.dead_letter.exchange.as_str())
+        } else {
+            None
+        };
+
+        self.declare_queue_with_optional_dlx(&config.rabbitmq.queues.events, dlx)
+            .await?;
+
+        // Bind to all events
+        self.bind_queue(
+            &config.rabbitmq.queues.events.name,
+            &config.rabbitmq.exchanges.events.name,
+            "#",
+        )
+        .await?;
+
+        info!("Sensor infrastructure setup complete");
+        Ok(())
+    }
+
+    /// Setup notifier-specific queues and bindings
+    pub async fn setup_notifier_infrastructure(&self, config: &MessageQueueConfig) -> MqResult<()> {
+        info!("Setting up Notifier infrastructure");
+
+        let dlx = if config.rabbitmq.dead_letter.enabled {
+            Some(config.rabbitmq.dead_letter.exchange.as_str())
+        } else {
+            None
+        };
+
+        self.declare_queue_with_optional_dlx(&config.rabbitmq.queues.notifications, dlx)
+            .await?;
+
+        // Bind to notifications exchange (fanout, no routing key)
+        self.bind_queue(
+            &config.rabbitmq.queues.notifications.name,
+            &config.rabbitmq.exchanges.notifications.name,
+            "",
+        )
+        .await?;
+
+        info!("Notifier infrastructure setup complete");
+        Ok(())
+    }
+
+    /// Helper to declare queue with optional DLX
+    async fn declare_queue_with_optional_dlx(
+        &self,
+        config: &QueueConfig,
+        dlx: Option<&str>,
+    ) -> MqResult<()> {
+        if let Some(dlx_exchange) = dlx {
+            self.declare_queue_with_dlx(config, dlx_exchange).await
+        } else {
+            self.declare_queue(config).await
+        }
     }
 }
 

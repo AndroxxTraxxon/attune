@@ -17,65 +17,60 @@ export default function EventsPage() {
   // Set up WebSocket for real-time event updates with stable callback
   const handleEventNotification = useCallback(
     (notification: Notification) => {
-      // Extract event data from notification payload
-      if (
-        notification.notification_type === "event_created" &&
-        notification.payload
-      ) {
-        const eventData = (notification.payload as any).data;
+      // Extract event data from notification payload (flat structure)
+      if (notification.notification_type === "event_created") {
+        const payload = notification.payload as any;
 
-        if (eventData) {
-          // Create EventSummary from notification data
-          const newEvent: EventSummary = {
-            id: eventData.id,
-            trigger: eventData.trigger,
-            trigger_ref: eventData.trigger_ref,
-            rule: eventData.rule,
-            rule_ref: eventData.rule_ref,
-            source: eventData.source,
-            source_ref: eventData.source_ref,
-            has_payload:
-              eventData.payload !== null && eventData.payload !== undefined,
-            created: eventData.created,
-          };
+        // Create EventSummary from notification data
+        const newEvent: EventSummary = {
+          id: payload.id,
+          trigger: payload.trigger,
+          trigger_ref: payload.trigger_ref,
+          rule: payload.rule,
+          rule_ref: payload.rule_ref,
+          source: payload.source,
+          source_ref: payload.source_ref,
+          has_payload:
+            payload.payload !== null && payload.payload !== undefined,
+          created: payload.created,
+        };
 
-          // Update the query cache directly instead of invalidating
-          queryClient.setQueryData(
-            [
-              "events",
-              { page, pageSize, triggerRef: triggerFilter || undefined },
-            ],
-            (oldData: any) => {
-              if (!oldData) return oldData;
+        // Update the query cache directly instead of invalidating
+        queryClient.setQueryData(
+          [
+            "events",
+            { page, pageSize, triggerRef: triggerFilter || undefined },
+          ],
+          (oldData: any) => {
+            if (!oldData) return oldData;
 
-              // Check if filtering and event matches filter
-              if (triggerFilter && newEvent.trigger_ref !== triggerFilter) {
-                return oldData;
-              }
+            // Check if filtering and event matches filter
+            if (triggerFilter && newEvent.trigger_ref !== triggerFilter) {
+              return oldData;
+            }
 
-              // Add new event to the beginning of the list if on first page
-              if (page === 1) {
-                return {
-                  ...oldData,
-                  data: [newEvent, ...oldData.data].slice(0, pageSize),
-                  pagination: {
-                    ...oldData.pagination,
-                    total_items: (oldData.pagination?.total_items || 0) + 1,
-                  },
-                };
-              }
-
-              // For other pages, just update the total count
+            // Add new event to the beginning of the list if on first page
+            if (page === 1) {
               return {
                 ...oldData,
+                data: [newEvent, ...oldData.data].slice(0, pageSize),
                 pagination: {
                   ...oldData.pagination,
                   total_items: (oldData.pagination?.total_items || 0) + 1,
                 },
               };
-            },
-          );
-        }
+            }
+
+            // For other pages, just update the total count
+            return {
+              ...oldData,
+              pagination: {
+                ...oldData.pagination,
+                total_items: (oldData.pagination?.total_items || 0) + 1,
+              },
+            };
+          },
+        );
       }
     },
     [queryClient, page, pageSize, triggerFilter],

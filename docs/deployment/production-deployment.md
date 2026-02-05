@@ -31,60 +31,6 @@ Before deploying Attune to production, verify the following:
 
 ---
 
-## Database Configuration
-
-### Critical: Schema Configuration
-
-**Production MUST use the `attune` schema.**
-
-The schema configuration is set in `config.production.yaml`:
-
-```yaml
-database:
-  schema: "attune"  # REQUIRED: Do not remove or change
-```
-
-### Why This Matters
-
-- **Test Isolation**: Tests use dynamic schemas (e.g., `test_uuid`) for isolation
-- **Production Consistency**: All production services must use the same schema
-- **Migration Safety**: Migrations expect the `attune` schema in production
-
-### Verification
-
-You can verify the schema configuration in several ways:
-
-1. **Check Configuration File**: Ensure `config.production.yaml` has `schema: "attune"`
-
-2. **Check Environment Variable** (if overriding):
-   ```bash
-   echo $ATTUNE__DATABASE__SCHEMA
-   # Should output: attune
-   ```
-
-3. **Check Application Logs** on startup:
-   ```
-   INFO Using production schema: attune
-   ```
-
-4. **Query Database**:
-   ```sql
-   SELECT current_schema();
-   -- Should return: attune
-   ```
-
-### ⚠️ WARNING
-
-If the schema is **not** set to `attune` in production, you will see this warning in logs:
-
-```
-WARN Using non-standard schema: 'test_xyz'. Production should use 'attune'
-```
-
-**If you see this warning in production, STOP and fix the configuration immediately.**
-
----
-
 ## Environment Variables
 
 ### Required Variables
@@ -350,18 +296,6 @@ Set up monitoring for:
 ---
 
 ## Troubleshooting
-
-### Issue: Wrong Schema in Production
-
-**Symptoms:**
-- Log shows: `WARN Using non-standard schema: 'something_else'`
-- Database queries fail or return no data
-
-**Solution:**
-1. Check `config.production.yaml` has `schema: "attune"`
-2. Check for environment variable override: `echo $ATTUNE__DATABASE__SCHEMA`
-3. Restart the application after fixing configuration
-4. Verify logs show: `INFO Using production schema: attune`
 
 ### Issue: Schema Not Found
 

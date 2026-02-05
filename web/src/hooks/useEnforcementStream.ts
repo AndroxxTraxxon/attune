@@ -87,10 +87,8 @@ export function useEnforcementStream(
         return;
       }
 
-      // Extract enforcement data from notification payload
-      // The payload has a nested "data" field with the actual enforcement data
-      const enforcementData =
-        (notification.payload as any).data || notification.payload;
+      // Extract enforcement data from notification payload (flat structure)
+      const enforcementData = notification.payload as any;
 
       // Update specific enforcement query if it exists
       queryClient.setQueryData(

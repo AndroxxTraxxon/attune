@@ -75,6 +75,21 @@ async fn main() -> Result<()> {
             Ok(mq_connection) => {
                 info!("Message queue connection established");
 
+                // Setup common message queue infrastructure (exchanges and DLX)
+                let mq_setup_config = attune_common::mq::MessageQueueConfig::default();
+                match mq_connection
+                    .setup_common_infrastructure(&mq_setup_config)
+                    .await
+                {
+                    Ok(_) => info!("Common message queue infrastructure setup completed"),
+                    Err(e) => {
+                        warn!(
+                            "Failed to setup common MQ infrastructure (may already exist): {}",
+                            e
+                        );
+                    }
+                }
+
                 // Create publisher
                 match Publisher::new(
                     &mq_connection,

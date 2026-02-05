@@ -6,36 +6,100 @@
 -- EXECUTION CHANGE NOTIFICATION
 -- ============================================================================
 
--- Function to notify on execution changes
-CREATE OR REPLACE FUNCTION notify_execution_change()
+-- Function to notify on execution creation
+CREATE OR REPLACE FUNCTION notify_execution_created()
 RETURNS TRIGGER AS $$
 DECLARE
     payload JSON;
+    enforcement_rule_ref TEXT;
+    enforcement_trigger_ref TEXT;
 BEGIN
+    -- Lookup enforcement details if this execution is linked to an enforcement
+    IF NEW.enforcement IS NOT NULL THEN
+        SELECT rule_ref, trigger_ref
+        INTO enforcement_rule_ref, enforcement_trigger_ref
+        FROM enforcement
+        WHERE id = NEW.enforcement;
+    END IF;
+
     payload := json_build_object(
+        'entity_type', 'execution',
+        'entity_id', NEW.id,
         'id', NEW.id,
-        'ref', NEW.ref,
+        'action_id', NEW.action,
         'action_ref', NEW.action_ref,
         'status', NEW.status,
-        'rule', NEW.rule,
-        'rule_ref', NEW.rule_ref,
+        'enforcement', NEW.enforcement,
+        'rule_ref', enforcement_rule_ref,
+        'trigger_ref', enforcement_trigger_ref,
+        'parent', NEW.parent,
+        'result', NEW.result,
         'created', NEW.created,
         'updated', NEW.updated
     );
 
-    PERFORM pg_notify('execution_change', payload::text);
+    PERFORM pg_notify('execution_created', payload::text);
 
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
--- Trigger on execution table
-CREATE TRIGGER execution_change_notify
-    AFTER INSERT OR UPDATE ON execution
-    FOR EACH ROW
-    EXECUTE FUNCTION notify_execution_change();
+-- Function to notify on execution status changes
+CREATE OR REPLACE FUNCTION notify_execution_status_changed()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+    enforcement_rule_ref TEXT;
+    enforcement_trigger_ref TEXT;
+BEGIN
+    -- Only notify on updates, not inserts
+    IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
+        -- Lookup enforcement details if this execution is linked to an enforcement
+        IF NEW.enforcement IS NOT NULL THEN
+            SELECT rule_ref, trigger_ref
+            INTO enforcement_rule_ref, enforcement_trigger_ref
+            FROM enforcement
+            WHERE id = NEW.enforcement;
+        END IF;
 
-COMMENT ON FUNCTION notify_execution_change() IS 'Sends execution change notifications via PostgreSQL LISTEN/NOTIFY';
+        payload := json_build_object(
+            'entity_type', 'execution',
+            'entity_id', NEW.id,
+            'id', NEW.id,
+            'action_id', NEW.action,
+            'action_ref', NEW.action_ref,
+            'status', NEW.status,
+            'old_status', OLD.status,
+            'enforcement', NEW.enforcement,
+            'rule_ref', enforcement_rule_ref,
+            'trigger_ref', enforcement_trigger_ref,
+            'parent', NEW.parent,
+            'result', NEW.result,
+            'created', NEW.created,
+            'updated', NEW.updated
+        );
+
+        PERFORM pg_notify('execution_status_changed', payload::text);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger on execution table for creation
+CREATE TRIGGER execution_created_notify
+    AFTER INSERT ON execution
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_execution_created();
+
+-- Trigger on execution table for status changes
+CREATE TRIGGER execution_status_changed_notify
+    AFTER UPDATE ON execution
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_execution_status_changed();
+
+COMMENT ON FUNCTION notify_execution_created() IS 'Sends execution creation notifications via PostgreSQL LISTEN/NOTIFY';
+COMMENT ON FUNCTION notify_execution_status_changed() IS 'Sends execution status change notifications via PostgreSQL LISTEN/NOTIFY';
 
 -- ============================================================================
 -- EVENT CREATION NOTIFICATION
@@ -48,11 +112,16 @@ DECLARE
     payload JSON;
 BEGIN
     payload := json_build_object(
+        'entity_type', 'event',
+        'entity_id', NEW.id,
         'id', NEW.id,
-        'ref', NEW.ref,
+        'trigger', NEW.trigger,
         'trigger_ref', NEW.trigger_ref,
+        'source', NEW.source,
+        'source_ref', NEW.source_ref,
         'rule', NEW.rule,
         'rule_ref', NEW.rule_ref,
+        'payload', NEW.payload,
         'created', NEW.created
     );
 
@@ -74,31 +143,146 @@ COMMENT ON FUNCTION notify_event_created() IS 'Sends event creation notification
 -- ENFORCEMENT CHANGE NOTIFICATION
 -- ============================================================================
 
--- Function to notify on enforcement changes
-CREATE OR REPLACE FUNCTION notify_enforcement_change()
+-- Function to notify on enforcement creation
+CREATE OR REPLACE FUNCTION notify_enforcement_created()
 RETURNS TRIGGER AS $$
 DECLARE
     payload JSON;
 BEGIN
     payload := json_build_object(
+        'entity_type', 'enforcement',
+        'entity_id', NEW.id,
         'id', NEW.id,
-        'ref', NEW.ref,
+        'rule', NEW.rule,
         'rule_ref', NEW.rule_ref,
+        'trigger_ref', NEW.trigger_ref,
+        'event', NEW.event,
         'status', NEW.status,
+        'condition', NEW.condition,
+        'conditions', NEW.conditions,
+        'config', NEW.config,
+        'payload', NEW.payload,
         'created', NEW.created,
         'updated', NEW.updated
     );
 
-    PERFORM pg_notify('enforcement_change', payload::text);
+    PERFORM pg_notify('enforcement_created', payload::text);
 
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 -- Trigger on enforcement table
-CREATE TRIGGER enforcement_change_notify
-    AFTER INSERT OR UPDATE ON enforcement
+CREATE TRIGGER enforcement_created_notify
+    AFTER INSERT ON enforcement
     FOR EACH ROW
-    EXECUTE FUNCTION notify_enforcement_change();
+    EXECUTE FUNCTION notify_enforcement_created();
 
-COMMENT ON FUNCTION notify_enforcement_change() IS 'Sends enforcement change notifications via PostgreSQL LISTEN/NOTIFY';
+COMMENT ON FUNCTION notify_enforcement_created() IS 'Sends enforcement creation notifications via PostgreSQL LISTEN/NOTIFY';
+
+-- ============================================================================
+-- INQUIRY NOTIFICATIONS
+-- ============================================================================
+
+-- Function to notify on inquiry creation
+CREATE OR REPLACE FUNCTION notify_inquiry_created()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    payload := json_build_object(
+        'entity_type', 'inquiry',
+        'entity_id', NEW.id,
+        'id', NEW.id,
+        'execution', NEW.execution,
+        'status', NEW.status,
+        'ttl', NEW.ttl,
+        'created', NEW.created
+    );
+
+    PERFORM pg_notify('inquiry_created', payload::text);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to notify on inquiry response
+CREATE OR REPLACE FUNCTION notify_inquiry_responded()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    -- Only notify when status changes to 'responded'
+    IF TG_OP = 'UPDATE' AND NEW.status = 'responded' AND OLD.status != 'responded' THEN
+        payload := json_build_object(
+            'entity_type', 'inquiry',
+            'entity_id', NEW.id,
+            'id', NEW.id,
+            'execution', NEW.execution,
+            'status', NEW.status,
+            'response', NEW.response,
+            'updated', NEW.updated
+        );
+
+        PERFORM pg_notify('inquiry_responded', payload::text);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger on inquiry table for creation
+CREATE TRIGGER inquiry_created_notify
+    AFTER INSERT ON inquiry
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_inquiry_created();
+
+-- Trigger on inquiry table for responses
+CREATE TRIGGER inquiry_responded_notify
+    AFTER UPDATE ON inquiry
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_inquiry_responded();
+
+COMMENT ON FUNCTION notify_inquiry_created() IS 'Sends inquiry creation notifications via PostgreSQL LISTEN/NOTIFY';
+COMMENT ON FUNCTION notify_inquiry_responded() IS 'Sends inquiry response notifications via PostgreSQL LISTEN/NOTIFY';
+
+-- ============================================================================
+-- WORKFLOW EXECUTION NOTIFICATIONS
+-- ============================================================================
+
+-- Function to notify on workflow execution status changes
+CREATE OR REPLACE FUNCTION notify_workflow_execution_status_changed()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    -- Only notify for workflow executions when status changes
+    IF TG_OP = 'UPDATE' AND NEW.is_workflow = true AND OLD.status IS DISTINCT FROM NEW.status THEN
+        payload := json_build_object(
+            'entity_type', 'execution',
+            'entity_id', NEW.id,
+            'id', NEW.id,
+            'action_ref', NEW.action_ref,
+            'status', NEW.status,
+            'old_status', OLD.status,
+            'workflow_def', NEW.workflow_def,
+            'parent', NEW.parent,
+            'created', NEW.created,
+            'updated', NEW.updated
+        );
+
+        PERFORM pg_notify('workflow_execution_status_changed', payload::text);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger on execution table for workflow status changes
+CREATE TRIGGER workflow_execution_status_changed_notify
+    AFTER UPDATE ON execution
+    FOR EACH ROW
+    WHEN (NEW.is_workflow = true)
+    EXECUTE FUNCTION notify_workflow_execution_status_changed();
+
+COMMENT ON FUNCTION notify_workflow_execution_status_changed() IS 'Sends workflow execution status change notifications via PostgreSQL LISTEN/NOTIFY';
