@@ -1,0 +1,18 @@
+ref: core.native
+pack_ref: core
+name: Native
+description: Native compiled runtime (Rust, Go, C, etc.) - always available
+
+distributions:
+  verification:
+    always_available: true
+    check_required: false
+  languages:
+    - rust
+    - go
+    - c
+    - c++
+
+installation:
+  build_required: false
+  system_native: true

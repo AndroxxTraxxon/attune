@@ -53,6 +53,7 @@ async fn create_test_pack(pool: &PgPool, suffix: &str) -> i64 {
         tags: vec![],
         runtime_deps: vec![],
         is_standard: false,
+        installers: json!({}),
     };
 
     PackRepository::create(pool, pack_input)

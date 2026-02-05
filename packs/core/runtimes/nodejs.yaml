@@ -1,0 +1,23 @@
+ref: core.nodejs
+pack_ref: core
+name: Node.js
+description: Node.js runtime for JavaScript-based actions and sensors
+
+distributions:
+  verification:
+    commands:
+      - binary: node
+        args:
+          - "--version"
+        exit_code: 0
+        pattern: "v\\d+\\.\\d+\\.\\d+"
+        priority: 1
+  min_version: "16.0.0"
+  recommended_version: "20.0.0"
+
+installation:
+  package_managers:
+    - npm
+    - yarn
+    - pnpm
+  module_support: true

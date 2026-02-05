@@ -12,7 +12,7 @@ mod helpers;
 use attune_common::{
     models::Pack,
     pack_registry::calculate_directory_checksum,
-    repositories::{pack::PackRepository, pack_installation::PackInstallationRepository, List},
+    repositories::{pack::PackRepository, List},
 };
 use helpers::{Result, TestContext};
 use serde_json::json;
@@ -351,19 +351,18 @@ async fn test_install_pack_metadata_tracking() -> Result<()> {
     let pack_id = body["data"]["pack"]["id"].as_i64().unwrap();
 
     // Verify installation metadata was created
-    let installation_repo = PackInstallationRepository::new(ctx.pool.clone());
-    let installation = installation_repo
-        .get_by_pack_id(pack_id)
+    let pack = PackRepository::find_by_id(&ctx.pool, pack_id)
         .await?
-        .expect("Should have installation record");
+        .expect("Should have pack record");
 
-    assert_eq!(installation.pack_id, pack_id);
-    assert_eq!(installation.source_type, "local_directory");
-    assert!(installation.source_url.is_some());
-    assert!(installation.checksum.is_some());
+    assert_eq!(pack.id, pack_id);
+    assert_eq!(pack.source_type.as_deref(), Some("local_directory"));
+    assert!(pack.source_url.is_some());
+    assert!(pack.checksum.is_some());
+    assert!(pack.installed_at.is_some());
 
     // Verify checksum matches
-    let stored_checksum = installation.checksum.as_ref().unwrap();
+    let stored_checksum = pack.checksum.as_ref().unwrap();
     assert_eq!(
         stored_checksum, &original_checksum,
         "Stored checksum should match calculated checksum"
@@ -451,13 +450,14 @@ async fn test_install_pack_storage_path_created() -> Result<()> {
     let pack_id = body["data"]["pack"]["id"].as_i64().unwrap();
 
     // Verify installation metadata has storage path
-    let installation_repo = PackInstallationRepository::new(ctx.pool.clone());
-    let installation = installation_repo
-        .get_by_pack_id(pack_id)
+    let pack = PackRepository::find_by_id(&ctx.pool, pack_id)
         .await?
-        .expect("Should have installation record");
+        .expect("Should have pack record");
 
-    let storage_path = &installation.storage_path;
+    let storage_path = pack
+        .storage_path
+        .as_ref()
+        .expect("Should have storage path");
     assert!(
         storage_path.contains("storage-test"),
         "Storage path should contain pack ref"

@@ -48,6 +48,7 @@ async fn create_test_pack(state: &AppState, name: &str) -> i64 {
         tags: vec![],
         runtime_deps: vec![],
         is_standard: false,
+        installers: json!({}),
     };
 
     let pack = PackRepository::create(&state.db, input)

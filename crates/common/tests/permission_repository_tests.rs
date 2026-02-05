@@ -80,6 +80,7 @@ impl PermissionSetFixture {
             meta: json!({}),
             runtime_deps: vec![],
             is_standard: false,
+        installers: json!({}),
         };
         PackRepository::create(&self.pool, input)
             .await

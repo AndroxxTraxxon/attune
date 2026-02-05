@@ -1,0 +1,27 @@
+name: echo
+ref: basic-pack.echo
+description: "Echo a message"
+runner_type: shell
+enabled: true
+entry_point: echo.sh
+
+parameters:
+  type: object
+  properties:
+    message:
+      type: string
+      description: "Message to echo"
+      default: "Hello from basic-pack!"
+  required: []
+
+output:
+  type: object
+  properties:
+    result:
+      type: string
+      description: "The echoed message"
+
+tags:
+  - basic
+  - shell
+  - example

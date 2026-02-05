@@ -18,7 +18,6 @@ pub use inquiry::*;
 pub use key::*;
 pub use notification::*;
 pub use pack::*;
-pub use pack_installation::*;
 pub use pack_test::*;
 pub use rule::*;
 pub use runtime::*;
@@ -195,48 +194,19 @@ pub mod pack {
         pub tags: Vec<String>,
         pub runtime_deps: Vec<String>,
         pub is_standard: bool,
-        pub created: DateTime<Utc>,
-        pub updated: DateTime<Utc>,
-    }
-}
-
-/// Pack installation metadata model
-pub mod pack_installation {
-    use super::*;
-    use utoipa::ToSchema;
-
-    #[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
-    #[serde(rename_all = "camelCase")]
-    pub struct PackInstallation {
-        pub id: Id,
-        pub pack_id: Id,
-        pub source_type: String,
+        pub installers: JsonDict,
+        // Installation metadata (nullable for non-installed packs)
+        pub source_type: Option<String>,
         pub source_url: Option<String>,
         pub source_ref: Option<String>,
         pub checksum: Option<String>,
-        pub checksum_verified: bool,
-        pub installed_at: DateTime<Utc>,
+        pub checksum_verified: Option<bool>,
+        pub installed_at: Option<DateTime<Utc>>,
         pub installed_by: Option<Id>,
-        pub installation_method: String,
-        pub storage_path: String,
-        pub meta: JsonDict,
+        pub installation_method: Option<String>,
+        pub storage_path: Option<String>,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-    #[serde(rename_all = "camelCase")]
-    pub struct CreatePackInstallation {
-        pub pack_id: Id,
-        pub source_type: String,
-        pub source_url: Option<String>,
-        pub source_ref: Option<String>,
-        pub checksum: Option<String>,
-        pub checksum_verified: bool,
-        pub installed_by: Option<Id>,
-        pub installation_method: String,
-        pub storage_path: String,
-        pub meta: Option<JsonDict>,
     }
 }
 

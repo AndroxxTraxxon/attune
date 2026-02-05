@@ -42,6 +42,7 @@ async fn setup_test_pack_and_action(pool: &PgPool) -> Result<(Pack, Action)> {
         tags: vec!["test".to_string()],
         runtime_deps: vec![],
         is_standard: false,
+        installers: json!({}),
     };
     let pack = PackRepository::create(pool, pack_input).await?;
 

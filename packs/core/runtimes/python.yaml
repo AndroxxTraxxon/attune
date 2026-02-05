@@ -1,0 +1,29 @@
+ref: core.python
+pack_ref: core
+name: Python
+description: Python 3 runtime for actions and sensors with automatic environment management
+
+distributions:
+  verification:
+    commands:
+      - binary: python3
+        args:
+          - "--version"
+        exit_code: 0
+        pattern: "Python 3\\."
+        priority: 1
+      - binary: python
+        args:
+          - "--version"
+        exit_code: 0
+        pattern: "Python 3\\."
+        priority: 2
+  min_version: "3.8"
+  recommended_version: "3.11"
+
+installation:
+  package_managers:
+    - pip
+    - pipenv
+    - poetry
+  virtual_env_support: true

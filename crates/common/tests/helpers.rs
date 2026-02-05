@@ -360,6 +360,7 @@ impl PackFixture {
             tags: self.tags,
             runtime_deps: self.runtime_deps,
             is_standard: self.is_standard,
+            installers: serde_json::json!({}),
         };
 
         PackRepository::create(pool, input).await

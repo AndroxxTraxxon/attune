@@ -186,6 +186,7 @@ services:
       - "8080:8080"
     volumes:
       - packs_data:/opt/attune/packs:ro
+      - ./packs.dev:/opt/attune/packs.dev:rw
       - api_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -229,6 +230,7 @@ services:
       ATTUNE__WORKER__WORKER_TYPE: container
     volumes:
       - packs_data:/opt/attune/packs:ro
+      - ./packs.dev:/opt/attune/packs.dev:rw
       - executor_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -278,6 +280,7 @@ services:
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
     volumes:
       - packs_data:/opt/attune/packs:ro
+      - ./packs.dev:/opt/attune/packs.dev:rw
       - worker_shell_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -321,6 +324,7 @@ services:
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
     volumes:
       - packs_data:/opt/attune/packs:ro
+      - ./packs.dev:/opt/attune/packs.dev:rw
       - worker_python_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -364,6 +368,7 @@ services:
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
     volumes:
       - packs_data:/opt/attune/packs:ro
+      - ./packs.dev:/opt/attune/packs.dev:rw
       - worker_node_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -407,6 +412,7 @@ services:
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
     volumes:
       - packs_data:/opt/attune/packs:ro
+      - ./packs.dev:/opt/attune/packs.dev:rw
       - worker_full_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -451,6 +457,7 @@ services:
       ATTUNE_PACKS_BASE_DIR: /opt/attune/packs
     volumes:
       - packs_data:/opt/attune/packs:ro
+      - ./packs.dev:/opt/attune/packs.dev:rw
       - sensor_logs:/opt/attune/logs
     depends_on:
       init-packs:

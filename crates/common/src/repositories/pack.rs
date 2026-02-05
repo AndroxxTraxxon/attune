@@ -32,6 +32,7 @@ pub struct CreatePackInput {
     pub tags: Vec<String>,
     pub runtime_deps: Vec<String>,
     pub is_standard: bool,
+    pub installers: JsonDict,
 }
 
 /// Input for updating a pack
@@ -46,6 +47,7 @@ pub struct UpdatePackInput {
     pub tags: Option<Vec<String>>,
     pub runtime_deps: Option<Vec<String>>,
     pub is_standard: Option<bool>,
+    pub installers: Option<JsonDict>,
 }
 
 #[async_trait::async_trait]
@@ -57,7 +59,10 @@ impl FindById for PackRepository {
         let pack = sqlx::query_as::<_, Pack>(
             r#"
             SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, created, updated
+                   tags, runtime_deps, is_standard, installers,
+                   source_type, source_url, source_ref, checksum, checksum_verified,
+                   installed_at, installed_by, installation_method, storage_path,
+                   created, updated
             FROM pack
             WHERE id = $1
             "#,
@@ -79,7 +84,10 @@ impl FindByRef for PackRepository {
         let pack = sqlx::query_as::<_, Pack>(
             r#"
             SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, created, updated
+                   tags, runtime_deps, is_standard, installers,
+                   source_type, source_url, source_ref, checksum, checksum_verified,
+                   installed_at, installed_by, installation_method, storage_path,
+                   created, updated
             FROM pack
             WHERE ref = $1
             "#,
@@ -101,7 +109,10 @@ impl List for PackRepository {
         let packs = sqlx::query_as::<_, Pack>(
             r#"
             SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, created, updated
+                   tags, runtime_deps, is_standard, installers,
+                   source_type, source_url, source_ref, checksum, checksum_verified,
+                   installed_at, installed_by, installation_method, storage_path,
+                   created, updated
             FROM pack
             ORDER BY ref ASC
             "#,
@@ -136,10 +147,13 @@ impl Create for PackRepository {
         let pack = sqlx::query_as::<_, Pack>(
             r#"
             INSERT INTO pack (ref, label, description, version, conf_schema, config, meta,
-                              tags, runtime_deps, is_standard)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                              tags, runtime_deps, is_standard, installers)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id, ref, label, description, version, conf_schema, config, meta,
-                      tags, runtime_deps, is_standard, created, updated
+                      tags, runtime_deps, is_standard, installers,
+                      source_type, source_url, source_ref, checksum, checksum_verified,
+                      installed_at, installed_by, installation_method, storage_path,
+                      created, updated
             "#,
         )
         .bind(&input.r#ref)
@@ -152,6 +166,7 @@ impl Create for PackRepository {
         .bind(&input.tags)
         .bind(&input.runtime_deps)
         .bind(input.is_standard)
+        .bind(&input.installers)
         .fetch_one(executor)
         .await
         .map_err(|e| {
@@ -261,6 +276,15 @@ impl Update for PackRepository {
             has_updates = true;
         }
 
+        if let Some(installers) = &input.installers {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("installers = ");
+            query.push_bind(installers);
+            has_updates = true;
+        }
+
         if !has_updates {
             // No updates requested, fetch and return existing pack
             return Self::find_by_id(executor, id)
@@ -271,7 +295,7 @@ impl Update for PackRepository {
         // Add updated timestamp
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(" RETURNING id, ref, label, description, version, conf_schema, config, meta, tags, runtime_deps, is_standard, created, updated");
+        query.push(" RETURNING id, ref, label, description, version, conf_schema, config, meta, tags, runtime_deps, is_standard, installers, source_type, source_url, source_ref, checksum, checksum_verified, installed_at, installed_by, installation_method, storage_path, created, updated");
 
         let pack = query
             .build_query_as::<Pack>()
@@ -310,7 +334,10 @@ impl PackRepository {
         let packs = sqlx::query_as::<_, Pack>(
             r#"
             SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, created, updated
+                   tags, runtime_deps, is_standard, installers,
+                   source_type, source_url, source_ref, checksum, checksum_verified,
+                   installed_at, installed_by, installation_method, storage_path,
+                   created, updated
             FROM pack
             ORDER BY ref ASC
             LIMIT $1 OFFSET $2
@@ -344,7 +371,10 @@ impl PackRepository {
         let packs = sqlx::query_as::<_, Pack>(
             r#"
             SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, created, updated
+                   tags, runtime_deps, is_standard, installers,
+                   source_type, source_url, source_ref, checksum, checksum_verified,
+                   installed_at, installed_by, installation_method, storage_path,
+                   created, updated
             FROM pack
             WHERE $1 = ANY(tags)
             ORDER BY ref ASC
@@ -365,7 +395,10 @@ impl PackRepository {
         let packs = sqlx::query_as::<_, Pack>(
             r#"
             SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, created, updated
+                   tags, runtime_deps, is_standard, installers,
+                   source_type, source_url, source_ref, checksum, checksum_verified,
+                   installed_at, installed_by, installation_method, storage_path,
+                   created, updated
             FROM pack
             WHERE is_standard = true
             ORDER BY ref ASC
@@ -386,7 +419,10 @@ impl PackRepository {
         let packs = sqlx::query_as::<_, Pack>(
             r#"
             SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, created, updated
+                   tags, runtime_deps, is_standard, installers,
+                   source_type, source_url, source_ref, checksum, checksum_verified,
+                   installed_at, installed_by, installation_method, storage_path,
+                   created, updated
             FROM pack
             WHERE LOWER(ref) LIKE $1 OR LOWER(label) LIKE $1 OR LOWER(description) LIKE $1
             ORDER BY ref ASC
@@ -404,13 +440,130 @@ impl PackRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let exists: (bool,) =
-            sqlx::query_as("SELECT EXISTS(SELECT 1 FROM pack WHERE ref = $1)")
-                .bind(ref_str)
-                .fetch_one(executor)
-                .await?;
+        let exists: (bool,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM pack WHERE ref = $1)")
+            .bind(ref_str)
+            .fetch_one(executor)
+            .await?;
 
         Ok(exists.0)
+    }
+
+    /// Update installation metadata for a pack
+    pub async fn update_installation_metadata<'e, E>(
+        executor: E,
+        id: i64,
+        source_type: String,
+        source_url: Option<String>,
+        source_ref: Option<String>,
+        checksum: Option<String>,
+        checksum_verified: bool,
+        installed_by: Option<i64>,
+        installation_method: String,
+        storage_path: String,
+    ) -> Result<Pack>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let pack = sqlx::query_as::<_, Pack>(
+            r#"
+            UPDATE pack
+            SET source_type = $2,
+                source_url = $3,
+                source_ref = $4,
+                checksum = $5,
+                checksum_verified = $6,
+                installed_at = NOW(),
+                installed_by = $7,
+                installation_method = $8,
+                storage_path = $9,
+                updated = NOW()
+            WHERE id = $1
+            RETURNING id, ref, label, description, version, conf_schema, config, meta,
+                      tags, runtime_deps, is_standard, installers,
+                      source_type, source_url, source_ref, checksum, checksum_verified,
+                      installed_at, installed_by, installation_method, storage_path,
+                      created, updated
+            "#,
+        )
+        .bind(id)
+        .bind(source_type)
+        .bind(source_url)
+        .bind(source_ref)
+        .bind(checksum)
+        .bind(checksum_verified)
+        .bind(installed_by)
+        .bind(installation_method)
+        .bind(storage_path)
+        .fetch_one(executor)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::RowNotFound => Error::not_found("pack", "id", id.to_string()),
+            _ => e.into(),
+        })?;
+
+        Ok(pack)
+    }
+
+    /// Check if a pack has installation metadata
+    pub async fn is_installed<'e, E>(executor: E, pack_id: i64) -> Result<bool>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let exists: (bool,) = sqlx::query_as(
+            "SELECT EXISTS(SELECT 1 FROM pack WHERE id = $1 AND installed_at IS NOT NULL)",
+        )
+        .bind(pack_id)
+        .fetch_one(executor)
+        .await?;
+
+        Ok(exists.0)
+    }
+
+    /// List all installed packs
+    pub async fn list_installed<'e, E>(executor: E) -> Result<Vec<Pack>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let packs = sqlx::query_as::<_, Pack>(
+            r#"
+            SELECT id, ref, label, description, version, conf_schema, config, meta,
+                   tags, runtime_deps, is_standard, installers,
+                   source_type, source_url, source_ref, checksum, checksum_verified,
+                   installed_at, installed_by, installation_method, storage_path,
+                   created, updated
+            FROM pack
+            WHERE installed_at IS NOT NULL
+            ORDER BY installed_at DESC
+            "#,
+        )
+        .fetch_all(executor)
+        .await?;
+
+        Ok(packs)
+    }
+
+    /// List packs by source type
+    pub async fn list_by_source_type<'e, E>(executor: E, source_type: &str) -> Result<Vec<Pack>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let packs = sqlx::query_as::<_, Pack>(
+            r#"
+            SELECT id, ref, label, description, version, conf_schema, config, meta,
+                   tags, runtime_deps, is_standard, installers,
+                   source_type, source_url, source_ref, checksum, checksum_verified,
+                   installed_at, installed_by, installation_method, storage_path,
+                   created, updated
+            FROM pack
+            WHERE source_type = $1
+            ORDER BY installed_at DESC
+            "#,
+        )
+        .bind(source_type)
+        .fetch_all(executor)
+        .await?;
+
+        Ok(packs)
     }
 }
 
@@ -431,6 +584,7 @@ mod tests {
             tags: vec!["test".to_string()],
             runtime_deps: vec![],
             is_standard: false,
+            installers: serde_json::json!({}),
         };
 
         assert_eq!(input.r#ref, "test.pack");

@@ -138,6 +138,7 @@ pub async fn create_pack(
         tags: request.tags,
         runtime_deps: request.runtime_deps,
         is_standard: request.is_standard,
+        installers: serde_json::json!({}),
     };
 
     let pack = PackRepository::create(&state.db, pack_input).await?;
@@ -220,6 +221,7 @@ pub async fn update_pack(
         tags: request.tags,
         runtime_deps: request.runtime_deps,
         is_standard: request.is_standard,
+        installers: None,
     };
 
     let pack = PackRepository::update(&state.db, existing_pack.id, update_input).await?;
@@ -527,6 +529,7 @@ async fn register_pack_internal(
             })
             .unwrap_or_default(),
         is_standard: false,
+        installers: serde_json::json!({}),
     };
 
     let pack = PackRepository::create(&state.db, pack_input).await?;
@@ -624,12 +627,10 @@ pub async fn install_pack(
     StatusCode,
     Json<crate::dto::ApiResponse<PackInstallResponse>>,
 )> {
-    use attune_common::models::CreatePackInstallation;
     use attune_common::pack_registry::{
         calculate_directory_checksum, DependencyValidator, PackInstaller, PackStorage,
     };
     use attune_common::repositories::List;
-    use attune_common::repositories::PackInstallationRepository;
 
     tracing::info!("Installing pack from source: {}", request.source);
 
@@ -782,34 +783,26 @@ pub async fn install_pack(
         .ok();
 
     // Store installation metadata
-    let installation_repo = PackInstallationRepository::new(state.db.clone());
     let (source_url, source_ref) =
         get_source_metadata(&source, &request.source, request.ref_spec.as_deref());
 
-    let installation_metadata = CreatePackInstallation {
+    PackRepository::update_installation_metadata(
+        &state.db,
         pack_id,
-        source_type: source_type.to_string(),
+        source_type.to_string(),
         source_url,
         source_ref,
-        checksum: checksum.clone(),
-        checksum_verified: installed.checksum.is_some() && checksum.is_some(),
-        installed_by: user_id,
-        installation_method: "api".to_string(),
-        storage_path: final_path.to_string_lossy().to_string(),
-        meta: Some(serde_json::json!({
-            "original_source": request.source,
-            "force": request.force,
-            "skip_tests": request.skip_tests,
-        })),
-    };
-
-    installation_repo
-        .create(installation_metadata)
-        .await
-        .map_err(|e| {
-            tracing::warn!("Failed to store installation metadata: {}", e);
-            ApiError::DatabaseError(format!("Failed to store installation metadata: {}", e))
-        })?;
+        checksum.clone(),
+        installed.checksum.is_some() && checksum.is_some(),
+        user_id,
+        "api".to_string(),
+        final_path.to_string_lossy().to_string(),
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!("Failed to store installation metadata: {}", e);
+        ApiError::DatabaseError(format!("Failed to store installation metadata: {}", e))
+    })?;
 
     // Clean up temp directory
     let _ = installer.cleanup(&installed.path).await;

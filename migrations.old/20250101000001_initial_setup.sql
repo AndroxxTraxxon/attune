@@ -3,16 +3,51 @@
 -- Version: 20250101000001
 
 -- ============================================================================
--- EXTENSIONS
+-- SCHEMA AND ROLE SETUP
 -- ============================================================================
+
+-- Create the attune schema
+-- NOTE: For tests, the test schema is created separately. For production, uncomment below:
+-- CREATE SCHEMA IF NOT EXISTS attune;
+
+-- Set search path (now set via connection pool configuration)
+
+-- Create service role for the application
+-- NOTE: Commented out for tests, uncomment for production:
+-- DO $$
+-- BEGIN
+--     IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'svc_attune') THEN
+--         CREATE ROLE svc_attune WITH LOGIN PASSWORD 'attune_service_password';
+--     END IF;
+-- END
+-- $$;
+
+-- Grant usage on schema
+-- NOTE: Commented out for tests, uncomment for production:
+-- GRANT USAGE ON SCHEMA attune TO svc_attune;
+-- GRANT CREATE ON SCHEMA attune TO svc_attune;
 
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+-- COMMENT ON SCHEMA attune IS 'Attune automation platform schema';
+
 -- ============================================================================
 -- ENUM TYPES
 -- ============================================================================
+
+-- RuntimeType enum
+DO $$ BEGIN
+    CREATE TYPE runtime_type_enum AS ENUM (
+        'action',
+        'sensor'
+    );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+COMMENT ON TYPE runtime_type_enum IS 'Type of runtime environment';
 
 -- WorkerType enum
 DO $$ BEGIN
@@ -26,20 +61,6 @@ EXCEPTION
 END $$;
 
 COMMENT ON TYPE worker_type_enum IS 'Type of worker deployment';
-
--- WorkerRole enum
-DO $$ BEGIN
-    CREATE TYPE worker_role_enum AS ENUM (
-        'action',
-        'sensor',
-        'hybrid'
-    );
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
-COMMENT ON TYPE worker_role_enum IS 'Role of worker (action executor, sensor, or both)';
-
 
 -- WorkerStatus enum
 DO $$ BEGIN
@@ -185,22 +206,6 @@ EXCEPTION
 END $$;
 
 COMMENT ON TYPE artifact_retention_enum IS 'Type of retention policy';
-
-
--- PackEnvironmentStatus enum
-DO $$ BEGIN
-    CREATE TYPE pack_environment_status_enum AS ENUM (
-        'pending',
-        'installing',
-        'ready',
-        'failed',
-        'outdated'
-    );
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
-COMMENT ON TYPE pack_environment_status_enum IS 'Status of pack runtime environment installation';
 
 -- ============================================================================
 -- SHARED FUNCTIONS

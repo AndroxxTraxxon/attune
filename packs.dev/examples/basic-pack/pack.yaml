@@ -1,0 +1,14 @@
+ref: basic-pack
+label: "Basic Example Pack"
+description: "A minimal example pack with a shell action"
+version: "1.0.0"
+author: "Attune Team"
+email: "dev@attune.io"
+
+system: false
+enabled: true
+
+tags:
+  - example
+  - basic
+  - shell

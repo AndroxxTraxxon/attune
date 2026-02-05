@@ -378,6 +378,7 @@ async fn test_find_by_pack() {
         tags: vec!["test".to_string()],
         runtime_deps: vec![],
         is_standard: false,
+        installers: json!({}),
     };
 
     let pack = PackRepository::create(&pool, pack_input)
