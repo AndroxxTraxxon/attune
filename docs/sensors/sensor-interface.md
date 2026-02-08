@@ -61,10 +61,16 @@ Sensors MUST accept the following environment variables:
 |----------|----------|-------------|---------|
 | `ATTUNE_API_URL` | Yes | Base URL of Attune API | `http://localhost:8080` |
 | `ATTUNE_API_TOKEN` | Yes | Transient API token for authentication | `sensor_abc123...` |
+| `ATTUNE_SENSOR_ID` | Yes | Sensor database ID | `42` |
 | `ATTUNE_SENSOR_REF` | Yes | Reference name of this sensor | `core.timer` |
 | `ATTUNE_MQ_URL` | Yes | RabbitMQ connection URL | `amqp://localhost:5672` |
 | `ATTUNE_MQ_EXCHANGE` | No | RabbitMQ exchange name | `attune` (default) |
 | `ATTUNE_LOG_LEVEL` | No | Logging verbosity | `info` (default) |
+
+**Note:** These environment variables provide parity with action execution context (see `QUICKREF-execution-environment.md`). Sensors receive:
+- `ATTUNE_SENSOR_ID` - analogous to `ATTUNE_EXEC_ID` for actions
+- `ATTUNE_SENSOR_REF` - analogous to `ATTUNE_ACTION` for actions
+- `ATTUNE_API_TOKEN` and `ATTUNE_API_URL` - same as actions for API access
 
 ### Alternative: stdin Configuration
 

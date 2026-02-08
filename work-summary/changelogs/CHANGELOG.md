@@ -7,6 +7,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2025-02-05
+
+#### Secure Parameter Delivery System
+
+**BREAKING CHANGE**: Default parameter delivery changed from `env` to `stdin` for security.
+
+- **Three Parameter Delivery Methods**:
+  - `stdin` - Standard input (DEFAULT, secure, not visible in process listings)
+  - `env` - Environment variables (explicit opt-in, visible in `ps aux`)
+  - `file` - Temporary file with restrictive permissions (0400 on Unix)
+
+- **Three Serialization Formats**:
+  - `json` - JSON object (DEFAULT, preserves types, structured data)
+  - `dotenv` - KEY='VALUE' format (simple shell scripts)
+  - `yaml` - YAML document (human-readable, large configs)
+
+- **Database Schema**:
+  - Added `parameter_delivery` column to `action` table (default: 'stdin')
+  - Added `parameter_format` column to `action` table (default: 'json')
+  - Migration: `20250205000001_action_parameter_delivery.sql`
+
+- **New Components**:
+  - `crates/worker/src/runtime/parameter_passing.rs` - Parameter formatting and delivery utilities
+  - `ParameterDelivery` enum in models (Stdin, Env, File)
+  - `ParameterFormat` enum in models (Json, Dotenv, Yaml)
+  - Comprehensive unit tests for all delivery methods and formats
+
+- **Runtime Integration**:
+  - Updated Shell runtime to support all delivery methods
+  - Updated Native runtime to support all delivery methods
+  - ExecutionContext includes `parameter_delivery` and `parameter_format` fields
+  - Executor populates delivery settings from Action model
+
+- **Documentation**:
+  - `docs/actions/parameter-delivery.md` (568 lines) - Complete guide
+  - `docs/actions/QUICKREF-parameter-delivery.md` (365 lines) - Quick reference
+  - Updated `docs/packs/pack-structure.md` with parameter delivery examples
+  - Work summary: `work-summary/2025-02-05-secure-parameter-delivery.md`
+
+- **Security Features**:
+  - Parameters not visible in process listings by default (stdin)
+  - Temporary files have restrictive permissions (owner read-only)
+  - Automatic cleanup of temporary files
+  - Delimiter separation of parameters and secrets in stdin
+  - Environment variables include delivery metadata for action introspection
+
+- **Action YAML Configuration**:
+  ```yaml
+  # Optional - these are the defaults
+  parameter_delivery: stdin  # Options: stdin, env, file
+  parameter_format: json     # Options: json, dotenv, yaml
+  ```
+
+- **Core Pack Updates**:
+  - `http_request.yaml` - Uses stdin + json (handles credentials)
+  - `echo.yaml`, `sleep.yaml`, `noop.yaml` - Explicitly use env + dotenv (no secrets)
+
+- **Environment Variables Set**:
+  - `ATTUNE_PARAMETER_DELIVERY` - Method used (stdin/env/file)
+  - `ATTUNE_PARAMETER_FORMAT` - Format used (json/dotenv/yaml)
+  - `ATTUNE_PARAMETER_FILE` - Path to temp file (file delivery only)
+  - `ATTUNE_ACTION_<KEY>` - Individual parameters (env delivery only)
+
+### Changed - 2025-02-05
+
+- **BREAKING**: Default parameter delivery changed from `env` to `stdin`
+- **BREAKING**: Default parameter format changed from `dotenv` to `json`
+- **Security Improvement**: Actions with sensitive parameters (passwords, API keys) are now secure by default
+- Python loader (`scripts/load_core_pack.py`) defaults to stdin + json
+- Actions requiring env delivery must explicitly opt-in
+
+### Security - 2025-02-05
+
+- **Fixed**: Sensitive parameters (passwords, API keys, tokens) no longer visible in process listings
+- **Addressed**: CWE-214 (Information Exposure Through Process Environment)
+- **Addressed**: OWASP "Sensitive Data Exposure" vulnerability
+- **Improved**: Secure-by-default parameter passing for all new actions
+
+### Migration Guide - 2025-02-05
+
+**For new actions**: No changes needed - defaults are secure (stdin + json)
+
+**For actions with non-sensitive parameters** (if you want env variables):
+```yaml
+# Explicitly opt-in to env delivery
+parameter_delivery: env
+parameter_format: dotenv
+```
+
+**Action scripts should read from stdin** (default):
+```python
+import sys, json
+content = sys.stdin.read()
+params = json.loads(content.split('---ATTUNE_PARAMS_END---')[0])
+```
+
+**For env delivery** (explicit opt-in):
+```python
+import os
+value = os.environ.get('ATTUNE_ACTION_PARAMETER_NAME')
+```
+
+### Justification for Breaking Change
+
+Per `AGENTS.md`: "Breaking changes are explicitly allowed and encouraged when they improve the architecture, API design, or developer experience. This project is under active development with no users, deployments, or stable releases."
+
+Changing the default to `stdin` provides secure-by-default behavior, preventing credential exposure in process listings from day one.
+
 ### Removed - 2026-01-27 (Workflow Task Execution Cleanup)
 
 **Deprecated Code Removal: WorkflowTaskExecution Consolidation Complete**

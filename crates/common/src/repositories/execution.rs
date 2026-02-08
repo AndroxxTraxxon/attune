@@ -20,6 +20,7 @@ pub struct CreateExecutionInput {
     pub action: Option<Id>,
     pub action_ref: String,
     pub config: Option<JsonDict>,
+    pub env_vars: Option<JsonDict>,
     pub parent: Option<Id>,
     pub enforcement: Option<Id>,
     pub executor: Option<Id>,
@@ -54,7 +55,7 @@ impl FindById for ExecutionRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, Execution>(
-            "SELECT id, action, action_ref, config, parent, enforcement, executor, status, result, workflow_task, created, updated FROM execution WHERE id = $1"
+            "SELECT id, action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task, created, updated FROM execution WHERE id = $1"
         ).bind(id).fetch_optional(executor).await.map_err(Into::into)
     }
 }
@@ -66,7 +67,7 @@ impl List for ExecutionRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, Execution>(
-            "SELECT id, action, action_ref, config, parent, enforcement, executor, status, result, workflow_task, created, updated FROM execution ORDER BY created DESC LIMIT 1000"
+            "SELECT id, action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task, created, updated FROM execution ORDER BY created DESC LIMIT 1000"
         ).fetch_all(executor).await.map_err(Into::into)
     }
 }
@@ -79,8 +80,8 @@ impl Create for ExecutionRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, Execution>(
-            "INSERT INTO execution (action, action_ref, config, parent, enforcement, executor, status, result, workflow_task) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, action, action_ref, config, parent, enforcement, executor, status, result, workflow_task, created, updated"
-        ).bind(input.action).bind(&input.action_ref).bind(&input.config).bind(input.parent).bind(input.enforcement).bind(input.executor).bind(input.status).bind(&input.result).bind(sqlx::types::Json(&input.workflow_task)).fetch_one(executor).await.map_err(Into::into)
+            "INSERT INTO execution (action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task, created, updated"
+        ).bind(input.action).bind(&input.action_ref).bind(&input.config).bind(&input.env_vars).bind(input.parent).bind(input.enforcement).bind(input.executor).bind(input.status).bind(&input.result).bind(sqlx::types::Json(&input.workflow_task)).fetch_one(executor).await.map_err(Into::into)
     }
 }
 
@@ -129,7 +130,7 @@ impl Update for ExecutionRepository {
         }
 
         query.push(", updated = NOW() WHERE id = ").push_bind(id);
-        query.push(" RETURNING id, action, action_ref, config, parent, enforcement, executor, status, result, workflow_task, created, updated");
+        query.push(" RETURNING id, action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task, created, updated");
 
         query
             .build_query_as::<Execution>()
@@ -162,7 +163,7 @@ impl ExecutionRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, Execution>(
-            "SELECT id, action, action_ref, config, parent, enforcement, executor, status, result, workflow_task, created, updated FROM execution WHERE status = $1 ORDER BY created DESC"
+            "SELECT id, action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task, created, updated FROM execution WHERE status = $1 ORDER BY created DESC"
         ).bind(status).fetch_all(executor).await.map_err(Into::into)
     }
 
@@ -174,7 +175,7 @@ impl ExecutionRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, Execution>(
-            "SELECT id, action, action_ref, config, parent, enforcement, executor, status, result, workflow_task, created, updated FROM execution WHERE enforcement = $1 ORDER BY created DESC"
+            "SELECT id, action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task, created, updated FROM execution WHERE enforcement = $1 ORDER BY created DESC"
         ).bind(enforcement_id).fetch_all(executor).await.map_err(Into::into)
     }
 }

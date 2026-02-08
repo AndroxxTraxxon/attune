@@ -1,21 +1,42 @@
-#!/bin/bash
+#!/bin/sh
 # Echo Action - Core Pack
-# Outputs a message to stdout with optional uppercase conversion
+# Outputs a message to stdout
+#
+# This script uses pure POSIX shell without external dependencies like jq or yq.
+# It reads parameters in DOTENV format from stdin until the delimiter.
 
 set -e
 
-# Parse parameters from environment variables
-# Attune passes action parameters as environment variables prefixed with ATTUNE_ACTION_
-MESSAGE="${ATTUNE_ACTION_MESSAGE:-Hello, World!}"
-UPPERCASE="${ATTUNE_ACTION_UPPERCASE:-false}"
+# Initialize message variable
+message=""
 
-# Convert to uppercase if requested
-if [ "$UPPERCASE" = "true" ]; then
-    MESSAGE=$(echo "$MESSAGE" | tr '[:lower:]' '[:upper:]')
-fi
+# Read DOTENV-formatted parameters from stdin until delimiter
+while IFS= read -r line; do
+    # Check for parameter delimiter
+    case "$line" in
+        *"---ATTUNE_PARAMS_END---"*)
+            break
+            ;;
+        message=*)
+            # Extract value after message=
+            message="${line#message=}"
+            # Remove quotes if present (both single and double)
+            case "$message" in
+                \"*\")
+                    message="${message#\"}"
+                    message="${message%\"}"
+                    ;;
+                \'*\')
+                    message="${message#\'}"
+                    message="${message%\'}"
+                    ;;
+            esac
+            ;;
+    esac
+done
 
-# Echo the message
-echo "$MESSAGE"
+# Echo the message (even if empty)
+echo "$message"
 
 # Exit successfully
 exit 0

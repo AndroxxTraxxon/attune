@@ -12,6 +12,13 @@ runner_type: shell
 # Entry point is the shell command or script to execute
 entry_point: noop.sh
 
+# Parameter delivery: stdin for secure parameter passing (no env vars)
+parameter_delivery: stdin
+parameter_format: dotenv
+
+# Output format: text (no structured data parsing)
+output_format: text
+
 # Action parameters schema (standard JSON Schema format)
 parameters:
   type: object
@@ -27,22 +34,8 @@ parameters:
       maximum: 255
   required: []
 
-# Output schema
-output_schema:
-  type: object
-  properties:
-    stdout:
-      type: string
-      description: "Standard output (empty unless message provided)"
-    stderr:
-      type: string
-      description: "Standard error output (usually empty)"
-    exit_code:
-      type: integer
-      description: "Exit code of the command"
-    result:
-      type: string
-      description: "Operation result"
+# Output schema: not applicable for text output format
+# The action outputs plain text to stdout
 
 # Tags for categorization
 tags:

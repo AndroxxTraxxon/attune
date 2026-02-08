@@ -108,6 +108,7 @@ async fn create_test_execution(
         action: Some(action_id),
         action_ref: action_ref.to_string(),
         config: None,
+        env_vars: None,
         parent: None,
         enforcement: None,
         executor: None,

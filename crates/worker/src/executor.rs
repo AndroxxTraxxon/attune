@@ -27,6 +27,7 @@ pub struct ActionExecutor {
     max_stdout_bytes: usize,
     max_stderr_bytes: usize,
     packs_base_dir: PathBuf,
+    api_url: String,
 }
 
 impl ActionExecutor {
@@ -39,6 +40,7 @@ impl ActionExecutor {
         max_stdout_bytes: usize,
         max_stderr_bytes: usize,
         packs_base_dir: PathBuf,
+        api_url: String,
     ) -> Self {
         Self {
             pool,
@@ -48,6 +50,7 @@ impl ActionExecutor {
             max_stdout_bytes,
             max_stderr_bytes,
             packs_base_dir,
+            api_url,
         }
     }
 
@@ -100,7 +103,16 @@ impl ActionExecutor {
         }
 
         // Update execution with result
-        if result.is_success() {
+        let is_success = result.is_success();
+        debug!(
+            "Execution {} result: exit_code={}, error={:?}, is_success={}",
+            execution_id,
+            result.exit_code,
+            result.error,
+            is_success
+        );
+
+        if is_success {
             self.handle_execution_success(execution_id, &result).await?;
         } else {
             self.handle_execution_failure(execution_id, Some(&result))
@@ -190,35 +202,63 @@ impl ActionExecutor {
         let mut parameters = HashMap::new();
 
         if let Some(config) = &execution.config {
+            info!("Execution config present: {:?}", config);
+
             // Try to get parameters from config.parameters first
             if let Some(params) = config.get("parameters") {
+                info!("Found config.parameters key");
                 if let JsonValue::Object(map) = params {
                     for (key, value) in map {
                         parameters.insert(key.clone(), value.clone());
                     }
                 }
             } else if let JsonValue::Object(map) = config {
+                info!("No config.parameters key, treating entire config as parameters");
                 // If no parameters key, treat entire config as parameters
                 // (this handles rule action_params being placed at root level)
                 for (key, value) in map {
                     // Skip special keys that aren't action parameters
                     if key != "context" && key != "env" {
+                        info!("Adding parameter: {} = {:?}", key, value);
                         parameters.insert(key.clone(), value.clone());
+                    } else {
+                        info!("Skipping special key: {}", key);
                     }
                 }
+            } else {
+                info!("Config is not an Object, cannot extract parameters");
             }
+        } else {
+            info!("No execution config present");
         }
 
-        // Prepare environment variables
-        let mut env = HashMap::new();
-        env.insert("ATTUNE_EXECUTION_ID".to_string(), execution.id.to_string());
-        env.insert(
-            "ATTUNE_ACTION_REF".to_string(),
-            execution.action_ref.clone(),
-        );
+        info!("Extracted {} parameters: {:?}", parameters.len(), parameters);
 
-        if let Some(action_id) = execution.action {
-            env.insert("ATTUNE_ACTION_ID".to_string(), action_id.to_string());
+        // Prepare standard environment variables
+        let mut env = HashMap::new();
+
+        // Standard execution context variables (see docs/QUICKREF-execution-environment.md)
+        env.insert("ATTUNE_EXEC_ID".to_string(), execution.id.to_string());
+        env.insert("ATTUNE_ACTION".to_string(), execution.action_ref.clone());
+        env.insert("ATTUNE_API_URL".to_string(), self.api_url.clone());
+
+        // TODO: Generate execution-scoped API token
+        // For now, set placeholder to maintain interface compatibility
+        env.insert("ATTUNE_API_TOKEN".to_string(), "".to_string());
+
+        // Add rule and trigger context if execution was triggered by enforcement
+        if let Some(enforcement_id) = execution.enforcement {
+            if let Ok(Some(enforcement)) = sqlx::query_as::<
+                _,
+                attune_common::models::event::Enforcement,
+            >("SELECT * FROM enforcement WHERE id = $1")
+            .bind(enforcement_id)
+            .fetch_optional(&self.pool)
+            .await
+            {
+                env.insert("ATTUNE_RULE".to_string(), enforcement.rule_ref);
+                env.insert("ATTUNE_TRIGGER".to_string(), enforcement.trigger_ref);
+            }
         }
 
         // Add context data as environment variables from config
@@ -341,6 +381,8 @@ impl ActionExecutor {
             runtime_name,
             max_stdout_bytes: self.max_stdout_bytes,
             max_stderr_bytes: self.max_stderr_bytes,
+            parameter_delivery: action.parameter_delivery,
+            parameter_format: action.parameter_format,
         };
 
         Ok(context)
@@ -392,7 +434,10 @@ impl ActionExecutor {
         execution_id: i64,
         result: &ExecutionResult,
     ) -> Result<()> {
-        info!("Execution {} succeeded", execution_id);
+        info!(
+            "Execution {} succeeded (exit_code={}, duration={}ms)",
+            execution_id, result.exit_code, result.duration_ms
+        );
 
         // Build comprehensive result with execution metadata
         let exec_dir = self.artifact_manager.get_execution_dir(execution_id);
@@ -402,29 +447,15 @@ impl ActionExecutor {
             "succeeded": true,
         });
 
-        // Add log file paths if logs exist
+        // Include stdout content directly in result
         if !result.stdout.is_empty() {
-            let stdout_path = exec_dir.join("stdout.log");
-            result_data["stdout_log"] = serde_json::json!(stdout_path.to_string_lossy());
-            // Include stdout preview (first 1000 chars)
-            let stdout_preview = if result.stdout.len() > 1000 {
-                format!("{}...", &result.stdout[..1000])
-            } else {
-                result.stdout.clone()
-            };
-            result_data["stdout"] = serde_json::json!(stdout_preview);
+            result_data["stdout"] = serde_json::json!(result.stdout);
         }
 
-        if !result.stderr.is_empty() {
+        // Include stderr log path only if stderr is non-empty and non-whitespace
+        if !result.stderr.trim().is_empty() {
             let stderr_path = exec_dir.join("stderr.log");
             result_data["stderr_log"] = serde_json::json!(stderr_path.to_string_lossy());
-            // Include stderr preview (first 1000 chars)
-            let stderr_preview = if result.stderr.len() > 1000 {
-                format!("{}...", &result.stderr[..1000])
-            } else {
-                result.stderr.clone()
-            };
-            result_data["stderr"] = serde_json::json!(stderr_preview);
         }
 
         // Include parsed result if available
@@ -450,7 +481,14 @@ impl ActionExecutor {
         execution_id: i64,
         result: Option<&ExecutionResult>,
     ) -> Result<()> {
-        error!("Execution {} failed", execution_id);
+        if let Some(r) = result {
+            error!(
+                "Execution {} failed (exit_code={}, error={:?}, duration={}ms)",
+                execution_id, r.exit_code, r.error, r.duration_ms
+            );
+        } else {
+            error!("Execution {} failed during preparation", execution_id);
+        }
 
         let exec_dir = self.artifact_manager.get_execution_dir(execution_id);
         let mut result_data = serde_json::json!({
@@ -466,29 +504,15 @@ impl ActionExecutor {
                 result_data["error"] = serde_json::json!(error);
             }
 
-            // Add log file paths and previews if logs exist
+            // Include stdout content directly in result
             if !exec_result.stdout.is_empty() {
-                let stdout_path = exec_dir.join("stdout.log");
-                result_data["stdout_log"] = serde_json::json!(stdout_path.to_string_lossy());
-                // Include stdout preview (first 1000 chars)
-                let stdout_preview = if exec_result.stdout.len() > 1000 {
-                    format!("{}...", &exec_result.stdout[..1000])
-                } else {
-                    exec_result.stdout.clone()
-                };
-                result_data["stdout"] = serde_json::json!(stdout_preview);
+                result_data["stdout"] = serde_json::json!(exec_result.stdout);
             }
 
-            if !exec_result.stderr.is_empty() {
+            // Include stderr log path only if stderr is non-empty and non-whitespace
+            if !exec_result.stderr.trim().is_empty() {
                 let stderr_path = exec_dir.join("stderr.log");
                 result_data["stderr_log"] = serde_json::json!(stderr_path.to_string_lossy());
-                // Include stderr preview (first 1000 chars)
-                let stderr_preview = if exec_result.stderr.len() > 1000 {
-                    format!("{}...", &exec_result.stderr[..1000])
-                } else {
-                    exec_result.stderr.clone()
-                };
-                result_data["stderr"] = serde_json::json!(stderr_preview);
             }
 
             // Add truncation warnings if applicable
@@ -509,33 +533,23 @@ impl ActionExecutor {
 
             warn!("Execution {} failed without ExecutionResult - this indicates an early/catastrophic failure", execution_id);
 
-            // Check if stderr log exists from artifact storage
+            // Check if stderr log exists and is non-empty from artifact storage
             let stderr_path = exec_dir.join("stderr.log");
             if stderr_path.exists() {
-                result_data["stderr_log"] = serde_json::json!(stderr_path.to_string_lossy());
-                // Try to read a preview if file exists
                 if let Ok(contents) = tokio::fs::read_to_string(&stderr_path).await {
-                    let preview = if contents.len() > 1000 {
-                        format!("{}...", &contents[..1000])
-                    } else {
-                        contents
-                    };
-                    result_data["stderr"] = serde_json::json!(preview);
+                    if !contents.trim().is_empty() {
+                        result_data["stderr_log"] = serde_json::json!(stderr_path.to_string_lossy());
+                    }
                 }
             }
 
             // Check if stdout log exists from artifact storage
             let stdout_path = exec_dir.join("stdout.log");
             if stdout_path.exists() {
-                result_data["stdout_log"] = serde_json::json!(stdout_path.to_string_lossy());
-                // Try to read a preview if file exists
                 if let Ok(contents) = tokio::fs::read_to_string(&stdout_path).await {
-                    let preview = if contents.len() > 1000 {
-                        format!("{}...", &contents[..1000])
-                    } else {
-                        contents
-                    };
-                    result_data["stdout"] = serde_json::json!(preview);
+                    if !contents.is_empty() {
+                        result_data["stdout"] = serde_json::json!(contents);
+                    }
                 }
             }
         }

@@ -237,19 +237,40 @@ class CorePackLoader:
             param_schema = json.dumps(action_data.get("parameters", {}))
             out_schema = json.dumps(action_data.get("output", {}))
 
+            # Parameter delivery and format (defaults: stdin + json for security)
+            parameter_delivery = action_data.get("parameter_delivery", "stdin").lower()
+            parameter_format = action_data.get("parameter_format", "json").lower()
+
+            # Validate parameter delivery method (only stdin and file allowed)
+            if parameter_delivery not in ["stdin", "file"]:
+                print(
+                    f"  ⚠ Invalid parameter_delivery '{parameter_delivery}' for '{ref}', defaulting to 'stdin'"
+                )
+                parameter_delivery = "stdin"
+
+            # Validate parameter format
+            if parameter_format not in ["dotenv", "json", "yaml"]:
+                print(
+                    f"  ⚠ Invalid parameter_format '{parameter_format}' for '{ref}', defaulting to 'json'"
+                )
+                parameter_format = "json"
+
             cursor.execute(
                 """
                 INSERT INTO action (
                     ref, pack, pack_ref, label, description,
-                    entrypoint, runtime, param_schema, out_schema, is_adhoc
+                    entrypoint, runtime, param_schema, out_schema, is_adhoc,
+                    parameter_delivery, parameter_format
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (ref) DO UPDATE SET
                     label = EXCLUDED.label,
                     description = EXCLUDED.description,
                     entrypoint = EXCLUDED.entrypoint,
                     param_schema = EXCLUDED.param_schema,
                     out_schema = EXCLUDED.out_schema,
+                    parameter_delivery = EXCLUDED.parameter_delivery,
+                    parameter_format = EXCLUDED.parameter_format,
                     updated = NOW()
                 RETURNING id
             """,
@@ -264,6 +285,8 @@ class CorePackLoader:
                     param_schema,
                     out_schema,
                     False,  # Pack-installed actions are not ad-hoc
+                    parameter_delivery,
+                    parameter_format,
                 ),
             )
 

@@ -336,8 +336,453 @@ pub struct PackWorkflowValidationResponse {
     pub errors: std::collections::HashMap<String, Vec<String>>,
 }
 
+/// Request DTO for downloading packs
+#[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
+pub struct DownloadPacksRequest {
+    /// List of pack sources (git URLs, HTTP URLs, or registry refs)
+    #[validate(length(min = 1))]
+    #[schema(example = json!(["https://github.com/attune/pack-slack.git", "aws@2.0.0"]))]
+    pub packs: Vec<String>,
+
+    /// Destination directory for downloaded packs
+    #[validate(length(min = 1))]
+    #[schema(example = "/tmp/attune-packs")]
+    pub destination_dir: String,
+
+    /// Pack registry URL for resolving references
+    #[schema(example = "https://registry.attune.io/index.json")]
+    pub registry_url: Option<String>,
+
+    /// Git reference (branch, tag, or commit) for git sources
+    #[schema(example = "v1.0.0")]
+    pub ref_spec: Option<String>,
+
+    /// Download timeout in seconds
+    #[serde(default = "default_download_timeout")]
+    #[schema(example = 300)]
+    pub timeout: u64,
+
+    /// Verify SSL certificates
+    #[serde(default = "default_true")]
+    #[schema(example = true)]
+    pub verify_ssl: bool,
+}
+
+/// Response DTO for download packs operation
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DownloadPacksResponse {
+    /// Successfully downloaded packs
+    pub downloaded_packs: Vec<DownloadedPack>,
+    /// Failed pack downloads
+    pub failed_packs: Vec<FailedPack>,
+    /// Total number of packs requested
+    pub total_count: usize,
+    /// Number of successful downloads
+    pub success_count: usize,
+    /// Number of failed downloads
+    pub failure_count: usize,
+}
+
+/// Information about a downloaded pack
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DownloadedPack {
+    /// Original source
+    pub source: String,
+    /// Source type (git, http, registry)
+    pub source_type: String,
+    /// Local path to downloaded pack
+    pub pack_path: String,
+    /// Pack reference from pack.yaml
+    pub pack_ref: String,
+    /// Pack version from pack.yaml
+    pub pack_version: String,
+    /// Git commit hash (for git sources)
+    pub git_commit: Option<String>,
+    /// Directory checksum
+    pub checksum: Option<String>,
+}
+
+/// Information about a failed pack download
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct FailedPack {
+    /// Pack source that failed
+    pub source: String,
+    /// Error message
+    pub error: String,
+}
+
+/// Request DTO for getting pack dependencies
+#[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
+pub struct GetPackDependenciesRequest {
+    /// List of pack directory paths to analyze
+    #[validate(length(min = 1))]
+    #[schema(example = json!(["/tmp/attune-packs/slack"]))]
+    pub pack_paths: Vec<String>,
+
+    /// Skip pack.yaml validation
+    #[serde(default)]
+    #[schema(example = false)]
+    pub skip_validation: bool,
+}
+
+/// Response DTO for get pack dependencies operation
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct GetPackDependenciesResponse {
+    /// All dependencies found
+    pub dependencies: Vec<PackDependency>,
+    /// Runtime requirements by pack
+    pub runtime_requirements: std::collections::HashMap<String, RuntimeRequirements>,
+    /// Dependencies not yet installed
+    pub missing_dependencies: Vec<PackDependency>,
+    /// Packs that were analyzed
+    pub analyzed_packs: Vec<AnalyzedPack>,
+    /// Errors encountered during analysis
+    pub errors: Vec<DependencyError>,
+}
+
+/// Pack dependency information
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PackDependency {
+    /// Pack reference
+    pub pack_ref: String,
+    /// Version specification
+    pub version_spec: String,
+    /// Pack that requires this dependency
+    pub required_by: String,
+    /// Whether dependency is already installed
+    pub already_installed: bool,
+}
+
+/// Runtime requirements for a pack
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RuntimeRequirements {
+    /// Pack reference
+    pub pack_ref: String,
+    /// Python requirements
+    pub python: Option<PythonRequirements>,
+    /// Node.js requirements
+    pub nodejs: Option<NodeJsRequirements>,
+}
+
+/// Python runtime requirements
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PythonRequirements {
+    /// Python version requirement
+    pub version: Option<String>,
+    /// Path to requirements.txt
+    pub requirements_file: Option<String>,
+}
+
+/// Node.js runtime requirements
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct NodeJsRequirements {
+    /// Node.js version requirement
+    pub version: Option<String>,
+    /// Path to package.json
+    pub package_file: Option<String>,
+}
+
+/// Information about an analyzed pack
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct AnalyzedPack {
+    /// Pack reference
+    pub pack_ref: String,
+    /// Pack directory path
+    pub pack_path: String,
+    /// Whether pack has dependencies
+    pub has_dependencies: bool,
+    /// Number of dependencies
+    pub dependency_count: usize,
+}
+
+/// Dependency analysis error
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DependencyError {
+    /// Pack path where error occurred
+    pub pack_path: String,
+    /// Error message
+    pub error: String,
+}
+
+/// Request DTO for building pack environments
+#[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
+pub struct BuildPackEnvsRequest {
+    /// List of pack directory paths
+    #[validate(length(min = 1))]
+    #[schema(example = json!(["/tmp/attune-packs/slack"]))]
+    pub pack_paths: Vec<String>,
+
+    /// Base directory for permanent pack storage
+    #[schema(example = "/opt/attune/packs")]
+    pub packs_base_dir: Option<String>,
+
+    /// Python version to use
+    #[serde(default = "default_python_version")]
+    #[schema(example = "3.11")]
+    pub python_version: String,
+
+    /// Node.js version to use
+    #[serde(default = "default_nodejs_version")]
+    #[schema(example = "20")]
+    pub nodejs_version: String,
+
+    /// Skip building Python environments
+    #[serde(default)]
+    #[schema(example = false)]
+    pub skip_python: bool,
+
+    /// Skip building Node.js environments
+    #[serde(default)]
+    #[schema(example = false)]
+    pub skip_nodejs: bool,
+
+    /// Force rebuild of existing environments
+    #[serde(default)]
+    #[schema(example = false)]
+    pub force_rebuild: bool,
+
+    /// Timeout in seconds for building each environment
+    #[serde(default = "default_build_timeout")]
+    #[schema(example = 600)]
+    pub timeout: u64,
+}
+
+/// Response DTO for build pack environments operation
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BuildPackEnvsResponse {
+    /// Successfully built environments
+    pub built_environments: Vec<BuiltEnvironment>,
+    /// Failed environment builds
+    pub failed_environments: Vec<FailedEnvironment>,
+    /// Summary statistics
+    pub summary: BuildSummary,
+}
+
+/// Information about a built environment
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BuiltEnvironment {
+    /// Pack reference
+    pub pack_ref: String,
+    /// Pack directory path
+    pub pack_path: String,
+    /// Built environments
+    pub environments: Environments,
+    /// Build duration in milliseconds
+    pub duration_ms: u64,
+}
+
+/// Environment details
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct Environments {
+    /// Python environment
+    pub python: Option<PythonEnvironment>,
+    /// Node.js environment
+    pub nodejs: Option<NodeJsEnvironment>,
+}
+
+/// Python environment details
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PythonEnvironment {
+    /// Path to virtualenv
+    pub virtualenv_path: String,
+    /// Whether requirements were installed
+    pub requirements_installed: bool,
+    /// Number of packages installed
+    pub package_count: usize,
+    /// Python version used
+    pub python_version: String,
+}
+
+/// Node.js environment details
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct NodeJsEnvironment {
+    /// Path to node_modules
+    pub node_modules_path: String,
+    /// Whether dependencies were installed
+    pub dependencies_installed: bool,
+    /// Number of packages installed
+    pub package_count: usize,
+    /// Node.js version used
+    pub nodejs_version: String,
+}
+
+/// Failed environment build
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct FailedEnvironment {
+    /// Pack reference
+    pub pack_ref: String,
+    /// Pack directory path
+    pub pack_path: String,
+    /// Runtime that failed
+    pub runtime: String,
+    /// Error message
+    pub error: String,
+}
+
+/// Build summary statistics
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BuildSummary {
+    /// Total packs processed
+    pub total_packs: usize,
+    /// Successfully built
+    pub success_count: usize,
+    /// Failed builds
+    pub failure_count: usize,
+    /// Python environments built
+    pub python_envs_built: usize,
+    /// Node.js environments built
+    pub nodejs_envs_built: usize,
+    /// Total duration in milliseconds
+    pub total_duration_ms: u64,
+}
+
+/// Request DTO for registering multiple packs
+#[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
+pub struct RegisterPacksRequest {
+    /// List of pack directory paths to register
+    #[validate(length(min = 1))]
+    #[schema(example = json!(["/tmp/attune-packs/slack"]))]
+    pub pack_paths: Vec<String>,
+
+    /// Base directory for permanent storage
+    #[schema(example = "/opt/attune/packs")]
+    pub packs_base_dir: Option<String>,
+
+    /// Skip schema validation
+    #[serde(default)]
+    #[schema(example = false)]
+    pub skip_validation: bool,
+
+    /// Skip running pack tests
+    #[serde(default)]
+    #[schema(example = false)]
+    pub skip_tests: bool,
+
+    /// Force registration (replace if exists)
+    #[serde(default)]
+    #[schema(example = false)]
+    pub force: bool,
+}
+
+/// Response DTO for register packs operation
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RegisterPacksResponse {
+    /// Successfully registered packs
+    pub registered_packs: Vec<RegisteredPack>,
+    /// Failed pack registrations
+    pub failed_packs: Vec<FailedPackRegistration>,
+    /// Summary statistics
+    pub summary: RegistrationSummary,
+}
+
+/// Information about a registered pack
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RegisteredPack {
+    /// Pack reference
+    pub pack_ref: String,
+    /// Pack database ID
+    pub pack_id: i64,
+    /// Pack version
+    pub pack_version: String,
+    /// Permanent storage path
+    pub storage_path: String,
+    /// Registered components by type
+    pub components_registered: ComponentCounts,
+    /// Test results
+    pub test_result: Option<TestResult>,
+    /// Validation results
+    pub validation_results: ValidationResults,
+}
+
+/// Component counts
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ComponentCounts {
+    /// Number of actions
+    pub actions: usize,
+    /// Number of sensors
+    pub sensors: usize,
+    /// Number of triggers
+    pub triggers: usize,
+    /// Number of rules
+    pub rules: usize,
+    /// Number of workflows
+    pub workflows: usize,
+    /// Number of policies
+    pub policies: usize,
+}
+
+/// Test result
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct TestResult {
+    /// Test status
+    pub status: String,
+    /// Total number of tests
+    pub total_tests: usize,
+    /// Number passed
+    pub passed: usize,
+    /// Number failed
+    pub failed: usize,
+}
+
+/// Validation results
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ValidationResults {
+    /// Whether validation passed
+    pub valid: bool,
+    /// Validation errors
+    pub errors: Vec<String>,
+}
+
+/// Failed pack registration
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct FailedPackRegistration {
+    /// Pack reference
+    pub pack_ref: String,
+    /// Pack path
+    pub pack_path: String,
+    /// Error message
+    pub error: String,
+    /// Error stage
+    pub error_stage: String,
+}
+
+/// Registration summary
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RegistrationSummary {
+    /// Total packs processed
+    pub total_packs: usize,
+    /// Successfully registered
+    pub success_count: usize,
+    /// Failed registrations
+    pub failure_count: usize,
+    /// Total components registered
+    pub total_components: usize,
+    /// Duration in milliseconds
+    pub duration_ms: u64,
+}
+
 fn default_empty_object() -> JsonValue {
     serde_json::json!({})
+}
+
+fn default_download_timeout() -> u64 {
+    300
+}
+
+fn default_build_timeout() -> u64 {
+    600
+}
+
+fn default_python_version() -> String {
+    "3.11".to_string()
+}
+
+fn default_nodejs_version() -> String {
+    "20".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[cfg(test)]

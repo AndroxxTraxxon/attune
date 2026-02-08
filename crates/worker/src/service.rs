@@ -10,7 +10,7 @@ use attune_common::models::ExecutionStatus;
 use attune_common::mq::{
     config::MessageQueueConfig as MqConfig, Connection, Consumer, ConsumerConfig,
     ExecutionCompletedPayload, ExecutionStatusChangedPayload, MessageEnvelope, MessageType,
-    Publisher, PublisherConfig, QueueConfig,
+    Publisher, PublisherConfig,
 };
 use attune_common::repositories::{execution::ExecutionRepository, FindById};
 use chrono::Utc;
@@ -230,6 +230,11 @@ impl WorkerService {
             .map(|w| w.max_stderr_bytes)
             .unwrap_or(10 * 1024 * 1024);
         let packs_base_dir = std::path::PathBuf::from(&config.packs_base_dir);
+
+        // Get API URL from environment or construct from server config
+        let api_url = std::env::var("ATTUNE_API_URL")
+            .unwrap_or_else(|_| format!("http://{}:{}", config.server.host, config.server.port));
+
         let executor = Arc::new(ActionExecutor::new(
             pool.clone(),
             runtime_registry,
@@ -238,6 +243,7 @@ impl WorkerService {
             max_stdout_bytes,
             max_stderr_bytes,
             packs_base_dir,
+            api_url,
         ));
 
         // Initialize heartbeat manager
@@ -430,8 +436,13 @@ impl WorkerService {
                 }
 
                 // Publish completion notification for queue management
-                if let Err(e) =
-                    Self::publish_completion_notification(&db_pool, &publisher, execution_id).await
+                if let Err(e) = Self::publish_completion_notification(
+                    &db_pool,
+                    &publisher,
+                    execution_id,
+                    ExecutionStatus::Completed,
+                )
+                .await
                 {
                     error!(
                         "Failed to publish completion notification for execution {}: {}",
@@ -458,8 +469,13 @@ impl WorkerService {
                 }
 
                 // Publish completion notification for queue management
-                if let Err(e) =
-                    Self::publish_completion_notification(&db_pool, &publisher, execution_id).await
+                if let Err(e) = Self::publish_completion_notification(
+                    &db_pool,
+                    &publisher,
+                    execution_id,
+                    ExecutionStatus::Failed,
+                )
+                .await
                 {
                     error!(
                         "Failed to publish completion notification for execution {}: {}",
@@ -528,6 +544,7 @@ impl WorkerService {
         db_pool: &PgPool,
         publisher: &Publisher,
         execution_id: i64,
+        final_status: ExecutionStatus,
     ) -> Result<()> {
         // Fetch execution to get action_id and other required fields
         let execution = ExecutionRepository::find_by_id(db_pool, execution_id)
@@ -556,7 +573,7 @@ impl WorkerService {
             execution_id: execution.id,
             action_id,
             action_ref: execution.action_ref.clone(),
-            status: format!("{:?}", execution.status),
+            status: format!("{:?}", final_status),
             result: execution.result.clone(),
             completed_at: Utc::now(),
         };
@@ -576,21 +593,7 @@ impl WorkerService {
         Ok(())
     }
 
-    /// Run the worker service until interrupted
-    pub async fn run(&mut self) -> Result<()> {
-        self.start().await?;
 
-        // Wait for shutdown signal
-        tokio::signal::ctrl_c()
-            .await
-            .map_err(|e| Error::Internal(format!("Failed to wait for shutdown signal: {}", e)))?;
-
-        info!("Received shutdown signal");
-
-        self.stop().await?;
-
-        Ok(())
-    }
 }
 
 #[cfg(test)]

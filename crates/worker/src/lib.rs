@@ -10,7 +10,6 @@ pub mod registration;
 pub mod runtime;
 pub mod secrets;
 pub mod service;
-pub mod test_executor;
 
 // Re-export commonly used types
 pub use executor::ActionExecutor;
@@ -22,4 +21,5 @@ pub use runtime::{
 };
 pub use secrets::SecretManager;
 pub use service::WorkerService;
-pub use test_executor::{TestConfig, TestExecutor};
+// Re-export test executor from common (shared business logic)
+pub use attune_common::test_executor::{TestConfig, TestExecutor};

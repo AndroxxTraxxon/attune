@@ -37,7 +37,131 @@ pub type JsonSchema = JsonValue;
 pub mod enums {
     use serde::{Deserialize, Serialize};
     use sqlx::Type;
+    use std::fmt;
+    use std::str::FromStr;
     use utoipa::ToSchema;
+
+    /// How parameters should be delivered to an action
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+    #[serde(rename_all = "lowercase")]
+    pub enum ParameterDelivery {
+        /// Pass parameters via stdin (secure, recommended for most cases)
+        Stdin,
+        /// Pass parameters via temporary file (secure, best for large payloads)
+        File,
+    }
+
+    impl Default for ParameterDelivery {
+        fn default() -> Self {
+            Self::Stdin
+        }
+    }
+
+    impl fmt::Display for ParameterDelivery {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Stdin => write!(f, "stdin"),
+                Self::File => write!(f, "file"),
+            }
+        }
+    }
+
+    impl FromStr for ParameterDelivery {
+        type Err = String;
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            match s.to_lowercase().as_str() {
+                "stdin" => Ok(Self::Stdin),
+                "file" => Ok(Self::File),
+                _ => Err(format!("Invalid parameter delivery method: {}", s)),
+            }
+        }
+    }
+
+    impl sqlx::Type<sqlx::Postgres> for ParameterDelivery {
+        fn type_info() -> sqlx::postgres::PgTypeInfo {
+            <String as sqlx::Type<sqlx::Postgres>>::type_info()
+        }
+    }
+
+    impl<'r> sqlx::Decode<'r, sqlx::Postgres> for ParameterDelivery {
+        fn decode(value: sqlx::postgres::PgValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+            let s = <String as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
+            s.parse().map_err(|e: String| e.into())
+        }
+    }
+
+    impl<'q> sqlx::Encode<'q, sqlx::Postgres> for ParameterDelivery {
+        fn encode_by_ref(
+            &self,
+            buf: &mut sqlx::postgres::PgArgumentBuffer,
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+            Ok(<String as sqlx::Encode<sqlx::Postgres>>::encode(self.to_string(), buf)?)
+        }
+    }
+
+    /// Format for parameter serialization
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+    #[serde(rename_all = "lowercase")]
+    pub enum ParameterFormat {
+        /// KEY='VALUE' format (one per line)
+        Dotenv,
+        /// JSON object
+        Json,
+        /// YAML format
+        Yaml,
+    }
+
+    impl Default for ParameterFormat {
+        fn default() -> Self {
+            Self::Json
+        }
+    }
+
+    impl fmt::Display for ParameterFormat {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Json => write!(f, "json"),
+                Self::Dotenv => write!(f, "dotenv"),
+                Self::Yaml => write!(f, "yaml"),
+            }
+        }
+    }
+
+    impl FromStr for ParameterFormat {
+        type Err = String;
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            match s.to_lowercase().as_str() {
+                "json" => Ok(Self::Json),
+                "dotenv" => Ok(Self::Dotenv),
+                "yaml" => Ok(Self::Yaml),
+                _ => Err(format!("Invalid parameter format: {}", s)),
+            }
+        }
+    }
+
+    impl sqlx::Type<sqlx::Postgres> for ParameterFormat {
+        fn type_info() -> sqlx::postgres::PgTypeInfo {
+            <String as sqlx::Type<sqlx::Postgres>>::type_info()
+        }
+    }
+
+    impl<'r> sqlx::Decode<'r, sqlx::Postgres> for ParameterFormat {
+        fn decode(value: sqlx::postgres::PgValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+            let s = <String as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
+            s.parse().map_err(|e: String| e.into())
+        }
+    }
+
+    impl<'q> sqlx::Encode<'q, sqlx::Postgres> for ParameterFormat {
+        fn encode_by_ref(
+            &self,
+            buf: &mut sqlx::postgres::PgArgumentBuffer,
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+            Ok(<String as sqlx::Encode<sqlx::Postgres>>::encode(self.to_string(), buf)?)
+        }
+    }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, ToSchema)]
     #[sqlx(type_name = "worker_type_enum", rename_all = "lowercase")]
@@ -310,6 +434,10 @@ pub mod action {
         pub is_workflow: bool,
         pub workflow_def: Option<Id>,
         pub is_adhoc: bool,
+        #[sqlx(default)]
+        pub parameter_delivery: ParameterDelivery,
+        #[sqlx(default)]
+        pub parameter_format: ParameterFormat,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
     }
@@ -492,6 +620,11 @@ pub mod execution {
         pub action: Option<Id>,
         pub action_ref: String,
         pub config: Option<JsonDict>,
+
+        /// Environment variables for this execution (string -> string mapping)
+        /// These are set as environment variables in the action's process.
+        /// Separate from parameters which are passed via stdin/file.
+        pub env_vars: Option<JsonDict>,
 
         /// Parent execution ID (generic hierarchy for all execution types)
         ///

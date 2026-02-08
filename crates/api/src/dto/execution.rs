@@ -17,6 +17,10 @@ pub struct CreateExecutionRequest {
     /// Execution parameters/configuration
     #[schema(value_type = Object, example = json!({"channel": "#alerts", "message": "Manual test"}))]
     pub parameters: Option<JsonValue>,
+
+    /// Environment variables for this execution
+    #[schema(value_type = Object, example = json!({"DEBUG": "true", "LOG_LEVEL": "info"}))]
+    pub env_vars: Option<JsonValue>,
 }
 
 /// Response DTO for execution information

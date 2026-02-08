@@ -69,6 +69,10 @@ pub async fn create_execution(
             .parameters
             .as_ref()
             .and_then(|p| serde_json::from_value(p.clone()).ok()),
+        env_vars: request
+            .env_vars
+            .as_ref()
+            .and_then(|e| serde_json::from_value(e.clone()).ok()),
         parent: None,
         enforcement: None,
         executor: None,

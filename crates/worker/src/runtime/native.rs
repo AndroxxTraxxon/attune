@@ -4,14 +4,16 @@
 //! This runtime is used for Rust binaries and other compiled executables.
 
 use super::{
+    parameter_passing::{self, ParameterDeliveryConfig},
     BoundedLogWriter, ExecutionContext, ExecutionResult, Runtime, RuntimeError, RuntimeResult,
 };
 use async_trait::async_trait;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::time::{timeout, Duration};
+use tokio::time::Duration;
 use tracing::{debug, info, warn};
 
 /// Native runtime for executing compiled binaries
@@ -35,11 +37,11 @@ impl NativeRuntime {
     /// Execute a native binary with parameters and environment variables
     async fn execute_binary(
         &self,
-        binary_path: std::path::PathBuf,
-        parameters: &std::collections::HashMap<String, serde_json::Value>,
+        binary_path: PathBuf,
         secrets: &std::collections::HashMap<String, String>,
         env: &std::collections::HashMap<String, String>,
-        exec_timeout: Option<u64>,
+        parameters_stdin: Option<&str>,
+        timeout: Option<u64>,
         max_stdout_bytes: usize,
         max_stderr_bytes: usize,
     ) -> RuntimeResult<ExecutionResult> {
@@ -76,20 +78,9 @@ impl NativeRuntime {
             cmd.current_dir(work_dir);
         }
 
-        // Add environment variables
+        // Add environment variables (including parameter delivery metadata)
         for (key, value) in env {
             cmd.env(key, value);
-        }
-
-        // Add parameters as environment variables with ATTUNE_ACTION_ prefix
-        for (key, value) in parameters {
-            let value_str = match value {
-                serde_json::Value::String(s) => s.clone(),
-                serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::Bool(b) => b.to_string(),
-                _ => serde_json::to_string(value)?,
-            };
-            cmd.env(format!("ATTUNE_ACTION_{}", key.to_uppercase()), value_str);
         }
 
         // Configure stdio
@@ -102,29 +93,42 @@ impl NativeRuntime {
             .spawn()
             .map_err(|e| RuntimeError::ExecutionFailed(format!("Failed to spawn binary: {}", e)))?;
 
-        // Write secrets to stdin - if this fails, the process has already started
-        // so we should continue and capture whatever output we can
-        let stdin_write_error = if !secrets.is_empty() {
-            if let Some(mut stdin) = child.stdin.take() {
+        // Write to stdin - parameters (if using stdin delivery) and/or secrets
+        // If this fails, the process has already started, so we continue and capture output
+        let stdin_write_error = if let Some(mut stdin) = child.stdin.take() {
+            let mut error = None;
+
+            // Write parameters first if using stdin delivery
+            if let Some(params_data) = parameters_stdin {
+                if let Err(e) = stdin.write_all(params_data.as_bytes()).await {
+                    error = Some(format!("Failed to write parameters to stdin: {}", e));
+                } else if let Err(e) = stdin.write_all(b"\n---ATTUNE_PARAMS_END---\n").await {
+                    error = Some(format!("Failed to write parameter delimiter: {}", e));
+                }
+            }
+
+            // Write secrets as JSON (always, for backward compatibility)
+            if error.is_none() && !secrets.is_empty() {
                 match serde_json::to_string(secrets) {
                     Ok(secrets_json) => {
                         if let Err(e) = stdin.write_all(secrets_json.as_bytes()).await {
-                            Some(format!("Failed to write secrets to stdin: {}", e))
-                        } else if let Err(e) = stdin.shutdown().await {
-                            Some(format!("Failed to close stdin: {}", e))
-                        } else {
-                            None
+                            error = Some(format!("Failed to write secrets to stdin: {}", e));
+                        } else if let Err(e) = stdin.write_all(b"\n").await {
+                            error = Some(format!("Failed to write newline to stdin: {}", e));
                         }
                     }
-                    Err(e) => Some(format!("Failed to serialize secrets: {}", e)),
+                    Err(e) => error = Some(format!("Failed to serialize secrets: {}", e)),
                 }
-            } else {
-                None
             }
+
+            // Close stdin
+            if let Err(e) = stdin.shutdown().await {
+                if error.is_none() {
+                    error = Some(format!("Failed to close stdin: {}", e));
+                }
+            }
+            error
         } else {
-            if let Some(stdin) = child.stdin.take() {
-                drop(stdin); // Close stdin if no secrets
-            }
             None
         };
 
@@ -184,8 +188,8 @@ impl NativeRuntime {
         let (stdout_writer, stderr_writer) = tokio::join!(stdout_task, stderr_task);
 
         // Wait for process with timeout
-        let wait_result = if let Some(timeout_secs) = exec_timeout {
-            match timeout(Duration::from_secs(timeout_secs), child.wait()).await {
+        let wait_result = if let Some(timeout_secs) = timeout {
+            match tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait()).await {
                 Ok(result) => result,
                 Err(_) => {
                     warn!(
@@ -317,9 +321,25 @@ impl Runtime for NativeRuntime {
 
     async fn execute(&self, context: ExecutionContext) -> RuntimeResult<ExecutionResult> {
         info!(
-            "Executing native action: {} (execution_id: {})",
-            context.action_ref, context.execution_id
+            "Executing native action: {} (execution_id: {}) with parameter delivery: {:?}, format: {:?}",
+            context.action_ref, context.execution_id, context.parameter_delivery, context.parameter_format
         );
+
+        // Prepare environment and parameters according to delivery method
+        let mut env = context.env.clone();
+        let config = ParameterDeliveryConfig {
+            delivery: context.parameter_delivery,
+            format: context.parameter_format,
+        };
+
+        let prepared_params = parameter_passing::prepare_parameters(
+            &context.parameters,
+            &mut env,
+            config,
+        )?;
+
+        // Get stdin content if parameters are delivered via stdin
+        let parameters_stdin = prepared_params.stdin_content();
 
         // Get the binary path
         let binary_path = context.code_path.ok_or_else(|| {
@@ -328,9 +348,9 @@ impl Runtime for NativeRuntime {
 
         self.execute_binary(
             binary_path,
-            &context.parameters,
             &context.secrets,
-            &context.env,
+            &env,
+            parameters_stdin,
             context.timeout,
             context.max_stdout_bytes,
             context.max_stderr_bytes,

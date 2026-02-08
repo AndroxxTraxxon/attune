@@ -1,51 +1,10 @@
 -- Migration: Add Pack Runtime Environments
 -- Description: Adds support for per-pack isolated runtime environments with installer metadata
 -- Version: 20260203000002
+-- Note: runtime.installers column is defined in migration 20250101000002_pack_system.sql
 
 -- ============================================================================
--- PART 1: Add installer metadata to runtime table
--- ============================================================================
-
--- Add installers field to runtime table for environment setup instructions
-ALTER TABLE runtime ADD COLUMN IF NOT EXISTS installers JSONB DEFAULT '[]'::jsonb;
-
-COMMENT ON COLUMN runtime.installers IS 'Array of installer actions to create pack-specific runtime environments. Each installer defines commands to set up isolated environments (e.g., Python venv, npm install).
-
-Structure:
-{
-  "installers": [
-    {
-      "name": "create_environment",
-      "description": "Create isolated runtime environment",
-      "command": "python3",
-      "args": ["-m", "venv", "{env_path}"],
-      "cwd": "{pack_path}",
-      "env": {},
-      "order": 1
-    },
-    {
-      "name": "install_dependencies",
-      "description": "Install pack dependencies",
-      "command": "{env_path}/bin/pip",
-      "args": ["install", "-r", "{pack_path}/requirements.txt"],
-      "cwd": "{pack_path}",
-      "env": {},
-      "order": 2,
-      "optional": false
-    }
-  ]
-}
-
-Template variables:
-  {env_path}   - Full path to environment directory (e.g., /opt/attune/packenvs/mypack/python)
-  {pack_path}  - Full path to pack directory (e.g., /opt/attune/packs/mypack)
-  {pack_ref}   - Pack reference (e.g., mycompany.monitoring)
-  {runtime_ref} - Runtime reference (e.g., core.python)
-  {runtime_name} - Runtime name (e.g., Python)
-';
-
--- ============================================================================
--- PART 2: Create pack_environment table
+-- PART 1: Create pack_environment table
 -- ============================================================================
 
 -- Pack environment table
@@ -96,7 +55,7 @@ COMMENT ON COLUMN pack_environment.install_error IS 'Error message if installati
 COMMENT ON COLUMN pack_environment.metadata IS 'Additional metadata (installed packages, versions, etc.)';
 
 -- ============================================================================
--- PART 3: Update existing runtimes with installer metadata
+-- PART 2: Update existing runtimes with installer metadata
 -- ============================================================================
 
 -- Python runtime installers
@@ -208,7 +167,7 @@ SET installers = jsonb_build_object(
 WHERE ref = 'core.sensor.builtin';
 
 -- ============================================================================
--- PART 4: Add helper functions
+-- PART 3: Add helper functions
 -- ============================================================================
 
 -- Function to get environment path for a pack/runtime combination
@@ -261,7 +220,7 @@ $$ LANGUAGE plpgsql STABLE;
 COMMENT ON FUNCTION runtime_requires_environment IS 'Check if a runtime needs a pack-specific environment';
 
 -- ============================================================================
--- PART 5: Create view for environment status
+-- PART 4: Create view for environment status
 -- ============================================================================
 
 CREATE OR REPLACE VIEW v_pack_environment_status AS

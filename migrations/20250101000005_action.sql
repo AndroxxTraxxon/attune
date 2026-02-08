@@ -17,6 +17,8 @@ CREATE TABLE action (
     runtime BIGINT REFERENCES runtime(id),
     param_schema JSONB,
     out_schema JSONB,
+    parameter_delivery TEXT NOT NULL DEFAULT 'stdin' CHECK (parameter_delivery IN ('stdin', 'file')),
+    parameter_format TEXT NOT NULL DEFAULT 'json' CHECK (parameter_format IN ('dotenv', 'json', 'yaml')),
     is_adhoc BOOLEAN NOT NULL DEFAULT FALSE,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -30,6 +32,8 @@ CREATE TABLE action (
 CREATE INDEX idx_action_ref ON action(ref);
 CREATE INDEX idx_action_pack ON action(pack);
 CREATE INDEX idx_action_runtime ON action(runtime);
+CREATE INDEX idx_action_parameter_delivery ON action(parameter_delivery);
+CREATE INDEX idx_action_parameter_format ON action(parameter_format);
 CREATE INDEX idx_action_is_adhoc ON action(is_adhoc) WHERE is_adhoc = true;
 CREATE INDEX idx_action_created ON action(created DESC);
 
@@ -48,6 +52,8 @@ COMMENT ON COLUMN action.entrypoint IS 'Script or command to execute';
 COMMENT ON COLUMN action.runtime IS 'Runtime environment for execution';
 COMMENT ON COLUMN action.param_schema IS 'JSON schema for action parameters';
 COMMENT ON COLUMN action.out_schema IS 'JSON schema for action output';
+COMMENT ON COLUMN action.parameter_delivery IS 'How parameters are delivered: stdin (standard input - secure), file (temporary file - secure for large payloads). Environment variables are set separately via execution.env_vars.';
+COMMENT ON COLUMN action.parameter_format IS 'Parameter serialization format: json (JSON object - default), dotenv (KEY=''VALUE''), yaml (YAML format)';
 COMMENT ON COLUMN action.is_adhoc IS 'True if action was manually created (ad-hoc), false if installed from pack';
 
 -- ============================================================================

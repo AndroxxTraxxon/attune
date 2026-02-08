@@ -17,6 +17,7 @@ pub mod pack_registry;
 pub mod repositories;
 pub mod runtime_detection;
 pub mod schema;
+pub mod test_executor;
 pub mod utils;
 pub mod workflow;
 

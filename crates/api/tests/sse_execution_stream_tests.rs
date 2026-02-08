@@ -69,6 +69,7 @@ async fn create_test_execution(pool: &PgPool, action_id: i64) -> Result<Executio
         action: Some(action_id),
         action_ref: format!("action_{}", action_id),
         config: None,
+        env_vars: None,
         parent: None,
         enforcement: None,
         executor: None,

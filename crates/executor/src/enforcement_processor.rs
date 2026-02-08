@@ -224,7 +224,8 @@ impl EnforcementProcessor {
             action: Some(action_id),
             action_ref: action_ref.clone(),
             config: enforcement.config.clone(),
-            parent: None, // TODO: Handle workflow parent-child relationships
+            env_vars: None, // No custom env vars for rule-triggered executions
+            parent: None,   // TODO: Handle workflow parent-child relationships
             enforcement: Some(enforcement.id),
             executor: None, // Will be assigned during scheduling
             status: attune_common::models::enums::ExecutionStatus::Requested,

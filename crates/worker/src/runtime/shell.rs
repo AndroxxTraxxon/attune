@@ -3,6 +3,7 @@
 //! Executes shell scripts and commands using subprocess execution.
 
 use super::{
+    parameter_passing::{self, ParameterDeliveryConfig},
     BoundedLogWriter, ExecutionContext, ExecutionResult, Runtime, RuntimeError, RuntimeResult,
 };
 use async_trait::async_trait;
@@ -53,6 +54,7 @@ impl ShellRuntime {
         &self,
         mut cmd: Command,
         secrets: &std::collections::HashMap<String, String>,
+        parameters_stdin: Option<&str>,
         timeout_secs: Option<u64>,
         max_stdout_bytes: usize,
         max_stderr_bytes: usize,
@@ -66,22 +68,36 @@ impl ShellRuntime {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        // Write secrets to stdin - if this fails, the process has already started
-        // so we should continue and capture whatever output we can
+        // Write to stdin - parameters (if using stdin delivery) and/or secrets
+        // If this fails, the process has already started, so we continue and capture output
         let stdin_write_error = if let Some(mut stdin) = child.stdin.take() {
-            match serde_json::to_string(secrets) {
-                Ok(secrets_json) => {
-                    if let Err(e) = stdin.write_all(secrets_json.as_bytes()).await {
-                        Some(format!("Failed to write secrets to stdin: {}", e))
-                    } else if let Err(e) = stdin.write_all(b"\n").await {
-                        Some(format!("Failed to write newline to stdin: {}", e))
-                    } else {
-                        drop(stdin);
-                        None
-                    }
+            let mut error = None;
+
+            // Write parameters first if using stdin delivery
+            if let Some(params_data) = parameters_stdin {
+                if let Err(e) = stdin.write_all(params_data.as_bytes()).await {
+                    error = Some(format!("Failed to write parameters to stdin: {}", e));
+                } else if let Err(e) = stdin.write_all(b"\n---ATTUNE_PARAMS_END---\n").await {
+                    error = Some(format!("Failed to write parameter delimiter: {}", e));
                 }
-                Err(e) => Some(format!("Failed to serialize secrets: {}", e)),
             }
+
+            // Write secrets as JSON (always, for backward compatibility)
+            if error.is_none() && !secrets.is_empty() {
+                match serde_json::to_string(secrets) {
+                    Ok(secrets_json) => {
+                        if let Err(e) = stdin.write_all(secrets_json.as_bytes()).await {
+                            error = Some(format!("Failed to write secrets to stdin: {}", e));
+                        } else if let Err(e) = stdin.write_all(b"\n").await {
+                            error = Some(format!("Failed to write newline to stdin: {}", e));
+                        }
+                    }
+                    Err(e) => error = Some(format!("Failed to serialize secrets: {}", e)),
+                }
+            }
+
+            drop(stdin);
+            error
         } else {
             None
         };
@@ -315,9 +331,10 @@ impl ShellRuntime {
     /// Execute shell script directly
     async fn execute_shell_code(
         &self,
-        script: String,
+        code: String,
         secrets: &std::collections::HashMap<String, String>,
         env: &std::collections::HashMap<String, String>,
+        parameters_stdin: Option<&str>,
         timeout_secs: Option<u64>,
         max_stdout_bytes: usize,
         max_stderr_bytes: usize,
@@ -329,7 +346,7 @@ impl ShellRuntime {
 
         // Build command
         let mut cmd = Command::new(&self.shell_path);
-        cmd.arg("-c").arg(&script);
+        cmd.arg("-c").arg(&code);
 
         // Add environment variables
         for (key, value) in env {
@@ -339,6 +356,7 @@ impl ShellRuntime {
         self.execute_with_streaming(
             cmd,
             secrets,
+            parameters_stdin,
             timeout_secs,
             max_stdout_bytes,
             max_stderr_bytes,
@@ -349,22 +367,23 @@ impl ShellRuntime {
     /// Execute shell script from file
     async fn execute_shell_file(
         &self,
-        code_path: PathBuf,
+        script_path: PathBuf,
         secrets: &std::collections::HashMap<String, String>,
         env: &std::collections::HashMap<String, String>,
+        parameters_stdin: Option<&str>,
         timeout_secs: Option<u64>,
         max_stdout_bytes: usize,
         max_stderr_bytes: usize,
     ) -> RuntimeResult<ExecutionResult> {
         debug!(
             "Executing shell file: {:?} with {} secrets",
-            code_path,
+            script_path,
             secrets.len()
         );
 
         // Build command
         let mut cmd = Command::new(&self.shell_path);
-        cmd.arg(&code_path);
+        cmd.arg(&script_path);
 
         // Add environment variables
         for (key, value) in env {
@@ -374,6 +393,7 @@ impl ShellRuntime {
         self.execute_with_streaming(
             cmd,
             secrets,
+            parameters_stdin,
             timeout_secs,
             max_stdout_bytes,
             max_stderr_bytes,
@@ -412,29 +432,49 @@ impl Runtime for ShellRuntime {
 
     async fn execute(&self, context: ExecutionContext) -> RuntimeResult<ExecutionResult> {
         info!(
-            "Executing shell action: {} (execution_id: {})",
-            context.action_ref, context.execution_id
+            "Executing shell action: {} (execution_id: {}) with parameter delivery: {:?}, format: {:?}",
+            context.action_ref, context.execution_id, context.parameter_delivery, context.parameter_format
         );
+        info!(
+            "Action parameters (count: {}): {:?}",
+            context.parameters.len(),
+            context.parameters
+        );
+
+        // Prepare environment and parameters according to delivery method
+        let mut env = context.env.clone();
+        let config = ParameterDeliveryConfig {
+            delivery: context.parameter_delivery,
+            format: context.parameter_format,
+        };
+
+        let prepared_params = parameter_passing::prepare_parameters(
+            &context.parameters,
+            &mut env,
+            config,
+        )?;
+
+        // Get stdin content if parameters are delivered via stdin
+        let parameters_stdin = prepared_params.stdin_content();
+
+        if let Some(stdin_data) = parameters_stdin {
+            info!(
+                "Parameters to be sent via stdin (length: {} bytes):\n{}",
+                stdin_data.len(),
+                stdin_data
+            );
+        } else {
+            info!("No parameters will be sent via stdin");
+        }
 
         // If code_path is provided, execute the file directly
         if let Some(code_path) = &context.code_path {
-            // Merge parameters into environment variables with ATTUNE_ACTION_ prefix
-            let mut env = context.env.clone();
-            for (key, value) in &context.parameters {
-                let value_str = match value {
-                    serde_json::Value::String(s) => s.clone(),
-                    serde_json::Value::Number(n) => n.to_string(),
-                    serde_json::Value::Bool(b) => b.to_string(),
-                    _ => serde_json::to_string(value)?,
-                };
-                env.insert(format!("ATTUNE_ACTION_{}", key.to_uppercase()), value_str);
-            }
-
             return self
                 .execute_shell_file(
                     code_path.clone(),
                     &context.secrets,
                     &env,
+                    parameters_stdin,
                     context.timeout,
                     context.max_stdout_bytes,
                     context.max_stderr_bytes,
@@ -447,7 +487,8 @@ impl Runtime for ShellRuntime {
         self.execute_shell_code(
             script,
             &context.secrets,
-            &context.env,
+            &env,
+            parameters_stdin,
             context.timeout,
             context.max_stdout_bytes,
             context.max_stderr_bytes,
@@ -534,6 +575,8 @@ mod tests {
             runtime_name: Some("shell".to_string()),
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: attune_common::models::ParameterDelivery::default(),
+            parameter_format: attune_common::models::ParameterFormat::default(),
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -564,6 +607,8 @@ mod tests {
             runtime_name: Some("shell".to_string()),
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: attune_common::models::ParameterDelivery::default(),
+            parameter_format: attune_common::models::ParameterFormat::default(),
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -589,6 +634,8 @@ mod tests {
             runtime_name: Some("shell".to_string()),
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: attune_common::models::ParameterDelivery::default(),
+            parameter_format: attune_common::models::ParameterFormat::default(),
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -616,6 +663,8 @@ mod tests {
             runtime_name: Some("shell".to_string()),
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: attune_common::models::ParameterDelivery::default(),
+            parameter_format: attune_common::models::ParameterFormat::default(),
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -658,6 +707,8 @@ echo "missing=$missing"
             runtime_name: Some("shell".to_string()),
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: attune_common::models::ParameterDelivery::default(),
+            parameter_format: attune_common::models::ParameterFormat::default(),
         };
 
         let result = runtime.execute(context).await.unwrap();

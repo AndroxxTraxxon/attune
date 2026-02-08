@@ -133,6 +133,8 @@ Action metadata files define the parameters, output schema, and execution detail
 - `enabled` (boolean): Whether action is enabled (default: true)
 - `parameters` (object): Parameter definitions (JSON Schema style)
 - `output_schema` (object): Output schema definition
+- `parameter_delivery` (string): How parameters are delivered - `env` (environment variables), `stdin` (standard input), or `file` (temporary file). Default: `env`. **Security Note**: Use `stdin` or `file` for actions with sensitive parameters.
+- `parameter_format` (string): Parameter serialization format - `dotenv` (KEY='VALUE'), `json` (JSON object), or `yaml` (YAML format). Default: `dotenv`
 - `tags` (array): Tags for categorization
 - `timeout` (integer): Default timeout in seconds
 - `examples` (array): Usage examples
@@ -146,6 +148,10 @@ description: "Echo a message to stdout"
 enabled: true
 runner_type: shell
 entry_point: echo.sh
+
+# Parameter delivery (optional, defaults to env/dotenv)
+parameter_delivery: env
+parameter_format: dotenv
 
 parameters:
   message:
@@ -178,9 +184,15 @@ tags:
 
 ### Action Implementation
 
-Action implementations receive parameters as environment variables prefixed with `ATTUNE_ACTION_`.
+Actions receive parameters according to the `parameter_delivery` method specified in their metadata:
 
-**Shell Example (`actions/echo.sh`):**
+- **`env`** (default): Parameters as environment variables prefixed with `ATTUNE_ACTION_`
+- **`stdin`**: Parameters via standard input in the specified format
+- **`file`**: Parameters in a temporary file (path in `ATTUNE_PARAMETER_FILE` env var)
+
+**Security Warning**: Environment variables are visible in process listings. Use `stdin` or `file` for sensitive data.
+
+**Shell Example with Environment Variables** (`actions/echo.sh`):
 
 ```bash
 #!/bin/bash
@@ -202,7 +214,66 @@ echo "$MESSAGE"
 exit 0
 ```
 
-**Python Example (`actions/http_request.py`):**
+**Shell Example with Stdin/JSON** (more secure):
+
+```bash
+#!/bin/bash
+set -e
+
+# Read parameters from stdin (JSON format)
+read -r PARAMS_JSON
+MESSAGE=$(echo "$PARAMS_JSON" | jq -r '.message // "Hello, World!"')
+UPPERCASE=$(echo "$PARAMS_JSON" | jq -r '.uppercase // "false"')
+
+# Convert to uppercase if requested
+if [ "$UPPERCASE" = "true" ]; then
+    MESSAGE=$(echo "$MESSAGE" | tr '[:lower:]' '[:upper:]')
+fi
+
+echo "$MESSAGE"
+exit 0
+```
+
+**Python Example with Stdin/JSON** (recommended for security):
+
+```python
+#!/usr/bin/env python3
+import json
+import sys
+
+def read_stdin_params():
+    """Read parameters from stdin."""
+    content = sys.stdin.read()
+    parts = content.split('---ATTUNE_PARAMS_END---')
+    params = json.loads(parts[0].strip()) if parts[0].strip() else {}
+    secrets = json.loads(parts[1].strip()) if len(parts) > 1 and parts[1].strip() else {}
+    return {**params, **secrets}
+
+def main():
+    params = read_stdin_params()
+    url = params.get("url")
+    method = params.get("method", "GET")
+    
+    if not url:
+        print(json.dumps({"error": "url parameter required"}))
+        sys.exit(1)
+    
+    # Perform action logic
+    result = {
+        "url": url,
+        "method": method,
+        "success": True
+    }
+    
+    # Output result as JSON
+    print(json.dumps(result, indent=2))
+    sys.exit(0)
+
+if __name__ == "__main__":
+    main()
+```
+
+**Python Example with Environment Variables** (legacy, less secure):
 
 ```python
 #!/usr/bin/env python3
@@ -216,8 +287,12 @@ def get_env_param(name: str, default=None):
     return os.environ.get(env_key, default)
 
 def main():
-    url = get_env_param("url", required=True)
+    url = get_env_param("url")
     method = get_env_param("method", "GET")
+    
+    if not url:
+        print(json.dumps({"error": "url parameter required"}))
+        sys.exit(1)
     
     # Perform action logic
     result = {
@@ -473,10 +548,13 @@ Ad-hoc packs are user-created packs without code-based components.
 
 ### Security
 
+- **Use `stdin` or `file` parameter delivery for actions with sensitive data** (not `env`)
 - Use `secret: true` for sensitive parameters (passwords, tokens, API keys)
+- Mark actions with credentials using `parameter_delivery: stdin` and `parameter_format: json`
 - Validate all user inputs
 - Sanitize command-line arguments to prevent injection
 - Use HTTPS for API calls with SSL verification enabled
+- Never log sensitive parameters in action output
 
 ---
 
@@ -527,5 +605,6 @@ slack-pack/
 - [Pack Management Architecture](./pack-management-architecture.md)
 - [Pack Management API](./api-packs.md)
 - [Trigger and Sensor Architecture](./trigger-sensor-architecture.md)
+- [Parameter Delivery Methods](../actions/parameter-delivery.md)
 - [Action Development Guide](./action-development-guide.md) (future)
 - [Sensor Development Guide](./sensor-development-guide.md) (future)

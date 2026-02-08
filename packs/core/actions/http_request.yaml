@@ -7,10 +7,18 @@ description: "Make HTTP requests to external APIs with support for various metho
 enabled: true
 
 # Runner type determines how the action is executed
-runner_type: python
+runner_type: shell
 
-# Entry point is the Python script to execute
-entry_point: http_request.py
+# Entry point is the bash script to execute
+entry_point: http_request.sh
+
+# Parameter delivery configuration (for security)
+# Use stdin + JSON for secure parameter passing (credentials won't appear in process list)
+parameter_delivery: stdin
+parameter_format: json
+
+# Output format: json (structured data parsing enabled)
+output_format: json
 
 # Action parameters schema (standard JSON Schema format)
 parameters:
@@ -84,7 +92,8 @@ parameters:
   required:
     - url
 
-# Output schema
+# Output schema: describes the JSON structure written to stdout
+# Note: stdout/stderr/exit_code are captured automatically by the execution system
 output_schema:
   type: object
   properties:
@@ -99,7 +108,7 @@ output_schema:
       description: "Response body as text"
     json:
       type: object
-      description: "Parsed JSON response (if applicable)"
+      description: "Parsed JSON response (if applicable, null otherwise)"
     elapsed_ms:
       type: integer
       description: "Request duration in milliseconds"
@@ -109,6 +118,9 @@ output_schema:
     success:
       type: boolean
       description: "Whether the request was successful (2xx status code)"
+    error:
+      type: string
+      description: "Error message if request failed (only present on failure)"
 
 # Tags for categorization
 tags:

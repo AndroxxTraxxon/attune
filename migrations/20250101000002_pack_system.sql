@@ -95,6 +95,7 @@ CREATE TABLE runtime (
     name TEXT NOT NULL,
     distributions JSONB NOT NULL,
     installation JSONB,
+    installers JSONB DEFAULT '[]'::jsonb,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -121,3 +122,4 @@ COMMENT ON COLUMN runtime.ref IS 'Unique runtime reference (format: pack.name, e
 COMMENT ON COLUMN runtime.name IS 'Runtime name (e.g., "Python", "Node.js", "Shell")';
 COMMENT ON COLUMN runtime.distributions IS 'Runtime distribution metadata including verification commands, version requirements, and capabilities';
 COMMENT ON COLUMN runtime.installation IS 'Installation requirements and instructions including package managers and setup steps';
+COMMENT ON COLUMN runtime.installers IS 'Array of installer actions to create pack-specific runtime environments. Each installer defines commands to set up isolated environments (e.g., Python venv, npm install).';

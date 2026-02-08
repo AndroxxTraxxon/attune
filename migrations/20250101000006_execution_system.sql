@@ -11,6 +11,7 @@ CREATE TABLE execution (
     action BIGINT REFERENCES action(id),
     action_ref TEXT NOT NULL,
     config JSONB,
+    env_vars JSONB,
     parent BIGINT REFERENCES execution(id),
     enforcement BIGINT REFERENCES enforcement(id),
     executor BIGINT REFERENCES identity(id) ON DELETE SET NULL,
@@ -38,6 +39,7 @@ CREATE INDEX idx_execution_action_status ON execution(action, status);
 CREATE INDEX idx_execution_executor_created ON execution(executor, created DESC);
 CREATE INDEX idx_execution_parent_created ON execution(parent, created DESC);
 CREATE INDEX idx_execution_result_gin ON execution USING GIN (result);
+CREATE INDEX idx_execution_env_vars_gin ON execution USING GIN (env_vars);
 
 -- Trigger
 CREATE TRIGGER update_execution_updated
@@ -50,6 +52,7 @@ COMMENT ON TABLE execution IS 'Executions represent action runs, supports nested
 COMMENT ON COLUMN execution.action IS 'Action being executed (may be null if action deleted)';
 COMMENT ON COLUMN execution.action_ref IS 'Action reference (preserved even if action deleted)';
 COMMENT ON COLUMN execution.config IS 'Snapshot of action configuration at execution time';
+COMMENT ON COLUMN execution.env_vars IS 'Environment variables for this execution as key-value pairs (string -> string). These are set in the execution environment and are separate from action parameters. Used for execution context, configuration, and non-sensitive metadata.';
 COMMENT ON COLUMN execution.parent IS 'Parent execution ID for workflow hierarchies';
 COMMENT ON COLUMN execution.enforcement IS 'Enforcement that triggered this execution (if rule-driven)';
 COMMENT ON COLUMN execution.executor IS 'Identity that initiated the execution';

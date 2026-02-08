@@ -250,6 +250,7 @@ impl SensorManager {
         let mut child = Command::new(&sensor_script)
             .env("ATTUNE_API_URL", &self.inner.api_url)
             .env("ATTUNE_API_TOKEN", &token_response.token)
+            .env("ATTUNE_SENSOR_ID", &sensor.id.to_string())
             .env("ATTUNE_SENSOR_REF", &sensor.r#ref)
             .env("ATTUNE_SENSOR_TRIGGERS", &trigger_instances_json)
             .env("ATTUNE_MQ_URL", &self.inner.mq_url)

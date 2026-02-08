@@ -163,7 +163,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.optimized
       args:
         SERVICE: api
         BUILDKIT_INLINE_CACHE: 1
@@ -214,7 +214,7 @@ services:
   executor:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.optimized
       args:
         SERVICE: executor
         BUILDKIT_INLINE_CACHE: 1
@@ -263,7 +263,7 @@ services:
   worker-shell:
     build:
       context: .
-      dockerfile: docker/Dockerfile.worker
+      dockerfile: docker/Dockerfile.worker.optimized
       target: worker-base
       args:
         BUILDKIT_INLINE_CACHE: 1
@@ -307,7 +307,7 @@ services:
   worker-python:
     build:
       context: .
-      dockerfile: docker/Dockerfile.worker
+      dockerfile: docker/Dockerfile.worker.optimized
       target: worker-python
       args:
         BUILDKIT_INLINE_CACHE: 1
@@ -351,7 +351,7 @@ services:
   worker-node:
     build:
       context: .
-      dockerfile: docker/Dockerfile.worker
+      dockerfile: docker/Dockerfile.worker.optimized
       target: worker-node
       args:
         BUILDKIT_INLINE_CACHE: 1
@@ -395,7 +395,7 @@ services:
   worker-full:
     build:
       context: .
-      dockerfile: docker/Dockerfile.worker
+      dockerfile: docker/Dockerfile.worker.optimized
       target: worker-full
       args:
         BUILDKIT_INLINE_CACHE: 1
@@ -438,7 +438,7 @@ services:
   sensor:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.optimized
       args:
         SERVICE: sensor
         BUILDKIT_INLINE_CACHE: 1
@@ -483,7 +483,7 @@ services:
   notifier:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.optimized
       args:
         SERVICE: notifier
         BUILDKIT_INLINE_CACHE: 1

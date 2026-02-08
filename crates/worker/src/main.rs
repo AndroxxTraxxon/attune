@@ -3,6 +3,7 @@
 use anyhow::Result;
 use attune_common::config::Config;
 use clap::Parser;
+use tokio::signal::unix::{signal, SignalKind};
 use tracing::info;
 
 use attune_worker::service::WorkerService;
@@ -70,8 +71,26 @@ async fn main() -> Result<()> {
 
     info!("Attune Worker Service is ready");
 
-    // Run until interrupted
-    service.run().await?;
+    // Start the service
+    service.start().await?;
+
+    // Setup signal handlers for graceful shutdown
+    let mut sigint = signal(SignalKind::interrupt())?;
+    let mut sigterm = signal(SignalKind::terminate())?;
+
+    tokio::select! {
+        _ = sigint.recv() => {
+            info!("Received SIGINT signal");
+        }
+        _ = sigterm.recv() => {
+            info!("Received SIGTERM signal");
+        }
+    }
+
+    info!("Shutting down gracefully...");
+
+    // Stop the service and mark worker as inactive
+    service.stop().await?;
 
     info!("Attune Worker Service shutdown complete");
 

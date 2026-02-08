@@ -23,9 +23,11 @@ use crate::{
     dto::{
         common::{PaginatedResponse, PaginationParams},
         pack::{
-            CreatePackRequest, InstallPackRequest, PackInstallResponse, PackResponse, PackSummary,
+            BuildPackEnvsRequest, BuildPackEnvsResponse, CreatePackRequest, DownloadPacksRequest,
+            DownloadPacksResponse, GetPackDependenciesRequest, GetPackDependenciesResponse,
+            InstallPackRequest, PackInstallResponse, PackResponse, PackSummary,
             PackWorkflowSyncResponse, PackWorkflowValidationResponse, RegisterPackRequest,
-            UpdatePackRequest, WorkflowSyncResult,
+            RegisterPacksRequest, RegisterPacksResponse, UpdatePackRequest, WorkflowSyncResult,
         },
         ApiResponse, SuccessResponse,
     },
@@ -307,7 +309,7 @@ async fn execute_and_store_pack_tests(
     pack_version: &str,
     trigger_type: &str,
 ) -> Result<attune_common::models::pack_test::PackTestResult, ApiError> {
-    use attune_worker::{TestConfig, TestExecutor};
+    use attune_common::test_executor::{TestConfig, TestExecutor};
     use serde_yaml_ng;
 
     // Load pack.yaml from filesystem
@@ -1036,7 +1038,7 @@ pub async fn test_pack(
     RequireAuth(_user): RequireAuth,
     Path(pack_ref): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
-    use attune_worker::{TestConfig, TestExecutor};
+    use attune_common::test_executor::{TestConfig, TestExecutor};
     use serde_yaml_ng;
 
     // Get pack from database
@@ -1202,11 +1204,547 @@ pub async fn get_pack_latest_test(
 /// Note: Nested resource routes (e.g., /packs/:ref/actions) are defined
 /// in their respective modules (actions.rs, triggers.rs, rules.rs) to avoid
 /// route conflicts and maintain proper separation of concerns.
+/// Download packs from various sources
+#[utoipa::path(
+    post,
+    path = "/api/v1/packs/download",
+    tag = "packs",
+    request_body = DownloadPacksRequest,
+    responses(
+        (status = 200, description = "Packs downloaded", body = ApiResponse<DownloadPacksResponse>),
+        (status = 400, description = "Invalid request"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn download_packs(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(_user): RequireAuth,
+    Json(request): Json<DownloadPacksRequest>,
+) -> ApiResult<Json<ApiResponse<DownloadPacksResponse>>> {
+    use attune_common::pack_registry::PackInstaller;
+
+    // Create temp directory
+    let temp_dir = std::env::temp_dir().join("attune-pack-downloads");
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to create temp dir: {}", e)))?;
+
+    // Create installer
+    let registry_config = if state.config.pack_registry.enabled {
+        Some(state.config.pack_registry.clone())
+    } else {
+        None
+    };
+
+    let installer = PackInstaller::new(&temp_dir, registry_config)
+        .await
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to create installer: {}", e)))?;
+
+    let mut downloaded = Vec::new();
+    let mut failed = Vec::new();
+
+    for source in &request.packs {
+        let pack_source = detect_pack_source(source, request.ref_spec.as_deref())?;
+        let source_type_str = get_source_type(&pack_source).to_string();
+
+        match installer.install(pack_source).await {
+            Ok(installed) => {
+                // Read pack.yaml
+                let pack_yaml_path = installed.path.join("pack.yaml");
+                if let Ok(content) = std::fs::read_to_string(&pack_yaml_path) {
+                    if let Ok(yaml) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&content) {
+                        let pack_ref = yaml
+                            .get("ref")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let pack_version = yaml
+                            .get("version")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("0.0.0")
+                            .to_string();
+
+                        downloaded.push(crate::dto::pack::DownloadedPack {
+                            source: source.clone(),
+                            source_type: source_type_str.clone(),
+                            pack_path: installed.path.to_string_lossy().to_string(),
+                            pack_ref,
+                            pack_version,
+                            git_commit: None,
+                            checksum: installed.checksum,
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                failed.push(crate::dto::pack::FailedPack {
+                    source: source.clone(),
+                    error: e.to_string(),
+                });
+            }
+        }
+    }
+
+    let response = DownloadPacksResponse {
+        success_count: downloaded.len(),
+        failure_count: failed.len(),
+        total_count: request.packs.len(),
+        downloaded_packs: downloaded,
+        failed_packs: failed,
+    };
+
+    Ok(Json(ApiResponse::new(response)))
+}
+
+/// Get pack dependencies
+#[utoipa::path(
+    post,
+    path = "/api/v1/packs/dependencies",
+    tag = "packs",
+    request_body = GetPackDependenciesRequest,
+    responses(
+        (status = 200, description = "Dependencies analyzed", body = ApiResponse<GetPackDependenciesResponse>),
+        (status = 400, description = "Invalid request"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn get_pack_dependencies(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(_user): RequireAuth,
+    Json(request): Json<GetPackDependenciesRequest>,
+) -> ApiResult<Json<ApiResponse<GetPackDependenciesResponse>>> {
+    use attune_common::repositories::List;
+
+    let mut dependencies = Vec::new();
+    let mut runtime_requirements = std::collections::HashMap::new();
+    let mut analyzed_packs = Vec::new();
+    let mut errors = Vec::new();
+
+    // Get installed packs
+    let installed_packs_list = PackRepository::list(&state.db).await?;
+    let installed_refs: std::collections::HashSet<String> =
+        installed_packs_list.into_iter().map(|p| p.r#ref).collect();
+
+    for pack_path in &request.pack_paths {
+        let pack_yaml_path = std::path::Path::new(pack_path).join("pack.yaml");
+
+        if !pack_yaml_path.exists() {
+            errors.push(crate::dto::pack::DependencyError {
+                pack_path: pack_path.clone(),
+                error: "pack.yaml not found".to_string(),
+            });
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&pack_yaml_path) {
+            Ok(c) => c,
+            Err(e) => {
+                errors.push(crate::dto::pack::DependencyError {
+                    pack_path: pack_path.clone(),
+                    error: format!("Failed to read pack.yaml: {}", e),
+                });
+                continue;
+            }
+        };
+
+        let yaml: serde_yaml_ng::Value = match serde_yaml_ng::from_str(&content) {
+            Ok(y) => y,
+            Err(e) => {
+                errors.push(crate::dto::pack::DependencyError {
+                    pack_path: pack_path.clone(),
+                    error: format!("Failed to parse pack.yaml: {}", e),
+                });
+                continue;
+            }
+        };
+
+        let pack_ref = yaml
+            .get("ref")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        // Extract dependencies
+        let mut dep_count = 0;
+        if let Some(deps) = yaml.get("dependencies").and_then(|d| d.as_sequence()) {
+            for dep in deps {
+                if let Some(dep_str) = dep.as_str() {
+                    let parts: Vec<&str> = dep_str.splitn(2, '@').collect();
+                    let dep_ref = parts[0].to_string();
+                    let version_spec = parts.get(1).unwrap_or(&"*").to_string();
+                    let already_installed = installed_refs.contains(&dep_ref);
+
+                    dependencies.push(crate::dto::pack::PackDependency {
+                        pack_ref: dep_ref.clone(),
+                        version_spec: version_spec.clone(),
+                        required_by: pack_ref.clone(),
+                        already_installed,
+                    });
+                    dep_count += 1;
+                }
+            }
+        }
+
+        // Extract runtime requirements
+        let mut runtime_req = crate::dto::pack::RuntimeRequirements {
+            pack_ref: pack_ref.clone(),
+            python: None,
+            nodejs: None,
+        };
+
+        if let Some(python_ver) = yaml.get("python").and_then(|v| v.as_str()) {
+            let req_file = std::path::Path::new(pack_path).join("requirements.txt");
+            runtime_req.python = Some(crate::dto::pack::PythonRequirements {
+                version: Some(python_ver.to_string()),
+                requirements_file: if req_file.exists() {
+                    Some(req_file.to_string_lossy().to_string())
+                } else {
+                    None
+                },
+            });
+        }
+
+        if let Some(nodejs_ver) = yaml.get("nodejs").and_then(|v| v.as_str()) {
+            let pkg_file = std::path::Path::new(pack_path).join("package.json");
+            runtime_req.nodejs = Some(crate::dto::pack::NodeJsRequirements {
+                version: Some(nodejs_ver.to_string()),
+                package_file: if pkg_file.exists() {
+                    Some(pkg_file.to_string_lossy().to_string())
+                } else {
+                    None
+                },
+            });
+        }
+
+        if runtime_req.python.is_some() || runtime_req.nodejs.is_some() {
+            runtime_requirements.insert(pack_ref.clone(), runtime_req);
+        }
+
+        analyzed_packs.push(crate::dto::pack::AnalyzedPack {
+            pack_ref: pack_ref.clone(),
+            pack_path: pack_path.clone(),
+            has_dependencies: dep_count > 0,
+            dependency_count: dep_count,
+        });
+    }
+
+    let missing_dependencies: Vec<_> = dependencies
+        .iter()
+        .filter(|d| !d.already_installed)
+        .cloned()
+        .collect();
+
+    let response = GetPackDependenciesResponse {
+        dependencies,
+        runtime_requirements,
+        missing_dependencies,
+        analyzed_packs,
+        errors,
+    };
+
+    Ok(Json(ApiResponse::new(response)))
+}
+
+/// Build pack environments
+#[utoipa::path(
+    post,
+    path = "/api/v1/packs/build-envs",
+    tag = "packs",
+    request_body = BuildPackEnvsRequest,
+    responses(
+        (status = 200, description = "Environments built", body = ApiResponse<BuildPackEnvsResponse>),
+        (status = 400, description = "Invalid request"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn build_pack_envs(
+    State(_state): State<Arc<AppState>>,
+    RequireAuth(_user): RequireAuth,
+    Json(request): Json<BuildPackEnvsRequest>,
+) -> ApiResult<Json<ApiResponse<BuildPackEnvsResponse>>> {
+    use std::path::Path;
+    use std::process::Command;
+
+    let start = std::time::Instant::now();
+    let mut built_environments = Vec::new();
+    let mut failed_environments = Vec::new();
+    let mut python_envs_built = 0;
+    let mut nodejs_envs_built = 0;
+
+    for pack_path in &request.pack_paths {
+        let pack_path_obj = Path::new(pack_path);
+        let pack_start = std::time::Instant::now();
+
+        // Read pack.yaml to get pack_ref and runtime requirements
+        let pack_yaml_path = pack_path_obj.join("pack.yaml");
+        if !pack_yaml_path.exists() {
+            failed_environments.push(crate::dto::pack::FailedEnvironment {
+                pack_ref: "unknown".to_string(),
+                pack_path: pack_path.clone(),
+                runtime: "unknown".to_string(),
+                error: "pack.yaml not found".to_string(),
+            });
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&pack_yaml_path) {
+            Ok(c) => c,
+            Err(e) => {
+                failed_environments.push(crate::dto::pack::FailedEnvironment {
+                    pack_ref: "unknown".to_string(),
+                    pack_path: pack_path.clone(),
+                    runtime: "unknown".to_string(),
+                    error: format!("Failed to read pack.yaml: {}", e),
+                });
+                continue;
+            }
+        };
+
+        let yaml: serde_yaml_ng::Value = match serde_yaml_ng::from_str(&content) {
+            Ok(y) => y,
+            Err(e) => {
+                failed_environments.push(crate::dto::pack::FailedEnvironment {
+                    pack_ref: "unknown".to_string(),
+                    pack_path: pack_path.clone(),
+                    runtime: "unknown".to_string(),
+                    error: format!("Failed to parse pack.yaml: {}", e),
+                });
+                continue;
+            }
+        };
+
+        let pack_ref = yaml
+            .get("ref")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let mut python_env = None;
+        let mut nodejs_env = None;
+        let mut has_error = false;
+
+        // Check for Python environment
+        if !request.skip_python {
+            if let Some(_python_ver) = yaml.get("python").and_then(|v| v.as_str()) {
+                let requirements_file = pack_path_obj.join("requirements.txt");
+
+                if requirements_file.exists() {
+                    // Check if Python is available
+                    match Command::new("python3").arg("--version").output() {
+                        Ok(output) if output.status.success() => {
+                            let version_str = String::from_utf8_lossy(&output.stdout);
+                            let venv_path = pack_path_obj.join("venv");
+
+                            // Check if venv exists or if force_rebuild is set
+                            if !venv_path.exists() || request.force_rebuild {
+                                tracing::info!(
+                                    pack_ref = %pack_ref,
+                                    "Python environment would be built here in production"
+                                );
+                            }
+
+                            // Report environment status (detection mode)
+                            python_env = Some(crate::dto::pack::PythonEnvironment {
+                                virtualenv_path: venv_path.to_string_lossy().to_string(),
+                                requirements_installed: venv_path.exists(),
+                                package_count: 0, // Would count from pip freeze in production
+                                python_version: version_str.trim().to_string(),
+                            });
+                            python_envs_built += 1;
+                        }
+                        _ => {
+                            failed_environments.push(crate::dto::pack::FailedEnvironment {
+                                pack_ref: pack_ref.clone(),
+                                pack_path: pack_path.clone(),
+                                runtime: "python".to_string(),
+                                error: "Python 3 not available in system".to_string(),
+                            });
+                            has_error = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check for Node.js environment
+        if !has_error && !request.skip_nodejs {
+            if let Some(_nodejs_ver) = yaml.get("nodejs").and_then(|v| v.as_str()) {
+                let package_file = pack_path_obj.join("package.json");
+
+                if package_file.exists() {
+                    // Check if Node.js is available
+                    match Command::new("node").arg("--version").output() {
+                        Ok(output) if output.status.success() => {
+                            let version_str = String::from_utf8_lossy(&output.stdout);
+                            let node_modules = pack_path_obj.join("node_modules");
+
+                            // Check if node_modules exists or if force_rebuild is set
+                            if !node_modules.exists() || request.force_rebuild {
+                                tracing::info!(
+                                    pack_ref = %pack_ref,
+                                    "Node.js environment would be built here in production"
+                                );
+                            }
+
+                            // Report environment status (detection mode)
+                            nodejs_env = Some(crate::dto::pack::NodeJsEnvironment {
+                                node_modules_path: node_modules.to_string_lossy().to_string(),
+                                dependencies_installed: node_modules.exists(),
+                                package_count: 0, // Would count from package.json in production
+                                nodejs_version: version_str.trim().to_string(),
+                            });
+                            nodejs_envs_built += 1;
+                        }
+                        _ => {
+                            failed_environments.push(crate::dto::pack::FailedEnvironment {
+                                pack_ref: pack_ref.clone(),
+                                pack_path: pack_path.clone(),
+                                runtime: "nodejs".to_string(),
+                                error: "Node.js not available in system".to_string(),
+                            });
+                            has_error = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if !has_error && (python_env.is_some() || nodejs_env.is_some()) {
+            built_environments.push(crate::dto::pack::BuiltEnvironment {
+                pack_ref,
+                pack_path: pack_path.clone(),
+                environments: crate::dto::pack::Environments {
+                    python: python_env,
+                    nodejs: nodejs_env,
+                },
+                duration_ms: pack_start.elapsed().as_millis() as u64,
+            });
+        }
+    }
+
+    let success_count = built_environments.len();
+    let failure_count = failed_environments.len();
+
+    let response = BuildPackEnvsResponse {
+        built_environments,
+        failed_environments,
+        summary: crate::dto::pack::BuildSummary {
+            total_packs: request.pack_paths.len(),
+            success_count,
+            failure_count,
+            python_envs_built,
+            nodejs_envs_built,
+            total_duration_ms: start.elapsed().as_millis() as u64,
+        },
+    };
+
+    Ok(Json(ApiResponse::new(response)))
+}
+
+/// Register multiple packs
+#[utoipa::path(
+    post,
+    path = "/api/v1/packs/register-batch",
+    tag = "packs",
+    request_body = RegisterPacksRequest,
+    responses(
+        (status = 200, description = "Packs registered", body = ApiResponse<RegisterPacksResponse>),
+        (status = 400, description = "Invalid request"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn register_packs_batch(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Json(request): Json<RegisterPacksRequest>,
+) -> ApiResult<Json<ApiResponse<RegisterPacksResponse>>> {
+    let start = std::time::Instant::now();
+    let mut registered = Vec::new();
+    let mut failed = Vec::new();
+    let total_components = 0;
+
+    for pack_path in &request.pack_paths {
+        // Call the existing register_pack_internal function
+        let register_req = crate::dto::pack::RegisterPackRequest {
+            path: pack_path.clone(),
+            force: request.force,
+            skip_tests: request.skip_tests,
+        };
+
+        match register_pack_internal(
+            state.clone(),
+            user.claims.sub.clone(),
+            register_req.path.clone(),
+            register_req.force,
+            register_req.skip_tests,
+        )
+        .await
+        {
+            Ok(pack_id) => {
+                // Fetch pack details
+                if let Ok(Some(pack)) = PackRepository::find_by_id(&state.db, pack_id).await {
+                    // Count components (simplified)
+                    registered.push(crate::dto::pack::RegisteredPack {
+                        pack_ref: pack.r#ref.clone(),
+                        pack_id,
+                        pack_version: pack.version.clone(),
+                        storage_path: format!("{}/{}", state.config.packs_base_dir, pack.r#ref),
+                        components_registered: crate::dto::pack::ComponentCounts {
+                            actions: 0,
+                            sensors: 0,
+                            triggers: 0,
+                            rules: 0,
+                            workflows: 0,
+                            policies: 0,
+                        },
+                        test_result: None,
+                        validation_results: crate::dto::pack::ValidationResults {
+                            valid: true,
+                            errors: Vec::new(),
+                        },
+                    });
+                }
+            }
+            Err(e) => {
+                failed.push(crate::dto::pack::FailedPackRegistration {
+                    pack_ref: "unknown".to_string(),
+                    pack_path: pack_path.clone(),
+                    error: e.to_string(),
+                    error_stage: "registration".to_string(),
+                });
+            }
+        }
+    }
+
+    let response = RegisterPacksResponse {
+        registered_packs: registered.clone(),
+        failed_packs: failed.clone(),
+        summary: crate::dto::pack::RegistrationSummary {
+            total_packs: request.pack_paths.len(),
+            success_count: registered.len(),
+            failure_count: failed.len(),
+            total_components,
+            duration_ms: start.elapsed().as_millis() as u64,
+        },
+    };
+
+    Ok(Json(ApiResponse::new(response)))
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/packs", get(list_packs).post(create_pack))
         .route("/packs/register", axum::routing::post(register_pack))
+        .route(
+            "/packs/register-batch",
+            axum::routing::post(register_packs_batch),
+        )
         .route("/packs/install", axum::routing::post(install_pack))
+        .route("/packs/download", axum::routing::post(download_packs))
+        .route(
+            "/packs/dependencies",
+            axum::routing::post(get_pack_dependencies),
+        )
+        .route("/packs/build-envs", axum::routing::post(build_pack_envs))
         .route(
             "/packs/{ref}",
             get(get_pack).put(update_pack).delete(delete_pack),

@@ -83,6 +83,23 @@ docker compose logs -f <svc>  # View logs
 
 **Key environment overrides**: `JWT_SECRET`, `ENCRYPTION_KEY` (required for production)
 
+### Docker Build Optimization
+- **Optimized Dockerfiles**: `docker/Dockerfile.optimized` and `docker/Dockerfile.worker.optimized`
+- **Strategy**: Selective crate copying - only copy crates needed for each service (not entire workspace)
+- **Performance**: 90% faster incremental builds (~30 sec vs ~5 min for code changes)
+- **BuildKit cache mounts**: Persist cargo registry and compilation artifacts between builds
+  - **Cache strategy**: `sharing=shared` for registry/git (concurrent-safe), service-specific IDs for target caches
+  - **Parallel builds**: 4x faster than old `sharing=locked` strategy - no serialization overhead
+- **Documentation**: See `docs/docker-layer-optimization.md`, `docs/QUICKREF-docker-optimization.md`, `docs/QUICKREF-buildkit-cache-strategy.md`
+
+### Packs Volume Architecture
+- **Key Principle**: Packs are NOT copied into Docker images - they are mounted as volumes
+- **Volume Flow**: Host `./packs/` → `init-packs` service → `packs_data` volume → mounted in all services
+- **Benefits**: Update packs with restart (~5 sec) instead of rebuild (~5 min)
+- **Pack Binaries**: Built separately with `./scripts/build-pack-binaries.sh` (GLIBC compatibility)
+- **Development**: Use `./packs.dev/` for instant testing (direct bind mount, no restart needed)
+- **Documentation**: See `docs/QUICKREF-packs-volumes.md`
+
 ## Domain Model & Event Flow
 
 **Critical Event Flow**:
@@ -169,11 +186,23 @@ Enforcement created → Execution scheduled → Worker executes Action
 - **Workflow Tasks**: Stored as JSONB in `execution.workflow_task` (consolidated from separate table 2026-01-27)
 **Table Count**: 17 tables total in the schema
 
-### Pack File Loading
+### Pack File Loading & Action Execution
 - **Pack Base Directory**: Configured via `packs_base_dir` in config (defaults to `/opt/attune/packs`, development uses `./packs`)
+- **Pack Volume Strategy**: Packs are mounted as volumes (NOT copied into Docker images)
+  - Host `./packs/` → `packs_data` volume via `init-packs` service → mounted at `/opt/attune/packs` in all services
+  - Development packs in `./packs.dev/` are bind-mounted directly for instant updates
+- **Pack Binaries**: Native binaries (sensors) built separately with `./scripts/build-pack-binaries.sh`
 - **Action Script Resolution**: Worker constructs file paths as `{packs_base_dir}/{pack_ref}/actions/{entrypoint}`
 - **Runtime Selection**: Determined by action's runtime field (e.g., "Shell", "Python") - compared case-insensitively
-- **Parameter Passing**: Shell actions receive parameters as environment variables with `ATTUNE_ACTION_` prefix
+- **Parameter Delivery**: Actions receive parameters via stdin as JSON (never environment variables)
+- **Output Format**: Actions declare output format (text/json/yaml) - json/yaml are parsed into execution.result JSONB
+- **Standard Environment Variables**: Worker provides execution context via `ATTUNE_*` environment variables:
+  - `ATTUNE_ACTION` - Action ref (always present)
+  - `ATTUNE_EXEC_ID` - Execution database ID (always present)
+  - `ATTUNE_API_TOKEN` - Execution-scoped API token (always present)
+  - `ATTUNE_RULE` - Rule ref (if triggered by rule)
+  - `ATTUNE_TRIGGER` - Trigger ref (if triggered by event/trigger)
+- **Custom Environment Variables**: Optional, set via `execution.env_vars` JSONB field (for debug flags, runtime config only)
 
 ### API Service (`crates/api`)
 - **Structure**: `routes/` (endpoints) + `dto/` (request/response) + `auth/` + `middleware/`
@@ -314,6 +343,10 @@ When reporting, ask: "Should I fix this first or continue with [original task]?"
 - `config.development.yaml` - Dev configuration
 - `Cargo.toml` - Workspace dependencies
 - `Makefile` - Development commands
+- `docker/Dockerfile.optimized` - Optimized service builds
+- `docker/Dockerfile.worker.optimized` - Optimized worker builds
+- `docker/Dockerfile.pack-binaries` - Separate pack binary builder
+- `scripts/build-pack-binaries.sh` - Build pack binaries script
 
 ## Common Pitfalls to Avoid
 1. **NEVER** bypass repositories - always use the repository layer for DB access
@@ -321,13 +354,17 @@ When reporting, ask: "Should I fix this first or continue with [original task]?"
 3. **NEVER** hardcode service URLs - use configuration
 4. **NEVER** commit secrets in config files (use env vars in production)
 5. **NEVER** hardcode schema prefixes in SQL queries - rely on PostgreSQL `search_path` mechanism
-6. **ALWAYS** use PostgreSQL enum type mappings for custom enums
-7. **ALWAYS** use transactions for multi-table operations
-8. **ALWAYS** start with `attune/` or correct crate name when specifying file paths
-9. **ALWAYS** convert runtime names to lowercase for comparison (database may store capitalized)
-10. **REMEMBER** IDs are `i64`, not `i32` or `uuid`
-11. **REMEMBER** schema is determined by `search_path`, not hardcoded in queries (production uses `attune`, development uses `public`)
-12. **REMEMBER** to regenerate SQLx metadata after schema-related changes: `cargo sqlx prepare`
+6. **NEVER** copy packs into Dockerfiles - they are mounted as volumes
+7. **ALWAYS** use PostgreSQL enum type mappings for custom enums
+8. **ALWAYS** use transactions for multi-table operations
+9. **ALWAYS** start with `attune/` or correct crate name when specifying file paths
+10. **ALWAYS** convert runtime names to lowercase for comparison (database may store capitalized)
+11. **ALWAYS** use optimized Dockerfiles for new services (selective crate copying)
+12. **REMEMBER** IDs are `i64`, not `i32` or `uuid`
+13. **REMEMBER** schema is determined by `search_path`, not hardcoded in queries (production uses `attune`, development uses `public`)
+14. **REMEMBER** to regenerate SQLx metadata after schema-related changes: `cargo sqlx prepare`
+15. **REMEMBER** packs are volumes - update with restart, not rebuild
+16. **REMEMBER** to build pack binaries separately: `./scripts/build-pack-binaries.sh`
 
 ## Deployment
 - **Target**: Distributed deployment with separate service instances
@@ -365,6 +402,8 @@ When reporting, ask: "Should I fix this first or continue with [original task]?"
 - Configuration: `attune/docs/configuration.md`
 - Architecture: `attune/docs/*-architecture.md`, `attune/docs/*-service.md`
 - Testing: `attune/docs/testing-*.md`, `attune/docs/running-tests.md`, `attune/docs/schema-per-test.md`
+- Docker optimization: `attune/docs/docker-layer-optimization.md`, `attune/docs/QUICKREF-docker-optimization.md`, `attune/docs/QUICKREF-buildkit-cache-strategy.md`
+- Packs architecture: `attune/docs/QUICKREF-packs-volumes.md`, `attune/docs/DOCKER-OPTIMIZATION-SUMMARY.md`
 - AI Agent Work Summaries: `attune/work-summary/*.md`
 - Deployment: `attune/docs/production-deployment.md`
 - DO NOT create additional documentation files in the root of the project. all new documentation describing how to use the system should be placed in the `attune/docs` directory, and documentation describing the work performed should be placed in the `attune/work-summary` directory.

@@ -18,11 +18,13 @@ use attune_common::{
         FindById, FindByRef, Update,
     },
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use std::time::Duration;
+use tracing::{debug, error, info, warn};
 
 /// Payload for execution scheduled messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +41,13 @@ pub struct ExecutionScheduler {
     publisher: Arc<Publisher>,
     consumer: Arc<Consumer>,
 }
+
+/// Default heartbeat interval in seconds (should match worker config default)
+const DEFAULT_HEARTBEAT_INTERVAL: u64 = 30;
+
+/// Maximum age multiplier for heartbeat staleness check
+/// Workers are considered stale if heartbeat is older than HEARTBEAT_INTERVAL * HEARTBEAT_STALENESS_MULTIPLIER
+const HEARTBEAT_STALENESS_MULTIPLIER: u64 = 3;
 
 impl ExecutionScheduler {
     /// Create a new execution scheduler
@@ -196,6 +205,20 @@ impl ExecutionScheduler {
             return Err(anyhow::anyhow!("No active workers available"));
         }
 
+        // Filter by heartbeat freshness (only workers with recent heartbeats)
+        let fresh_workers: Vec<_> = active_workers
+            .into_iter()
+            .filter(|w| Self::is_worker_heartbeat_fresh(w))
+            .collect();
+
+        if fresh_workers.is_empty() {
+            warn!("No workers with fresh heartbeats available. All active workers have stale heartbeats.");
+            return Err(anyhow::anyhow!(
+                "No workers with fresh heartbeats available (heartbeat older than {} seconds)",
+                DEFAULT_HEARTBEAT_INTERVAL * HEARTBEAT_STALENESS_MULTIPLIER
+            ));
+        }
+
         // TODO: Implement intelligent worker selection:
         // - Consider worker load/capacity
         // - Consider worker affinity (same pack, same runtime)
@@ -203,7 +226,7 @@ impl ExecutionScheduler {
         // - Round-robin or least-connections strategy
 
         // For now, just select the first available worker
-        Ok(active_workers
+        Ok(fresh_workers
             .into_iter()
             .next()
             .expect("Worker list should not be empty"))
@@ -253,6 +276,43 @@ impl ExecutionScheduler {
         false
     }
 
+    /// Check if a worker's heartbeat is fresh enough to schedule work
+    ///
+    /// A worker is considered fresh if its last heartbeat is within
+    /// HEARTBEAT_STALENESS_MULTIPLIER * HEARTBEAT_INTERVAL seconds.
+    fn is_worker_heartbeat_fresh(worker: &attune_common::models::Worker) -> bool {
+        let Some(last_heartbeat) = worker.last_heartbeat else {
+            warn!(
+                "Worker {} has no heartbeat recorded, considering stale",
+                worker.name
+            );
+            return false;
+        };
+
+        let now = Utc::now();
+        let age = now.signed_duration_since(last_heartbeat);
+        let max_age = Duration::from_secs(DEFAULT_HEARTBEAT_INTERVAL * HEARTBEAT_STALENESS_MULTIPLIER);
+
+        let is_fresh = age.to_std().unwrap_or(Duration::MAX) <= max_age;
+
+        if !is_fresh {
+            warn!(
+                "Worker {} heartbeat is stale: last seen {} seconds ago (max: {} seconds)",
+                worker.name,
+                age.num_seconds(),
+                max_age.as_secs()
+            );
+        } else {
+            debug!(
+                "Worker {} heartbeat is fresh: last seen {} seconds ago",
+                worker.name,
+                age.num_seconds()
+            );
+        }
+
+        is_fresh
+    }
+
     /// Queue execution to a specific worker
     async fn queue_to_worker(
         publisher: &Publisher,
@@ -294,6 +354,86 @@ impl ExecutionScheduler {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use attune_common::models::{Worker, WorkerRole, WorkerStatus, WorkerType};
+    use chrono::{Duration as ChronoDuration, Utc};
+
+    fn create_test_worker(name: &str, heartbeat_offset_secs: i64) -> Worker {
+        let last_heartbeat = if heartbeat_offset_secs == 0 {
+            None
+        } else {
+            Some(Utc::now() - ChronoDuration::seconds(heartbeat_offset_secs))
+        };
+
+        Worker {
+            id: 1,
+            name: name.to_string(),
+            worker_type: WorkerType::Local,
+            worker_role: WorkerRole::Action,
+            runtime: None,
+            host: Some("localhost".to_string()),
+            port: Some(8080),
+            status: Some(WorkerStatus::Active),
+            capabilities: Some(serde_json::json!({
+                "runtimes": ["shell", "python"]
+            })),
+            meta: None,
+            last_heartbeat,
+            created: Utc::now(),
+            updated: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn test_heartbeat_freshness_with_recent_heartbeat() {
+        // Worker with heartbeat 30 seconds ago (within limit)
+        let worker = create_test_worker("test-worker", 30);
+        assert!(
+            ExecutionScheduler::is_worker_heartbeat_fresh(&worker),
+            "Worker with 30s old heartbeat should be considered fresh"
+        );
+    }
+
+    #[test]
+    fn test_heartbeat_freshness_with_stale_heartbeat() {
+        // Worker with heartbeat 100 seconds ago (beyond 3x30s = 90s limit)
+        let worker = create_test_worker("test-worker", 100);
+        assert!(
+            !ExecutionScheduler::is_worker_heartbeat_fresh(&worker),
+            "Worker with 100s old heartbeat should be considered stale"
+        );
+    }
+
+    #[test]
+    fn test_heartbeat_freshness_at_boundary() {
+        // Worker with heartbeat exactly at the 90 second boundary
+        let worker = create_test_worker("test-worker", 90);
+        assert!(
+            !ExecutionScheduler::is_worker_heartbeat_fresh(&worker),
+            "Worker with 90s old heartbeat should be considered stale (at boundary)"
+        );
+    }
+
+    #[test]
+    fn test_heartbeat_freshness_with_no_heartbeat() {
+        // Worker with no heartbeat recorded
+        let worker = create_test_worker("test-worker", 0);
+        assert!(
+            !ExecutionScheduler::is_worker_heartbeat_fresh(&worker),
+            "Worker with no heartbeat should be considered stale"
+        );
+    }
+
+    #[test]
+    fn test_heartbeat_freshness_with_very_recent() {
+        // Worker with heartbeat 5 seconds ago
+        let worker = create_test_worker("test-worker", 5);
+        assert!(
+            ExecutionScheduler::is_worker_heartbeat_fresh(&worker),
+            "Worker with 5s old heartbeat should be considered fresh"
+        );
+    }
+
     #[test]
     fn test_scheduler_creation() {
         // This is a placeholder test

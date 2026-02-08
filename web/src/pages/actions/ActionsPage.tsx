@@ -588,9 +588,15 @@ function ExecuteActionModal({
 
   const [parameters, setParameters] = useState<Record<string, any>>({});
   const [paramErrors, setParamErrors] = useState<Record<string, string>>({});
+  const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>(
+    [{ key: "", value: "" }],
+  );
 
   const executeAction = useMutation({
-    mutationFn: async (params: Record<string, any>) => {
+    mutationFn: async (params: {
+      parameters: Record<string, any>;
+      envVars: Array<{ key: string; value: string }>;
+    }) => {
       // Get the token by calling the TOKEN function
       const token =
         typeof OpenAPI.TOKEN === "function"
@@ -607,7 +613,16 @@ function ExecuteActionModal({
           },
           body: JSON.stringify({
             action_ref: action.ref,
-            parameters: params,
+            parameters: params.parameters,
+            env_vars: params.envVars
+              .filter((ev) => ev.key.trim() !== "")
+              .reduce(
+                (acc, ev) => {
+                  acc[ev.key] = ev.value;
+                  return acc;
+                },
+                {} as Record<string, string>,
+              ),
           }),
         },
       );
@@ -641,10 +656,30 @@ function ExecuteActionModal({
     }
 
     try {
-      await executeAction.mutateAsync(parameters);
+      await executeAction.mutateAsync({ parameters, envVars });
     } catch (err) {
       console.error("Failed to execute action:", err);
     }
+  };
+
+  const addEnvVar = () => {
+    setEnvVars([...envVars, { key: "", value: "" }]);
+  };
+
+  const removeEnvVar = (index: number) => {
+    if (envVars.length > 1) {
+      setEnvVars(envVars.filter((_, i) => i !== index));
+    }
+  };
+
+  const updateEnvVar = (
+    index: number,
+    field: "key" | "value",
+    value: string,
+  ) => {
+    const updated = [...envVars];
+    updated[index][field] = value;
+    setEnvVars(updated);
   };
 
   return (
@@ -677,12 +712,61 @@ function ExecuteActionModal({
         )}
 
         <div className="mb-6">
+          <h4 className="text-sm font-semibold text-gray-700 mb-2">
+            Parameters
+          </h4>
           <ParamSchemaForm
             schema={paramSchema}
             values={parameters}
             onChange={setParameters}
             errors={paramErrors}
           />
+        </div>
+
+        <div className="mb-6">
+          <h4 className="text-sm font-semibold text-gray-700 mb-2">
+            Environment Variables
+          </h4>
+          <p className="text-xs text-gray-500 mb-3">
+            Optional environment variables for this execution (e.g., DEBUG,
+            LOG_LEVEL)
+          </p>
+          <div className="space-y-2">
+            {envVars.map((envVar, index) => (
+              <div key={index} className="flex gap-2 items-start">
+                <input
+                  type="text"
+                  placeholder="Key"
+                  value={envVar.key}
+                  onChange={(e) => updateEnvVar(index, "key", e.target.value)}
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <input
+                  type="text"
+                  placeholder="Value"
+                  value={envVar.value}
+                  onChange={(e) => updateEnvVar(index, "value", e.target.value)}
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeEnvVar(index)}
+                  disabled={envVars.length === 1}
+                  className="px-3 py-2 text-red-600 hover:text-red-700 disabled:text-gray-300 disabled:cursor-not-allowed"
+                  title="Remove"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={addEnvVar}
+            className="mt-2 text-sm text-blue-600 hover:text-blue-700"
+          >
+            + Add Environment Variable
+          </button>
         </div>
 
         <div className="flex justify-end gap-3">

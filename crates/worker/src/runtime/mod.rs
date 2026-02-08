@@ -7,6 +7,7 @@ pub mod dependency;
 pub mod local;
 pub mod log_writer;
 pub mod native;
+pub mod parameter_passing;
 pub mod python;
 pub mod python_venv;
 pub mod shell;
@@ -18,6 +19,7 @@ pub use python::PythonRuntime;
 pub use shell::ShellRuntime;
 
 use async_trait::async_trait;
+use attune_common::models::{ParameterDelivery, ParameterFormat};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -29,6 +31,7 @@ pub use dependency::{
     DependencySpec, EnvironmentInfo,
 };
 pub use log_writer::{BoundedLogResult, BoundedLogWriter};
+pub use parameter_passing::{ParameterDeliveryConfig, PreparedParameters};
 pub use python_venv::PythonVenvManager;
 
 /// Runtime execution result
@@ -108,6 +111,14 @@ pub struct ExecutionContext {
     /// Maximum stderr size in bytes (for log truncation)
     #[serde(default = "default_max_log_bytes")]
     pub max_stderr_bytes: usize,
+
+    /// How parameters should be delivered to the action
+    #[serde(default)]
+    pub parameter_delivery: ParameterDelivery,
+
+    /// Format for parameter serialization
+    #[serde(default)]
+    pub parameter_format: ParameterFormat,
 }
 
 fn default_max_log_bytes() -> usize {
@@ -133,6 +144,8 @@ impl ExecutionContext {
             runtime_name: None,
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: ParameterDelivery::default(),
+            parameter_format: ParameterFormat::default(),
         }
     }
 }
