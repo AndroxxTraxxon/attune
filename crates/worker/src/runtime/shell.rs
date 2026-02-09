@@ -4,7 +4,8 @@
 
 use super::{
     parameter_passing::{self, ParameterDeliveryConfig},
-    BoundedLogWriter, ExecutionContext, ExecutionResult, Runtime, RuntimeError, RuntimeResult,
+    BoundedLogWriter, ExecutionContext, ExecutionResult, OutputFormat, Runtime, RuntimeError,
+    RuntimeResult,
 };
 use async_trait::async_trait;
 use std::path::PathBuf;
@@ -58,6 +59,7 @@ impl ShellRuntime {
         timeout_secs: Option<u64>,
         max_stdout_bytes: usize,
         max_stderr_bytes: usize,
+        output_format: OutputFormat,
     ) -> RuntimeResult<ExecutionResult> {
         let start = Instant::now();
 
@@ -198,14 +200,41 @@ impl ShellRuntime {
             exit_code, duration_ms, stdout_result.truncated, stderr_result.truncated
         );
 
-        // Try to parse result from stdout as JSON
+        // Parse result from stdout based on output_format
         let result = if exit_code == 0 && !stdout_result.content.trim().is_empty() {
-            stdout_result
-                .content
-                .trim()
-                .lines()
-                .last()
-                .and_then(|line| serde_json::from_str(line).ok())
+            match output_format {
+                OutputFormat::Text => {
+                    // No parsing - text output is captured in stdout field
+                    None
+                }
+                OutputFormat::Json => {
+                    // Try to parse last line of stdout as JSON
+                    stdout_result
+                        .content
+                        .trim()
+                        .lines()
+                        .last()
+                        .and_then(|line| serde_json::from_str(line).ok())
+                }
+                OutputFormat::Yaml => {
+                    // Try to parse stdout as YAML
+                    serde_yaml_ng::from_str(stdout_result.content.trim()).ok()
+                }
+                OutputFormat::Jsonl => {
+                    // Parse each line as JSON and collect into array
+                    let mut items = Vec::new();
+                    for line in stdout_result.content.trim().lines() {
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+                            items.push(value);
+                        }
+                    }
+                    if items.is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::Value::Array(items))
+                    }
+                }
+            }
         } else {
             None
         };
@@ -338,6 +367,7 @@ impl ShellRuntime {
         timeout_secs: Option<u64>,
         max_stdout_bytes: usize,
         max_stderr_bytes: usize,
+        output_format: OutputFormat,
     ) -> RuntimeResult<ExecutionResult> {
         debug!(
             "Executing shell script with {} secrets (passed via stdin)",
@@ -360,6 +390,7 @@ impl ShellRuntime {
             timeout_secs,
             max_stdout_bytes,
             max_stderr_bytes,
+            output_format,
         )
         .await
     }
@@ -374,6 +405,7 @@ impl ShellRuntime {
         timeout_secs: Option<u64>,
         max_stdout_bytes: usize,
         max_stderr_bytes: usize,
+        output_format: OutputFormat,
     ) -> RuntimeResult<ExecutionResult> {
         debug!(
             "Executing shell file: {:?} with {} secrets",
@@ -397,6 +429,7 @@ impl ShellRuntime {
             timeout_secs,
             max_stdout_bytes,
             max_stderr_bytes,
+            output_format,
         )
         .await
     }
@@ -448,11 +481,8 @@ impl Runtime for ShellRuntime {
             format: context.parameter_format,
         };
 
-        let prepared_params = parameter_passing::prepare_parameters(
-            &context.parameters,
-            &mut env,
-            config,
-        )?;
+        let prepared_params =
+            parameter_passing::prepare_parameters(&context.parameters, &mut env, config)?;
 
         // Get stdin content if parameters are delivered via stdin
         let parameters_stdin = prepared_params.stdin_content();
@@ -478,6 +508,7 @@ impl Runtime for ShellRuntime {
                     context.timeout,
                     context.max_stdout_bytes,
                     context.max_stderr_bytes,
+                    context.output_format,
                 )
                 .await;
         }
@@ -492,6 +523,7 @@ impl Runtime for ShellRuntime {
             context.timeout,
             context.max_stdout_bytes,
             context.max_stderr_bytes,
+            context.output_format,
         )
         .await
     }
@@ -577,6 +609,7 @@ mod tests {
             max_stderr_bytes: 10 * 1024 * 1024,
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
+            output_format: attune_common::models::OutputFormat::default(),
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -609,6 +642,7 @@ mod tests {
             max_stderr_bytes: 10 * 1024 * 1024,
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
+            output_format: attune_common::models::OutputFormat::default(),
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -636,6 +670,7 @@ mod tests {
             max_stderr_bytes: 10 * 1024 * 1024,
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
+            output_format: attune_common::models::OutputFormat::default(),
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -665,6 +700,7 @@ mod tests {
             max_stderr_bytes: 10 * 1024 * 1024,
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
+            output_format: attune_common::models::OutputFormat::default(),
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -709,6 +745,7 @@ echo "missing=$missing"
             max_stderr_bytes: 10 * 1024 * 1024,
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
+            output_format: attune_common::models::OutputFormat::default(),
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -719,5 +756,59 @@ echo "missing=$missing"
         assert!(result.stdout.contains("api_key=secret_key_12345"));
         assert!(result.stdout.contains("db_pass=super_secret_pass"));
         assert!(result.stdout.contains("missing="));
+    }
+
+    #[tokio::test]
+    async fn test_shell_runtime_jsonl_output() {
+        let runtime = ShellRuntime::new();
+
+        let context = ExecutionContext {
+            execution_id: 6,
+            action_ref: "test.jsonl".to_string(),
+            parameters: HashMap::new(),
+            env: HashMap::new(),
+            secrets: HashMap::new(),
+            timeout: Some(10),
+            working_dir: None,
+            entry_point: "shell".to_string(),
+            code: Some(
+                r#"
+echo '{"id": 1, "name": "Alice"}'
+echo '{"id": 2, "name": "Bob"}'
+echo '{"id": 3, "name": "Charlie"}'
+"#
+                .to_string(),
+            ),
+            code_path: None,
+            runtime_name: Some("shell".to_string()),
+            max_stdout_bytes: 10 * 1024 * 1024,
+            max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: attune_common::models::ParameterDelivery::default(),
+            parameter_format: attune_common::models::ParameterFormat::default(),
+            output_format: attune_common::models::OutputFormat::Jsonl,
+        };
+
+        let result = runtime.execute(context).await.unwrap();
+        assert!(result.is_success());
+        assert_eq!(result.exit_code, 0);
+
+        // Verify result is parsed as an array of JSON objects
+        let parsed_result = result.result.expect("Should have parsed result");
+        assert!(parsed_result.is_array());
+
+        let items = parsed_result.as_array().unwrap();
+        assert_eq!(items.len(), 3);
+
+        // Verify first item
+        assert_eq!(items[0]["id"], 1);
+        assert_eq!(items[0]["name"], "Alice");
+
+        // Verify second item
+        assert_eq!(items[1]["id"], 2);
+        assert_eq!(items[1]["name"], "Bob");
+
+        // Verify third item
+        assert_eq!(items[2]["id"], 3);
+        assert_eq!(items[2]["name"], "Charlie");
     }
 }

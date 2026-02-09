@@ -96,7 +96,10 @@ pub mod enums {
             &self,
             buf: &mut sqlx::postgres::PgArgumentBuffer,
         ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-            Ok(<String as sqlx::Encode<sqlx::Postgres>>::encode(self.to_string(), buf)?)
+            Ok(<String as sqlx::Encode<sqlx::Postgres>>::encode(
+                self.to_string(),
+                buf,
+            )?)
         }
     }
 
@@ -159,7 +162,80 @@ pub mod enums {
             &self,
             buf: &mut sqlx::postgres::PgArgumentBuffer,
         ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-            Ok(<String as sqlx::Encode<sqlx::Postgres>>::encode(self.to_string(), buf)?)
+            Ok(<String as sqlx::Encode<sqlx::Postgres>>::encode(
+                self.to_string(),
+                buf,
+            )?)
+        }
+    }
+
+    /// Format for action output parsing
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+    #[serde(rename_all = "lowercase")]
+    pub enum OutputFormat {
+        /// Plain text (no parsing)
+        Text,
+        /// Parse as JSON
+        Json,
+        /// Parse as YAML
+        Yaml,
+        /// Parse as JSON Lines (each line is a separate JSON object/value)
+        Jsonl,
+    }
+
+    impl Default for OutputFormat {
+        fn default() -> Self {
+            Self::Text
+        }
+    }
+
+    impl fmt::Display for OutputFormat {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Text => write!(f, "text"),
+                Self::Json => write!(f, "json"),
+                Self::Yaml => write!(f, "yaml"),
+                Self::Jsonl => write!(f, "jsonl"),
+            }
+        }
+    }
+
+    impl FromStr for OutputFormat {
+        type Err = String;
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            match s.to_lowercase().as_str() {
+                "text" => Ok(Self::Text),
+                "json" => Ok(Self::Json),
+                "yaml" => Ok(Self::Yaml),
+                "jsonl" => Ok(Self::Jsonl),
+                _ => Err(format!("Invalid output format: {}", s)),
+            }
+        }
+    }
+
+    impl sqlx::Type<sqlx::Postgres> for OutputFormat {
+        fn type_info() -> sqlx::postgres::PgTypeInfo {
+            <String as sqlx::Type<sqlx::Postgres>>::type_info()
+        }
+    }
+
+    impl<'r> sqlx::Decode<'r, sqlx::Postgres> for OutputFormat {
+        fn decode(value: sqlx::postgres::PgValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+            let s = <String as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
+            s.parse().map_err(|e: String| e.into())
+        }
+    }
+
+    impl<'q> sqlx::Encode<'q, sqlx::Postgres> for OutputFormat {
+        fn encode_by_ref(
+            &self,
+            buf: &mut sqlx::postgres::PgArgumentBuffer,
+        ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+            Ok(<String as sqlx::Encode<sqlx::Postgres>>::encode(
+                self.to_string(),
+                buf,
+            )?)
         }
     }
 
@@ -438,6 +514,8 @@ pub mod action {
         pub parameter_delivery: ParameterDelivery,
         #[sqlx(default)]
         pub parameter_format: ParameterFormat,
+        #[sqlx(default)]
+        pub output_format: OutputFormat,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
     }
@@ -644,7 +722,7 @@ pub mod execution {
         /// Provides direct access to workflow orchestration state without JOINs.
         /// The `workflow_execution` field within this metadata is separate from
         /// the `parent` field above, as they serve different query patterns.
-        #[sqlx(json)]
+        #[sqlx(json, default)]
         pub workflow_task: Option<WorkflowTaskMetadata>,
 
         pub created: DateTime<Utc>,

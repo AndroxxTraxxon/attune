@@ -59,6 +59,8 @@ def run():
         runtime_name: Some("python".to_string()),
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
+        parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
+        parameter_format: attune_worker::runtime::ParameterFormat::default(),
     };
 
     let result = runtime.execute(context).await.unwrap();
@@ -155,6 +157,8 @@ echo "SECURITY_PASS: Secrets not in environment but accessible via get_secret"
         runtime_name: Some("shell".to_string()),
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
+        parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
+        parameter_format: attune_worker::runtime::ParameterFormat::default(),
     };
 
     let result = runtime.execute(context).await.unwrap();
@@ -203,6 +207,8 @@ def run():
         runtime_name: Some("python".to_string()),
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
+        parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
+        parameter_format: attune_worker::runtime::ParameterFormat::default(),
     };
 
     let result1 = runtime.execute(context1).await.unwrap();
@@ -239,6 +245,8 @@ def run():
         runtime_name: Some("python".to_string()),
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
+        parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
+        parameter_format: attune_worker::runtime::ParameterFormat::default(),
     };
 
     let result2 = runtime.execute(context2).await.unwrap();
@@ -286,6 +294,8 @@ def run():
         runtime_name: Some("python".to_string()),
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
+        parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
+        parameter_format: attune_worker::runtime::ParameterFormat::default(),
     };
 
     let result = runtime.execute(context).await.unwrap();
@@ -329,6 +339,8 @@ fi
         runtime_name: Some("shell".to_string()),
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
+        parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
+        parameter_format: attune_worker::runtime::ParameterFormat::default(),
     };
 
     let result = runtime.execute(context).await.unwrap();
@@ -380,6 +392,8 @@ def run():
         runtime_name: Some("python".to_string()),
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
+        parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
+        parameter_format: attune_worker::runtime::ParameterFormat::default(),
     };
 
     let result = runtime.execute(context).await.unwrap();

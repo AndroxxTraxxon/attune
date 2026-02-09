@@ -1,8 +1,8 @@
 # Cron Timer Trigger
 # Fires based on cron schedule expressions
 
-name: crontimer
 ref: core.crontimer
+label: "Cron Timer"
 description: "Fires based on a cron schedule expression (e.g., '0 0 * * * *' for every hour)"
 enabled: true
 

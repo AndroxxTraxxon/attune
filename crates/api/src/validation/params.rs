@@ -217,6 +217,8 @@ mod tests {
             is_workflow: false,
             workflow_def: None,
             is_adhoc: false,
+            parameter_delivery: attune_common::models::ParameterDelivery::default(),
+            parameter_format: attune_common::models::ParameterFormat::default(),
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
         };
@@ -249,6 +251,8 @@ mod tests {
             is_workflow: false,
             workflow_def: None,
             is_adhoc: false,
+            parameter_delivery: attune_common::models::ParameterDelivery::default(),
+            parameter_format: attune_common::models::ParameterFormat::default(),
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
         };

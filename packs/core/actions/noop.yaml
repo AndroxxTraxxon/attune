@@ -1,8 +1,8 @@
 # No Operation Action
 # Does nothing - useful for testing and placeholder workflows
 
-name: noop
 ref: core.noop
+label: "No-Op"
 description: "Does nothing - useful for testing and placeholder workflows"
 enabled: true
 
@@ -32,7 +32,6 @@ parameters:
       default: 0
       minimum: 0
       maximum: 255
-  required: []
 
 # Output schema: not applicable for text output format
 # The action outputs plain text to stdout

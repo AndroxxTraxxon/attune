@@ -1,8 +1,8 @@
 # Datetime Timer Trigger
 # Fires once at a specific date and time
 
-name: datetimetimer
 ref: core.datetimetimer
+label: "DateTime Timer"
 description: "Fires once at a specific date and time"
 enabled: true
 

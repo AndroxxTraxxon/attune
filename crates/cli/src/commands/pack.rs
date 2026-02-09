@@ -663,7 +663,7 @@ async fn handle_test(
     detailed: bool,
     output_format: OutputFormat,
 ) -> Result<()> {
-    use attune_worker::{TestConfig, TestExecutor};
+    use attune_common::test_executor::{TestConfig, TestExecutor};
     use std::path::{Path, PathBuf};
 
     // Determine if pack is a path or a pack name

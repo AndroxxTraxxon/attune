@@ -1,8 +1,8 @@
 # Download Packs Action
 # Downloads packs from various sources (git repositories, HTTP archives, or pack registry)
 
-name: download_packs
 ref: core.download_packs
+label: "Download Packs"
 description: "Download packs from git repositories, HTTP archives, or pack registry to a temporary directory"
 enabled: true
 runner_type: shell

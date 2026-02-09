@@ -210,7 +210,7 @@ Current migrations (15 total):
 20250101000002_pack_system.sql
 20250101000003_identity_and_auth.sql
 20250101000004_trigger_sensor_event_rule.sql
-20250101000005_action.sql                    ← UPDATED (added parameter columns)
+20250101000005_action.sql                    ← UPDATED (added parameter columns and output_format)
 20250101000006_execution_system.sql          ← UPDATED (added env_vars column)
 20250101000007_workflow_system.sql
 20250101000008_worker_notification.sql
@@ -220,17 +220,16 @@ Current migrations (15 total):
 20250101000012_pack_testing.sql
 20250101000013_notify_triggers.sql
 20250101000014_worker_table.sql
-20250101000015_placeholder.sql (empty)
 ```
 
 ## Validation Checklist
 
 After Docker rebuild, verify:
 
-- [ ] All 15 migrations apply successfully
+- [ ] All 14 migrations apply successfully
 - [ ] No migration errors in logs
 - [ ] `execution` table has `env_vars` column
-- [ ] `action` table has `parameter_delivery` and `parameter_format` columns
+- [ ] `action` table has `parameter_delivery`, `parameter_format`, and `output_format` columns
 - [ ] All indexes created correctly
 - [ ] API can query executions
 - [ ] Executor can create and update executions

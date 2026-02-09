@@ -1,8 +1,8 @@
 # HTTP Request Action
 # Make HTTP requests to external APIs
 
-name: http_request
 ref: core.http_request
+label: "HTTP Request"
 description: "Make HTTP requests to external APIs with support for various methods, headers, and authentication"
 enabled: true
 
@@ -13,9 +13,9 @@ runner_type: shell
 entry_point: http_request.sh
 
 # Parameter delivery configuration (for security)
-# Use stdin + JSON for secure parameter passing (credentials won't appear in process list)
+# Use stdin + DOTENV for secure parameter passing (credentials won't appear in process list)
 parameter_delivery: stdin
-parameter_format: json
+parameter_format: dotenv
 
 # Output format: json (structured data parsing enabled)
 output_format: json

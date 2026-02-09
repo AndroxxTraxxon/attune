@@ -106,10 +106,7 @@ impl ActionExecutor {
         let is_success = result.is_success();
         debug!(
             "Execution {} result: exit_code={}, error={:?}, is_success={}",
-            execution_id,
-            result.exit_code,
-            result.error,
-            is_success
+            execution_id, result.exit_code, result.error, is_success
         );
 
         if is_success {
@@ -232,7 +229,11 @@ impl ActionExecutor {
             info!("No execution config present");
         }
 
-        info!("Extracted {} parameters: {:?}", parameters.len(), parameters);
+        info!(
+            "Extracted {} parameters: {:?}",
+            parameters.len(),
+            parameters
+        );
 
         // Prepare standard environment variables
         let mut env = HashMap::new();
@@ -383,6 +384,7 @@ impl ActionExecutor {
             max_stderr_bytes: self.max_stderr_bytes,
             parameter_delivery: action.parameter_delivery,
             parameter_format: action.parameter_format,
+            output_format: action.output_format,
         };
 
         Ok(context)
@@ -538,7 +540,8 @@ impl ActionExecutor {
             if stderr_path.exists() {
                 if let Ok(contents) = tokio::fs::read_to_string(&stderr_path).await {
                     if !contents.trim().is_empty() {
-                        result_data["stderr_log"] = serde_json::json!(stderr_path.to_string_lossy());
+                        result_data["stderr_log"] =
+                            serde_json::json!(stderr_path.to_string_lossy());
                     }
                 }
             }

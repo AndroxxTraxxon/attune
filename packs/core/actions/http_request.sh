@@ -1,209 +1,259 @@
-#!/bin/bash
+#!/bin/sh
 # HTTP Request Action - Core Pack
 # Make HTTP requests to external APIs using curl
+#
+# This script uses pure POSIX shell without external dependencies like jq.
+# It reads parameters in DOTENV format from stdin until the delimiter.
 
 set -e
-set -o pipefail
 
-# Read JSON parameters from stdin
-INPUT=$(cat)
+# Initialize variables
+url=""
+method="GET"
+body=""
+json_body=""
+timeout="30"
+verify_ssl="true"
+auth_type="none"
+auth_username=""
+auth_password=""
+auth_token=""
+follow_redirects="true"
+max_redirects="10"
 
-# Parse required parameters
-URL=$(echo "$INPUT" | jq -r '.url // ""')
+# Temporary files
+headers_file=$(mktemp)
+query_params_file=$(mktemp)
+body_file=""
+temp_headers=$(mktemp)
+curl_output=$(mktemp)
 
-if [ -z "$URL" ] || [ "$URL" = "null" ]; then
-    echo "ERROR: 'url' parameter is required" >&2
+cleanup() {
+    rm -f "$headers_file" "$query_params_file" "$temp_headers" "$curl_output"
+    [ -n "$body_file" ] && [ -f "$body_file" ] && rm -f "$body_file"
+}
+trap cleanup EXIT
+
+# Read DOTENV-formatted parameters
+while IFS= read -r line; do
+    case "$line" in
+        *"---ATTUNE_PARAMS_END---"*) break ;;
+    esac
+    [ -z "$line" ] && continue
+
+    key="${line%%=*}"
+    value="${line#*=}"
+
+    # Remove quotes
+    case "$value" in
+        \"*\") value="${value#\"}"; value="${value%\"}" ;;
+        \'*\') value="${value#\'}"; value="${value%\'}" ;;
+    esac
+
+    # Process parameters
+    case "$key" in
+        url) url="$value" ;;
+        method) method="$value" ;;
+        body) body="$value" ;;
+        json_body) json_body="$value" ;;
+        timeout) timeout="$value" ;;
+        verify_ssl) verify_ssl="$value" ;;
+        auth_type) auth_type="$value" ;;
+        auth_username) auth_username="$value" ;;
+        auth_password) auth_password="$value" ;;
+        auth_token) auth_token="$value" ;;
+        follow_redirects) follow_redirects="$value" ;;
+        max_redirects) max_redirects="$value" ;;
+        headers.*)
+            printf '%s: %s\n' "${key#headers.}" "$value" >> "$headers_file"
+            ;;
+        query_params.*)
+            printf '%s=%s\n' "${key#query_params.}" "$value" >> "$query_params_file"
+            ;;
+    esac
+done
+
+# Validate required
+if [ -z "$url" ]; then
+    printf '{"status_code":0,"headers":{},"body":"","json":null,"elapsed_ms":0,"url":"","success":false,"error":"url parameter is required"}\n'
     exit 1
 fi
 
-# Parse optional parameters
-METHOD=$(echo "$INPUT" | jq -r '.method // "GET"' | tr '[:lower:]' '[:upper:]')
-HEADERS=$(echo "$INPUT" | jq -r '.headers // {}')
-BODY=$(echo "$INPUT" | jq -r '.body // ""')
-JSON_BODY=$(echo "$INPUT" | jq -c '.json_body // null')
-QUERY_PARAMS=$(echo "$INPUT" | jq -r '.query_params // {}')
-TIMEOUT=$(echo "$INPUT" | jq -r '.timeout // 30')
-VERIFY_SSL=$(echo "$INPUT" | jq -r '.verify_ssl // true')
-AUTH_TYPE=$(echo "$INPUT" | jq -r '.auth_type // "none"')
-FOLLOW_REDIRECTS=$(echo "$INPUT" | jq -r '.follow_redirects // true')
-MAX_REDIRECTS=$(echo "$INPUT" | jq -r '.max_redirects // 10')
+# Normalize method
+method=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
 
-# Build URL with query parameters
-FINAL_URL="$URL"
-if [ "$QUERY_PARAMS" != "{}" ] && [ "$QUERY_PARAMS" != "null" ]; then
-    QUERY_STRING=$(echo "$QUERY_PARAMS" | jq -r 'to_entries | map("\(.key)=\(.value | @uri)") | join("&")')
-    if [[ "$FINAL_URL" == *"?"* ]]; then
-        FINAL_URL="${FINAL_URL}&${QUERY_STRING}"
-    else
-        FINAL_URL="${FINAL_URL}?${QUERY_STRING}"
+# URL encode helper
+url_encode() {
+    printf '%s' "$1" | sed 's/ /%20/g; s/!/%21/g; s/"/%22/g; s/#/%23/g; s/\$/%24/g; s/&/%26/g; s/'\''/%27/g'
+}
+
+# Build URL with query params
+final_url="$url"
+if [ -s "$query_params_file" ]; then
+    query_string=""
+    while IFS='=' read -r param_name param_value; do
+        [ -z "$param_name" ] && continue
+        encoded=$(url_encode "$param_value")
+        [ -z "$query_string" ] && query_string="${param_name}=${encoded}" || query_string="${query_string}&${param_name}=${encoded}"
+    done < "$query_params_file"
+
+    if [ -n "$query_string" ]; then
+        case "$final_url" in
+            *\?*) final_url="${final_url}&${query_string}" ;;
+            *) final_url="${final_url}?${query_string}" ;;
+        esac
     fi
 fi
 
-# Build curl arguments array
-CURL_ARGS=(
-    -X "$METHOD"
-    -s  # Silent mode
-    -w "\n%{http_code}\n%{time_total}\n%{url_effective}\n"  # Write out metadata
-    --max-time "$TIMEOUT"
-    --connect-timeout 10
-)
-
-# Handle SSL verification
-if [ "$VERIFY_SSL" = "false" ]; then
-    CURL_ARGS+=(-k)
+# Prepare body
+if [ -n "$json_body" ]; then
+    body_file=$(mktemp)
+    printf '%s' "$json_body" > "$body_file"
+elif [ -n "$body" ]; then
+    body_file=$(mktemp)
+    printf '%s' "$body" > "$body_file"
 fi
 
-# Handle redirects
-if [ "$FOLLOW_REDIRECTS" = "true" ]; then
-    CURL_ARGS+=(-L --max-redirs "$MAX_REDIRECTS")
-fi
+# Build curl args file (avoid shell escaping issues)
+curl_args=$(mktemp)
+{
+    printf -- '-X\n%s\n' "$method"
+    printf -- '-s\n'
+    printf -- '-w\n\n%%{http_code}\n%%{url_effective}\n\n'
+    printf -- '--max-time\n%s\n' "$timeout"
+    printf -- '--connect-timeout\n10\n'
+    printf -- '--dump-header\n%s\n' "$temp_headers"
+    
+    [ "$verify_ssl" = "false" ] && printf -- '-k\n'
+    
+    if [ "$follow_redirects" = "true" ]; then
+        printf -- '-L\n'
+        printf -- '--max-redirs\n%s\n' "$max_redirects"
+    fi
 
-# Add headers
-if [ "$HEADERS" != "{}" ] && [ "$HEADERS" != "null" ]; then
-    while IFS= read -r header; do
-        if [ -n "$header" ]; then
-            CURL_ARGS+=(-H "$header")
-        fi
-    done < <(echo "$HEADERS" | jq -r 'to_entries | map("\(.key): \(.value)") | .[]')
-fi
+    if [ -s "$headers_file" ]; then
+        while IFS= read -r h; do
+            [ -n "$h" ] && printf -- '-H\n%s\n' "$h"
+        done < "$headers_file"
+    fi
 
-# Handle authentication
-case "$AUTH_TYPE" in
-    basic)
-        AUTH_USERNAME=$(echo "$INPUT" | jq -r '.auth_username // ""')
-        AUTH_PASSWORD=$(echo "$INPUT" | jq -r '.auth_password // ""')
-        if [ -n "$AUTH_USERNAME" ] && [ "$AUTH_USERNAME" != "null" ]; then
-            CURL_ARGS+=(-u "${AUTH_USERNAME}:${AUTH_PASSWORD}")
-        fi
-        ;;
-    bearer)
-        AUTH_TOKEN=$(echo "$INPUT" | jq -r '.auth_token // ""')
-        if [ -n "$AUTH_TOKEN" ] && [ "$AUTH_TOKEN" != "null" ]; then
-            CURL_ARGS+=(-H "Authorization: Bearer ${AUTH_TOKEN}")
-        fi
-        ;;
-esac
-
-# Handle request body
-if [ "$JSON_BODY" != "null" ] && [ "$JSON_BODY" != "" ]; then
-    CURL_ARGS+=(-H "Content-Type: application/json")
-    CURL_ARGS+=(-d "$JSON_BODY")
-elif [ -n "$BODY" ] && [ "$BODY" != "null" ]; then
-    CURL_ARGS+=(-d "$BODY")
-fi
-
-# Capture start time
-START_TIME=$(date +%s%3N)
-
-# Make the request and capture response headers
-TEMP_HEADERS=$(mktemp)
-CURL_ARGS+=(--dump-header "$TEMP_HEADERS")
-
-# Execute curl and capture output
-set +e
-RESPONSE=$(curl "${CURL_ARGS[@]}" "$FINAL_URL" 2>&1)
-CURL_EXIT_CODE=$?
-set -e
-
-# Calculate elapsed time
-END_TIME=$(date +%s%3N)
-ELAPSED_MS=$((END_TIME - START_TIME))
-
-# Parse curl output (last 3 lines are: http_code, time_total, url_effective)
-BODY_OUTPUT=$(echo "$RESPONSE" | head -n -3)
-HTTP_CODE=$(echo "$RESPONSE" | tail -n 3 | head -n 1 | tr -d '\r\n')
-CURL_TIME=$(echo "$RESPONSE" | tail -n 2 | head -n 1 | tr -d '\r\n')
-EFFECTIVE_URL=$(echo "$RESPONSE" | tail -n 1 | tr -d '\r\n')
-
-# Ensure HTTP_CODE is numeric, default to 0 if not
-if ! [[ "$HTTP_CODE" =~ ^[0-9]+$ ]]; then
-    HTTP_CODE=0
-fi
-
-# If curl failed, handle error
-if [ "$CURL_EXIT_CODE" -ne 0 ]; then
-    ERROR_MSG="curl failed with exit code $CURL_EXIT_CODE"
-
-    # Determine specific error
-    case $CURL_EXIT_CODE in
-        6)  ERROR_MSG="Could not resolve host" ;;
-        7)  ERROR_MSG="Failed to connect to host" ;;
-        28) ERROR_MSG="Request timeout" ;;
-        35) ERROR_MSG="SSL/TLS connection error" ;;
-        52) ERROR_MSG="Empty reply from server" ;;
-        56) ERROR_MSG="Failure receiving network data" ;;
-        *)  ERROR_MSG="curl error code $CURL_EXIT_CODE" ;;
+    case "$auth_type" in
+        basic)
+            [ -n "$auth_username" ] && printf -- '-u\n%s:%s\n' "$auth_username" "$auth_password"
+            ;;
+        bearer)
+            [ -n "$auth_token" ] && printf -- '-H\nAuthorization: Bearer %s\n' "$auth_token"
+            ;;
     esac
 
-    # Output error result as JSON
-    jq -n \
-        --arg error "$ERROR_MSG" \
-        --argjson elapsed "$ELAPSED_MS" \
-        --arg url "$FINAL_URL" \
-        '{
-            status_code: 0,
-            headers: {},
-            body: "",
-            json: null,
-            elapsed_ms: $elapsed,
-            url: $url,
-            success: false,
-            error: $error
-        }'
+    if [ -n "$body_file" ] && [ -f "$body_file" ]; then
+        [ -n "$json_body" ] && printf -- '-H\nContent-Type: application/json\n'
+        printf -- '-d\n@%s\n' "$body_file"
+    fi
 
-    rm -f "$TEMP_HEADERS"
+    printf -- '%s\n' "$final_url"
+} > "$curl_args"
+
+# Execute curl
+start_time=$(date +%s%3N 2>/dev/null || echo $(($(date +%s) * 1000)))
+
+set +e
+xargs -a "$curl_args" curl > "$curl_output" 2>&1
+curl_exit_code=$?
+set -e
+
+rm -f "$curl_args"
+
+end_time=$(date +%s%3N 2>/dev/null || echo $(($(date +%s) * 1000)))
+elapsed_ms=$((end_time - start_time))
+
+# Parse output
+response=$(cat "$curl_output")
+total_lines=$(printf '%s\n' "$response" | wc -l)
+body_lines=$((total_lines - 2))
+
+if [ "$body_lines" -gt 0 ]; then
+    body_output=$(printf '%s\n' "$response" | head -n "$body_lines")
+else
+    body_output=""
+fi
+
+http_code=$(printf '%s\n' "$response" | tail -n 2 | head -n 1 | tr -d '\r\n ')
+effective_url=$(printf '%s\n' "$response" | tail -n 1 | tr -d '\r\n')
+
+case "$http_code" in
+    ''|*[!0-9]*) http_code=0 ;;
+esac
+
+# Handle errors
+if [ "$curl_exit_code" -ne 0 ]; then
+    error_msg="curl error code $curl_exit_code"
+    case $curl_exit_code in
+        6) error_msg="Could not resolve host" ;;
+        7) error_msg="Failed to connect to host" ;;
+        28) error_msg="Request timeout" ;;
+        35) error_msg="SSL/TLS connection error" ;;
+        52) error_msg="Empty reply from server" ;;
+        56) error_msg="Failure receiving network data" ;;
+    esac
+    error_msg=$(printf '%s' "$error_msg" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    printf '{"status_code":0,"headers":{},"body":"","json":null,"elapsed_ms":%d,"url":"%s","success":false,"error":"%s"}\n' \
+        "$elapsed_ms" "$final_url" "$error_msg"
     exit 1
 fi
 
-# Parse response headers into JSON
-HEADERS_JSON="{}"
-if [ -f "$TEMP_HEADERS" ]; then
-    # Skip the status line and parse headers
-    HEADERS_JSON=$(grep -v "^HTTP/" "$TEMP_HEADERS" | grep ":" | sed 's/\r$//' | jq -R -s -c '
-        split("\n") |
-        map(select(length > 0)) |
-        map(split(": "; "") | select(length > 1) | {key: .[0], value: (.[1:] | join(": "))}) |
-        map({(.key): .value}) |
-        add // {}
-    ' || echo '{}')
-    rm -f "$TEMP_HEADERS"
+# Parse headers
+headers_json="{"
+first_header=true
+if [ -f "$temp_headers" ]; then
+    while IFS= read -r line; do
+        case "$line" in HTTP/*|'') continue ;; esac
+        
+        header_name="${line%%:*}"
+        header_value="${line#*:}"
+        [ "$header_name" = "$line" ] && continue
+
+        header_value=$(printf '%s' "$header_value" | sed 's/^ *//; s/ *$//; s/\r$//; s/\\/\\\\/g; s/"/\\"/g')
+        header_name=$(printf '%s' "$header_name" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+        if [ "$first_header" = true ]; then
+            headers_json="${headers_json}\"${header_name}\":\"${header_value}\""
+            first_header=false
+        else
+            headers_json="${headers_json},\"${header_name}\":\"${header_value}\""
+        fi
+    done < "$temp_headers"
+fi
+headers_json="${headers_json}}"
+
+# Success check
+success="false"
+[ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ] && success="true"
+
+# Escape body
+body_escaped=$(printf '%s' "$body_output" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' | awk '{printf "%s\\n", $0}' | sed 's/\\n$//')
+
+# Detect JSON
+json_parsed="null"
+if [ -n "$body_output" ]; then
+    first_char=$(printf '%s' "$body_output" | sed 's/^[[:space:]]*//' | head -c 1)
+    last_char=$(printf '%s' "$body_output" | sed 's/[[:space:]]*$//' | tail -c 1)
+    case "$first_char" in
+        '{'|'[')
+            case "$last_char" in
+                '}'|']') json_parsed="$body_output" ;;
+            esac
+            ;;
+    esac
 fi
 
-# Ensure HEADERS_JSON is valid JSON
-if ! echo "$HEADERS_JSON" | jq empty 2>/dev/null; then
-    HEADERS_JSON="{}"
+# Output
+if [ "$json_parsed" = "null" ]; then
+    printf '{"status_code":%d,"headers":%s,"body":"%s","json":null,"elapsed_ms":%d,"url":"%s","success":%s}\n' \
+        "$http_code" "$headers_json" "$body_escaped" "$elapsed_ms" "$effective_url" "$success"
+else
+    printf '{"status_code":%d,"headers":%s,"body":"%s","json":%s,"elapsed_ms":%d,"url":"%s","success":%s}\n' \
+        "$http_code" "$headers_json" "$body_escaped" "$json_parsed" "$elapsed_ms" "$effective_url" "$success"
 fi
 
-# Determine if successful (2xx status code)
-SUCCESS=false
-if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-    SUCCESS=true
-fi
-
-# Try to parse body as JSON
-JSON_PARSED="null"
-if [ -n "$BODY_OUTPUT" ] && echo "$BODY_OUTPUT" | jq empty 2>/dev/null; then
-    JSON_PARSED=$(echo "$BODY_OUTPUT" | jq -c '.' || echo 'null')
-fi
-
-# Output result as JSON
-jq -n \
-    --argjson status_code "$HTTP_CODE" \
-    --argjson headers "$HEADERS_JSON" \
-    --arg body "$BODY_OUTPUT" \
-    --argjson json "$JSON_PARSED" \
-    --argjson elapsed "$ELAPSED_MS" \
-    --arg url "$EFFECTIVE_URL" \
-    --argjson success "$SUCCESS" \
-    '{
-        status_code: $status_code,
-        headers: $headers,
-        body: $body,
-        json: $json,
-        elapsed_ms: $elapsed,
-        url: $url,
-        success: $success
-    }'
-
-# Exit with success
 exit 0

@@ -1,8 +1,8 @@
 # Interval Timer Trigger
 # Fires at regular intervals based on time unit and interval
 
-name: intervaltimer
 ref: core.intervaltimer
+label: "Interval Timer"
 description: "Fires at regular intervals based on specified time unit and interval"
 enabled: true
 

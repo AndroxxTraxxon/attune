@@ -25,7 +25,6 @@ conf_schema:
       type: boolean
       description: "Enable debug logging for core pack actions"
       default: false
-  required: []
 
 # Default pack configuration
 config:

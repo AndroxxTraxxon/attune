@@ -91,7 +91,6 @@ conf_schema:
       default: 300
       minimum: 1
       maximum: 3600
-  required: []
 
 config:
   max_action_timeout: 300
@@ -123,8 +122,8 @@ runtime_deps:
 Action metadata files define the parameters, output schema, and execution details for actions.
 
 **Required Fields:**
-- `name` (string): Action name (matches filename)
 - `ref` (string): Full action reference (e.g., "core.echo")
+- `label` (string): Human-readable action name
 - `description` (string): Action description
 - `runner_type` (string): Execution runtime (shell, python, nodejs, docker)
 - `entry_point` (string): Script filename to execute
@@ -142,28 +141,28 @@ Action metadata files define the parameters, output schema, and execution detail
 **Example:**
 
 ```yaml
-name: echo
 ref: core.echo
+label: "Echo"
 description: "Echo a message to stdout"
 enabled: true
 runner_type: shell
 entry_point: echo.sh
 
-# Parameter delivery (optional, defaults to env/dotenv)
-parameter_delivery: env
-parameter_format: dotenv
+# Parameter delivery (optional, defaults to stdin/json)
+parameter_delivery: stdin
+parameter_format: json
 
 parameters:
-  message:
-    type: string
-    description: "Message to echo"
-    required: true
-    default: "Hello, World!"
-  uppercase:
-    type: boolean
-    description: "Convert message to uppercase"
-    required: false
-    default: false
+  type: object
+  properties:
+    message:
+      type: string
+      description: "Message to echo"
+      default: "Hello, World!"
+    uppercase:
+      type: boolean
+      description: "Convert message to uppercase"
+      default: false
 
 output_schema:
   type: object
@@ -316,8 +315,8 @@ if __name__ == "__main__":
 Sensor metadata files define sensors that monitor for events and fire triggers.
 
 **Required Fields:**
-- `name` (string): Sensor name
 - `ref` (string): Full sensor reference (e.g., "core.interval_timer_sensor")
+- `label` (string): Human-readable sensor name
 - `description` (string): Sensor description
 - `runner_type` (string): Execution runtime (python, nodejs)
 - `entry_point` (string): Script filename to execute
@@ -333,8 +332,8 @@ Sensor metadata files define sensors that monitor for events and fire triggers.
 **Example:**
 
 ```yaml
-name: interval_timer_sensor
 ref: core.interval_timer_sensor
+label: "Interval Timer Sensor"
 description: "Monitors time and fires interval timer triggers"
 enabled: true
 runner_type: python
@@ -407,8 +406,8 @@ if __name__ == "__main__":
 Trigger metadata files define event types that sensors can fire.
 
 **Required Fields:**
-- `name` (string): Trigger name
 - `ref` (string): Full trigger reference (e.g., "core.intervaltimer")
+- `label` (string): Human-readable trigger name
 - `description` (string): Trigger description
 - `type` (string): Trigger type (interval, cron, one_shot, webhook, custom)
 
@@ -422,8 +421,8 @@ Trigger metadata files define event types that sensors can fire.
 **Example:**
 
 ```yaml
-name: intervaltimer
 ref: core.intervaltimer
+label: "Interval Timer"
 description: "Fires at regular intervals"
 enabled: true
 type: interval

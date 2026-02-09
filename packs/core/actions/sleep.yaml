@@ -1,8 +1,8 @@
 # Sleep Action
 # Pauses execution for a specified duration
 
-name: sleep
 ref: core.sleep
+label: "Sleep"
 description: "Sleep for a specified number of seconds"
 enabled: true
 

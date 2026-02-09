@@ -6,7 +6,9 @@
 use super::native::NativeRuntime;
 use super::python::PythonRuntime;
 use super::shell::ShellRuntime;
-use super::{ExecutionContext, ExecutionResult, Runtime, RuntimeError, RuntimeResult};
+use super::{
+    ExecutionContext, ExecutionResult, OutputFormat, Runtime, RuntimeError, RuntimeResult,
+};
 use async_trait::async_trait;
 use tracing::{debug, info};
 
@@ -123,6 +125,7 @@ impl Runtime for LocalRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::{ParameterDelivery, ParameterFormat};
     use std::collections::HashMap;
 
     #[tokio::test]
@@ -149,6 +152,9 @@ def run():
             runtime_name: Some("python".to_string()),
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: ParameterDelivery::default(),
+            parameter_format: ParameterFormat::default(),
+            output_format: OutputFormat::default(),
         };
 
         assert!(runtime.can_execute(&context));
@@ -168,12 +174,15 @@ def run():
             secrets: HashMap::new(),
             timeout: Some(10),
             working_dir: None,
-            entry_point: "shell".to_string(),
-            code: Some("echo 'hello from shell'".to_string()),
+            entry_point: "run.sh".to_string(),
+            code: Some("#!/bin/bash\necho 'hello from shell'".to_string()),
             code_path: None,
             runtime_name: Some("shell".to_string()),
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: ParameterDelivery::default(),
+            parameter_format: ParameterFormat::default(),
+            output_format: OutputFormat::default(),
         };
 
         assert!(runtime.can_execute(&context));
@@ -194,12 +203,15 @@ def run():
             secrets: HashMap::new(),
             timeout: Some(10),
             working_dir: None,
-            entry_point: "unknown".to_string(),
+            entry_point: "run".to_string(),
             code: Some("some code".to_string()),
             code_path: None,
-            runtime_name: None,
+            runtime_name: Some("unknown".to_string()),
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: ParameterDelivery::default(),
+            parameter_format: ParameterFormat::default(),
+            output_format: OutputFormat::default(),
         };
 
         assert!(!runtime.can_execute(&context));

@@ -32,6 +32,8 @@ for i in range(100):
         runtime_name: Some("python".to_string()),
         max_stdout_bytes: 500, // Small limit to trigger truncation
         max_stderr_bytes: 1024,
+        parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
+        parameter_format: attune_worker::runtime::ParameterFormat::default(),
     };
 
     let result = runtime.execute(context).await.unwrap();
@@ -70,6 +72,8 @@ for i in range(100):
         runtime_name: Some("python".to_string()),
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 300, // Small limit for stderr
+        parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
+        parameter_format: attune_worker::runtime::ParameterFormat::default(),
     };
 
     let result = runtime.execute(context).await.unwrap();
@@ -109,6 +113,8 @@ done
         runtime_name: Some("shell".to_string()),
         max_stdout_bytes: 400, // Small limit
         max_stderr_bytes: 1024,
+        parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
+        parameter_format: attune_worker::runtime::ParameterFormat::default(),
     };
 
     let result = runtime.execute(context).await.unwrap();
@@ -144,6 +150,8 @@ print("Hello, World!")
         runtime_name: Some("python".to_string()),
         max_stdout_bytes: 10 * 1024 * 1024, // Large limit
         max_stderr_bytes: 10 * 1024 * 1024,
+        parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
+        parameter_format: attune_worker::runtime::ParameterFormat::default(),
     };
 
     let result = runtime.execute(context).await.unwrap();
@@ -184,6 +192,8 @@ for i in range(50):
         runtime_name: Some("python".to_string()),
         max_stdout_bytes: 300, // Both limits are small
         max_stderr_bytes: 300,
+        parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
+        parameter_format: attune_worker::runtime::ParameterFormat::default(),
     };
 
     let result = runtime.execute(context).await.unwrap();
@@ -226,6 +236,8 @@ time.sleep(30)  # Will timeout before this
         runtime_name: Some("python".to_string()),
         max_stdout_bytes: 500,
         max_stderr_bytes: 1024,
+        parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
+        parameter_format: attune_worker::runtime::ParameterFormat::default(),
     };
 
     let result = runtime.execute(context).await.unwrap();
@@ -262,6 +274,8 @@ sys.stdout.write("Small output")
         runtime_name: Some("python".to_string()),
         max_stdout_bytes: 10 * 1024 * 1024, // Large limit to avoid truncation
         max_stderr_bytes: 10 * 1024 * 1024,
+        parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
+        parameter_format: attune_worker::runtime::ParameterFormat::default(),
     };
 
     let result = runtime.execute(context).await.unwrap();

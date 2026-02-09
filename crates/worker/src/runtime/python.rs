@@ -4,7 +4,7 @@
 
 use super::{
     BoundedLogWriter, DependencyManagerRegistry, DependencySpec, ExecutionContext, ExecutionResult,
-    Runtime, RuntimeError, RuntimeResult,
+    OutputFormat, Runtime, RuntimeError, RuntimeResult,
 };
 use async_trait::async_trait;
 use std::path::PathBuf;
@@ -214,6 +214,7 @@ if __name__ == '__main__':
         timeout_secs: Option<u64>,
         max_stdout_bytes: usize,
         max_stderr_bytes: usize,
+        output_format: OutputFormat,
     ) -> RuntimeResult<ExecutionResult> {
         let start = Instant::now();
 
@@ -330,13 +331,41 @@ if __name__ == '__main__':
             exit_code, duration_ms, stdout_result.truncated, stderr_result.truncated
         );
 
-        // Try to parse result from stdout
-        let result = if exit_code == 0 {
-            stdout_result
-                .content
-                .lines()
-                .last()
-                .and_then(|line| serde_json::from_str(line).ok())
+        // Parse result from stdout based on output_format
+        let result = if exit_code == 0 && !stdout_result.content.trim().is_empty() {
+            match output_format {
+                OutputFormat::Text => {
+                    // No parsing - text output is captured in stdout field
+                    None
+                }
+                OutputFormat::Json => {
+                    // Try to parse last line of stdout as JSON
+                    stdout_result
+                        .content
+                        .trim()
+                        .lines()
+                        .last()
+                        .and_then(|line| serde_json::from_str(line).ok())
+                }
+                OutputFormat::Yaml => {
+                    // Try to parse stdout as YAML
+                    serde_yaml_ng::from_str(stdout_result.content.trim()).ok()
+                }
+                OutputFormat::Jsonl => {
+                    // Parse each line as JSON and collect into array
+                    let mut items = Vec::new();
+                    for line in stdout_result.content.trim().lines() {
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+                            items.push(value);
+                        }
+                    }
+                    if items.is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::Value::Array(items))
+                    }
+                }
+            }
         } else {
             None
         };
@@ -368,6 +397,7 @@ if __name__ == '__main__':
         python_path: PathBuf,
         max_stdout_bytes: usize,
         max_stderr_bytes: usize,
+        output_format: OutputFormat,
     ) -> RuntimeResult<ExecutionResult> {
         debug!(
             "Executing Python script with {} secrets (passed via stdin)",
@@ -389,6 +419,7 @@ if __name__ == '__main__':
             timeout_secs,
             max_stdout_bytes,
             max_stderr_bytes,
+            output_format,
         )
         .await
     }
@@ -403,6 +434,7 @@ if __name__ == '__main__':
         python_path: PathBuf,
         max_stdout_bytes: usize,
         max_stderr_bytes: usize,
+        output_format: OutputFormat,
     ) -> RuntimeResult<ExecutionResult> {
         debug!(
             "Executing Python file: {:?} with {} secrets",
@@ -425,6 +457,7 @@ if __name__ == '__main__':
             timeout_secs,
             max_stdout_bytes,
             max_stderr_bytes,
+            output_format,
         )
         .await
     }
@@ -515,6 +548,7 @@ impl Runtime for PythonRuntime {
                     python_path,
                     context.max_stdout_bytes,
                     context.max_stderr_bytes,
+                    context.output_format,
                 )
                 .await;
         }
@@ -529,6 +563,7 @@ impl Runtime for PythonRuntime {
             python_path,
             context.max_stdout_bytes,
             context.max_stderr_bytes,
+            context.output_format,
         )
         .await
     }
@@ -625,6 +660,9 @@ def run(x, y):
             runtime_name: Some("python".to_string()),
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: attune_common::models::ParameterDelivery::default(),
+            parameter_format: attune_common::models::ParameterFormat::default(),
+            output_format: attune_common::models::OutputFormat::default(),
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -658,6 +696,9 @@ def run():
             runtime_name: Some("python".to_string()),
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: attune_common::models::ParameterDelivery::default(),
+            parameter_format: attune_common::models::ParameterFormat::default(),
+            output_format: attune_common::models::OutputFormat::default(),
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -691,6 +732,9 @@ def run():
             runtime_name: Some("python".to_string()),
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: attune_common::models::ParameterDelivery::default(),
+            parameter_format: attune_common::models::ParameterFormat::default(),
+            output_format: attune_common::models::OutputFormat::default(),
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -736,6 +780,9 @@ def run():
             runtime_name: Some("python".to_string()),
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: attune_common::models::ParameterDelivery::default(),
+            parameter_format: attune_common::models::ParameterFormat::default(),
+            output_format: attune_common::models::OutputFormat::default(),
         };
 
         let result = runtime.execute(context).await.unwrap();

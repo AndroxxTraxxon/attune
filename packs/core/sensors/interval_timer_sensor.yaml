@@ -1,8 +1,8 @@
 # Timer Sensor
 # Monitors time and fires all timer trigger types
 
-name: interval_timer_sensor
 ref: core.interval_timer_sensor
+label: "Interval Timer Sensor"
 description: "Built-in sensor that monitors time and fires timer triggers (interval, cron, and one-shot datetime)"
 enabled: true
 
@@ -28,7 +28,6 @@ parameters:
       default: 1
       minimum: 1
       maximum: 60
-  required: []
 
 # Poll interval (how often the sensor checks for events)
 poll_interval: 1

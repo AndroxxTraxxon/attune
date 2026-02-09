@@ -46,20 +46,14 @@ fn format_dotenv(parameters: &HashMap<String, JsonValue>) -> Result<String, Runt
 /// Format parameters as JSON
 fn format_json(parameters: &HashMap<String, JsonValue>) -> Result<String, RuntimeError> {
     serde_json::to_string_pretty(parameters).map_err(|e| {
-        RuntimeError::ExecutionFailed(format!(
-            "Failed to serialize parameters to JSON: {}",
-            e
-        ))
+        RuntimeError::ExecutionFailed(format!("Failed to serialize parameters to JSON: {}", e))
     })
 }
 
 /// Format parameters as YAML
 fn format_yaml(parameters: &HashMap<String, JsonValue>) -> Result<String, RuntimeError> {
     serde_yaml_ng::to_string(parameters).map_err(|e| {
-        RuntimeError::ExecutionFailed(format!(
-            "Failed to serialize parameters to YAML: {}",
-            e
-        ))
+        RuntimeError::ExecutionFailed(format!("Failed to serialize parameters to YAML: {}", e))
     })
 }
 
@@ -81,18 +75,21 @@ pub fn create_parameter_file(
 ) -> Result<NamedTempFile, RuntimeError> {
     let formatted = format_parameters(parameters, format)?;
 
-    let mut temp_file = NamedTempFile::new()
-        .map_err(|e| RuntimeError::IoError(e))?;
+    let mut temp_file = NamedTempFile::new().map_err(|e| RuntimeError::IoError(e))?;
 
     // Set restrictive permissions (owner read-only)
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = temp_file.as_file().metadata()
+        let mut perms = temp_file
+            .as_file()
+            .metadata()
             .map_err(|e| RuntimeError::IoError(e))?
             .permissions();
         perms.set_mode(0o400); // Read-only for owner
-        temp_file.as_file().set_permissions(perms)
+        temp_file
+            .as_file()
+            .set_permissions(perms)
             .map_err(|e| RuntimeError::IoError(e))?;
     }
 
@@ -100,9 +97,7 @@ pub fn create_parameter_file(
         .write_all(formatted.as_bytes())
         .map_err(|e| RuntimeError::IoError(e))?;
 
-    temp_file
-        .flush()
-        .map_err(|e| RuntimeError::IoError(e))?;
+    temp_file.flush().map_err(|e| RuntimeError::IoError(e))?;
 
     debug!(
         "Created parameter file at {:?} with format {:?}",
@@ -165,10 +160,7 @@ pub fn prepare_parameters(
             let formatted = format_parameters(parameters, config.format)?;
 
             // Add environment variables to indicate delivery method
-            env.insert(
-                "ATTUNE_PARAMETER_DELIVERY".to_string(),
-                "stdin".to_string(),
-            );
+            env.insert("ATTUNE_PARAMETER_DELIVERY".to_string(), "stdin".to_string());
             env.insert(
                 "ATTUNE_PARAMETER_FORMAT".to_string(),
                 config.format.to_string(),
@@ -182,10 +174,7 @@ pub fn prepare_parameters(
             let path = temp_file.path().to_path_buf();
 
             // Add environment variables to indicate delivery method and file location
-            env.insert(
-                "ATTUNE_PARAMETER_DELIVERY".to_string(),
-                "file".to_string(),
-            );
+            env.insert("ATTUNE_PARAMETER_DELIVERY".to_string(), "file".to_string());
             env.insert(
                 "ATTUNE_PARAMETER_FORMAT".to_string(),
                 config.format.to_string(),
@@ -256,7 +245,6 @@ mod tests {
         assert!(result.contains("42"));
     }
 
-    #[test]
     #[test]
     fn test_create_parameter_file() {
         let mut params = HashMap::new();

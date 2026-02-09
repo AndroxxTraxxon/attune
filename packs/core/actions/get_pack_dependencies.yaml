@@ -1,8 +1,8 @@
 # Get Pack Dependencies Action
 # Parses pack.yaml files to identify pack and runtime dependencies
 
-name: get_pack_dependencies
 ref: core.get_pack_dependencies
+label: "Get Pack Dependencies"
 description: "Parse pack.yaml files to extract pack dependencies and runtime requirements"
 enabled: true
 runner_type: shell

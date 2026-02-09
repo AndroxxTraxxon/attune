@@ -1,0 +1,54 @@
+# Examples Pack
+# Demonstrates various Attune features and patterns
+
+ref: examples
+label: "Examples Pack"
+description: "Example actions and workflows demonstrating Attune capabilities"
+version: "1.0.0"
+author: "Attune Team"
+email: "support@attune.io"
+
+# System pack flag
+system: false
+enabled: true
+
+# Configuration schema
+conf_schema:
+  type: object
+  properties:
+    example_setting:
+      type: string
+      description: "Example configuration setting"
+      default: "default_value"
+
+# Default pack configuration
+config:
+  example_setting: "default_value"
+
+# Pack metadata
+meta:
+  category: "examples"
+  keywords:
+    - "examples"
+    - "demos"
+    - "tutorials"
+    - "learning"
+  documentation_url: "https://docs.attune.io/packs/examples"
+  repository_url: "https://github.com/attune/attune"
+  description: |
+    The Examples pack provides reference implementations and demonstrations
+    of Attune features including:
+
+    - JSON Lines (JSONL) output format for streaming results
+    - Various parameter delivery methods
+    - Different output formats
+    - Best practices for action development
+
+# Tags for categorization
+tags:
+  - examples
+  - demos
+  - documentation
+
+# Runtime dependencies (none for examples)
+runtime_deps: []

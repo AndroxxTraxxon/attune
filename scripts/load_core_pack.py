@@ -241,6 +241,9 @@ class CorePackLoader:
             parameter_delivery = action_data.get("parameter_delivery", "stdin").lower()
             parameter_format = action_data.get("parameter_format", "json").lower()
 
+            # Output format (defaults: text for no parsing)
+            output_format = action_data.get("output_format", "text").lower()
+
             # Validate parameter delivery method (only stdin and file allowed)
             if parameter_delivery not in ["stdin", "file"]:
                 print(
@@ -255,14 +258,21 @@ class CorePackLoader:
                 )
                 parameter_format = "json"
 
+            # Validate output format
+            if output_format not in ["text", "json", "yaml", "jsonl"]:
+                print(
+                    f"  ⚠ Invalid output_format '{output_format}' for '{ref}', defaulting to 'text'"
+                )
+                output_format = "text"
+
             cursor.execute(
                 """
                 INSERT INTO action (
                     ref, pack, pack_ref, label, description,
                     entrypoint, runtime, param_schema, out_schema, is_adhoc,
-                    parameter_delivery, parameter_format
+                    parameter_delivery, parameter_format, output_format
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (ref) DO UPDATE SET
                     label = EXCLUDED.label,
                     description = EXCLUDED.description,
@@ -271,6 +281,7 @@ class CorePackLoader:
                     out_schema = EXCLUDED.out_schema,
                     parameter_delivery = EXCLUDED.parameter_delivery,
                     parameter_format = EXCLUDED.parameter_format,
+                    output_format = EXCLUDED.output_format,
                     updated = NOW()
                 RETURNING id
             """,
@@ -287,6 +298,7 @@ class CorePackLoader:
                     False,  # Pack-installed actions are not ad-hoc
                     parameter_delivery,
                     parameter_format,
+                    output_format,
                 ),
             )
 

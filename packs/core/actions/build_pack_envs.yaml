@@ -1,8 +1,8 @@
 # Build Pack Environments Action
 # Creates runtime environments and installs dependencies for packs
 
-name: build_pack_envs
 ref: core.build_pack_envs
+label: "Build Pack Environments"
 description: "Build runtime environments for packs and install declared dependencies (Python requirements.txt, Node.js package.json)"
 enabled: true
 runner_type: shell

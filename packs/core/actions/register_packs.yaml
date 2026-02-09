@@ -1,8 +1,8 @@
 # Register Packs Action
 # Validates pack structure and loads components into database
 
-name: register_packs
 ref: core.register_packs
+label: "Register Packs"
 description: "Register packs by validating schemas, loading components into database, and copying to permanent storage"
 enabled: true
 runner_type: shell

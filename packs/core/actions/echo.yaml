@@ -1,8 +1,8 @@
 # Echo Action
 # Outputs a message to stdout
 
-name: echo
 ref: core.echo
+label: "Echo"
 description: "Echo a message to stdout"
 enabled: true
 
@@ -26,7 +26,6 @@ parameters:
     message:
       type: string
       description: "Message to echo (empty string if not provided)"
-  required: []
 
 # Output schema: not applicable for text output format
 # The action outputs plain text to stdout

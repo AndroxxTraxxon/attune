@@ -19,7 +19,6 @@ pub use python::PythonRuntime;
 pub use shell::ShellRuntime;
 
 use async_trait::async_trait;
-use attune_common::models::{ParameterDelivery, ParameterFormat};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -33,6 +32,9 @@ pub use dependency::{
 pub use log_writer::{BoundedLogResult, BoundedLogWriter};
 pub use parameter_passing::{ParameterDeliveryConfig, PreparedParameters};
 pub use python_venv::PythonVenvManager;
+
+// Re-export parameter types from common
+pub use attune_common::models::{OutputFormat, ParameterDelivery, ParameterFormat};
 
 /// Runtime execution result
 pub type RuntimeResult<T> = std::result::Result<T, RuntimeError>;
@@ -119,6 +121,10 @@ pub struct ExecutionContext {
     /// Format for parameter serialization
     #[serde(default)]
     pub parameter_format: ParameterFormat,
+
+    /// Format for output parsing
+    #[serde(default)]
+    pub output_format: OutputFormat,
 }
 
 fn default_max_log_bytes() -> usize {
@@ -146,6 +152,7 @@ impl ExecutionContext {
             max_stderr_bytes: 10 * 1024 * 1024,
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
+            output_format: OutputFormat::default(),
         }
     }
 }
