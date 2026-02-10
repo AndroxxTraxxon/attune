@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useExecutions } from "@/hooks/useExecutions";
 import { useExecutionStream } from "@/hooks/useExecutionStream";
 import { ExecutionStatus } from "@/api";
@@ -51,16 +51,22 @@ const STATUS_OPTIONS = [
 ];
 
 export default function ExecutionsPage() {
+  const [searchParams] = useSearchParams();
+
+  // Initialize filters from URL query parameters
   const [page, setPage] = useState(1);
   const pageSize = 50;
   const [searchFilters, setSearchFilters] = useState({
-    pack: "",
-    rule: "",
-    action: "",
-    trigger: "",
-    executor: "",
+    pack: searchParams.get("pack_name") || "",
+    rule: searchParams.get("rule_ref") || "",
+    action: searchParams.get("action_ref") || "",
+    trigger: searchParams.get("trigger_ref") || "",
+    executor: searchParams.get("executor") || "",
   });
-  const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>(() => {
+    const status = searchParams.get("status");
+    return status ? [status] : [];
+  });
 
   // Debounced filter state for API calls
   const [debouncedFilters, setDebouncedFilters] = useState(searchFilters);

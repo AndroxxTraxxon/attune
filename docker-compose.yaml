@@ -268,6 +268,7 @@ services:
       args:
         BUILDKIT_INLINE_CACHE: 1
     container_name: attune-worker-shell
+    stop_grace_period: 45s
     environment:
       RUST_LOG: info
       ATTUNE_CONFIG: /opt/attune/config.docker.yaml
@@ -312,6 +313,7 @@ services:
       args:
         BUILDKIT_INLINE_CACHE: 1
     container_name: attune-worker-python
+    stop_grace_period: 45s
     environment:
       RUST_LOG: info
       ATTUNE_CONFIG: /opt/attune/config.docker.yaml
@@ -356,6 +358,7 @@ services:
       args:
         BUILDKIT_INLINE_CACHE: 1
     container_name: attune-worker-node
+    stop_grace_period: 45s
     environment:
       RUST_LOG: info
       ATTUNE_CONFIG: /opt/attune/config.docker.yaml
@@ -400,6 +403,7 @@ services:
       args:
         BUILDKIT_INLINE_CACHE: 1
     container_name: attune-worker-full
+    stop_grace_period: 45s
     environment:
       RUST_LOG: info
       ATTUNE_CONFIG: /opt/attune/config.docker.yaml

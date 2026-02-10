@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useEnforcements } from "@/hooks/useEvents";
 import { useEnforcementStream } from "@/hooks/useEnforcementStream";
 import { EnforcementStatus } from "@/api";
@@ -44,14 +44,20 @@ const STATUS_OPTIONS = [
 ];
 
 export default function EnforcementsPage() {
+  const [searchParams] = useSearchParams();
+
+  // Initialize filters from URL query parameters
   const [page, setPage] = useState(1);
   const pageSize = 50;
   const [searchFilters, setSearchFilters] = useState({
-    rule: "",
-    trigger: "",
-    event: "",
+    rule: searchParams.get("rule_ref") || "",
+    trigger: searchParams.get("trigger_ref") || "",
+    event: searchParams.get("event") || "",
   });
-  const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>(() => {
+    const status = searchParams.get("status");
+    return status ? [status] : [];
+  });
 
   // Debounced filter state for API calls
   const [debouncedFilters, setDebouncedFilters] = useState(searchFilters);

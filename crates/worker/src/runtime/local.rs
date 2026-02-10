@@ -6,9 +6,7 @@
 use super::native::NativeRuntime;
 use super::python::PythonRuntime;
 use super::shell::ShellRuntime;
-use super::{
-    ExecutionContext, ExecutionResult, OutputFormat, Runtime, RuntimeError, RuntimeResult,
-};
+use super::{ExecutionContext, ExecutionResult, Runtime, RuntimeError, RuntimeResult};
 use async_trait::async_trait;
 use tracing::{debug, info};
 

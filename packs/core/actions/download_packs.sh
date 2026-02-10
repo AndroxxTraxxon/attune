@@ -1,81 +1,202 @@
-#!/bin/bash
-# Download Packs Action - API Wrapper
-# Thin wrapper around POST /api/v1/packs/download
+#!/bin/sh
+# Download Packs Action - Core Pack
+# API Wrapper for POST /api/v1/packs/download
+#
+# This script uses pure POSIX shell without external dependencies like jq.
+# It reads parameters in DOTENV format from stdin until the delimiter.
 
 set -e
-set -o pipefail
 
-# Read JSON parameters from stdin
-INPUT=$(cat)
+# Initialize variables
+packs=""
+destination_dir=""
+registry_url="https://registry.attune.io/index.json"
+ref_spec=""
+timeout="300"
+verify_ssl="true"
+api_url="http://localhost:8080"
+api_token=""
 
-# Parse parameters using jq
-PACKS=$(echo "$INPUT" | jq -c '.packs // []')
-DESTINATION_DIR=$(echo "$INPUT" | jq -r '.destination_dir // ""')
-REGISTRY_URL=$(echo "$INPUT" | jq -r '.registry_url // "https://registry.attune.io/index.json"')
-REF_SPEC=$(echo "$INPUT" | jq -r '.ref_spec // ""')
-TIMEOUT=$(echo "$INPUT" | jq -r '.timeout // 300')
-VERIFY_SSL=$(echo "$INPUT" | jq -r '.verify_ssl // true')
-API_URL=$(echo "$INPUT" | jq -r '.api_url // "http://localhost:8080"')
-API_TOKEN=$(echo "$INPUT" | jq -r '.api_token // ""')
+# Read DOTENV-formatted parameters from stdin until delimiter
+while IFS= read -r line; do
+    # Check for parameter delimiter
+    case "$line" in
+        *"---ATTUNE_PARAMS_END---"*)
+            break
+            ;;
+    esac
+    [ -z "$line" ] && continue
+
+    key="${line%%=*}"
+    value="${line#*=}"
+
+    # Remove quotes if present (both single and double)
+    case "$value" in
+        \"*\")
+            value="${value#\"}"
+            value="${value%\"}"
+            ;;
+        \'*\')
+            value="${value#\'}"
+            value="${value%\'}"
+            ;;
+    esac
+
+    # Process parameters
+    case "$key" in
+        packs)
+            packs="$value"
+            ;;
+        destination_dir)
+            destination_dir="$value"
+            ;;
+        registry_url)
+            registry_url="$value"
+            ;;
+        ref_spec)
+            ref_spec="$value"
+            ;;
+        timeout)
+            timeout="$value"
+            ;;
+        verify_ssl)
+            verify_ssl="$value"
+            ;;
+        api_url)
+            api_url="$value"
+            ;;
+        api_token)
+            api_token="$value"
+            ;;
+    esac
+done
 
 # Validate required parameters
-if [[ -z "$DESTINATION_DIR" ]] || [[ "$DESTINATION_DIR" == "null" ]]; then
-    echo '{"downloaded_packs":[],"failed_packs":[{"source":"input","error":"destination_dir is required"}],"total_count":0,"success_count":0,"failure_count":1}' >&1
+if [ -z "$destination_dir" ]; then
+    printf '{"downloaded_packs":[],"failed_packs":[{"source":"input","error":"destination_dir is required"}],"total_count":0,"success_count":0,"failure_count":1}\n'
     exit 1
 fi
 
-# Build request body
-REQUEST_BODY=$(jq -n \
-    --argjson packs "$PACKS" \
-    --arg destination_dir "$DESTINATION_DIR" \
-    --arg registry_url "$REGISTRY_URL" \
-    --argjson timeout "$TIMEOUT" \
-    --argjson verify_ssl "$([[ "$VERIFY_SSL" == "true" ]] && echo true || echo false)" \
-    '{
-        packs: $packs,
-        destination_dir: $destination_dir,
-        registry_url: $registry_url,
-        timeout: $timeout,
-        verify_ssl: $verify_ssl
-    }' | jq --arg ref_spec "$REF_SPEC" 'if $ref_spec != "" and $ref_spec != "null" then .ref_spec = $ref_spec else . end')
+# Normalize boolean
+case "$verify_ssl" in
+    true|True|TRUE|yes|Yes|YES|1) verify_ssl="true" ;;
+    *) verify_ssl="false" ;;
+esac
 
-# Make API call
-CURL_ARGS=(
-    -X POST
-    -H "Content-Type: application/json"
-    -H "Accept: application/json"
-    -d "$REQUEST_BODY"
-    -s
-    -w "\n%{http_code}"
-    --max-time $((TIMEOUT + 30))
-    --connect-timeout 10
+# Validate timeout is numeric
+case "$timeout" in
+    ''|*[!0-9]*)
+        timeout="300"
+        ;;
+esac
+
+# Escape values for JSON
+packs_escaped=$(printf '%s' "$packs" | sed 's/\\/\\\\/g; s/"/\\"/g')
+destination_dir_escaped=$(printf '%s' "$destination_dir" | sed 's/\\/\\\\/g; s/"/\\"/g')
+registry_url_escaped=$(printf '%s' "$registry_url" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+# Build JSON request body
+if [ -n "$ref_spec" ]; then
+    ref_spec_escaped=$(printf '%s' "$ref_spec" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    request_body=$(cat <<EOF
+{
+  "packs": $packs_escaped,
+  "destination_dir": "$destination_dir_escaped",
+  "registry_url": "$registry_url_escaped",
+  "ref_spec": "$ref_spec_escaped",
+  "timeout": $timeout,
+  "verify_ssl": $verify_ssl
+}
+EOF
 )
-
-if [[ -n "$API_TOKEN" ]] && [[ "$API_TOKEN" != "null" ]]; then
-    CURL_ARGS+=(-H "Authorization: Bearer ${API_TOKEN}")
+else
+    request_body=$(cat <<EOF
+{
+  "packs": $packs_escaped,
+  "destination_dir": "$destination_dir_escaped",
+  "registry_url": "$registry_url_escaped",
+  "timeout": $timeout,
+  "verify_ssl": $verify_ssl
+}
+EOF
+)
 fi
 
-RESPONSE=$(curl "${CURL_ARGS[@]}" "${API_URL}/api/v1/packs/download" 2>/dev/null || echo -e "\n000")
+# Create temp files for curl
+temp_response=$(mktemp)
+temp_headers=$(mktemp)
 
-# Extract status code (last line)
-HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
-BODY=$(echo "$RESPONSE" | head -n -1)
+cleanup() {
+    rm -f "$temp_response" "$temp_headers"
+}
+trap cleanup EXIT
+
+# Calculate curl timeout (request timeout + buffer)
+curl_timeout=$((timeout + 30))
+
+# Make API call
+http_code=$(curl -X POST \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json" \
+    ${api_token:+-H "Authorization: Bearer ${api_token}"} \
+    -d "$request_body" \
+    -s \
+    -w "%{http_code}" \
+    -o "$temp_response" \
+    --max-time "$curl_timeout" \
+    --connect-timeout 10 \
+    "${api_url}/api/v1/packs/download" 2>/dev/null || echo "000")
 
 # Check HTTP status
-if [[ "$HTTP_CODE" -ge 200 ]] && [[ "$HTTP_CODE" -lt 300 ]]; then
-    # Extract data field from API response
-    echo "$BODY" | jq -r '.data // .'
+if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+    # Success - extract data field from API response
+    response_body=$(cat "$temp_response")
+
+    # Try to extract .data field using simple text processing
+    # If response contains "data" field, extract it; otherwise use whole response
+    case "$response_body" in
+        *'"data":'*)
+            # Extract content after "data": up to the closing brace
+            # This is a simple extraction - assumes well-formed JSON
+            data_content=$(printf '%s' "$response_body" | sed -n 's/.*"data":\s*\(.*\)}/\1/p')
+            if [ -n "$data_content" ]; then
+                printf '%s\n' "$data_content"
+            else
+                cat "$temp_response"
+            fi
+            ;;
+        *)
+            cat "$temp_response"
+            ;;
+    esac
     exit 0
 else
-    # Error response
-    ERROR_MSG=$(echo "$BODY" | jq -r '.error // .message // "API request failed"' 2>/dev/null || echo "API request failed")
+    # Error response - try to extract error message
+    error_msg="API request failed"
+    if [ -s "$temp_response" ]; then
+        # Try to extract error or message field
+        response_content=$(cat "$temp_response")
+        case "$response_content" in
+            *'"error":'*)
+                error_msg=$(printf '%s' "$response_content" | sed -n 's/.*"error":\s*"\([^"]*\)".*/\1/p')
+                [ -z "$error_msg" ] && error_msg="API request failed"
+                ;;
+            *'"message":'*)
+                error_msg=$(printf '%s' "$response_content" | sed -n 's/.*"message":\s*"\([^"]*\)".*/\1/p')
+                [ -z "$error_msg" ] && error_msg="API request failed"
+                ;;
+        esac
+    fi
+
+    # Escape error message for JSON
+    error_msg_escaped=$(printf '%s' "$error_msg" | sed 's/\\/\\\\/g; s/"/\\"/g')
 
     cat <<EOF
 {
   "downloaded_packs": [],
   "failed_packs": [{
     "source": "api",
-    "error": "API call failed (HTTP $HTTP_CODE): $ERROR_MSG"
+    "error": "API call failed (HTTP $http_code): $error_msg_escaped"
   }],
   "total_count": 0,
   "success_count": 0,

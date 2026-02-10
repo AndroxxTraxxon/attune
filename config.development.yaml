@@ -12,6 +12,12 @@ database:
 # Development message queue
 message_queue:
   url: amqp://guest:guest@localhost:5672
+  rabbitmq:
+    worker_queue_ttl_ms: 300000 # 5 minutes - expire unprocessed executions
+    dead_letter:
+      enabled: true
+      exchange: attune.dlx
+      ttl_ms: 86400000 # 24 hours - retain DLQ messages for debugging
 
 # Development server
 server:
@@ -49,7 +55,7 @@ worker:
   service_name: attune-worker-e2e
   worker_type: local
   max_concurrent_tasks: 10
-  heartbeat_interval: 10
+  heartbeat_interval: 10 # Reduced from 30s for faster stale detection
   task_timeout: 120 # 2 minutes default
   cleanup_interval: 60
   work_dir: ./tests/artifacts
@@ -86,3 +92,9 @@ notifier:
   connection_timeout: 60
   max_connections: 100
   message_buffer_size: 1000
+
+# Executor service configuration
+executor:
+  scheduled_timeout: 120 # 2 minutes (faster feedback in dev)
+  timeout_check_interval: 30 # Check every 30 seconds
+  enable_timeout_monitor: true

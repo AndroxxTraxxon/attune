@@ -101,6 +101,10 @@ pub struct RabbitMqConfig {
     /// Dead letter queue configuration
     #[serde(default)]
     pub dead_letter: DeadLetterConfig,
+
+    /// Worker queue message TTL in milliseconds (default 5 minutes)
+    #[serde(default = "default_worker_queue_ttl")]
+    pub worker_queue_ttl_ms: u64,
 }
 
 impl Default for RabbitMqConfig {
@@ -123,6 +127,7 @@ impl Default for RabbitMqConfig {
             queues: QueuesConfig::default(),
             exchanges: ExchangesConfig::default(),
             dead_letter: DeadLetterConfig::default(),
+            worker_queue_ttl_ms: default_worker_queue_ttl(),
         }
     }
 }
@@ -159,6 +164,11 @@ impl RabbitMqConfig {
     /// Get consumer timeout as Duration
     pub fn consumer_timeout(&self) -> Duration {
         Duration::from_secs(self.consumer_timeout_secs)
+    }
+
+    /// Get worker queue TTL as Duration
+    pub fn worker_queue_ttl(&self) -> Duration {
+        Duration::from_millis(self.worker_queue_ttl_ms)
     }
 
     /// Validate configuration
@@ -491,6 +501,10 @@ fn default_dlq_ttl() -> u64 {
     86400000 // 24 hours in milliseconds
 }
 
+fn default_worker_queue_ttl() -> u64 {
+    300000 // 5 minutes in milliseconds
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -540,6 +554,13 @@ mod tests {
         assert!(config.enabled);
         assert_eq!(config.exchange, "attune.dlx");
         assert_eq!(config.ttl().as_secs(), 86400); // 24 hours
+    }
+
+    #[test]
+    fn test_worker_queue_ttl() {
+        let config = RabbitMqConfig::default();
+        assert_eq!(config.worker_queue_ttl().as_secs(), 300); // 5 minutes
+        assert_eq!(config.worker_queue_ttl_ms, 300000);
     }
 
     #[test]

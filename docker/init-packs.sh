@@ -28,7 +28,7 @@ LOADER_SCRIPT="${LOADER_SCRIPT:-/scripts/load_core_pack.py}"
 
 echo ""
 echo -e "${BLUE}╔════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║    Attune Builtin Packs Initialization        ║${NC}"
+echo -e "${BLUE}║    Attune Builtin Packs Initialization         ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -162,6 +162,7 @@ if [ -f "$LOADER_SCRIPT" ]; then
                 if python3 "$LOADER_SCRIPT" \
                     --database-url "$DATABASE_URL" \
                     --pack-dir "$TARGET_PACKS_DIR" \
+                    --pack-name "$pack_name" \
                     --schema "$DB_SCHEMA"; then
                     LOADED_COUNT=$((LOADED_COUNT + 1))
                     echo -e "${GREEN}✓${NC} Loaded pack: $pack_name"
@@ -188,7 +189,7 @@ fi
 # Summary
 echo ""
 echo -e "${GREEN}╔════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║  Builtin Packs Initialization Complete!       ║${NC}"
+echo -e "${GREEN}║    Builtin Packs Initialization Complete!      ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "${BLUE}Packs Location:${NC} ${GREEN}$TARGET_PACKS_DIR${NC}"

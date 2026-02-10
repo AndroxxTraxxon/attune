@@ -1,23 +1,32 @@
-//! Execution Manager - Manages execution lifecycle and status transitions
+//! Execution Manager - Handles execution orchestration and lifecycle events
 //!
 //! This module is responsible for:
-//! - Listening for ExecutionStatusChanged messages
-//! - Updating execution records in the database
-//! - Managing workflow executions (parent-child relationships)
+//! - Listening for ExecutionStatusChanged messages from workers
+//! - Orchestrating workflow executions (parent-child relationships)
 //! - Triggering child executions when parent completes
 //! - Handling execution failures and retries
-//! - Publishing status change notifications
+//!
+//! ## Ownership Model
+//!
+//! The Executor owns execution state until it is scheduled to a worker.
+//! After scheduling, the Worker owns the state and updates the database directly.
+//!
+//! - **Executor owns**: Requested → Scheduling → Scheduled
+//! - **Worker owns**: Running → Completed/Failed/Cancelled/Timeout
+//!
+//! The ExecutionManager receives status change notifications for orchestration
+//! purposes (e.g., triggering child executions) but does NOT update the database.
 
 use anyhow::Result;
 use attune_common::{
     models::{enums::ExecutionStatus, Execution},
     mq::{
-        Consumer, ExecutionCompletedPayload, ExecutionRequestedPayload,
-        ExecutionStatusChangedPayload, MessageEnvelope, MessageType, Publisher,
+        Consumer, ExecutionRequestedPayload, ExecutionStatusChangedPayload, MessageEnvelope,
+        MessageType, Publisher,
     },
     repositories::{
         execution::{CreateExecutionInput, ExecutionRepository},
-        Create, FindById, Update,
+        Create, FindById,
     },
 };
 
@@ -74,6 +83,10 @@ impl ExecutionManager {
     }
 
     /// Process an execution status change message
+    ///
+    /// NOTE: This method does NOT update the database. The worker is responsible
+    /// for updating execution state after the execution is scheduled. The executor
+    /// only handles orchestration logic (e.g., triggering workflow children).
     async fn process_status_change(
         pool: &PgPool,
         publisher: &Publisher,
@@ -85,37 +98,38 @@ impl ExecutionManager {
         let status_str = &envelope.payload.new_status;
         let status = Self::parse_execution_status(status_str)?;
 
-        info!(
-            "Processing status change for execution {}: {:?}",
-            execution_id, status
+        debug!(
+            "Received status change notification for execution {}: {}",
+            execution_id, status_str
         );
 
-        // Fetch execution from database
-        let mut execution = ExecutionRepository::find_by_id(pool, execution_id)
+        // Fetch execution from database (for orchestration logic)
+        let execution = ExecutionRepository::find_by_id(pool, execution_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Execution not found: {}", execution_id))?;
 
-        // Update status
-        let old_status = execution.status.clone();
-        execution.status = status;
-
-        // Note: ExecutionStatusChangedPayload doesn't contain result data
-        // Results are only in ExecutionCompletedPayload
-
-        // Update execution in database
-        ExecutionRepository::update(pool, execution.id, execution.clone().into()).await?;
-
-        info!(
-            "Updated execution {} status: {:?} -> {:?}",
-            execution_id, old_status, status
-        );
-
-        // Handle status-specific logic
+        // Handle orchestration logic based on status
+        // Note: Worker has already updated the database directly
         match status {
             ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Cancelled => {
+                info!(
+                    "Execution {} reached terminal state: {:?}, handling orchestration",
+                    execution_id, status
+                );
                 Self::handle_completion(pool, publisher, &execution).await?;
             }
-            _ => {}
+            ExecutionStatus::Running => {
+                debug!(
+                    "Execution {} now running (worker has updated DB)",
+                    execution_id
+                );
+            }
+            _ => {
+                debug!(
+                    "Execution {} status changed to {:?} (no orchestration needed)",
+                    execution_id, status
+                );
+            }
         }
 
         Ok(())
@@ -159,8 +173,9 @@ impl ExecutionManager {
             }
         }
 
-        // Publish completion notification
-        Self::publish_completion_notification(pool, publisher, execution).await?;
+        // NOTE: Completion notification is published by the worker, not here.
+        // This prevents duplicate execution.completed messages that would cause
+        // the queue manager to decrement active_count twice.
 
         Ok(())
     }
@@ -229,38 +244,11 @@ impl ExecutionManager {
         Ok(())
     }
 
-    /// Publish execution completion notification
-    async fn publish_completion_notification(
-        _pool: &PgPool,
-        publisher: &Publisher,
-        execution: &Execution,
-    ) -> Result<()> {
-        // Get action_id (required field)
-        let action_id = execution
-            .action
-            .ok_or_else(|| anyhow::anyhow!("Execution {} has no action_id", execution.id))?;
-
-        let payload = ExecutionCompletedPayload {
-            execution_id: execution.id,
-            action_id,
-            action_ref: execution.action_ref.clone(),
-            status: format!("{:?}", execution.status),
-            result: execution.result.clone(),
-            completed_at: chrono::Utc::now(),
-        };
-
-        let envelope =
-            MessageEnvelope::new(MessageType::ExecutionCompleted, payload).with_source("executor");
-
-        publisher.publish_envelope(&envelope).await?;
-
-        info!(
-            "Published execution.completed notification for execution: {}",
-            execution.id
-        );
-
-        Ok(())
-    }
+    // REMOVED: publish_completion_notification
+    // This method was causing duplicate execution.completed messages.
+    // The worker is responsible for publishing completion notifications,
+    // not the executor. Removing this prevents double-decrementing the
+    // queue manager's active_count.
 }
 
 #[cfg(test)]

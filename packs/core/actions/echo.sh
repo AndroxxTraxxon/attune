@@ -36,7 +36,7 @@ while IFS= read -r line; do
 done
 
 # Echo the message (even if empty)
-echo "$message"
+echo -n "$message"
 
 # Exit successfully
 exit 0

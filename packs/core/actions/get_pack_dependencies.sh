@@ -1,65 +1,148 @@
-#!/bin/bash
-# Get Pack Dependencies Action - API Wrapper
-# Thin wrapper around POST /api/v1/packs/dependencies
+#!/bin/sh
+# Get Pack Dependencies Action - Core Pack
+# API Wrapper for POST /api/v1/packs/dependencies
+#
+# This script uses pure POSIX shell without external dependencies like jq.
+# It reads parameters in DOTENV format from stdin until the delimiter.
 
 set -e
-set -o pipefail
 
-# Read JSON parameters from stdin
-INPUT=$(cat)
+# Initialize variables
+pack_paths=""
+skip_validation="false"
+api_url="http://localhost:8080"
+api_token=""
 
-# Parse parameters using jq
-PACK_PATHS=$(echo "$INPUT" | jq -c '.pack_paths // []')
-SKIP_VALIDATION=$(echo "$INPUT" | jq -r '.skip_validation // false')
-API_URL=$(echo "$INPUT" | jq -r '.api_url // "http://localhost:8080"')
-API_TOKEN=$(echo "$INPUT" | jq -r '.api_token // ""')
+# Read DOTENV-formatted parameters from stdin until delimiter
+while IFS= read -r line; do
+    # Check for parameter delimiter
+    case "$line" in
+        *"---ATTUNE_PARAMS_END---"*)
+            break
+            ;;
+    esac
+    [ -z "$line" ] && continue
+
+    key="${line%%=*}"
+    value="${line#*=}"
+
+    # Remove quotes if present (both single and double)
+    case "$value" in
+        \"*\")
+            value="${value#\"}"
+            value="${value%\"}"
+            ;;
+        \'*\')
+            value="${value#\'}"
+            value="${value%\'}"
+            ;;
+    esac
+
+    # Process parameters
+    case "$key" in
+        pack_paths)
+            pack_paths="$value"
+            ;;
+        skip_validation)
+            skip_validation="$value"
+            ;;
+        api_url)
+            api_url="$value"
+            ;;
+        api_token)
+            api_token="$value"
+            ;;
+    esac
+done
 
 # Validate required parameters
-PACK_COUNT=$(echo "$PACK_PATHS" | jq -r 'length' 2>/dev/null || echo "0")
-if [[ "$PACK_COUNT" -eq 0 ]]; then
-    echo '{"dependencies":[],"runtime_requirements":{},"missing_dependencies":[],"analyzed_packs":[],"errors":[{"pack_path":"input","error":"No pack paths provided"}]}' >&1
+if [ -z "$pack_paths" ]; then
+    printf '{"dependencies":[],"runtime_requirements":{},"missing_dependencies":[],"analyzed_packs":[],"errors":[{"pack_path":"input","error":"No pack paths provided"}]}\n'
     exit 1
 fi
 
-# Build request body
-REQUEST_BODY=$(jq -n \
-    --argjson pack_paths "$PACK_PATHS" \
-    --argjson skip_validation "$([[ "$SKIP_VALIDATION" == "true" ]] && echo true || echo false)" \
-    '{
-        pack_paths: $pack_paths,
-        skip_validation: $skip_validation
-    }')
+# Normalize boolean
+case "$skip_validation" in
+    true|True|TRUE|yes|Yes|YES|1) skip_validation="true" ;;
+    *) skip_validation="false" ;;
+esac
 
-# Make API call
-CURL_ARGS=(
-    -X POST
-    -H "Content-Type: application/json"
-    -H "Accept: application/json"
-    -d "$REQUEST_BODY"
-    -s
-    -w "\n%{http_code}"
-    --max-time 60
-    --connect-timeout 10
+# Build JSON request body (escape pack_paths value for JSON)
+pack_paths_escaped=$(printf '%s' "$pack_paths" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+request_body=$(cat <<EOF
+{
+  "pack_paths": $pack_paths_escaped,
+  "skip_validation": $skip_validation
+}
+EOF
 )
 
-if [[ -n "$API_TOKEN" ]] && [[ "$API_TOKEN" != "null" ]]; then
-    CURL_ARGS+=(-H "Authorization: Bearer ${API_TOKEN}")
-fi
+# Create temp files for curl
+temp_response=$(mktemp)
+temp_headers=$(mktemp)
 
-RESPONSE=$(curl "${CURL_ARGS[@]}" "${API_URL}/api/v1/packs/dependencies" 2>/dev/null || echo -e "\n000")
+cleanup() {
+    rm -f "$temp_response" "$temp_headers"
+}
+trap cleanup EXIT
 
-# Extract status code (last line)
-HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
-BODY=$(echo "$RESPONSE" | head -n -1)
+# Make API call
+http_code=$(curl -X POST \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json" \
+    ${api_token:+-H "Authorization: Bearer ${api_token}"} \
+    -d "$request_body" \
+    -s \
+    -w "%{http_code}" \
+    -o "$temp_response" \
+    --max-time 60 \
+    --connect-timeout 10 \
+    "${api_url}/api/v1/packs/dependencies" 2>/dev/null || echo "000")
 
 # Check HTTP status
-if [[ "$HTTP_CODE" -ge 200 ]] && [[ "$HTTP_CODE" -lt 300 ]]; then
-    # Extract data field from API response
-    echo "$BODY" | jq -r '.data // .'
+if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+    # Success - extract data field from API response
+    response_body=$(cat "$temp_response")
+
+    # Try to extract .data field using simple text processing
+    # If response contains "data" field, extract it; otherwise use whole response
+    case "$response_body" in
+        *'"data":'*)
+            # Extract content after "data": up to the closing brace
+            # This is a simple extraction - assumes well-formed JSON
+            data_content=$(printf '%s' "$response_body" | sed -n 's/.*"data":\s*\(.*\)}/\1/p')
+            if [ -n "$data_content" ]; then
+                printf '%s\n' "$data_content"
+            else
+                cat "$temp_response"
+            fi
+            ;;
+        *)
+            cat "$temp_response"
+            ;;
+    esac
     exit 0
 else
-    # Error response
-    ERROR_MSG=$(echo "$BODY" | jq -r '.error // .message // "API request failed"' 2>/dev/null || echo "API request failed")
+    # Error response - try to extract error message
+    error_msg="API request failed"
+    if [ -s "$temp_response" ]; then
+        # Try to extract error or message field
+        response_content=$(cat "$temp_response")
+        case "$response_content" in
+            *'"error":'*)
+                error_msg=$(printf '%s' "$response_content" | sed -n 's/.*"error":\s*"\([^"]*\)".*/\1/p')
+                [ -z "$error_msg" ] && error_msg="API request failed"
+                ;;
+            *'"message":'*)
+                error_msg=$(printf '%s' "$response_content" | sed -n 's/.*"message":\s*"\([^"]*\)".*/\1/p')
+                [ -z "$error_msg" ] && error_msg="API request failed"
+                ;;
+        esac
+    fi
+
+    # Escape error message for JSON
+    error_msg_escaped=$(printf '%s' "$error_msg" | sed 's/\\/\\\\/g; s/"/\\"/g')
 
     cat <<EOF
 {
@@ -69,7 +152,7 @@ else
   "analyzed_packs": [],
   "errors": [{
     "pack_path": "api",
-    "error": "API call failed (HTTP $HTTP_CODE): $ERROR_MSG"
+    "error": "API call failed (HTTP $http_code): $error_msg_escaped"
   }]
 }
 EOF

@@ -347,6 +347,10 @@ pub struct WorkerConfig {
     #[serde(default = "default_max_stderr_bytes")]
     pub max_stderr_bytes: usize,
 
+    /// Graceful shutdown timeout in seconds
+    #[serde(default = "default_shutdown_timeout")]
+    pub shutdown_timeout: Option<u64>,
+
     /// Enable log streaming instead of buffering
     #[serde(default = "default_true")]
     pub stream_logs: bool,
@@ -360,8 +364,12 @@ fn default_heartbeat_interval() -> u64 {
     30
 }
 
+fn default_shutdown_timeout() -> Option<u64> {
+    Some(30)
+}
+
 fn default_task_timeout() -> u64 {
-    300
+    300 // 5 minutes
 }
 
 fn default_max_stdout_bytes() -> usize {
@@ -489,6 +497,32 @@ impl Default for PackRegistryConfig {
     }
 }
 
+/// Executor service configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutorConfig {
+    /// How long an execution can remain in SCHEDULED status before timing out (seconds)
+    #[serde(default)]
+    pub scheduled_timeout: Option<u64>,
+
+    /// How often to check for stale executions (seconds)
+    #[serde(default)]
+    pub timeout_check_interval: Option<u64>,
+
+    /// Whether to enable the execution timeout monitor
+    #[serde(default)]
+    pub enable_timeout_monitor: Option<bool>,
+}
+
+impl Default for ExecutorConfig {
+    fn default() -> Self {
+        Self {
+            scheduled_timeout: Some(300),     // 5 minutes
+            timeout_check_interval: Some(60), // 1 minute
+            enable_timeout_monitor: Some(true),
+        }
+    }
+}
+
 /// Main application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -540,6 +574,9 @@ pub struct Config {
     /// Pack registry configuration
     #[serde(default)]
     pub pack_registry: PackRegistryConfig,
+
+    /// Executor configuration (optional, for executor service)
+    pub executor: Option<ExecutorConfig>,
 }
 
 fn default_service_name() -> String {

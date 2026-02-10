@@ -87,32 +87,47 @@ Execution Requested → Scheduler → Worker Selection → Execution Scheduled �
 
 ### 3. Execution Manager
 
-**Purpose**: Manages execution lifecycle and status transitions.
+**Purpose**: Orchestrates execution workflows and handles lifecycle events.
 
 **Responsibilities**:
 - Listens for `execution.status.*` messages from workers
-- Updates execution records with status changes
-- Handles execution completion (success, failure, cancellation)
-- Orchestrates workflow executions (parent-child relationships)
-- Publishes completion notifications for downstream consumers
+- **Does NOT update execution state** (worker owns state after scheduling)
+- Handles execution completion orchestration (triggering child executions)
+- Manages workflow executions (parent-child relationships)
+- Coordinates workflow state transitions
+
+**Ownership Model**:
+- **Executor owns**: Requested → Scheduling → Scheduled (updates DB)
+  - Includes pre-handoff cancellations/failures (before `execution.scheduled` is published)
+- **Worker owns**: Running → Completed/Failed/Cancelled (updates DB)
+  - Includes post-handoff cancellations/failures (after receiving `execution.scheduled`)
+- **Handoff Point**: When `execution.scheduled` message is **published** to worker
+  - Before publish: Executor owns and updates state
+  - After publish: Worker owns and updates state
 
 **Message Flow**:
 ```
-Worker Status Update → Execution Manager → Database Update → Completion Handler
+Worker Status Update → Execution Manager → Orchestration Logic (Read-Only)
+                                         → Trigger Child Executions
 ```
 
 **Status Lifecycle**:
 ```
-Requested → Scheduling → Scheduled → Running → Completed/Failed/Cancelled
-                                        │
-                                        └→ Child Executions (workflows)
+Requested → Scheduling → Scheduled → [HANDOFF: execution.scheduled published] → Running → Completed/Failed/Cancelled
+    │                       │                                                     │
+    └─ Executor Updates ───┘                                                     └─ Worker Updates
+    │  (includes pre-handoff                                                     │  (includes post-handoff
+    │   Cancelled)                                                               │   Cancelled/Timeout/Abandoned)
+                                                                                  │
+                                                                                  └→ Child Executions (workflows)
 ```
 
 **Key Implementation Details**:
-- Parses status strings to typed enums for type safety
+- Receives status change notifications for orchestration purposes only
+- Does not update execution state after handoff to worker
 - Handles workflow orchestration (parent-child execution chaining)
 - Only triggers child executions on successful parent completion
-- Publishes completion events for notification service
+- Read-only access to execution records for orchestration logic
 
 ## Message Queue Integration
 
@@ -123,12 +138,14 @@ The Executor consumes and produces several message types:
 **Consumed**:
 - `enforcement.created` - New enforcement from triggered rules
 - `execution.requested` - Execution scheduling requests
-- `execution.status.*` - Status updates from workers
+- `execution.status.changed` - Status change notifications from workers (for orchestration)
+- `execution.completed` - Completion notifications from workers (for queue management)
 
 **Published**:
 - `execution.requested` - To scheduler (from enforcement processor)
-- `execution.scheduled` - To workers (from scheduler)
-- `execution.completed` - To notifier (from execution manager)
+- `execution.scheduled` - To workers (from scheduler) **← OWNERSHIP HANDOFF**
+
+**Note**: The executor does NOT publish `execution.completed` messages. This is the worker's responsibility as the authoritative source of execution state after scheduling.
 
 ### Message Envelope Structure
 
@@ -186,11 +203,34 @@ use attune_common::repositories::{
 };
 ```
 
+### Database Update Ownership
+
+**Executor updates execution state** from creation through handoff:
+- Creates execution records (`Requested` status)
+- Updates status during scheduling (`Scheduling` → `Scheduled`)
+- Publishes `execution.scheduled` message to worker **← HANDOFF POINT**
+- **Handles cancellations/failures BEFORE handoff** (before message is published)
+  - Example: User cancels execution while queued by concurrency policy
+  - Executor updates to `Cancelled`, worker never receives message
+
+**Worker updates execution state** after receiving handoff:
+- Receives `execution.scheduled` message (takes ownership)
+- Updates status when execution starts (`Running`)
+- Updates status when execution completes (`Completed`, `Failed`, etc.)
+- **Handles cancellations/failures AFTER handoff** (after receiving message)
+- Updates result data and artifacts
+- Worker only owns executions it has received
+
+**Executor reads execution state** for orchestration after handoff:
+- Receives status change notifications from workers
+- Reads execution records to trigger workflow children
+- Does NOT update execution state after publishing `execution.scheduled`
+
 ### Transaction Support
 
 Future implementations will use database transactions for multi-step operations:
 - Creating execution + publishing message (atomic)
-- Status update + completion handling (atomic)
+- Enforcement processing + execution creation (atomic)
 
 ## Configuration
 

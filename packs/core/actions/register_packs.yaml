@@ -10,7 +10,7 @@ entry_point: register_packs.sh
 
 # Parameter delivery: stdin for secure parameter passing (no env vars)
 parameter_delivery: stdin
-parameter_format: json
+parameter_format: dotenv
 
 # Output format: json (structured data parsing enabled)
 output_format: json

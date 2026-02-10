@@ -275,11 +275,28 @@ impl Connection {
         config: &QueueConfig,
         dlx_exchange: &str,
     ) -> MqResult<()> {
+        self.declare_queue_with_dlx_and_ttl(config, dlx_exchange, None)
+            .await
+    }
+
+    /// Declare a queue with dead letter exchange and optional TTL
+    pub async fn declare_queue_with_dlx_and_ttl(
+        &self,
+        config: &QueueConfig,
+        dlx_exchange: &str,
+        ttl_ms: Option<u64>,
+    ) -> MqResult<()> {
         let channel = self.create_channel().await?;
 
+        let ttl_info = if let Some(ttl) = ttl_ms {
+            format!(" and TTL {}ms", ttl)
+        } else {
+            String::new()
+        };
+
         debug!(
-            "Declaring queue '{}' with dead letter exchange '{}'",
-            config.name, dlx_exchange
+            "Declaring queue '{}' with dead letter exchange '{}'{}",
+            config.name, dlx_exchange, ttl_info
         );
 
         let mut args = FieldTable::default();
@@ -287,6 +304,14 @@ impl Connection {
             "x-dead-letter-exchange".into(),
             lapin::types::AMQPValue::LongString(dlx_exchange.into()),
         );
+
+        // Add message TTL if specified
+        if let Some(ttl) = ttl_ms {
+            args.insert(
+                "x-message-ttl".into(),
+                lapin::types::AMQPValue::LongInt(ttl as i32),
+            );
+        }
 
         channel
             .queue_declare(
@@ -302,14 +327,14 @@ impl Connection {
             .await
             .map_err(|e| {
                 MqError::QueueDeclaration(format!(
-                    "Failed to declare queue '{}' with DLX: {}",
-                    config.name, e
+                    "Failed to declare queue '{}' with DLX{}: {}",
+                    config.name, ttl_info, e
                 ))
             })?;
 
         info!(
-            "Queue '{}' declared with dead letter exchange '{}'",
-            config.name, dlx_exchange
+            "Queue '{}' declared with dead letter exchange '{}'{}",
+            config.name, dlx_exchange, ttl_info
         );
         Ok(())
     }
@@ -448,7 +473,10 @@ impl Connection {
             None
         };
 
-        self.declare_queue_with_optional_dlx(&queue_config, dlx)
+        // Worker queues use TTL to expire unprocessed messages
+        let ttl_ms = Some(config.rabbitmq.worker_queue_ttl_ms);
+
+        self.declare_queue_with_optional_dlx_and_ttl(&queue_config, dlx, ttl_ms)
             .await?;
 
         // Bind to execution dispatch routing key
@@ -522,9 +550,27 @@ impl Connection {
         config: &QueueConfig,
         dlx: Option<&str>,
     ) -> MqResult<()> {
+        self.declare_queue_with_optional_dlx_and_ttl(config, dlx, None)
+            .await
+    }
+
+    /// Helper to declare queue with optional DLX and TTL
+    async fn declare_queue_with_optional_dlx_and_ttl(
+        &self,
+        config: &QueueConfig,
+        dlx: Option<&str>,
+        ttl_ms: Option<u64>,
+    ) -> MqResult<()> {
         if let Some(dlx_exchange) = dlx {
-            self.declare_queue_with_dlx(config, dlx_exchange).await
+            self.declare_queue_with_dlx_and_ttl(config, dlx_exchange, ttl_ms)
+                .await
         } else {
+            if ttl_ms.is_some() {
+                warn!(
+                    "Queue '{}' configured with TTL but no DLX - messages will be dropped",
+                    config.name
+                );
+            }
             self.declare_queue(config).await
         }
     }

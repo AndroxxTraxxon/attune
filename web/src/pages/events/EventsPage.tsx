@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEvents } from "@/hooks/useEvents";
 import {
@@ -9,9 +9,12 @@ import {
 import type { EventSummary } from "@/api";
 
 export default function EventsPage() {
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
-  const [triggerFilter, setTriggerFilter] = useState<string>("");
+  const [triggerFilter, setTriggerFilter] = useState<string>(
+    searchParams.get("trigger_ref") || "",
+  );
   const pageSize = 50;
 
   // Set up WebSocket for real-time event updates with stable callback

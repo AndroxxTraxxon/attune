@@ -35,6 +35,7 @@ tera = "1.19"
 serde_yaml_ng = { workspace = true }
 validator = { workspace = true }
 futures = { workspace = true }
+rand = "0.8"
 
 [dev-dependencies]
 tempfile = { workspace = true }

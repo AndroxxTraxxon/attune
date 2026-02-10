@@ -131,28 +131,38 @@ echo "Hello, $PARAM_NAME!"
 
 ### 4. Action Executor
 
-**Purpose**: Orchestrate the complete execution flow for an action.
+**Purpose**: Orchestrate the complete execution flow for an action and own execution state after handoff.
 
 **Execution Flow**:
 ```
-1. Load execution record from database
-2. Update status to Running
-3. Load action definition by reference
-4. Prepare execution context (parameters, env vars, timeout)
-5. Select and execute in appropriate runtime
-6. Capture results (stdout, stderr, return value)
-7. Store artifacts (logs, results)
-8. Update execution status (Succeeded/Failed)
-9. Publish status update messages
+1. Receive execution.scheduled message from executor
+2. Load execution record from database
+3. Update status to Running (owns state after handoff)
+4. Load action definition by reference
+5. Prepare execution context (parameters, env vars, timeout)
+6. Select and execute in appropriate runtime
+7. Capture results (stdout, stderr, return value)
+8. Store artifacts (logs, results)
+9. Update execution status (Completed/Failed) in database
+10. Publish status change notifications
+11. Publish completion notification for queue management
 ```
+
+**Ownership Model**:
+- **Worker owns execution state** after receiving `execution.scheduled`
+- **Authoritative source** for all status updates: Running, Completed, Failed, Cancelled, etc.
+- **Updates database directly** for all state changes
+- **Publishes notifications** for orchestration and monitoring
 
 **Responsibilities**:
 - Coordinate execution lifecycle
 - Load action and execution data from database
+- **Update execution state in database** (after handoff from executor)
 - Prepare execution context with parameters and environment
 - Execute action via runtime registry
 - Handle success and failure cases
 - Store execution artifacts
+- Publish status change notifications
 
 **Key Implementation Details**:
 - Parameters merged: action defaults + execution overrides
@@ -246,7 +256,10 @@ See `docs/secrets-management.md` for comprehensive documentation.
 - Register worker in database
 - Start heartbeat manager
 - Consume execution messages from worker-specific queue
-- Publish execution status updates
+- **Own execution state** after receiving scheduled executions
+- **Update execution status in database** (Running, Completed, Failed, etc.)
+- Publish execution status change notifications
+- Publish execution completion notifications
 - Handle graceful shutdown
 
 **Message Flow**:
@@ -407,8 +420,9 @@ pub struct ExecutionResult {
 ### Error Propagation
 
 - Runtime errors captured in `ExecutionResult.error`
-- Execution status updated to Failed in database
-- Error published in status update message
+- **Worker updates** execution status to Failed in database (owns state)
+- Error published in status change notification message
+- Error published in completion notification message
 - Artifacts still stored for failed executions
 - Logs preserved for debugging
 

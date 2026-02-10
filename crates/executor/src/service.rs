@@ -20,6 +20,7 @@ use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
 use crate::completion_listener::CompletionListener;
+use crate::dead_letter_handler::{create_dlq_consumer_config, DeadLetterHandler};
 use crate::enforcement_processor::EnforcementProcessor;
 use crate::event_processor::EventProcessor;
 use crate::execution_manager::ExecutionManager;
@@ -27,6 +28,7 @@ use crate::inquiry_handler::InquiryHandler;
 use crate::policy_enforcer::PolicyEnforcer;
 use crate::queue_manager::{ExecutionQueueManager, QueueConfig};
 use crate::scheduler::ExecutionScheduler;
+use crate::timeout_monitor::{ExecutionTimeoutMonitor, TimeoutMonitorConfig};
 
 /// Main executor service that orchestrates execution processing
 #[derive(Clone)]
@@ -355,6 +357,75 @@ impl ExecutorService {
             Ok(())
         }));
 
+        // Start worker heartbeat monitor
+        info!("Starting worker heartbeat monitor...");
+        let worker_pool = self.inner.pool.clone();
+        handles.push(tokio::spawn(async move {
+            Self::worker_heartbeat_monitor_loop(worker_pool, 60).await;
+            Ok(())
+        }));
+
+        // Start execution timeout monitor
+        info!("Starting execution timeout monitor...");
+        let timeout_config = TimeoutMonitorConfig {
+            scheduled_timeout: std::time::Duration::from_secs(
+                self.inner
+                    .config
+                    .executor
+                    .as_ref()
+                    .and_then(|e| e.scheduled_timeout)
+                    .unwrap_or(300), // Default: 5 minutes
+            ),
+            check_interval: std::time::Duration::from_secs(
+                self.inner
+                    .config
+                    .executor
+                    .as_ref()
+                    .and_then(|e| e.timeout_check_interval)
+                    .unwrap_or(60), // Default: 1 minute
+            ),
+            enabled: self
+                .inner
+                .config
+                .executor
+                .as_ref()
+                .and_then(|e| e.enable_timeout_monitor)
+                .unwrap_or(true), // Default: enabled
+        };
+        let timeout_monitor = Arc::new(ExecutionTimeoutMonitor::new(
+            self.inner.pool.clone(),
+            self.inner.publisher.clone(),
+            timeout_config,
+        ));
+        handles.push(tokio::spawn(async move { timeout_monitor.start().await }));
+
+        // Start dead letter handler (if DLQ is enabled)
+        if self.inner.mq_config.rabbitmq.dead_letter.enabled {
+            info!("Starting dead letter handler...");
+            let dlq_name = format!(
+                "{}.queue",
+                self.inner.mq_config.rabbitmq.dead_letter.exchange
+            );
+            let dlq_consumer = Consumer::new(
+                &self.inner.mq_connection,
+                create_dlq_consumer_config(&dlq_name, "executor.dlq"),
+            )
+            .await?;
+            let dlq_handler = Arc::new(
+                DeadLetterHandler::new(Arc::new(self.inner.pool.clone()), dlq_consumer)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to create DLQ handler: {}", e))?,
+            );
+            handles.push(tokio::spawn(async move {
+                dlq_handler
+                    .start()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("DLQ handler error: {}", e))
+            }));
+        } else {
+            info!("Dead letter queue is disabled, skipping DLQ handler");
+        }
+
         info!("Executor Service started successfully");
         info!("All processors are listening for messages...");
 
@@ -391,6 +462,113 @@ impl ExecutorService {
         info!("Executor Service stopped");
 
         Ok(())
+    }
+
+    /// Worker heartbeat monitor loop
+    ///
+    /// Periodically checks for stale workers and marks them as inactive
+    async fn worker_heartbeat_monitor_loop(pool: PgPool, interval_secs: u64) {
+        use attune_common::models::enums::WorkerStatus;
+        use attune_common::repositories::{
+            runtime::{UpdateWorkerInput, WorkerRepository},
+            Update,
+        };
+        use chrono::Utc;
+        use std::time::Duration;
+
+        let check_interval = Duration::from_secs(interval_secs);
+
+        // Heartbeat staleness threshold: 3x the expected interval (90 seconds)
+        // NOTE: These constants MUST match DEFAULT_HEARTBEAT_INTERVAL and
+        // HEARTBEAT_STALENESS_MULTIPLIER in scheduler.rs to ensure consistency
+        const HEARTBEAT_INTERVAL: u64 = 30;
+        const STALENESS_MULTIPLIER: u64 = 3;
+        let max_age_secs = HEARTBEAT_INTERVAL * STALENESS_MULTIPLIER;
+
+        info!(
+            "Worker heartbeat monitor started (check interval: {}s, staleness threshold: {}s)",
+            interval_secs, max_age_secs
+        );
+
+        loop {
+            tokio::time::sleep(check_interval).await;
+
+            // Get all active workers
+            match WorkerRepository::find_by_status(&pool, WorkerStatus::Active).await {
+                Ok(workers) => {
+                    let now = Utc::now();
+                    let mut deactivated_count = 0;
+
+                    for worker in workers {
+                        // Check if worker has a heartbeat
+                        let Some(last_heartbeat) = worker.last_heartbeat else {
+                            warn!(
+                                "Worker {} (ID: {}) has no heartbeat, marking as inactive",
+                                worker.name, worker.id
+                            );
+
+                            if let Err(e) = WorkerRepository::update(
+                                &pool,
+                                worker.id,
+                                UpdateWorkerInput {
+                                    status: Some(WorkerStatus::Inactive),
+                                    ..Default::default()
+                                },
+                            )
+                            .await
+                            {
+                                error!(
+                                    "Failed to deactivate worker {} (no heartbeat): {}",
+                                    worker.name, e
+                                );
+                            } else {
+                                deactivated_count += 1;
+                            }
+                            continue;
+                        };
+
+                        // Check if heartbeat is stale
+                        let age = now.signed_duration_since(last_heartbeat);
+                        let age_secs = age.num_seconds();
+
+                        if age_secs > max_age_secs as i64 {
+                            warn!(
+                                "Worker {} (ID: {}) heartbeat is stale ({}s old), marking as inactive",
+                                worker.name, worker.id, age_secs
+                            );
+
+                            if let Err(e) = WorkerRepository::update(
+                                &pool,
+                                worker.id,
+                                UpdateWorkerInput {
+                                    status: Some(WorkerStatus::Inactive),
+                                    ..Default::default()
+                                },
+                            )
+                            .await
+                            {
+                                error!(
+                                    "Failed to deactivate worker {} (stale heartbeat): {}",
+                                    worker.name, e
+                                );
+                            } else {
+                                deactivated_count += 1;
+                            }
+                        }
+                    }
+
+                    if deactivated_count > 0 {
+                        info!(
+                            "Deactivated {} worker(s) with stale heartbeats",
+                            deactivated_count
+                        );
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to query active workers for heartbeat check: {}", e);
+                }
+            }
+        }
     }
 
     /// Wait for all tasks to complete

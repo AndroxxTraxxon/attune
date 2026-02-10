@@ -26,19 +26,68 @@ pub fn format_parameters(
     }
 }
 
+/// Flatten nested JSON objects into dotted notation for dotenv format
+/// Example: {"headers": {"Content-Type": "application/json"}} becomes:
+///   headers.Content-Type=application/json
+fn flatten_parameters(
+    params: &HashMap<String, JsonValue>,
+    prefix: &str,
+) -> HashMap<String, String> {
+    let mut flattened = HashMap::new();
+
+    for (key, value) in params {
+        let full_key = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{}.{}", prefix, key)
+        };
+
+        match value {
+            JsonValue::Object(map) => {
+                // Recursively flatten nested objects
+                let nested_params: HashMap<String, JsonValue> =
+                    map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                let nested_flattened = flatten_parameters(&nested_params, &full_key);
+                flattened.extend(nested_flattened);
+            }
+            JsonValue::Array(_) => {
+                // Arrays are serialized as JSON strings
+                flattened.insert(full_key, serde_json::to_string(value).unwrap_or_default());
+            }
+            JsonValue::String(s) => {
+                flattened.insert(full_key, s.clone());
+            }
+            JsonValue::Number(n) => {
+                flattened.insert(full_key, n.to_string());
+            }
+            JsonValue::Bool(b) => {
+                flattened.insert(full_key, b.to_string());
+            }
+            JsonValue::Null => {
+                flattened.insert(full_key, String::new());
+            }
+        }
+    }
+
+    flattened
+}
+
 /// Format parameters as dotenv (key='value')
 /// Note: Parameter names are preserved as-is (case-sensitive)
+/// Nested objects are flattened with dot notation (e.g., headers.Content-Type)
 fn format_dotenv(parameters: &HashMap<String, JsonValue>) -> Result<String, RuntimeError> {
+    let flattened = flatten_parameters(parameters, "");
     let mut lines = Vec::new();
 
-    for (key, value) in parameters {
-        let value_str = value_to_string(value);
-
+    for (key, value) in flattened {
         // Escape single quotes in value
-        let escaped_value = value_str.replace('\'', "'\\''");
+        let escaped_value = value.replace('\'', "'\\''");
 
         lines.push(format!("{}='{}'", key, escaped_value));
     }
+
+    // Sort lines for consistent output
+    lines.sort();
 
     Ok(lines.join("\n"))
 }
@@ -55,17 +104,6 @@ fn format_yaml(parameters: &HashMap<String, JsonValue>) -> Result<String, Runtim
     serde_yaml_ng::to_string(parameters).map_err(|e| {
         RuntimeError::ExecutionFailed(format!("Failed to serialize parameters to YAML: {}", e))
     })
-}
-
-/// Convert JSON value to string representation
-fn value_to_string(value: &JsonValue) -> String {
-    match value {
-        JsonValue::String(s) => s.clone(),
-        JsonValue::Number(n) => n.to_string(),
-        JsonValue::Bool(b) => b.to_string(),
-        JsonValue::Null => String::new(),
-        _ => serde_json::to_string(value).unwrap_or_else(|_| String::new()),
-    }
 }
 
 /// Create a temporary file with parameters
@@ -206,6 +244,44 @@ mod tests {
         assert!(result.contains("message='Hello, World!'"));
         assert!(result.contains("count='42'"));
         assert!(result.contains("enabled='true'"));
+    }
+
+    #[test]
+    fn test_format_dotenv_nested_objects() {
+        let mut params = HashMap::new();
+        params.insert("url".to_string(), json!("https://example.com"));
+        params.insert(
+            "headers".to_string(),
+            json!({"Content-Type": "application/json", "Authorization": "Bearer token"}),
+        );
+        params.insert(
+            "query_params".to_string(),
+            json!({"page": "1", "size": "10"}),
+        );
+
+        let result = format_dotenv(&params).unwrap();
+
+        // Check that nested objects are flattened with dot notation
+        assert!(result.contains("headers.Content-Type='application/json'"));
+        assert!(result.contains("headers.Authorization='Bearer token'"));
+        assert!(result.contains("query_params.page='1'"));
+        assert!(result.contains("query_params.size='10'"));
+        assert!(result.contains("url='https://example.com'"));
+    }
+
+    #[test]
+    fn test_format_dotenv_empty_objects() {
+        let mut params = HashMap::new();
+        params.insert("url".to_string(), json!("https://example.com"));
+        params.insert("headers".to_string(), json!({}));
+        params.insert("query_params".to_string(), json!({}));
+
+        let result = format_dotenv(&params).unwrap();
+
+        // Empty objects should not produce any flattened keys
+        assert!(result.contains("url='https://example.com'"));
+        assert!(!result.contains("headers="));
+        assert!(!result.contains("query_params="));
     }
 
     #[test]

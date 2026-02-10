@@ -270,7 +270,12 @@ impl NativeRuntime {
 
         Ok(ExecutionResult {
             exit_code,
-            stdout: stdout_log.content,
+            // Only populate stdout if result wasn't parsed (avoid duplication)
+            stdout: if result.is_some() {
+                String::new()
+            } else {
+                stdout_log.content
+            },
             stderr: stderr_log.content,
             result,
             duration_ms,
@@ -332,11 +337,8 @@ impl Runtime for NativeRuntime {
             format: context.parameter_format,
         };
 
-        let prepared_params = parameter_passing::prepare_parameters(
-            &context.parameters,
-            &mut env,
-            config,
-        )?;
+        let prepared_params =
+            parameter_passing::prepare_parameters(&context.parameters, &mut env, config)?;
 
         // Get stdin content if parameters are delivered via stdin
         let parameters_stdin = prepared_params.stdin_content();

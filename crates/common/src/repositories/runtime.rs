@@ -428,7 +428,7 @@ impl Update for WorkerRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(" RETURNING id, name, worker_type, runtime, host, port, status, capabilities, meta, last_heartbeat, created, updated");
+        query.push(" RETURNING id, name, worker_type, worker_role, runtime, host, port, status, capabilities, meta, last_heartbeat, created, updated");
 
         let worker = query.build_query_as::<Worker>().fetch_one(executor).await?;
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Core Pack Loader for Attune
+Pack Loader for Attune
 
-This script loads the core pack from the filesystem into the database.
+This script loads a pack from the filesystem into the database.
 It reads pack.yaml, action definitions, trigger definitions, and sensor definitions
 and creates all necessary database entries.
 
 Usage:
-    python3 scripts/load_core_pack.py [--database-url URL] [--pack-dir DIR]
+    python3 scripts/load_core_pack.py [--database-url URL] [--pack-dir DIR] [--pack-name NAME]
 
 Environment Variables:
     DATABASE_URL: PostgreSQL connection string (default: from config or localhost)
@@ -28,7 +28,6 @@ import yaml
 # Default configuration
 DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/attune"
 DEFAULT_PACKS_DIR = "./packs"
-CORE_PACK_REF = "core"
 
 
 def generate_label(name: str) -> str:
@@ -43,16 +42,20 @@ def generate_label(name: str) -> str:
     return " ".join(word.capitalize() for word in name.replace("_", " ").split())
 
 
-class CorePackLoader:
-    """Loads the core pack into the database"""
+class PackLoader:
+    """Loads a pack into the database"""
 
-    def __init__(self, database_url: str, packs_dir: Path, schema: str = "public"):
+    def __init__(
+        self, database_url: str, packs_dir: Path, pack_name: str, schema: str = "public"
+    ):
         self.database_url = database_url
         self.packs_dir = packs_dir
-        self.core_pack_dir = packs_dir / CORE_PACK_REF
+        self.pack_name = pack_name
+        self.pack_dir = packs_dir / pack_name
         self.schema = schema
         self.conn = None
         self.pack_id = None
+        self.pack_ref = None
 
     def connect(self):
         """Connect to the database"""
@@ -79,10 +82,10 @@ class CorePackLoader:
             return yaml.safe_load(f)
 
     def upsert_pack(self) -> int:
-        """Create or update the core pack"""
+        """Create or update the pack"""
         print("\n→ Loading pack metadata...")
 
-        pack_yaml_path = self.core_pack_dir / "pack.yaml"
+        pack_yaml_path = self.pack_dir / "pack.yaml"
         if not pack_yaml_path.exists():
             raise FileNotFoundError(f"pack.yaml not found at {pack_yaml_path}")
 
@@ -92,6 +95,7 @@ class CorePackLoader:
 
         # Prepare pack data
         ref = pack_data["ref"]
+        self.pack_ref = ref
         label = pack_data["label"]
         description = pack_data.get("description", "")
         version = pack_data["version"]
@@ -147,7 +151,7 @@ class CorePackLoader:
         """Load trigger definitions"""
         print("\n→ Loading triggers...")
 
-        triggers_dir = self.core_pack_dir / "triggers"
+        triggers_dir = self.pack_dir / "triggers"
         if not triggers_dir.exists():
             print("  No triggers directory found")
             return {}
@@ -158,8 +162,15 @@ class CorePackLoader:
         for yaml_file in sorted(triggers_dir.glob("*.yaml")):
             trigger_data = self.load_yaml(yaml_file)
 
-            ref = f"{CORE_PACK_REF}.{trigger_data['name']}"
-            label = trigger_data.get("label") or generate_label(trigger_data["name"])
+            # Use ref from YAML (new format) or construct from name (old format)
+            ref = trigger_data.get("ref")
+            if not ref:
+                # Fallback for old format - should not happen with new pack format
+                ref = f"{self.pack_ref}.{trigger_data['name']}"
+
+            # Extract name from ref for label generation
+            name = ref.split(".")[-1] if "." in ref else ref
+            label = trigger_data.get("label") or generate_label(name)
             description = trigger_data.get("description", "")
             enabled = trigger_data.get("enabled", True)
             param_schema = json.dumps(trigger_data.get("parameters", {}))
@@ -184,7 +195,7 @@ class CorePackLoader:
                 (
                     ref,
                     self.pack_id,
-                    CORE_PACK_REF,
+                    self.pack_ref,
                     label,
                     description,
                     enabled,
@@ -205,7 +216,7 @@ class CorePackLoader:
         """Load action definitions"""
         print("\n→ Loading actions...")
 
-        actions_dir = self.core_pack_dir / "actions"
+        actions_dir = self.pack_dir / "actions"
         if not actions_dir.exists():
             print("  No actions directory found")
             return {}
@@ -219,17 +230,23 @@ class CorePackLoader:
         for yaml_file in sorted(actions_dir.glob("*.yaml")):
             action_data = self.load_yaml(yaml_file)
 
-            ref = f"{CORE_PACK_REF}.{action_data['name']}"
-            label = action_data.get("label") or generate_label(action_data["name"])
+            # Use ref from YAML (new format) or construct from name (old format)
+            ref = action_data.get("ref")
+            if not ref:
+                # Fallback for old format - should not happen with new pack format
+                ref = f"{self.pack_ref}.{action_data['name']}"
+
+            # Extract name from ref for label generation and entrypoint detection
+            name = ref.split(".")[-1] if "." in ref else ref
+            label = action_data.get("label") or generate_label(name)
             description = action_data.get("description", "")
 
             # Determine entrypoint
             entrypoint = action_data.get("entry_point", "")
             if not entrypoint:
                 # Try to find corresponding script file
-                action_name = action_data["name"]
                 for ext in [".sh", ".py"]:
-                    script_path = actions_dir / f"{action_name}{ext}"
+                    script_path = actions_dir / f"{name}{ext}"
                     if script_path.exists():
                         entrypoint = str(script_path.relative_to(self.packs_dir))
                         break
@@ -288,7 +305,7 @@ class CorePackLoader:
                 (
                     ref,
                     self.pack_id,
-                    CORE_PACK_REF,
+                    self.pack_ref,
                     label,
                     description,
                     entrypoint,
@@ -326,7 +343,7 @@ class CorePackLoader:
             (
                 "core.action.shell",
                 self.pack_id,
-                CORE_PACK_REF,
+                self.pack_ref,
                 "Shell",
                 "Shell script runtime",
                 json.dumps({"shell": {"command": "sh"}}),
@@ -338,7 +355,7 @@ class CorePackLoader:
         """Load sensor definitions"""
         print("\n→ Loading sensors...")
 
-        sensors_dir = self.core_pack_dir / "sensors"
+        sensors_dir = self.pack_dir / "sensors"
         if not sensors_dir.exists():
             print("  No sensors directory found")
             return {}
@@ -352,8 +369,15 @@ class CorePackLoader:
         for yaml_file in sorted(sensors_dir.glob("*.yaml")):
             sensor_data = self.load_yaml(yaml_file)
 
-            ref = f"{CORE_PACK_REF}.{sensor_data['name']}"
-            label = sensor_data.get("label") or generate_label(sensor_data["name"])
+            # Use ref from YAML (new format) or construct from name (old format)
+            ref = sensor_data.get("ref")
+            if not ref:
+                # Fallback for old format - should not happen with new pack format
+                ref = f"{self.pack_ref}.{sensor_data['name']}"
+
+            # Extract name from ref for label generation and entrypoint detection
+            name = ref.split(".")[-1] if "." in ref else ref
+            label = sensor_data.get("label") or generate_label(name)
             description = sensor_data.get("description", "")
             enabled = sensor_data.get("enabled", True)
 
@@ -373,15 +397,14 @@ class CorePackLoader:
                 if "." in first_trigger:
                     trigger_ref = first_trigger
                 else:
-                    trigger_ref = f"{CORE_PACK_REF}.{first_trigger}"
+                    trigger_ref = f"{self.pack_ref}.{first_trigger}"
                 trigger_id = trigger_ids.get(trigger_ref)
 
             # Determine entrypoint
             entry_point = sensor_data.get("entry_point", "")
             if not entry_point:
-                sensor_name = sensor_data["name"]
                 for ext in [".py", ".sh"]:
-                    script_path = sensors_dir / f"{sensor_name}{ext}"
+                    script_path = sensors_dir / f"{name}{ext}"
                     if script_path.exists():
                         entry_point = str(script_path.relative_to(self.packs_dir))
                         break
@@ -410,7 +433,7 @@ class CorePackLoader:
                 (
                     ref,
                     self.pack_id,
-                    CORE_PACK_REF,
+                    self.pack_ref,
                     label,
                     description,
                     entry_point,
@@ -447,7 +470,7 @@ class CorePackLoader:
             (
                 "core.sensor.builtin",
                 self.pack_id,
-                CORE_PACK_REF,
+                self.pack_ref,
                 "Built-in Sensor",
                 "Built-in sensor runtime",
                 json.dumps([]),
@@ -458,13 +481,11 @@ class CorePackLoader:
     def load_pack(self):
         """Main loading process"""
         print("=" * 60)
-        print("Core Pack Loader")
+        print(f"Pack Loader - {self.pack_name}")
         print("=" * 60)
 
-        if not self.core_pack_dir.exists():
-            raise FileNotFoundError(
-                f"Core pack directory not found: {self.core_pack_dir}"
-            )
+        if not self.pack_dir.exists():
+            raise FileNotFoundError(f"Pack directory not found: {self.pack_dir}")
 
         try:
             self.connect()
@@ -485,7 +506,7 @@ class CorePackLoader:
             self.conn.commit()
 
             print("\n" + "=" * 60)
-            print("✓ Core pack loaded successfully!")
+            print(f"✓ Pack '{self.pack_name}' loaded successfully!")
             print("=" * 60)
             print(f"  Pack ID: {self.pack_id}")
             print(f"  Triggers: {len(trigger_ids)}")
@@ -496,7 +517,7 @@ class CorePackLoader:
         except Exception as e:
             if self.conn:
                 self.conn.rollback()
-            print(f"\n✗ Error loading core pack: {e}")
+            print(f"\n✗ Error loading pack '{self.pack_name}': {e}")
             import traceback
 
             traceback.print_exc()
@@ -506,9 +527,7 @@ class CorePackLoader:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Load the core pack into the Attune database"
-    )
+    parser = argparse.ArgumentParser(description="Load a pack into the Attune database")
     parser.add_argument(
         "--database-url",
         default=os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL),
@@ -519,6 +538,11 @@ def main():
         type=Path,
         default=Path(os.getenv("ATTUNE_PACKS_DIR", DEFAULT_PACKS_DIR)),
         help=f"Base directory for packs (default: {DEFAULT_PACKS_DIR})",
+    )
+    parser.add_argument(
+        "--pack-name",
+        default="core",
+        help="Name of the pack to load (default: core)",
     )
     parser.add_argument(
         "--schema",
@@ -537,7 +561,7 @@ def main():
         print("DRY RUN MODE: No changes will be made")
         print()
 
-    loader = CorePackLoader(args.database_url, args.pack_dir, args.schema)
+    loader = PackLoader(args.database_url, args.pack_dir, args.pack_name, args.schema)
     loader.load_pack()
 
 

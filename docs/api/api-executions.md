@@ -339,7 +339,7 @@ Understanding the execution lifecycle helps with monitoring and debugging:
 ```
 1. requested   → Action execution requested
 2. scheduling  → Finding available worker
-3. scheduled   → Assigned to worker, queued
+3. scheduled   → Assigned to worker, queued [HANDOFF TO WORKER]
 4. running     → Currently executing
 5. completed   → Finished successfully
    OR
@@ -352,32 +352,77 @@ Understanding the execution lifecycle helps with monitoring and debugging:
    abandoned   → Worker lost
 ```
 
+### State Ownership Model
+
+Execution state is owned by different services at different lifecycle stages:
+
+**Executor Ownership (Pre-Handoff):**
+- `requested` → `scheduling` → `scheduled`
+- Executor creates and updates execution records
+- Executor selects worker and publishes `execution.scheduled`
+- **Handles cancellations/failures BEFORE handoff** (before `execution.scheduled` is published)
+
+**Handoff Point:**
+- When `execution.scheduled` message is **published to worker**
+- Before handoff: Executor owns and updates state
+- After handoff: Worker owns and updates state
+
+**Worker Ownership (Post-Handoff):**
+- `running` → `completed` / `failed` / `cancelled` / `timeout` / `abandoned`
+- Worker updates execution records directly
+- Worker publishes status change notifications
+- **Handles cancellations/failures AFTER handoff** (after receiving `execution.scheduled`)
+- Worker only owns executions it has received
+
+**Orchestration (Read-Only):**
+- Executor receives status change notifications for orchestration
+- Triggers workflow children, manages parent-child relationships
+- Does NOT update execution state after handoff
+
 ### State Transitions
 
 **Normal Flow:**
 ```
-requested → scheduling → scheduled → running → completed
+requested → scheduling → scheduled → [HANDOFF] → running → completed
+  └─ Executor Updates ─────────┘      └─ Worker Updates ─┘
 ```
 
 **Failure Flow:**
 ```
-requested → scheduling → scheduled → running → failed
+requested → scheduling → scheduled → [HANDOFF] → running → failed
+  └─ Executor Updates ─────────┘      └─ Worker Updates ──┘
 ```
 
-**Cancellation:**
+**Cancellation (depends on handoff):**
 ```
-(any state) → canceling → cancelled
+Before handoff:
+  requested/scheduling/scheduled → cancelled
+  └─ Executor Updates (worker never notified) ──┘
+
+After handoff:
+  running → canceling → cancelled
+           └─ Worker Updates ──┘
 ```
 
 **Timeout:**
 ```
-scheduled/running → timeout
+scheduled/running → [HANDOFF] → timeout
+                                └─ Worker Updates
 ```
 
 **Abandonment:**
 ```
-scheduled/running → abandoned
+scheduled/running → [HANDOFF] → abandoned
+                                └─ Worker Updates
 ```
+
+**Key Points:**
+- Only one service updates each execution stage (no race conditions)
+- Handoff occurs when `execution.scheduled` is **published**, not just when status is set to `scheduled`
+- If cancelled before handoff: Executor updates (worker never knows execution existed)
+- If cancelled after handoff: Worker updates (worker owns execution)
+- Worker is authoritative source for execution state after receiving `execution.scheduled`
+- Status changes are reflected in real-time via notifications
 
 ---
 
