@@ -8,6 +8,7 @@ use anyhow::Result;
 use attune_common::config::Config;
 use attune_sensor::service::SensorService;
 use clap::Parser;
+use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info};
 
 #[derive(Parser, Debug)]
@@ -56,32 +57,38 @@ async fn main() -> Result<()> {
         info!("Message Queue: {}", mask_connection_string(&mq_config.url));
     }
 
-    // Create sensor service
+    // Create and start sensor service
     let service = SensorService::new(config).await?;
 
     info!("Sensor Service initialized successfully");
 
-    // Set up graceful shutdown handler
-    let service_clone = service.clone();
-    tokio::spawn(async move {
-        if let Err(e) = tokio::signal::ctrl_c().await {
-            error!("Failed to listen for shutdown signal: {}", e);
-        } else {
-            info!("Shutdown signal received");
-            if let Err(e) = service_clone.stop().await {
-                error!("Error during shutdown: {}", e);
-            }
-        }
-    });
-
-    // Start the service
+    // Start the service (spawns background tasks and returns)
     info!("Starting Sensor Service components...");
-    if let Err(e) = service.start().await {
-        error!("Sensor Service error: {}", e);
-        return Err(e);
+    service.start().await?;
+
+    info!("Attune Sensor Service is ready");
+
+    // Setup signal handlers for graceful shutdown
+    let mut sigint = signal(SignalKind::interrupt())?;
+    let mut sigterm = signal(SignalKind::terminate())?;
+
+    tokio::select! {
+        _ = sigint.recv() => {
+            info!("Received SIGINT signal");
+        }
+        _ = sigterm.recv() => {
+            info!("Received SIGTERM signal");
+        }
     }
 
-    info!("Sensor Service has shut down gracefully");
+    info!("Shutting down gracefully...");
+
+    // Stop the service: deregister worker, stop sensors, clean up connections
+    if let Err(e) = service.stop().await {
+        error!("Error during shutdown: {}", e);
+    }
+
+    info!("Attune Sensor Service shutdown complete");
 
     Ok(())
 }

@@ -80,6 +80,7 @@ sensor:
   heartbeat_interval: 10
   max_concurrent_sensors: 20
   sensor_timeout: 120
+  shutdown_timeout: 30
   polling_interval: 5 # Check for new sensors every 5 seconds
   cleanup_interval: 60
 

@@ -1,8 +1,12 @@
 import { useParams, Link } from "react-router-dom";
 import { useExecution } from "@/hooks/useExecutions";
+import { useAction } from "@/hooks/useActions";
 import { useExecutionStream } from "@/hooks/useExecutionStream";
 import { formatDistanceToNow } from "date-fns";
 import { ExecutionStatus } from "@/api";
+import { useState } from "react";
+import { RotateCcw } from "lucide-react";
+import ExecuteActionModal from "@/components/common/ExecuteActionModal";
 
 const getStatusColor = (status: string) => {
   switch (status) {
@@ -30,6 +34,11 @@ export default function ExecutionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { data: executionData, isLoading, error } = useExecution(Number(id));
   const execution = executionData?.data;
+
+  // Fetch the action so we can get param_schema for the re-run modal
+  const { data: actionData } = useAction(execution?.action_ref || "");
+
+  const [showRerunModal, setShowRerunModal] = useState(false);
 
   // Subscribe to real-time updates for this execution
   const { isConnected } = useExecutionStream({
@@ -102,6 +111,19 @@ export default function ExecutionDetailPage() {
               </div>
             )}
           </div>
+          <button
+            onClick={() => setShowRerunModal(true)}
+            disabled={!actionData?.data}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            title={
+              !actionData?.data
+                ? "Loading action details..."
+                : "Re-run this action with the same parameters"
+            }
+          >
+            <RotateCcw className="h-4 w-4" />
+            Re-Run
+          </button>
         </div>
         <p className="text-gray-600 mt-2">
           <Link
@@ -112,6 +134,15 @@ export default function ExecutionDetailPage() {
           </Link>
         </p>
       </div>
+
+      {/* Re-Run Modal */}
+      {showRerunModal && actionData?.data && (
+        <ExecuteActionModal
+          action={actionData.data}
+          onClose={() => setShowRerunModal(false)}
+          initialParameters={execution.config}
+        />
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main Content */}
@@ -295,6 +326,13 @@ export default function ExecutionDetailPage() {
           <div className="bg-white shadow rounded-lg p-6">
             <h2 className="text-lg font-semibold mb-4">Quick Actions</h2>
             <div className="space-y-2">
+              <button
+                onClick={() => setShowRerunModal(true)}
+                disabled={!actionData?.data}
+                className="block w-full px-4 py-2 text-sm text-center bg-blue-50 hover:bg-blue-100 text-blue-700 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Re-Run with Same Parameters
+              </button>
               <Link
                 to={`/actions/${execution.action_ref}`}
                 className="block w-full px-4 py-2 text-sm text-center bg-gray-100 hover:bg-gray-200 rounded"

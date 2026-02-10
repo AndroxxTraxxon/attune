@@ -19,6 +19,7 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
 use crate::artifacts::ArtifactManager;
@@ -51,6 +52,7 @@ pub struct WorkerService {
     mq_connection: Arc<Connection>,
     publisher: Arc<Publisher>,
     consumer: Option<Arc<Consumer>>,
+    consumer_handle: Option<JoinHandle<()>>,
     worker_id: Option<i64>,
 }
 
@@ -266,6 +268,7 @@ impl WorkerService {
             mq_connection: Arc::new(mq_connection),
             publisher: Arc::new(publisher),
             consumer: None,
+            consumer_handle: None,
             worker_id: None,
         })
     }
@@ -305,25 +308,35 @@ impl WorkerService {
         Ok(())
     }
 
-    /// Stop the worker service
+    /// Stop the worker service gracefully
+    ///
+    /// Shutdown order (mirrors sensor service pattern):
+    /// 1. Deregister worker (mark inactive to stop receiving new work)
+    /// 2. Stop heartbeat
+    /// 3. Wait for in-flight tasks with timeout
+    /// 4. Close MQ connection
+    /// 5. Close DB connection
     pub async fn stop(&mut self) -> Result<()> {
         info!("Stopping Worker Service - initiating graceful shutdown");
 
-        // Mark worker as inactive first to stop receiving new tasks
+        // 1. Mark worker as inactive first to stop receiving new tasks
+        // Use if-let instead of ? so shutdown continues even if DB call fails
         {
             let reg = self.registration.read().await;
             info!("Marking worker as inactive to stop receiving new tasks");
-            reg.deregister().await?;
+            if let Err(e) = reg.deregister().await {
+                error!("Failed to deregister worker: {}", e);
+            }
         }
 
-        // Stop heartbeat
+        // 2. Stop heartbeat
         info!("Stopping heartbeat updates");
         self.heartbeat.stop().await;
 
-        // Wait a bit for heartbeat to stop
+        // Wait a bit for heartbeat loop to notice the flag
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        // Wait for in-flight tasks to complete (with timeout)
+        // 3. Wait for in-flight tasks to complete (with timeout)
         let shutdown_timeout = self
             .config
             .worker
@@ -341,6 +354,23 @@ impl WorkerService {
             Ok(_) => info!("All in-flight tasks completed"),
             Err(_) => warn!("Shutdown timeout reached - some tasks may have been interrupted"),
         }
+
+        // 4. Abort consumer task and close message queue connection
+        if let Some(handle) = self.consumer_handle.take() {
+            info!("Stopping consumer task...");
+            handle.abort();
+            // Wait briefly for the task to finish
+            let _ = handle.await;
+        }
+
+        info!("Closing message queue connection...");
+        if let Err(e) = self.mq_connection.close().await {
+            warn!("Error closing message queue: {}", e);
+        }
+
+        // 5. Close database connection
+        info!("Closing database connection...");
+        self.db_pool.close().await;
 
         info!("Worker Service stopped");
 
@@ -364,6 +394,9 @@ impl WorkerService {
     }
 
     /// Start consuming execution.scheduled messages
+    ///
+    /// Spawns the consumer loop as a background task so that `start()` returns
+    /// immediately, allowing the caller to set up signal handlers.
     async fn start_execution_consumer(&mut self) -> Result<()> {
         let worker_id = self
             .worker_id
@@ -375,48 +408,63 @@ impl WorkerService {
         info!("Starting consumer for worker queue: {}", queue_name);
 
         // Create consumer
-        let consumer = Consumer::new(
-            &self.mq_connection,
-            ConsumerConfig {
-                queue: queue_name.clone(),
-                tag: format!("worker-{}", worker_id),
-                prefetch_count: 10,
-                auto_ack: false,
-                exclusive: false,
-            },
-        )
-        .await
-        .map_err(|e| Error::Internal(format!("Failed to create consumer: {}", e)))?;
-
-        info!("Consumer started for queue: {}", queue_name);
-
-        info!("Message queue consumer initialized");
-
-        // Clone Arc references for the handler
-        let executor = self.executor.clone();
-        let publisher = self.publisher.clone();
-        let db_pool = self.db_pool.clone();
-
-        // Consume messages with handler
-        consumer
-            .consume_with_handler(
-                move |envelope: MessageEnvelope<ExecutionScheduledPayload>| {
-                    let executor = executor.clone();
-                    let publisher = publisher.clone();
-                    let db_pool = db_pool.clone();
-
-                    async move {
-                        Self::handle_execution_scheduled(executor, publisher, db_pool, envelope)
-                            .await
-                            .map_err(|e| format!("Execution handler error: {}", e).into())
-                    }
+        let consumer = Arc::new(
+            Consumer::new(
+                &self.mq_connection,
+                ConsumerConfig {
+                    queue: queue_name.clone(),
+                    tag: format!("worker-{}", worker_id),
+                    prefetch_count: 10,
+                    auto_ack: false,
+                    exclusive: false,
                 },
             )
             .await
-            .map_err(|e| Error::Internal(format!("Failed to start consumer: {}", e)))?;
+            .map_err(|e| Error::Internal(format!("Failed to create consumer: {}", e)))?,
+        );
 
-        // Store consumer reference
-        self.consumer = Some(Arc::new(consumer));
+        info!("Consumer created for queue: {}", queue_name);
+
+        // Clone Arc references for the spawned task
+        let executor = self.executor.clone();
+        let publisher = self.publisher.clone();
+        let db_pool = self.db_pool.clone();
+        let consumer_for_task = consumer.clone();
+        let queue_name_for_log = queue_name.clone();
+
+        // Spawn the consumer loop as a background task so start() can return
+        let handle = tokio::spawn(async move {
+            info!("Consumer loop started for queue '{}'", queue_name_for_log);
+            let result = consumer_for_task
+                .consume_with_handler(
+                    move |envelope: MessageEnvelope<ExecutionScheduledPayload>| {
+                        let executor = executor.clone();
+                        let publisher = publisher.clone();
+                        let db_pool = db_pool.clone();
+
+                        async move {
+                            Self::handle_execution_scheduled(executor, publisher, db_pool, envelope)
+                                .await
+                                .map_err(|e| format!("Execution handler error: {}", e).into())
+                        }
+                    },
+                )
+                .await;
+
+            match result {
+                Ok(()) => info!("Consumer loop for queue '{}' ended", queue_name_for_log),
+                Err(e) => error!(
+                    "Consumer loop for queue '{}' failed: {}",
+                    queue_name_for_log, e
+                ),
+            }
+        });
+
+        // Store consumer reference and task handle
+        self.consumer = Some(consumer);
+        self.consumer_handle = Some(handle);
+
+        info!("Message queue consumer initialized");
 
         Ok(())
     }

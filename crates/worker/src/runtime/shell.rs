@@ -208,13 +208,15 @@ impl ShellRuntime {
                     None
                 }
                 OutputFormat::Json => {
-                    // Try to parse last line of stdout as JSON
-                    stdout_result
-                        .content
-                        .trim()
-                        .lines()
-                        .last()
-                        .and_then(|line| serde_json::from_str(line).ok())
+                    // Try to parse full stdout as JSON first (handles multi-line JSON),
+                    // then fall back to last line only (for scripts that log before output)
+                    let trimmed = stdout_result.content.trim();
+                    serde_json::from_str(trimmed).ok().or_else(|| {
+                        trimmed
+                            .lines()
+                            .last()
+                            .and_then(|line| serde_json::from_str(line).ok())
+                    })
                 }
                 OutputFormat::Yaml => {
                     // Try to parse stdout as YAML
@@ -822,5 +824,98 @@ echo '{"id": 3, "name": "Charlie"}'
         // Verify third item
         assert_eq!(items[2]["id"], 3);
         assert_eq!(items[2]["name"], "Charlie");
+    }
+
+    #[tokio::test]
+    async fn test_shell_runtime_multiline_json_output() {
+        // Regression test: scripts that embed pretty-printed JSON (e.g., http_request.sh
+        // embedding a multi-line response body in its "json" field) produce multi-line
+        // stdout. The parser must handle this by trying to parse the full stdout as JSON
+        // before falling back to last-line parsing.
+        let runtime = ShellRuntime::new();
+
+        let context = ExecutionContext {
+            execution_id: 7,
+            action_ref: "test.multiline_json".to_string(),
+            parameters: HashMap::new(),
+            env: HashMap::new(),
+            secrets: HashMap::new(),
+            timeout: Some(10),
+            working_dir: None,
+            entry_point: "shell".to_string(),
+            code: Some(
+                r#"
+# Simulate http_request.sh output with embedded pretty-printed JSON
+printf '{"status_code":200,"body":"hello","json":{\n  "args": {\n    "hello": "world"\n  },\n  "url": "https://example.com"\n},"success":true}\n'
+"#
+                .to_string(),
+            ),
+            code_path: None,
+            runtime_name: Some("shell".to_string()),
+            max_stdout_bytes: 10 * 1024 * 1024,
+            max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: attune_common::models::ParameterDelivery::default(),
+            parameter_format: attune_common::models::ParameterFormat::default(),
+            output_format: attune_common::models::OutputFormat::Json,
+        };
+
+        let result = runtime.execute(context).await.unwrap();
+        assert!(result.is_success());
+        assert_eq!(result.exit_code, 0);
+
+        // Verify result was parsed (not stored as raw stdout)
+        let parsed = result
+            .result
+            .expect("Multi-line JSON should be parsed successfully");
+        assert_eq!(parsed["status_code"], 200);
+        assert_eq!(parsed["success"], true);
+        assert_eq!(parsed["json"]["args"]["hello"], "world");
+
+        // stdout should be empty when result is successfully parsed
+        assert!(
+            result.stdout.is_empty(),
+            "stdout should be empty when result is parsed, got: {}",
+            result.stdout
+        );
+    }
+
+    #[tokio::test]
+    async fn test_shell_runtime_json_with_log_prefix() {
+        // Verify last-line fallback still works: scripts that log to stdout
+        // before the final JSON line should still parse correctly.
+        let runtime = ShellRuntime::new();
+
+        let context = ExecutionContext {
+            execution_id: 8,
+            action_ref: "test.json_with_logs".to_string(),
+            parameters: HashMap::new(),
+            env: HashMap::new(),
+            secrets: HashMap::new(),
+            timeout: Some(10),
+            working_dir: None,
+            entry_point: "shell".to_string(),
+            code: Some(
+                r#"
+echo "Starting action..."
+echo "Processing data..."
+echo '{"result": "success", "count": 42}'
+"#
+                .to_string(),
+            ),
+            code_path: None,
+            runtime_name: Some("shell".to_string()),
+            max_stdout_bytes: 10 * 1024 * 1024,
+            max_stderr_bytes: 10 * 1024 * 1024,
+            parameter_delivery: attune_common::models::ParameterDelivery::default(),
+            parameter_format: attune_common::models::ParameterFormat::default(),
+            output_format: attune_common::models::OutputFormat::Json,
+        };
+
+        let result = runtime.execute(context).await.unwrap();
+        assert!(result.is_success());
+
+        let parsed = result.result.expect("Last-line JSON should be parsed");
+        assert_eq!(parsed["result"], "success");
+        assert_eq!(parsed["count"], 42);
     }
 }

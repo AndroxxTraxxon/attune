@@ -123,7 +123,7 @@ impl Runtime for LocalRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{ParameterDelivery, ParameterFormat};
+    use crate::runtime::{OutputFormat, ParameterDelivery, ParameterFormat};
     use std::collections::HashMap;
 
     #[tokio::test]

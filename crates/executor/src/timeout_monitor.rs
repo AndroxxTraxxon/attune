@@ -112,7 +112,7 @@ impl ExecutionTimeoutMonitor {
              ORDER BY updated ASC
              LIMIT 100", // Process in batches to avoid overwhelming system
         )
-        .bind("scheduled")
+        .bind(ExecutionStatus::Scheduled)
         .bind(cutoff)
         .fetch_all(&self.pool)
         .await?;
@@ -186,7 +186,7 @@ impl ExecutionTimeoutMonitor {
                  updated = NOW()
              WHERE id = $3",
         )
-        .bind("failed")
+        .bind(ExecutionStatus::Failed)
         .bind(&result)
         .bind(execution_id)
         .execute(&self.pool)

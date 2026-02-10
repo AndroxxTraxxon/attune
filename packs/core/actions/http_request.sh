@@ -27,10 +27,13 @@ query_params_file=$(mktemp)
 body_file=""
 temp_headers=$(mktemp)
 curl_output=$(mktemp)
+write_out_file=$(mktemp)
 
 cleanup() {
-    rm -f "$headers_file" "$query_params_file" "$temp_headers" "$curl_output"
+    local exit_code=$?
+    rm -f "$headers_file" "$query_params_file" "$temp_headers" "$curl_output" "$write_out_file"
     [ -n "$body_file" ] && [ -f "$body_file" ] && rm -f "$body_file"
+    return "$exit_code"
 }
 trap cleanup EXIT
 
@@ -119,13 +122,16 @@ curl_args=$(mktemp)
 {
     printf -- '-X\n%s\n' "$method"
     printf -- '-s\n'
-    printf -- '-w\n\n%%{http_code}\n%%{url_effective}\n\n'
+    # Use @file for -w to avoid xargs escape interpretation issues
+    # curl's @file mode requires literal \n (two chars) not actual newlines
+    printf '\\n%%{http_code}\\n%%{url_effective}\\n' > "$write_out_file"
+    printf -- '-w\n@%s\n' "$write_out_file"
     printf -- '--max-time\n%s\n' "$timeout"
     printf -- '--connect-timeout\n10\n'
     printf -- '--dump-header\n%s\n' "$temp_headers"
-    
+
     [ "$verify_ssl" = "false" ] && printf -- '-k\n'
-    
+
     if [ "$follow_redirects" = "true" ]; then
         printf -- '-L\n'
         printf -- '--max-redirs\n%s\n' "$max_redirects"
@@ -208,7 +214,7 @@ first_header=true
 if [ -f "$temp_headers" ]; then
     while IFS= read -r line; do
         case "$line" in HTTP/*|'') continue ;; esac
-        
+
         header_name="${line%%:*}"
         header_value="${line#*:}"
         [ "$header_name" = "$line" ] && continue
@@ -241,7 +247,13 @@ if [ -n "$body_output" ]; then
     case "$first_char" in
         '{'|'[')
             case "$last_char" in
-                '}'|']') json_parsed="$body_output" ;;
+                '}'|']')
+                    # Compact multi-line JSON to single line to avoid breaking
+                    # the worker's last-line JSON parser. In valid JSON, literal
+                    # newlines only appear as whitespace outside strings (inside
+                    # strings they must be escaped as \n), so tr is safe here.
+                    json_parsed=$(printf '%s' "$body_output" | tr '\n' ' ' | tr '\r' ' ')
+                    ;;
             esac
             ;;
     esac

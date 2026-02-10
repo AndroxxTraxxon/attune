@@ -170,7 +170,7 @@ services:
     container_name: attune-api
     environment:
       RUST_LOG: info
-      ATTUNE_CONFIG: /opt/attune/config.docker.yaml
+      ATTUNE_CONFIG: /opt/attune/config.yaml
       # Security - MUST set these in production via .env file
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
@@ -221,7 +221,7 @@ services:
     container_name: attune-executor
     environment:
       RUST_LOG: info
-      ATTUNE_CONFIG: /opt/attune/config.docker.yaml
+      ATTUNE_CONFIG: /opt/attune/config.yaml
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
@@ -246,7 +246,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f attune-service || exit 1"]
+      test: ["CMD-SHELL", "kill -0 1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -256,10 +256,8 @@ services:
     restart: unless-stopped
 
   # ============================================================================
-  # Worker Services (Multiple variants with different runtime capabilities)
+  # Workers
   # ============================================================================
-
-  # Base worker - Shell commands only
   worker-shell:
     build:
       context: .
@@ -271,7 +269,7 @@ services:
     stop_grace_period: 45s
     environment:
       RUST_LOG: info
-      ATTUNE_CONFIG: /opt/attune/config.docker.yaml
+      ATTUNE_CONFIG: /opt/attune/config.yaml
       ATTUNE_WORKER_RUNTIMES: shell
       ATTUNE_WORKER_TYPE: container
       ATTUNE_WORKER_NAME: worker-shell-01
@@ -316,7 +314,7 @@ services:
     stop_grace_period: 45s
     environment:
       RUST_LOG: info
-      ATTUNE_CONFIG: /opt/attune/config.docker.yaml
+      ATTUNE_CONFIG: /opt/attune/config.yaml
       ATTUNE_WORKER_RUNTIMES: shell,python
       ATTUNE_WORKER_TYPE: container
       ATTUNE_WORKER_NAME: worker-python-01
@@ -361,7 +359,7 @@ services:
     stop_grace_period: 45s
     environment:
       RUST_LOG: info
-      ATTUNE_CONFIG: /opt/attune/config.docker.yaml
+      ATTUNE_CONFIG: /opt/attune/config.yaml
       ATTUNE_WORKER_RUNTIMES: shell,node
       ATTUNE_WORKER_TYPE: container
       ATTUNE_WORKER_NAME: worker-node-01
@@ -406,7 +404,7 @@ services:
     stop_grace_period: 45s
     environment:
       RUST_LOG: info
-      ATTUNE_CONFIG: /opt/attune/config.docker.yaml
+      ATTUNE_CONFIG: /opt/attune/config.yaml
       ATTUNE_WORKER_RUNTIMES: shell,python,node,native
       ATTUNE_WORKER_TYPE: container
       ATTUNE_WORKER_NAME: worker-full-01
@@ -447,9 +445,10 @@ services:
         SERVICE: sensor
         BUILDKIT_INLINE_CACHE: 1
     container_name: attune-sensor
+    stop_grace_period: 45s
     environment:
       RUST_LOG: debug
-      ATTUNE_CONFIG: /opt/attune/config.docker.yaml
+      ATTUNE_CONFIG: /opt/attune/config.yaml
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
@@ -475,7 +474,7 @@ services:
       rabbitmq:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f attune-service || exit 1"]
+      test: ["CMD-SHELL", "kill -0 1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -494,7 +493,7 @@ services:
     container_name: attune-notifier
     environment:
       RUST_LOG: info
-      ATTUNE_CONFIG: /opt/attune/config.docker.yaml
+      ATTUNE_CONFIG: /opt/attune/config.yaml
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
@@ -512,7 +511,7 @@ services:
       rabbitmq:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f attune-service || exit 1"]
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -524,7 +523,6 @@ services:
   # ============================================================================
   # Web UI
   # ============================================================================
-
   web:
     build:
       context: .
@@ -537,8 +535,10 @@ services:
     ports:
       - "3000:80"
     depends_on:
-      - api
-      - notifier
+      api:
+        condition: service_healthy
+      notifier:
+        condition: service_healthy
     healthcheck:
       test:
         [

@@ -339,13 +339,15 @@ if __name__ == '__main__':
                     None
                 }
                 OutputFormat::Json => {
-                    // Try to parse last line of stdout as JSON
-                    stdout_result
-                        .content
-                        .trim()
-                        .lines()
-                        .last()
-                        .and_then(|line| serde_json::from_str(line).ok())
+                    // Try to parse full stdout as JSON first (handles multi-line JSON),
+                    // then fall back to last line only (for scripts that log before output)
+                    let trimmed = stdout_result.content.trim();
+                    serde_json::from_str(trimmed).ok().or_else(|| {
+                        trimmed
+                            .lines()
+                            .last()
+                            .and_then(|line| serde_json::from_str(line).ok())
+                    })
                 }
                 OutputFormat::Yaml => {
                     // Try to parse stdout as YAML

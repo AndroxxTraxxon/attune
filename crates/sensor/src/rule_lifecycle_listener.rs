@@ -12,6 +12,7 @@ use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
 use crate::sensor_manager::SensorManager;
@@ -22,6 +23,7 @@ pub struct RuleLifecycleListener {
     connection: Connection,
     sensor_manager: Arc<SensorManager>,
     consumer: Arc<RwLock<Option<Consumer>>>,
+    task_handle: RwLock<Option<JoinHandle<()>>>,
 }
 
 impl RuleLifecycleListener {
@@ -32,6 +34,7 @@ impl RuleLifecycleListener {
             connection,
             sensor_manager,
             consumer: Arc::new(RwLock::new(None)),
+            task_handle: RwLock::new(None),
         }
     }
 
@@ -88,19 +91,20 @@ impl RuleLifecycleListener {
             );
         }
 
-        // Store consumer
+        // Store consumer reference (for cleanup on drop)
         *self.consumer.write().await = Some(consumer);
 
-        // Clone self for async handler
+        // Clone references for the spawned task
         let db = self.db.clone();
         let sensor_manager = self.sensor_manager.clone();
         let consumer_ref = self.consumer.clone();
 
-        // Start consuming messages
-        tokio::spawn(async move {
-            // Get consumer from the Arc<RwLock<Option<Consumer>>>
-            let consumer_guard = consumer_ref.read().await;
-            if let Some(consumer) = consumer_guard.as_ref() {
+        // Start consuming messages in a background task.
+        // Take the consumer out of the Arc<RwLock> so we don't hold the read lock
+        // for the entire duration of consume_with_handler (which would deadlock stop()).
+        let handle = tokio::spawn(async move {
+            let consumer = consumer_ref.write().await.take();
+            if let Some(consumer) = consumer {
                 let result = consumer
                     .consume_with_handler::<JsonValue, _, _>(move |envelope| {
                         let db = db.clone();
@@ -129,6 +133,8 @@ impl RuleLifecycleListener {
             }
         });
 
+        *self.task_handle.write().await = Some(handle);
+
         info!("Rule lifecycle listener started");
 
         Ok(())
@@ -138,8 +144,15 @@ impl RuleLifecycleListener {
     pub async fn stop(&self) -> Result<()> {
         info!("Stopping rule lifecycle listener");
 
+        // Abort the consumer task first — this ends the consume_with_handler loop
+        // and drops the Consumer (and its channel) inside the task.
+        if let Some(handle) = self.task_handle.write().await.take() {
+            handle.abort();
+            let _ = handle.await; // wait for abort to complete
+        }
+
+        // Clean up any consumer that wasn't taken by the task (e.g. if task never started)
         if let Some(consumer) = self.consumer.write().await.take() {
-            // Consumer will be dropped and connection closed
             drop(consumer);
         }
 

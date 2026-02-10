@@ -109,9 +109,9 @@ WORKDIR /opt/attune
 # Note: We copy from /build/attune-service-binary because the cache mount is not available in COPY
 COPY --from=builder /build/attune-service-binary /usr/local/bin/attune-service
 
-# Copy configuration files
-COPY config.production.yaml ./config.yaml
-COPY config.docker.yaml ./config.docker.yaml
+# Copy configuration for Docker Compose development
+# Production: mount config files as a volume instead of baking them into the image
+COPY config.docker.yaml ./config.yaml
 
 # Copy migrations for services that need them
 COPY migrations/ ./migrations/
@@ -132,7 +132,7 @@ USER attune
 
 # Environment variables (can be overridden at runtime)
 ENV RUST_LOG=info
-ENV ATTUNE_CONFIG=/opt/attune/config.docker.yaml
+ENV ATTUNE_CONFIG=/opt/attune/config.yaml
 
 # Health check (will be overridden per service in docker-compose)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \

@@ -407,6 +407,10 @@ pub struct SensorConfig {
     /// Sensor execution timeout in seconds
     #[serde(default = "default_sensor_timeout")]
     pub sensor_timeout: u64,
+
+    /// Graceful shutdown timeout in seconds
+    #[serde(default = "default_sensor_shutdown_timeout")]
+    pub shutdown_timeout: u64,
 }
 
 fn default_sensor_poll_interval() -> u64 {
@@ -414,6 +418,10 @@ fn default_sensor_poll_interval() -> u64 {
 }
 
 fn default_sensor_timeout() -> u64 {
+    30
+}
+
+fn default_sensor_shutdown_timeout() -> u64 {
     30
 }
 

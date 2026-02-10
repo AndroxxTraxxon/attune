@@ -2,6 +2,12 @@
 //!
 //! Main service orchestrator that coordinates sensor management
 //! and rule lifecycle listening.
+//!
+//! Shutdown follows the same pattern as the worker service:
+//! 1. Deregister worker (mark inactive, stop receiving new work)
+//! 2. Stop heartbeat
+//! 3. Stop sensor processes with configurable timeout
+//! 4. Close MQ and DB connections
 
 use crate::rule_lifecycle_listener::RuleLifecycleListener;
 use crate::sensor_manager::SensorManager;
@@ -12,6 +18,7 @@ use attune_common::db::Database;
 use attune_common::mq::MessageQueue;
 use sqlx::PgPool;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
@@ -29,7 +36,7 @@ struct SensorServiceInner {
     rule_lifecycle_listener: Arc<RuleLifecycleListener>,
     sensor_worker_registration: Arc<RwLock<SensorWorkerRegistration>>,
     heartbeat_interval: u64,
-    running: Arc<RwLock<bool>>,
+    heartbeat_running: Arc<RwLock<bool>>,
 }
 
 impl SensorService {
@@ -112,17 +119,17 @@ impl SensorService {
                 rule_lifecycle_listener,
                 sensor_worker_registration: Arc::new(RwLock::new(sensor_worker_registration)),
                 heartbeat_interval,
-                running: Arc::new(RwLock::new(false)),
+                heartbeat_running: Arc::new(RwLock::new(false)),
             }),
         })
     }
 
     /// Start the sensor service
+    ///
+    /// Spawns background tasks (heartbeat, rule listener, sensor manager) and returns.
+    /// The caller is responsible for blocking on shutdown signals and calling `stop()`.
     pub async fn start(&self) -> Result<()> {
         info!("Starting Sensor Service");
-
-        // Mark as running
-        *self.inner.running.write().await = true;
 
         // Register sensor worker
         info!("Registering sensor worker...");
@@ -152,37 +159,48 @@ impl SensorService {
         info!("Sensor manager started");
 
         // Start heartbeat loop
+        *self.inner.heartbeat_running.write().await = true;
+
         let registration = self.inner.sensor_worker_registration.clone();
         let heartbeat_interval = self.inner.heartbeat_interval;
-        let running = self.inner.running.clone();
+        let heartbeat_running = self.inner.heartbeat_running.clone();
         tokio::spawn(async move {
-            while *running.read().await {
-                tokio::time::sleep(tokio::time::Duration::from_secs(heartbeat_interval)).await;
+            let mut ticker = tokio::time::interval(Duration::from_secs(heartbeat_interval));
+
+            loop {
+                ticker.tick().await;
+
+                if !*heartbeat_running.read().await {
+                    info!("Heartbeat loop stopping");
+                    break;
+                }
+
                 if let Err(e) = registration.read().await.heartbeat().await {
                     error!("Failed to send sensor worker heartbeat: {}", e);
                 }
             }
+
+            info!("Heartbeat loop stopped");
         });
 
-        // Wait until stopped
-        while *self.inner.running.read().await {
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        }
-
-        info!("Sensor Service stopped");
+        info!("Sensor Service started successfully");
 
         Ok(())
     }
 
-    /// Stop the sensor service
+    /// Stop the sensor service gracefully
+    ///
+    /// Shutdown order (mirrors worker service pattern):
+    /// 1. Deregister worker (mark inactive to stop being scheduled for new work)
+    /// 2. Stop heartbeat
+    /// 3. Stop sensor processes with timeout
+    /// 4. Stop rule lifecycle listener
+    /// 5. Close MQ and DB connections
     pub async fn stop(&self) -> Result<()> {
-        info!("Stopping Sensor Service");
+        info!("Stopping Sensor Service - initiating graceful shutdown");
 
-        // Mark as not running
-        *self.inner.running.write().await = false;
-
-        // Deregister sensor worker
-        info!("Deregistering sensor worker...");
+        // 1. Deregister sensor worker first to stop receiving new work
+        info!("Marking sensor worker as inactive to stop receiving new work");
         if let Err(e) = self
             .inner
             .sensor_worker_registration
@@ -194,36 +212,57 @@ impl SensorService {
             error!("Failed to deregister sensor worker: {}", e);
         }
 
-        // Stop rule lifecycle listener
+        // 2. Stop heartbeat
+        info!("Stopping heartbeat updates");
+        *self.inner.heartbeat_running.write().await = false;
+
+        // Wait a bit for heartbeat loop to notice the flag
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // 3. Stop sensor processes with timeout
+        let shutdown_timeout = self
+            .inner
+            .config
+            .sensor
+            .as_ref()
+            .map(|s| s.shutdown_timeout)
+            .unwrap_or(30);
+
+        info!(
+            "Waiting up to {} seconds for sensor processes to stop",
+            shutdown_timeout
+        );
+
+        let sensor_manager = self.inner.sensor_manager.clone();
+        let timeout_duration = Duration::from_secs(shutdown_timeout);
+        match tokio::time::timeout(timeout_duration, sensor_manager.stop()).await {
+            Ok(Ok(_)) => info!("All sensor processes stopped"),
+            Ok(Err(e)) => error!("Error stopping sensor processes: {}", e),
+            Err(_) => warn!(
+                "Shutdown timeout reached ({} seconds) - some sensor processes may have been interrupted",
+                shutdown_timeout
+            ),
+        }
+
+        // 4. Stop rule lifecycle listener
         info!("Stopping rule lifecycle listener...");
         if let Err(e) = self.inner.rule_lifecycle_listener.stop().await {
             error!("Failed to stop rule lifecycle listener: {}", e);
         }
 
-        // Stop sensor manager
-        info!("Stopping sensor manager...");
-        if let Err(e) = self.inner.sensor_manager.stop().await {
-            error!("Failed to stop sensor manager: {}", e);
-        }
-
-        // Close message queue connection
+        // 5. Close message queue connection
         info!("Closing message queue connection...");
         if let Err(e) = self.inner.mq.close().await {
             warn!("Error closing message queue: {}", e);
         }
 
-        // Close database connection
+        // 6. Close database connection
         info!("Closing database connection...");
         self.inner.db.close().await;
 
         info!("Sensor Service stopped successfully");
 
         Ok(())
-    }
-
-    /// Check if service is running
-    pub async fn is_running(&self) -> bool {
-        *self.inner.running.read().await
     }
 
     /// Get database pool
@@ -243,11 +282,6 @@ impl SensorService {
 
     /// Get health status
     pub async fn health_check(&self) -> HealthStatus {
-        // Check if service is running
-        if !*self.inner.running.read().await {
-            return HealthStatus::Unhealthy("Service not running".to_string());
-        }
-
         // Check database connection
         if let Err(e) = sqlx::query("SELECT 1").execute(&self.inner.db).await {
             return HealthStatus::Unhealthy(format!("Database connection failed: {}", e));
