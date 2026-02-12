@@ -45,6 +45,7 @@ async fn create_test_pack(pool: &PgPool, suffix: &str) -> i64 {
         meta: json!({}),
         tags: vec![],
         runtime_deps: vec![],
+        dependencies: vec![],
         is_standard: false,
         installers: json!({}),
     };

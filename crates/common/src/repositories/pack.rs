@@ -31,6 +31,7 @@ pub struct CreatePackInput {
     pub meta: JsonDict,
     pub tags: Vec<String>,
     pub runtime_deps: Vec<String>,
+    pub dependencies: Vec<String>,
     pub is_standard: bool,
     pub installers: JsonDict,
 }
@@ -46,9 +47,12 @@ pub struct UpdatePackInput {
     pub meta: Option<JsonDict>,
     pub tags: Option<Vec<String>>,
     pub runtime_deps: Option<Vec<String>>,
+    pub dependencies: Option<Vec<String>>,
     pub is_standard: Option<bool>,
     pub installers: Option<JsonDict>,
 }
+
+const PACK_COLUMNS: &str = "id, ref, label, description, version, conf_schema, config, meta, tags, runtime_deps, dependencies, is_standard, installers, source_type, source_url, source_ref, checksum, checksum_verified, installed_at, installed_by, installation_method, storage_path, created, updated";
 
 #[async_trait::async_trait]
 impl FindById for PackRepository {
@@ -56,20 +60,11 @@ impl FindById for PackRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let pack = sqlx::query_as::<_, Pack>(
-            r#"
-            SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, installers,
-                   source_type, source_url, source_ref, checksum, checksum_verified,
-                   installed_at, installed_by, installation_method, storage_path,
-                   created, updated
-            FROM pack
-            WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .fetch_optional(executor)
-        .await?;
+        let query = format!("SELECT {} FROM pack WHERE id = $1", PACK_COLUMNS);
+        let pack = sqlx::query_as::<_, Pack>(&query)
+            .bind(id)
+            .fetch_optional(executor)
+            .await?;
 
         Ok(pack)
     }
@@ -81,20 +76,11 @@ impl FindByRef for PackRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let pack = sqlx::query_as::<_, Pack>(
-            r#"
-            SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, installers,
-                   source_type, source_url, source_ref, checksum, checksum_verified,
-                   installed_at, installed_by, installation_method, storage_path,
-                   created, updated
-            FROM pack
-            WHERE ref = $1
-            "#,
-        )
-        .bind(ref_str)
-        .fetch_optional(executor)
-        .await?;
+        let query = format!("SELECT {} FROM pack WHERE ref = $1", PACK_COLUMNS);
+        let pack = sqlx::query_as::<_, Pack>(&query)
+            .bind(ref_str)
+            .fetch_optional(executor)
+            .await?;
 
         Ok(pack)
     }
@@ -106,19 +92,10 @@ impl List for PackRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let packs = sqlx::query_as::<_, Pack>(
-            r#"
-            SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, installers,
-                   source_type, source_url, source_ref, checksum, checksum_verified,
-                   installed_at, installed_by, installation_method, storage_path,
-                   created, updated
-            FROM pack
-            ORDER BY ref ASC
-            "#,
-        )
-        .fetch_all(executor)
-        .await?;
+        let query = format!("SELECT {} FROM pack ORDER BY ref ASC", PACK_COLUMNS);
+        let packs = sqlx::query_as::<_, Pack>(&query)
+            .fetch_all(executor)
+            .await?;
 
         Ok(packs)
     }
@@ -143,41 +120,41 @@ impl Create for PackRepository {
             ));
         }
 
-        // Try to insert - database will enforce uniqueness constraint
-        let pack = sqlx::query_as::<_, Pack>(
+        let query = format!(
             r#"
             INSERT INTO pack (ref, label, description, version, conf_schema, config, meta,
-                              tags, runtime_deps, is_standard, installers)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            RETURNING id, ref, label, description, version, conf_schema, config, meta,
-                      tags, runtime_deps, is_standard, installers,
-                      source_type, source_url, source_ref, checksum, checksum_verified,
-                      installed_at, installed_by, installation_method, storage_path,
-                      created, updated
+                              tags, runtime_deps, dependencies, is_standard, installers)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            RETURNING {}
             "#,
-        )
-        .bind(&input.r#ref)
-        .bind(&input.label)
-        .bind(&input.description)
-        .bind(&input.version)
-        .bind(&input.conf_schema)
-        .bind(&input.config)
-        .bind(&input.meta)
-        .bind(&input.tags)
-        .bind(&input.runtime_deps)
-        .bind(input.is_standard)
-        .bind(&input.installers)
-        .fetch_one(executor)
-        .await
-        .map_err(|e| {
-            // Convert unique constraint violation to AlreadyExists error
-            if let sqlx::Error::Database(db_err) = &e {
-                if db_err.is_unique_violation() {
-                    return Error::already_exists("Pack", "ref", &input.r#ref);
+            PACK_COLUMNS
+        );
+
+        // Try to insert - database will enforce uniqueness constraint
+        let pack = sqlx::query_as::<_, Pack>(&query)
+            .bind(&input.r#ref)
+            .bind(&input.label)
+            .bind(&input.description)
+            .bind(&input.version)
+            .bind(&input.conf_schema)
+            .bind(&input.config)
+            .bind(&input.meta)
+            .bind(&input.tags)
+            .bind(&input.runtime_deps)
+            .bind(&input.dependencies)
+            .bind(input.is_standard)
+            .bind(&input.installers)
+            .fetch_one(executor)
+            .await
+            .map_err(|e| {
+                // Convert unique constraint violation to AlreadyExists error
+                if let sqlx::Error::Database(db_err) = &e {
+                    if db_err.is_unique_violation() {
+                        return Error::already_exists("Pack", "ref", &input.r#ref);
+                    }
                 }
-            }
-            e.into()
-        })?;
+                e.into()
+            })?;
 
         Ok(pack)
     }
@@ -267,6 +244,15 @@ impl Update for PackRepository {
             has_updates = true;
         }
 
+        if let Some(dependencies) = &input.dependencies {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("dependencies = ");
+            query.push_bind(dependencies);
+            has_updates = true;
+        }
+
         if let Some(is_standard) = input.is_standard {
             if has_updates {
                 query.push(", ");
@@ -295,7 +281,8 @@ impl Update for PackRepository {
         // Add updated timestamp
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(" RETURNING id, ref, label, description, version, conf_schema, config, meta, tags, runtime_deps, is_standard, installers, source_type, source_url, source_ref, checksum, checksum_verified, installed_at, installed_by, installation_method, storage_path, created, updated");
+        query.push(" RETURNING ");
+        query.push(PACK_COLUMNS);
 
         let pack = query
             .build_query_as::<Pack>()
@@ -331,22 +318,15 @@ impl PackRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let packs = sqlx::query_as::<_, Pack>(
-            r#"
-            SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, installers,
-                   source_type, source_url, source_ref, checksum, checksum_verified,
-                   installed_at, installed_by, installation_method, storage_path,
-                   created, updated
-            FROM pack
-            ORDER BY ref ASC
-            LIMIT $1 OFFSET $2
-            "#,
-        )
-        .bind(pagination.limit())
-        .bind(pagination.offset())
-        .fetch_all(executor)
-        .await?;
+        let query = format!(
+            "SELECT {} FROM pack ORDER BY ref ASC LIMIT $1 OFFSET $2",
+            PACK_COLUMNS
+        );
+        let packs = sqlx::query_as::<_, Pack>(&query)
+            .bind(pagination.limit())
+            .bind(pagination.offset())
+            .fetch_all(executor)
+            .await?;
 
         Ok(packs)
     }
@@ -368,21 +348,14 @@ impl PackRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let packs = sqlx::query_as::<_, Pack>(
-            r#"
-            SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, installers,
-                   source_type, source_url, source_ref, checksum, checksum_verified,
-                   installed_at, installed_by, installation_method, storage_path,
-                   created, updated
-            FROM pack
-            WHERE $1 = ANY(tags)
-            ORDER BY ref ASC
-            "#,
-        )
-        .bind(tag)
-        .fetch_all(executor)
-        .await?;
+        let query = format!(
+            "SELECT {} FROM pack WHERE $1 = ANY(tags) ORDER BY ref ASC",
+            PACK_COLUMNS
+        );
+        let packs = sqlx::query_as::<_, Pack>(&query)
+            .bind(tag)
+            .fetch_all(executor)
+            .await?;
 
         Ok(packs)
     }
@@ -392,20 +365,13 @@ impl PackRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let packs = sqlx::query_as::<_, Pack>(
-            r#"
-            SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, installers,
-                   source_type, source_url, source_ref, checksum, checksum_verified,
-                   installed_at, installed_by, installation_method, storage_path,
-                   created, updated
-            FROM pack
-            WHERE is_standard = true
-            ORDER BY ref ASC
-            "#,
-        )
-        .fetch_all(executor)
-        .await?;
+        let query = format!(
+            "SELECT {} FROM pack WHERE is_standard = true ORDER BY ref ASC",
+            PACK_COLUMNS
+        );
+        let packs = sqlx::query_as::<_, Pack>(&query)
+            .fetch_all(executor)
+            .await?;
 
         Ok(packs)
     }
@@ -416,21 +382,14 @@ impl PackRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         let search_pattern = format!("%{}%", query.to_lowercase());
-        let packs = sqlx::query_as::<_, Pack>(
-            r#"
-            SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, installers,
-                   source_type, source_url, source_ref, checksum, checksum_verified,
-                   installed_at, installed_by, installation_method, storage_path,
-                   created, updated
-            FROM pack
-            WHERE LOWER(ref) LIKE $1 OR LOWER(label) LIKE $1 OR LOWER(description) LIKE $1
-            ORDER BY ref ASC
-            "#,
-        )
-        .bind(&search_pattern)
-        .fetch_all(executor)
-        .await?;
+        let sql = format!(
+            "SELECT {} FROM pack WHERE LOWER(ref) LIKE $1 OR LOWER(label) LIKE $1 OR LOWER(description) LIKE $1 ORDER BY ref ASC",
+            PACK_COLUMNS
+        );
+        let packs = sqlx::query_as::<_, Pack>(&sql)
+            .bind(&search_pattern)
+            .fetch_all(executor)
+            .await?;
 
         Ok(packs)
     }
@@ -464,7 +423,7 @@ impl PackRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let pack = sqlx::query_as::<_, Pack>(
+        let query = format!(
             r#"
             UPDATE pack
             SET source_type = $2,
@@ -478,28 +437,26 @@ impl PackRepository {
                 storage_path = $9,
                 updated = NOW()
             WHERE id = $1
-            RETURNING id, ref, label, description, version, conf_schema, config, meta,
-                      tags, runtime_deps, is_standard, installers,
-                      source_type, source_url, source_ref, checksum, checksum_verified,
-                      installed_at, installed_by, installation_method, storage_path,
-                      created, updated
+            RETURNING {}
             "#,
-        )
-        .bind(id)
-        .bind(source_type)
-        .bind(source_url)
-        .bind(source_ref)
-        .bind(checksum)
-        .bind(checksum_verified)
-        .bind(installed_by)
-        .bind(installation_method)
-        .bind(storage_path)
-        .fetch_one(executor)
-        .await
-        .map_err(|e| match e {
-            sqlx::Error::RowNotFound => Error::not_found("pack", "id", id.to_string()),
-            _ => e.into(),
-        })?;
+            PACK_COLUMNS
+        );
+        let pack = sqlx::query_as::<_, Pack>(&query)
+            .bind(id)
+            .bind(source_type)
+            .bind(source_url)
+            .bind(source_ref)
+            .bind(checksum)
+            .bind(checksum_verified)
+            .bind(installed_by)
+            .bind(installation_method)
+            .bind(storage_path)
+            .fetch_one(executor)
+            .await
+            .map_err(|e| match e {
+                sqlx::Error::RowNotFound => Error::not_found("pack", "id", id.to_string()),
+                _ => e.into(),
+            })?;
 
         Ok(pack)
     }
@@ -524,20 +481,13 @@ impl PackRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let packs = sqlx::query_as::<_, Pack>(
-            r#"
-            SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, installers,
-                   source_type, source_url, source_ref, checksum, checksum_verified,
-                   installed_at, installed_by, installation_method, storage_path,
-                   created, updated
-            FROM pack
-            WHERE installed_at IS NOT NULL
-            ORDER BY installed_at DESC
-            "#,
-        )
-        .fetch_all(executor)
-        .await?;
+        let query = format!(
+            "SELECT {} FROM pack WHERE installed_at IS NOT NULL ORDER BY installed_at DESC",
+            PACK_COLUMNS
+        );
+        let packs = sqlx::query_as::<_, Pack>(&query)
+            .fetch_all(executor)
+            .await?;
 
         Ok(packs)
     }
@@ -547,21 +497,14 @@ impl PackRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let packs = sqlx::query_as::<_, Pack>(
-            r#"
-            SELECT id, ref, label, description, version, conf_schema, config, meta,
-                   tags, runtime_deps, is_standard, installers,
-                   source_type, source_url, source_ref, checksum, checksum_verified,
-                   installed_at, installed_by, installation_method, storage_path,
-                   created, updated
-            FROM pack
-            WHERE source_type = $1
-            ORDER BY installed_at DESC
-            "#,
-        )
-        .bind(source_type)
-        .fetch_all(executor)
-        .await?;
+        let query = format!(
+            "SELECT {} FROM pack WHERE source_type = $1 ORDER BY installed_at DESC",
+            PACK_COLUMNS
+        );
+        let packs = sqlx::query_as::<_, Pack>(&query)
+            .bind(source_type)
+            .fetch_all(executor)
+            .await?;
 
         Ok(packs)
     }
@@ -583,6 +526,7 @@ mod tests {
             meta: serde_json::json!({}),
             tags: vec!["test".to_string()],
             runtime_deps: vec![],
+            dependencies: vec![],
             is_standard: false,
             installers: serde_json::json!({}),
         };
@@ -597,5 +541,6 @@ mod tests {
         assert!(input.label.is_none());
         assert!(input.description.is_none());
         assert!(input.version.is_none());
+        assert!(input.dependencies.is_none());
     }
 }

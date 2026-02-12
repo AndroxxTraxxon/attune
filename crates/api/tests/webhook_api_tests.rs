@@ -39,6 +39,7 @@ async fn create_test_pack(state: &AppState, name: &str) -> i64 {
         meta: serde_json::json!({}),
         tags: vec![],
         runtime_deps: vec![],
+        dependencies: vec![],
         is_standard: false,
         installers: json!({}),
     };

@@ -31,9 +31,7 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
   const [description, setDescription] = useState(pack?.description || "");
   const [version, setVersion] = useState(pack?.version || "1.0.0");
   const [tags, setTags] = useState(pack?.tags?.join(", ") || "");
-  const [runtimeDeps, setRuntimeDeps] = useState(
-    pack?.runtime_deps?.join(", ") || "",
-  );
+  const [deps, setDeps] = useState(pack?.dependencies?.join(", ") || "");
   const [isStandard, setIsStandard] = useState(pack?.is_standard ?? false);
 
   const [configValues, setConfigValues] =
@@ -134,7 +132,7 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
       .split(",")
       .map((t) => t.trim())
       .filter((t) => t);
-    const runtimeDepsList = runtimeDeps
+    const depsList = deps
       .split(",")
       .map((d) => d.trim())
       .filter((d) => d);
@@ -149,7 +147,7 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
           config: configValues,
           meta: parsedMeta,
           tags: tagsList,
-          runtime_deps: runtimeDepsList,
+          dependencies: depsList,
           is_standard: isStandard,
         };
         await updatePack.mutateAsync({ ref: pack!.ref, data: updateData });
@@ -166,7 +164,7 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
           config: configValues,
           meta: parsedMeta,
           tags: tagsList,
-          runtime_deps: runtimeDepsList,
+          dependencies: depsList,
           is_standard: isStandard,
         };
         const newPackResponse = await createPack.mutateAsync(createData);
@@ -443,19 +441,19 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
           </p>
         </div>
 
-        {/* Runtime Dependencies */}
+        {/* Pack Dependencies */}
         <div>
           <label
-            htmlFor="runtimeDeps"
+            htmlFor="deps"
             className="block text-sm font-medium text-gray-700 mb-1"
           >
-            Runtime Dependencies
+            Pack Dependencies
           </label>
           <input
             type="text"
-            id="runtimeDeps"
-            value={runtimeDeps}
-            onChange={(e) => setRuntimeDeps(e.target.value)}
+            id="deps"
+            value={deps}
+            onChange={(e) => setDeps(e.target.value)}
             disabled={isStandard}
             className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
               isStandard ? "bg-gray-100 cursor-not-allowed" : ""
@@ -463,7 +461,8 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
             placeholder="e.g., core, utils"
           />
           <p className="mt-1 text-xs text-gray-500">
-            Comma-separated list of required pack refs
+            Comma-separated list of required pack refs (other packs this pack
+            depends on)
           </p>
         </div>
 

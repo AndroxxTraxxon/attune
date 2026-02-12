@@ -392,6 +392,7 @@ async fn test_pack_transaction_commit() {
         meta: json!({}),
         tags: vec![],
         runtime_deps: vec![],
+        dependencies: vec![],
         is_standard: false,
         installers: json!({}),
     };
@@ -428,6 +429,7 @@ async fn test_pack_transaction_rollback() {
         meta: json!({}),
         tags: vec![],
         runtime_deps: vec![],
+        dependencies: vec![],
         is_standard: false,
         installers: json!({}),
     };
@@ -457,6 +459,7 @@ async fn test_pack_invalid_ref_format() {
         meta: json!({}),
         tags: vec![],
         runtime_deps: vec![],
+        dependencies: vec![],
         is_standard: false,
         installers: json!({}),
     };
@@ -491,8 +494,9 @@ async fn test_pack_valid_ref_formats() {
             meta: json!({}),
             tags: vec![],
             runtime_deps: vec![],
+            dependencies: vec![],
             is_standard: false,
-        installers: json!({}),
+            installers: json!({}),
         };
 
         let result = PackRepository::create(&pool, input).await;

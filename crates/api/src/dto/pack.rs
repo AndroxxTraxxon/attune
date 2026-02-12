@@ -48,10 +48,15 @@ pub struct CreatePackRequest {
     #[schema(example = json!(["messaging", "collaboration"]))]
     pub tags: Vec<String>,
 
-    /// Runtime dependencies (refs of required packs)
+    /// Runtime dependencies (e.g., shell, python, nodejs)
+    #[serde(default)]
+    #[schema(example = json!(["shell", "python"]))]
+    pub runtime_deps: Vec<String>,
+
+    /// Pack dependencies (refs of required packs)
     #[serde(default)]
     #[schema(example = json!(["core"]))]
-    pub runtime_deps: Vec<String>,
+    pub dependencies: Vec<String>,
 
     /// Whether this is a standard/built-in pack
     #[serde(default)]
@@ -152,9 +157,13 @@ pub struct UpdatePackRequest {
     #[schema(example = json!(["messaging", "collaboration", "webhooks"]))]
     pub tags: Option<Vec<String>>,
 
-    /// Runtime dependencies
-    #[schema(example = json!(["core", "http"]))]
+    /// Runtime dependencies (e.g., shell, python, nodejs)
+    #[schema(example = json!(["shell", "python"]))]
     pub runtime_deps: Option<Vec<String>>,
+
+    /// Pack dependencies (refs of required packs)
+    #[schema(example = json!(["core", "http"]))]
+    pub dependencies: Option<Vec<String>>,
 
     /// Whether this is a standard pack
     #[schema(example = false)]
@@ -200,9 +209,13 @@ pub struct PackResponse {
     #[schema(example = json!(["messaging", "collaboration"]))]
     pub tags: Vec<String>,
 
-    /// Runtime dependencies
-    #[schema(example = json!(["core"]))]
+    /// Runtime dependencies (e.g., shell, python, nodejs)
+    #[schema(example = json!(["shell", "python"]))]
     pub runtime_deps: Vec<String>,
+
+    /// Pack dependencies (refs of required packs)
+    #[schema(example = json!(["core"]))]
+    pub dependencies: Vec<String>,
 
     /// Is standard pack
     #[schema(example = false)]
@@ -271,6 +284,7 @@ impl From<attune_common::models::Pack> for PackResponse {
             meta: pack.meta,
             tags: pack.tags,
             runtime_deps: pack.runtime_deps,
+            dependencies: pack.dependencies,
             is_standard: pack.is_standard,
             created: pack.created,
             updated: pack.updated,
@@ -803,6 +817,7 @@ mod tests {
         assert_eq!(req.version, "1.0.0");
         assert!(req.tags.is_empty());
         assert!(req.runtime_deps.is_empty());
+        assert!(req.dependencies.is_empty());
         assert!(!req.is_standard);
     }
 
@@ -818,6 +833,7 @@ mod tests {
             meta: default_empty_object(),
             tags: vec![],
             runtime_deps: vec![],
+            dependencies: vec![],
             is_standard: false,
         };
 

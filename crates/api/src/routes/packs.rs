@@ -139,6 +139,7 @@ pub async fn create_pack(
         meta: request.meta,
         tags: request.tags,
         runtime_deps: request.runtime_deps,
+        dependencies: request.dependencies,
         is_standard: request.is_standard,
         installers: serde_json::json!({}),
     };
@@ -222,6 +223,7 @@ pub async fn update_pack(
         meta: request.meta,
         tags: request.tags,
         runtime_deps: request.runtime_deps,
+        dependencies: request.dependencies,
         is_standard: request.is_standard,
         installers: None,
     };
@@ -522,6 +524,15 @@ async fn register_pack_internal(
             })
             .unwrap_or_default(),
         runtime_deps: pack_yaml
+            .get("runtime_deps")
+            .and_then(|v| v.as_sequence())
+            .map(|seq| {
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        dependencies: pack_yaml
             .get("dependencies")
             .and_then(|v| v.as_sequence())
             .map(|seq| {

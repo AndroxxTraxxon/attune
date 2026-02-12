@@ -393,6 +393,7 @@ pub mod pack {
         pub meta: JsonDict,
         pub tags: Vec<String>,
         pub runtime_deps: Vec<String>,
+        pub dependencies: Vec<String>,
         pub is_standard: bool,
         pub installers: JsonDict,
         // Installation metadata (nullable for non-installed packs)

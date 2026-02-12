@@ -433,6 +433,7 @@ pub async fn create_test_pack(pool: &PgPool, ref_name: &str) -> Result<Pack> {
         }),
         tags: vec!["test".to_string()],
         runtime_deps: vec![],
+        dependencies: vec![],
         is_standard: false,
         installers: json!({}),
     };

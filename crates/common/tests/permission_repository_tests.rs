@@ -79,8 +79,9 @@ impl PermissionSetFixture {
             config: json!({}),
             meta: json!({}),
             runtime_deps: vec![],
+            dependencies: vec![],
             is_standard: false,
-        installers: json!({}),
+            installers: json!({}),
         };
         PackRepository::create(&self.pool, input)
             .await
@@ -95,7 +96,7 @@ impl PermissionSetFixture {
             login,
             display_name: Some("Test User".to_string()),
             attributes: json!({}),
-        password_hash: None,
+            password_hash: None,
         };
         IdentityRepository::create(&self.pool, input)
             .await

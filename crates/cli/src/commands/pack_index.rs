@@ -146,7 +146,7 @@ pub async fn handle_index_update(
         .unwrap_or_default();
 
     let runtime_deps: Vec<String> = pack_yaml
-        .get("dependencies")
+        .get("runtime_deps")
         .and_then(|v| v.as_sequence())
         .map(|seq| {
             seq.iter()

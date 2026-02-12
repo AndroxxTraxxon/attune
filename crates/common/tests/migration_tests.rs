@@ -358,6 +358,7 @@ async fn test_pack_columns() {
         "conf_schema",
         "config",
         "created",
+        "dependencies",
         "description",
         "id",
         "is_standard",

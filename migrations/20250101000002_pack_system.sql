@@ -17,6 +17,7 @@ CREATE TABLE pack (
     meta JSONB NOT NULL DEFAULT '{}'::jsonb,
     tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     runtime_deps TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    dependencies TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     is_standard BOOLEAN NOT NULL DEFAULT FALSE,
     installers JSONB DEFAULT '[]'::jsonb,
 
@@ -52,6 +53,7 @@ CREATE INDEX idx_pack_config_gin ON pack USING GIN (config);
 CREATE INDEX idx_pack_meta_gin ON pack USING GIN (meta);
 CREATE INDEX idx_pack_tags_gin ON pack USING GIN (tags);
 CREATE INDEX idx_pack_runtime_deps_gin ON pack USING GIN (runtime_deps);
+CREATE INDEX idx_pack_dependencies_gin ON pack USING GIN (dependencies);
 CREATE INDEX idx_pack_installed_at ON pack(installed_at DESC) WHERE installed_at IS NOT NULL;
 CREATE INDEX idx_pack_installed_by ON pack(installed_by) WHERE installed_by IS NOT NULL;
 CREATE INDEX idx_pack_source_type ON pack(source_type) WHERE source_type IS NOT NULL;
@@ -70,7 +72,8 @@ COMMENT ON COLUMN pack.version IS 'Semantic version of the pack';
 COMMENT ON COLUMN pack.conf_schema IS 'JSON schema for pack configuration';
 COMMENT ON COLUMN pack.config IS 'Pack configuration values';
 COMMENT ON COLUMN pack.meta IS 'Pack metadata';
-COMMENT ON COLUMN pack.runtime_deps IS 'Array of required runtime references';
+COMMENT ON COLUMN pack.runtime_deps IS 'Array of required runtime references (e.g., shell, python, nodejs)';
+COMMENT ON COLUMN pack.dependencies IS 'Array of required pack references (e.g., core, utils)';
 COMMENT ON COLUMN pack.is_standard IS 'Whether this is a core/built-in pack';
 COMMENT ON COLUMN pack.source_type IS 'Installation source type (e.g., "git", "local", "registry")';
 COMMENT ON COLUMN pack.source_url IS 'URL or path where pack was installed from';

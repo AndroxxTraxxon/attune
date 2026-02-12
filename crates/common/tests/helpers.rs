@@ -284,6 +284,7 @@ pub struct PackFixture {
     pub meta: serde_json::Value,
     pub tags: Vec<String>,
     pub runtime_deps: Vec<String>,
+    pub dependencies: Vec<String>,
     pub is_standard: bool,
 }
 
@@ -300,6 +301,7 @@ impl PackFixture {
             meta: json!({}),
             tags: vec!["test".to_string()],
             runtime_deps: vec![],
+            dependencies: vec![],
             is_standard: false,
         }
     }
@@ -319,6 +321,7 @@ impl PackFixture {
             meta: json!({}),
             tags: vec!["test".to_string()],
             runtime_deps: vec![],
+            dependencies: vec![],
             is_standard: false,
         }
     }
@@ -359,6 +362,7 @@ impl PackFixture {
             meta: self.meta,
             tags: self.tags,
             runtime_deps: self.runtime_deps,
+            dependencies: self.dependencies,
             is_standard: self.is_standard,
             installers: serde_json::json!({}),
         };

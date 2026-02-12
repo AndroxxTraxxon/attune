@@ -41,6 +41,7 @@ async fn setup_test_pack_and_action(pool: &PgPool) -> Result<(Pack, Action)> {
         meta: json!({"author": "test"}),
         tags: vec!["test".to_string()],
         runtime_deps: vec![],
+        dependencies: vec![],
         is_standard: false,
         installers: json!({}),
     };
