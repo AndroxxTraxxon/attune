@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { ExecutionsService } from "@/api";
 import type { ExecutionStatus } from "@/api";
 
@@ -43,6 +43,8 @@ export function useExecutions(params?: ExecutionsQueryParams) {
     staleTime: hasFilters ? 5000 : 30000,
     // Refetch in background when filters change to get latest data
     refetchOnMount: hasFilters ? "always" : true,
+    // Keep previous results visible while new data loads (prevents flash of empty state)
+    placeholderData: keepPreviousData,
   });
 }
 

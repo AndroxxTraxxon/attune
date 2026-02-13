@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { EventsService, EnforcementsService, EnforcementStatus } from "@/api";
 import type { i64 } from "@/api";
 
@@ -7,6 +7,7 @@ interface EventsQueryParams {
   pageSize?: number;
   trigger?: i64 | null;
   triggerRef?: string | null;
+  ruleRef?: string | null;
   source?: i64 | null;
 }
 
@@ -29,10 +30,12 @@ export function useEvents(params?: EventsQueryParams) {
         perPage: params?.pageSize || 50,
         trigger: params?.trigger,
         triggerRef: params?.triggerRef,
+        ruleRef: params?.ruleRef,
         source: params?.source,
       });
     },
     staleTime: 30000, // 30 seconds
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -63,6 +66,7 @@ export function useEnforcements(params?: EnforcementsQueryParams) {
       });
     },
     staleTime: 30000,
+    placeholderData: keepPreviousData,
   });
 }
 

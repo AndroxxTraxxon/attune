@@ -237,6 +237,16 @@ pub async fn list_events(
         filtered_events.retain(|e| e.source == Some(source_id));
     }
 
+    if let Some(rule_ref) = &query.rule_ref {
+        let rule_ref_lower = rule_ref.to_lowercase();
+        filtered_events.retain(|e| {
+            e.rule_ref
+                .as_ref()
+                .map(|r| r.to_lowercase().contains(&rule_ref_lower))
+                .unwrap_or(false)
+        });
+    }
+
     // Calculate pagination
     let total = filtered_events.len() as u64;
     let start = query.offset() as usize;

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo, memo, useEffect } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEvents } from "@/hooks/useEvents";
@@ -6,25 +6,322 @@ import {
   useEntityNotifications,
   Notification,
 } from "@/contexts/WebSocketContext";
+import { Search, X } from "lucide-react";
+import AutocompleteInput from "@/components/common/AutocompleteInput";
+import {
+  useFilterSuggestions,
+  useMergedSuggestions,
+} from "@/hooks/useFilterSuggestions";
 import type { EventSummary } from "@/api";
+
+const formatDate = (dateString: string) => {
+  return new Date(dateString).toLocaleString();
+};
+
+const formatTime = (timestamp: string) => {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+
+  if (diff < 60000) return "just now";
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return date.toLocaleDateString();
+};
+
+// Memoized results table component - only re-renders when query data changes,
+// NOT when the user types in filter inputs.
+const EventsResultsTable = memo(
+  ({
+    events,
+    isLoading,
+    isFetching,
+    error,
+    hasActiveFilters,
+    clearFilters,
+    page,
+    setPage,
+    pageSize,
+    total,
+  }: {
+    events: EventSummary[];
+    isLoading: boolean;
+    isFetching: boolean;
+    error: Error | null;
+    hasActiveFilters: boolean;
+    clearFilters: () => void;
+    page: number;
+    setPage: (page: number) => void;
+    pageSize: number;
+    total: number;
+  }) => {
+    const totalPages = total ? Math.ceil(total / pageSize) : 0;
+
+    // Initial load (no cached data yet)
+    if (isLoading && events.length === 0) {
+      return (
+        <div className="bg-white shadow rounded-lg">
+          <div className="flex items-center justify-center h-64">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
+            <p className="ml-4 text-gray-600">Loading events...</p>
+          </div>
+        </div>
+      );
+    }
+
+    // Error with no cached data to show
+    if (error && events.length === 0) {
+      return (
+        <div className="bg-white shadow rounded-lg p-12 text-center">
+          <p className="text-red-600">Failed to load events</p>
+          <p className="text-sm text-gray-600 mt-2">{error.message}</p>
+        </div>
+      );
+    }
+
+    // Empty results
+    if (events.length === 0) {
+      return (
+        <div className="bg-white shadow rounded-lg p-12 text-center">
+          <svg
+            className="mx-auto h-12 w-12 text-gray-400"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M13 10V3L4 14h7v7l9-11h-7z"
+            />
+          </svg>
+          <p className="mt-4 text-gray-600">No events found</p>
+          <p className="text-sm text-gray-500 mt-1">
+            {hasActiveFilters
+              ? "Try adjusting your filters"
+              : "Events will appear here when triggers fire"}
+          </p>
+          {hasActiveFilters && (
+            <button
+              onClick={clearFilters}
+              className="mt-3 text-sm text-blue-600 hover:text-blue-800"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className="relative">
+        {/* Inline loading overlay - shows on top of previous results while fetching */}
+        {isFetching && (
+          <div className="absolute inset-0 bg-white/60 z-10 flex items-center justify-center rounded-lg">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+          </div>
+        )}
+
+        {/* Non-fatal error banner (data still shown from cache) */}
+        {error && (
+          <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+            <p>Error refreshing: {error.message}</p>
+          </div>
+        )}
+
+        <div className="bg-white shadow rounded-lg overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    ID
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Trigger
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Rule
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Source
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Created
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {events.map((event) => (
+                  <tr key={event.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <Link
+                        to={`/events/${event.id}`}
+                        className="text-sm font-mono text-blue-600 hover:text-blue-800"
+                      >
+                        #{event.id}
+                      </Link>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-sm">
+                        <div className="font-medium text-gray-900">
+                          {event.trigger_ref}
+                        </div>
+                        <div className="text-gray-500 text-xs">
+                          ID: {event.trigger || "N/A"}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      {event.rule_ref ? (
+                        <div className="text-sm">
+                          <Link
+                            to={`/rules/${event.rule}`}
+                            className="font-medium text-blue-600 hover:text-blue-900"
+                          >
+                            {event.rule_ref}
+                          </Link>
+                          <div className="text-gray-500 text-xs">
+                            ID: {event.rule}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-sm text-gray-400 italic">
+                          No rule
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      {event.source_ref ? (
+                        <div className="text-sm">
+                          <div className="font-medium text-gray-900">
+                            {event.source_ref}
+                          </div>
+                          <div className="text-gray-500 text-xs">
+                            ID: {event.source || "N/A"}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-sm text-gray-400 italic">
+                          No source
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-900">
+                        {formatTime(event.created)}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        {formatDate(event.created)}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="bg-gray-50 px-6 py-4 flex items-center justify-between border-t border-gray-200">
+            <div className="flex-1 flex justify-between sm:hidden">
+              <button
+                onClick={() => setPage(page - 1)}
+                disabled={page === 1}
+                className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => setPage(page + 1)}
+                disabled={page === totalPages}
+                className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
+            <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm text-gray-700">
+                  Page <span className="font-medium">{page}</span> of{" "}
+                  <span className="font-medium">{totalPages}</span>
+                </p>
+              </div>
+              <div>
+                <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
+                  <button
+                    onClick={() => setPage(page - 1)}
+                    disabled={page === 1}
+                    className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    onClick={() => setPage(page + 1)}
+                    disabled={page === totalPages}
+                    className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                </nav>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  },
+);
+
+EventsResultsTable.displayName = "EventsResultsTable";
 
 export default function EventsPage() {
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
+
+  // --- Filter input state (updates immediately on keystroke) ---
   const [page, setPage] = useState(1);
-  const [triggerFilter, setTriggerFilter] = useState<string>(
-    searchParams.get("trigger_ref") || "",
-  );
   const pageSize = 50;
+  const [searchFilters, setSearchFilters] = useState({
+    trigger: searchParams.get("trigger_ref") || "",
+    rule: searchParams.get("rule_ref") || "",
+  });
+
+  // --- Debounced filter state (drives API calls, updates after delay) ---
+  const [debouncedFilters, setDebouncedFilters] = useState(searchFilters);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedFilters(searchFilters);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [searchFilters]);
+
+  // --- Autocomplete suggestions ---
+  const baseSuggestions = useFilterSuggestions();
+
+  // Additional refs discovered via WebSocket notifications (accumulated over time)
+  const [wsRefs, setWsRefs] = useState<{
+    triggers: string[];
+    rules: string[];
+  }>({ triggers: [], rules: [] });
+
+  // --- Build query params from debounced state ---
+  const queryParams = useMemo(() => {
+    const params: any = { page, pageSize };
+    if (debouncedFilters.trigger) params.triggerRef = debouncedFilters.trigger;
+    if (debouncedFilters.rule) params.ruleRef = debouncedFilters.rule;
+    return params;
+  }, [page, pageSize, debouncedFilters]);
 
   // Set up WebSocket for real-time event updates with stable callback
   const handleEventNotification = useCallback(
     (notification: Notification) => {
-      // Extract event data from notification payload (flat structure)
       if (notification.notification_type === "event_created") {
         const payload = notification.payload as any;
 
-        // Create EventSummary from notification data
         const newEvent: EventSummary = {
           id: payload.id,
           trigger: payload.trigger,
@@ -38,45 +335,69 @@ export default function EventsPage() {
           created: payload.created,
         };
 
-        // Update the query cache directly instead of invalidating
-        queryClient.setQueryData(
-          [
-            "events",
-            { page, pageSize, triggerRef: triggerFilter || undefined },
-          ],
-          (oldData: any) => {
-            if (!oldData) return oldData;
+        // Augment autocomplete suggestions with new refs from notification
+        setWsRefs((prev) => {
+          const newTriggers = new Set(prev.triggers);
+          const newRules = new Set(prev.rules);
+          let changed = false;
 
-            // Check if filtering and event matches filter
-            if (triggerFilter && newEvent.trigger_ref !== triggerFilter) {
-              return oldData;
-            }
+          if (newEvent.trigger_ref && !newTriggers.has(newEvent.trigger_ref)) {
+            newTriggers.add(newEvent.trigger_ref);
+            changed = true;
+          }
+          if (newEvent.rule_ref && !newRules.has(newEvent.rule_ref)) {
+            newRules.add(newEvent.rule_ref);
+            changed = true;
+          }
 
-            // Add new event to the beginning of the list if on first page
-            if (page === 1) {
-              return {
-                ...oldData,
-                data: [newEvent, ...oldData.data].slice(0, pageSize),
-                pagination: {
-                  ...oldData.pagination,
-                  total_items: (oldData.pagination?.total_items || 0) + 1,
-                },
-              };
-            }
+          if (!changed) return prev;
+          return {
+            triggers: [...newTriggers],
+            rules: [...newRules],
+          };
+        });
 
-            // For other pages, just update the total count
+        queryClient.setQueryData(["events", queryParams], (oldData: any) => {
+          if (!oldData) return oldData;
+
+          // Check if filtering and event matches filter
+          if (
+            debouncedFilters.trigger &&
+            newEvent.trigger_ref !== debouncedFilters.trigger
+          ) {
+            return oldData;
+          }
+          if (
+            debouncedFilters.rule &&
+            newEvent.rule_ref !== debouncedFilters.rule
+          ) {
+            return oldData;
+          }
+
+          // Add new event to the beginning of the list if on first page
+          if (page === 1) {
             return {
               ...oldData,
+              data: [newEvent, ...oldData.data].slice(0, pageSize),
               pagination: {
                 ...oldData.pagination,
                 total_items: (oldData.pagination?.total_items || 0) + 1,
               },
             };
-          },
-        );
+          }
+
+          // For other pages, just update the total count
+          return {
+            ...oldData,
+            pagination: {
+              ...oldData.pagination,
+              total_items: (oldData.pagination?.total_items || 0) + 1,
+            },
+          };
+        });
       }
     },
-    [queryClient, page, pageSize, triggerFilter],
+    [queryClient, queryParams, page, pageSize, debouncedFilters],
   );
 
   const { connected: wsConnected } = useEntityNotifications(
@@ -84,35 +405,54 @@ export default function EventsPage() {
     handleEventNotification,
   );
 
-  const { data, isLoading, error } = useEvents({
-    page,
-    pageSize,
-    triggerRef: triggerFilter || undefined,
-  });
+  const { data, isLoading, isFetching, error } = useEvents(queryParams);
 
-  const events = data?.data || [];
+  const events = useMemo(() => data?.data || [], [data]);
   const total = data?.pagination?.total_items || 0;
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString();
-  };
+  // Derive refs from currently-loaded event data (no setState needed)
+  const loadedRefs = useMemo(() => {
+    const triggers = new Set<string>();
+    const rules = new Set<string>();
 
-  const formatTime = (timestamp: string) => {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
+    for (const event of events) {
+      if (event.trigger_ref) triggers.add(event.trigger_ref);
+      if (event.rule_ref) rules.add(event.rule_ref);
+    }
 
-    if (diff < 60000) return "just now";
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-    return date.toLocaleDateString();
-  };
+    return {
+      triggers: [...triggers],
+      rules: [...rules],
+    };
+  }, [events]);
 
-  const totalPages = total ? Math.ceil(total / pageSize) : 0;
+  // Merge base entity suggestions + loaded data refs + WebSocket refs
+  const triggerSuggestions = useMergedSuggestions(
+    baseSuggestions.triggerRefs,
+    loadedRefs.triggers,
+    wsRefs.triggers,
+  );
+  const ruleSuggestions = useMergedSuggestions(
+    baseSuggestions.ruleRefs,
+    loadedRefs.rules,
+    wsRefs.rules,
+  );
+
+  const handleFilterChange = useCallback((field: string, value: string) => {
+    setSearchFilters((prev) => ({ ...prev, [field]: value }));
+    setPage(1);
+  }, []);
+
+  const clearFilters = useCallback(() => {
+    setSearchFilters({ trigger: "", rule: "" });
+    setPage(1);
+  }, []);
+
+  const hasActiveFilters = Object.values(searchFilters).some((v) => v !== "");
 
   return (
     <div className="p-6">
-      {/* Header */}
+      {/* Header - always visible */}
       <div className="mb-6">
         <div className="flex items-center justify-between">
           <div>
@@ -120,6 +460,9 @@ export default function EventsPage() {
             <p className="mt-2 text-gray-600">
               Event instances generated by sensors and triggers
             </p>
+            {isFetching && hasActiveFilters && (
+              <p className="text-sm text-gray-500 mt-1">Searching events...</p>
+            )}
           </div>
           {wsConnected && (
             <div className="flex items-center gap-2 text-sm text-green-600">
@@ -130,237 +473,60 @@ export default function EventsPage() {
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="bg-white rounded-lg shadow mb-6 p-4">
-        <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-          <div className="flex-1 max-w-md">
-            <label
-              htmlFor="trigger-filter"
-              className="block text-sm font-medium text-gray-700 mb-1"
-            >
-              Filter by Trigger
-            </label>
-            <input
-              id="trigger-filter"
-              type="text"
-              value={triggerFilter}
-              onChange={(e) => {
-                setTriggerFilter(e.target.value);
-                setPage(1); // Reset to first page on filter change
-              }}
-              placeholder="e.g., core.webhook"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+      {/* Filter section - always mounted, never unmounts during loading */}
+      <div className="bg-white shadow rounded-lg p-4 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Search className="h-5 w-5 text-gray-400" />
+            <h2 className="text-lg font-semibold">Filter Events</h2>
           </div>
-
-          {triggerFilter && (
+          {hasActiveFilters && (
             <button
-              onClick={() => {
-                setTriggerFilter("");
-                setPage(1);
-              }}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900"
+              onClick={clearFilters}
+              className="flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900"
             >
-              Clear Filter
+              <X className="h-4 w-4" />
+              Clear Filters
             </button>
           )}
         </div>
-
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <AutocompleteInput
+            label="Trigger"
+            value={searchFilters.trigger}
+            onChange={(value) => handleFilterChange("trigger", value)}
+            suggestions={triggerSuggestions}
+            placeholder="e.g., core.webhook"
+          />
+          <AutocompleteInput
+            label="Rule"
+            value={searchFilters.rule}
+            onChange={(value) => handleFilterChange("rule", value)}
+            suggestions={ruleSuggestions}
+            placeholder="e.g., core.on_webhook"
+          />
+        </div>
         {data && (
           <div className="mt-3 text-sm text-gray-600">
             Showing {events.length} of {total} events
-            {triggerFilter && ` (filtered by "${triggerFilter}")`}
+            {hasActiveFilters && " (filtered)"}
           </div>
         )}
       </div>
 
-      {/* Events List */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        {isLoading ? (
-          <div className="p-12 text-center">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            <p className="mt-4 text-gray-600">Loading events...</p>
-          </div>
-        ) : error ? (
-          <div className="p-12 text-center">
-            <p className="text-red-600">Failed to load events</p>
-            <p className="text-sm text-gray-600 mt-2">
-              {error instanceof Error ? error.message : "Unknown error"}
-            </p>
-          </div>
-        ) : !events || events.length === 0 ? (
-          <div className="p-12 text-center">
-            <svg
-              className="mx-auto h-12 w-12 text-gray-400"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M13 10V3L4 14h7v7l9-11h-7z"
-              />
-            </svg>
-            <p className="mt-4 text-gray-600">No events found</p>
-            <p className="text-sm text-gray-500 mt-1">
-              {triggerFilter
-                ? "Try adjusting your filter"
-                : "Events will appear here when triggers fire"}
-            </p>
-          </div>
-        ) : (
-          <>
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      ID
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Trigger
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Rule
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Source
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Created
-                    </th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {events.map((event) => (
-                    <tr key={event.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="text-sm font-mono text-gray-900">
-                          {event.id}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm">
-                          <div className="font-medium text-gray-900">
-                            {event.trigger_ref}
-                          </div>
-                          <div className="text-gray-500 text-xs">
-                            ID: {event.trigger || "N/A"}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        {event.rule_ref ? (
-                          <div className="text-sm">
-                            <Link
-                              to={`/rules/${event.rule}`}
-                              className="font-medium text-blue-600 hover:text-blue-900"
-                            >
-                              {event.rule_ref}
-                            </Link>
-                            <div className="text-gray-500 text-xs">
-                              ID: {event.rule}
-                            </div>
-                          </div>
-                        ) : (
-                          <span className="text-sm text-gray-400 italic">
-                            No rule
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        {event.source_ref ? (
-                          <div className="text-sm">
-                            <div className="font-medium text-gray-900">
-                              {event.source_ref}
-                            </div>
-                            <div className="text-gray-500 text-xs">
-                              ID: {event.source || "N/A"}
-                            </div>
-                          </div>
-                        ) : (
-                          <span className="text-sm text-gray-400 italic">
-                            No source
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
-                          {formatTime(event.created)}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {formatDate(event.created)}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <Link
-                          to={`/events/${event.id}`}
-                          className="text-blue-600 hover:text-blue-900"
-                        >
-                          View Details
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="bg-gray-50 px-6 py-4 flex items-center justify-between border-t border-gray-200">
-                <div className="flex-1 flex justify-between sm:hidden">
-                  <button
-                    onClick={() => setPage(page - 1)}
-                    disabled={page === 1}
-                    className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Previous
-                  </button>
-                  <button
-                    onClick={() => setPage(page + 1)}
-                    disabled={page === totalPages}
-                    className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Next
-                  </button>
-                </div>
-                <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-sm text-gray-700">
-                      Page <span className="font-medium">{page}</span> of{" "}
-                      <span className="font-medium">{totalPages}</span>
-                    </p>
-                  </div>
-                  <div>
-                    <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
-                      <button
-                        onClick={() => setPage(page - 1)}
-                        disabled={page === 1}
-                        className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        Previous
-                      </button>
-                      <button
-                        onClick={() => setPage(page + 1)}
-                        disabled={page === totalPages}
-                        className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        Next
-                      </button>
-                    </nav>
-                  </div>
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </div>
+      {/* Results section - isolated from filter state, only depends on query results */}
+      <EventsResultsTable
+        events={events}
+        isLoading={isLoading}
+        isFetching={isFetching}
+        error={error as Error | null}
+        hasActiveFilters={hasActiveFilters}
+        clearFilters={clearFilters}
+        page={page}
+        setPage={setPage}
+        pageSize={pageSize}
+        total={total}
+      />
     </div>
   );
 }

@@ -144,6 +144,10 @@ pub struct EventQueryParams {
     #[param(example = "core.webhook")]
     pub trigger_ref: Option<String>,
 
+    /// Filter by rule reference
+    #[param(example = "core.on_webhook")]
+    pub rule_ref: Option<String>,
+
     /// Filter by source ID
     #[param(example = 1)]
     pub source: Option<Id>,
