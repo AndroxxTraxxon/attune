@@ -4,6 +4,7 @@
 //! which executes actions in various runtime environments.
 
 pub mod artifacts;
+pub mod env_setup;
 pub mod executor;
 pub mod heartbeat;
 pub mod registration;
@@ -16,7 +17,7 @@ pub use executor::ActionExecutor;
 pub use heartbeat::HeartbeatManager;
 pub use registration::WorkerRegistration;
 pub use runtime::{
-    ExecutionContext, ExecutionResult, LocalRuntime, NativeRuntime, PythonRuntime, Runtime,
+    ExecutionContext, ExecutionResult, LocalRuntime, NativeRuntime, ProcessRuntime, Runtime,
     RuntimeError, RuntimeResult, ShellRuntime,
 };
 pub use secrets::SecretManager;

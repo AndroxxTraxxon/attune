@@ -50,6 +50,11 @@ security:
 # Packs directory (where pack action files are located)
 packs_base_dir: ./packs
 
+# Runtime environments directory (virtualenvs, node_modules, etc.)
+# Isolated from pack directories to keep packs clean and read-only.
+# Pattern: {runtime_envs_dir}/{pack_ref}/{runtime_name}
+runtime_envs_dir: ./runtime_envs
+
 # Worker service configuration
 worker:
   service_name: attune-worker-e2e

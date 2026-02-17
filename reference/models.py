@@ -291,18 +291,10 @@ class Pack(Base):
     )
 
 
-class RuntimeType(enum.Enum):
-    action = "action"
-    sensor = "sensor"
-
-
 class Runtime(Base):
     __tablename__: str = "runtime"
     __table_args__: tuple[Constraint, ...] = (
         CheckConstraint("ref = lower(ref)", name="runtime_ref_lowercase"),
-        CheckConstraint(
-            r"ref ~ '^[^.]+\.(action|sensor)\.[^.]+$'", name="runtime_ref_format"
-        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -312,12 +304,10 @@ class Runtime(Base):
     )
     pack_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
     description: Mapped[str | None] = mapped_column(Text)
-    runtime_type: Mapped[RuntimeType] = mapped_column(
-        Enum(RuntimeType, name="runtime_type_enum", schema=DB_SCHEMA), nullable=False
-    )
     name: Mapped[str] = mapped_column(Text, nullable=False)
     distributions: Mapped[JSONDict] = mapped_column(JSONB, nullable=False)
     installation: Mapped[JSONDict | None] = mapped_column(JSONB)
+    execution_config: Mapped[JSONDict | None] = mapped_column(JSONB)
     created: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=func.now()
     )

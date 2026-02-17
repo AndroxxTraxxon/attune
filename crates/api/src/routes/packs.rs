@@ -12,6 +12,7 @@ use std::sync::Arc;
 use validator::Validate;
 
 use attune_common::models::pack_test::PackTestResult;
+use attune_common::mq::{MessageEnvelope, MessageType, PackRegisteredPayload};
 use attune_common::repositories::{
     pack::{CreatePackInput, UpdatePackInput},
     Create, Delete, FindById, FindByRef, PackRepository, PackTestRepository, Pagination, Update,
@@ -291,11 +292,28 @@ pub async fn delete_pack(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", pack_ref)))?;
 
-    // Delete the pack
+    // Delete the pack from the database (cascades to actions, triggers, sensors, rules, etc.
+    // Foreign keys on execution, event, enforcement, and rule tables use ON DELETE SET NULL
+    // so historical records are preserved with their text ref fields intact.)
     let deleted = PackRepository::delete(&state.db, pack.id).await?;
 
     if !deleted {
         return Err(ApiError::NotFound(format!("Pack '{}' not found", pack_ref)));
+    }
+
+    // Remove pack directory from permanent storage
+    let pack_dir = PathBuf::from(&state.config.packs_base_dir).join(&pack_ref);
+    if pack_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&pack_dir) {
+            tracing::warn!(
+                "Pack '{}' deleted from database but failed to remove directory {}: {}",
+                pack_ref,
+                pack_dir.display(),
+                e
+            );
+        } else {
+            tracing::info!("Removed pack directory: {}", pack_dir.display());
+        }
     }
 
     let response = SuccessResponse::new(format!("Pack '{}' deleted successfully", pack_ref));
@@ -310,77 +328,121 @@ async fn execute_and_store_pack_tests(
     pack_ref: &str,
     pack_version: &str,
     trigger_type: &str,
-) -> Result<attune_common::models::pack_test::PackTestResult, ApiError> {
+    pack_dir_override: Option<&std::path::Path>,
+) -> Option<Result<attune_common::models::pack_test::PackTestResult, ApiError>> {
     use attune_common::test_executor::{TestConfig, TestExecutor};
     use serde_yaml_ng;
 
     // Load pack.yaml from filesystem
     let packs_base_dir = PathBuf::from(&state.config.packs_base_dir);
-    let pack_dir = packs_base_dir.join(pack_ref);
+    let pack_dir = match pack_dir_override {
+        Some(dir) => dir.to_path_buf(),
+        None => packs_base_dir.join(pack_ref),
+    };
 
     if !pack_dir.exists() {
-        return Err(ApiError::NotFound(format!(
+        return Some(Err(ApiError::NotFound(format!(
             "Pack directory not found: {}",
             pack_dir.display()
-        )));
+        ))));
     }
 
     let pack_yaml_path = pack_dir.join("pack.yaml");
     if !pack_yaml_path.exists() {
-        return Err(ApiError::NotFound(format!(
+        return Some(Err(ApiError::NotFound(format!(
             "pack.yaml not found for pack '{}'",
             pack_ref
-        )));
+        ))));
     }
 
     // Parse pack.yaml
-    let pack_yaml_content = tokio::fs::read_to_string(&pack_yaml_path)
-        .await
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to read pack.yaml: {}", e)))?;
+    let pack_yaml_content = match tokio::fs::read_to_string(&pack_yaml_path).await {
+        Ok(content) => content,
+        Err(e) => {
+            return Some(Err(ApiError::InternalServerError(format!(
+                "Failed to read pack.yaml: {}",
+                e
+            ))))
+        }
+    };
 
-    let pack_yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&pack_yaml_content)
-        .map_err(|e| ApiError::InternalServerError(format!("Failed to parse pack.yaml: {}", e)))?;
+    let pack_yaml: serde_yaml_ng::Value = match serde_yaml_ng::from_str(&pack_yaml_content) {
+        Ok(v) => v,
+        Err(e) => {
+            return Some(Err(ApiError::InternalServerError(format!(
+                "Failed to parse pack.yaml: {}",
+                e
+            ))))
+        }
+    };
 
-    // Extract test configuration
-    let testing_config = pack_yaml.get("testing").ok_or_else(|| {
-        ApiError::BadRequest(format!(
-            "No testing configuration found in pack.yaml for pack '{}'",
-            pack_ref
-        ))
-    })?;
+    // Extract test configuration - if absent or disabled, skip tests gracefully
+    let testing_config = match pack_yaml.get("testing") {
+        Some(config) => config,
+        None => {
+            tracing::info!(
+                "No testing configuration found in pack.yaml for pack '{}', skipping tests",
+                pack_ref
+            );
+            return None;
+        }
+    };
 
-    let test_config: TestConfig =
-        serde_yaml_ng::from_value(testing_config.clone()).map_err(|e| {
-            ApiError::InternalServerError(format!("Failed to parse test configuration: {}", e))
-        })?;
+    let test_config: TestConfig = match serde_yaml_ng::from_value(testing_config.clone()) {
+        Ok(config) => config,
+        Err(e) => {
+            return Some(Err(ApiError::InternalServerError(format!(
+                "Failed to parse test configuration: {}",
+                e
+            ))))
+        }
+    };
 
     if !test_config.enabled {
-        return Err(ApiError::BadRequest(format!(
-            "Testing is disabled for pack '{}'",
+        tracing::info!(
+            "Testing is disabled for pack '{}', skipping tests",
             pack_ref
-        )));
+        );
+        return None;
     }
 
     // Create test executor
     let executor = TestExecutor::new(packs_base_dir);
 
-    // Execute tests
-    let result = executor
-        .execute_pack_tests(pack_ref, pack_version, &test_config)
-        .await
-        .map_err(|e| ApiError::InternalServerError(format!("Test execution failed: {}", e)))?;
+    // Execute tests - use execute_pack_tests_at when we have a specific directory
+    // (e.g., temp dir during installation before pack is moved to permanent storage)
+    let result = match if pack_dir_override.is_some() {
+        executor
+            .execute_pack_tests_at(&pack_dir, pack_ref, pack_version, &test_config)
+            .await
+    } else {
+        executor
+            .execute_pack_tests(pack_ref, pack_version, &test_config)
+            .await
+    } {
+        Ok(r) => r,
+        Err(e) => {
+            return Some(Err(ApiError::InternalServerError(format!(
+                "Test execution failed: {}",
+                e
+            ))))
+        }
+    };
 
     // Store test results in database
     let pack_test_repo = PackTestRepository::new(state.db.clone());
-    pack_test_repo
+    if let Err(e) = pack_test_repo
         .create(pack_id, pack_version, trigger_type, &result)
         .await
-        .map_err(|e| {
-            tracing::warn!("Failed to store test results: {}", e);
-            ApiError::DatabaseError(format!("Failed to store test results: {}", e))
-        })?;
+    {
+        tracing::warn!("Failed to store test results: {}", e);
+        return Some(Err(ApiError::DatabaseError(format!(
+            "Failed to store test results: {}",
+            e
+        ))));
+    }
 
-    Ok(result)
+    Some(Ok(result))
 }
 
 /// Register a pack from local filesystem
@@ -578,38 +640,313 @@ async fn register_pack_internal(
         }
     }
 
-    // Execute tests if not skipped
-    if !skip_tests {
-        match execute_and_store_pack_tests(&state, pack.id, &pack.r#ref, &pack.version, "register")
-            .await
-        {
-            Ok(result) => {
-                let test_passed = result.status == "passed";
+    // Load pack components (triggers, actions, sensors) into the database
+    {
+        use attune_common::pack_registry::PackComponentLoader;
 
-                if !test_passed && !force {
-                    // Tests failed and force is not set - rollback pack creation
-                    let _ = PackRepository::delete(&state.db, pack.id).await;
-                    return Err(ApiError::BadRequest(format!(
-                        "Pack registration failed: tests did not pass. Use force=true to register anyway."
-                    )));
-                }
-
-                if !test_passed && force {
-                    tracing::warn!(
-                        "Pack '{}' tests failed but force=true, continuing with registration",
-                        pack.r#ref
-                    );
+        let component_loader = PackComponentLoader::new(&state.db, pack.id, &pack.r#ref);
+        match component_loader.load_all(&pack_path).await {
+            Ok(load_result) => {
+                tracing::info!(
+                    "Pack '{}' components loaded: {} runtimes, {} triggers, {} actions, {} sensors ({} skipped, {} warnings)",
+                    pack.r#ref,
+                    load_result.runtimes_loaded,
+                    load_result.triggers_loaded,
+                    load_result.actions_loaded,
+                    load_result.sensors_loaded,
+                    load_result.total_skipped(),
+                    load_result.warnings.len()
+                );
+                for warning in &load_result.warnings {
+                    tracing::warn!("Pack component warning: {}", warning);
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to execute tests for pack '{}': {}", pack.r#ref, e);
-                // If tests can't be executed and force is not set, fail the registration
-                if !force {
-                    let _ = PackRepository::delete(&state.db, pack.id).await;
-                    return Err(ApiError::BadRequest(format!(
-                        "Pack registration failed: could not execute tests. Error: {}. Use force=true to register anyway.",
-                        e
-                    )));
+                tracing::warn!(
+                    "Failed to load components for pack '{}': {}. Components can be loaded manually.",
+                    pack.r#ref,
+                    e
+                );
+            }
+        }
+    }
+
+    // Set up runtime environments for the pack's actions.
+    // This creates virtualenvs, installs dependencies, etc. based on each
+    // runtime's execution_config from the database.
+    //
+    // Environment directories are placed at:
+    //   {runtime_envs_dir}/{pack_ref}/{runtime_name}
+    // e.g., /opt/attune/runtime_envs/python_example/python
+    // This keeps the pack directory clean and read-only.
+    {
+        use attune_common::repositories::runtime::RuntimeRepository;
+        use attune_common::repositories::FindById as _;
+
+        let runtime_envs_base = PathBuf::from(&state.config.runtime_envs_dir);
+
+        // Collect unique runtime IDs from the pack's actions
+        let actions =
+            attune_common::repositories::ActionRepository::find_by_pack(&state.db, pack.id)
+                .await
+                .unwrap_or_default();
+
+        let mut seen_runtime_ids = std::collections::HashSet::new();
+        for action in &actions {
+            if let Some(runtime_id) = action.runtime {
+                seen_runtime_ids.insert(runtime_id);
+            }
+        }
+
+        for runtime_id in seen_runtime_ids {
+            match RuntimeRepository::find_by_id(&state.db, runtime_id).await {
+                Ok(Some(rt)) => {
+                    let exec_config = rt.parsed_execution_config();
+                    let rt_name = rt.name.to_lowercase();
+
+                    // Check if this runtime has environment/dependency config
+                    if exec_config.environment.is_some() || exec_config.has_dependencies(&pack_path)
+                    {
+                        // Compute external env_dir: {runtime_envs_dir}/{pack_ref}/{runtime_name}
+                        let env_dir = runtime_envs_base.join(&pack.r#ref).join(&rt_name);
+
+                        tracing::info!(
+                            "Runtime '{}' for pack '{}' requires environment setup (env_dir: {})",
+                            rt.name,
+                            pack.r#ref,
+                            env_dir.display()
+                        );
+
+                        // Attempt to create environment if configured.
+                        // NOTE: In Docker deployments the API container typically does NOT
+                        // have runtime interpreters (e.g., python3) installed, so this will
+                        // fail. That is expected — the worker service will create the
+                        // environment on-demand before the first execution. This block is
+                        // a best-effort optimisation for non-Docker (bare-metal) setups
+                        // where the API host has the interpreter available.
+                        if let Some(ref env_cfg) = exec_config.environment {
+                            if env_cfg.env_type != "none" {
+                                if !env_dir.exists() && !env_cfg.create_command.is_empty() {
+                                    // Ensure parent directories exist
+                                    if let Some(parent) = env_dir.parent() {
+                                        let _ = std::fs::create_dir_all(parent);
+                                    }
+
+                                    let vars = exec_config
+                                        .build_template_vars_with_env(&pack_path, Some(&env_dir));
+                                    let resolved_cmd = attune_common::models::runtime::RuntimeExecutionConfig::resolve_command(
+                                        &env_cfg.create_command,
+                                        &vars,
+                                    );
+
+                                    tracing::info!(
+                                        "Attempting to create {} environment (best-effort) at {}: {:?}",
+                                        env_cfg.env_type,
+                                        env_dir.display(),
+                                        resolved_cmd
+                                    );
+
+                                    if let Some((program, args)) = resolved_cmd.split_first() {
+                                        match tokio::process::Command::new(program)
+                                            .args(args)
+                                            .current_dir(&pack_path)
+                                            .output()
+                                            .await
+                                        {
+                                            Ok(output) if output.status.success() => {
+                                                tracing::info!(
+                                                    "Created {} environment at {}",
+                                                    env_cfg.env_type,
+                                                    env_dir.display()
+                                                );
+                                            }
+                                            Ok(output) => {
+                                                let stderr =
+                                                    String::from_utf8_lossy(&output.stderr);
+                                                tracing::info!(
+                                                    "Environment creation skipped in API service (exit {}): {}. \
+                                                     The worker will create it on first execution.",
+                                                    output.status.code().unwrap_or(-1),
+                                                    stderr.trim()
+                                                );
+                                            }
+                                            Err(e) => {
+                                                tracing::info!(
+                                                    "Runtime '{}' not available in API service: {}. \
+                                                     The worker will create the environment on first execution.",
+                                                    program, e
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Attempt to install dependencies if manifest file exists.
+                        // Same caveat as above — this is best-effort in the API service.
+                        if let Some(ref dep_cfg) = exec_config.dependencies {
+                            let manifest_path = pack_path.join(&dep_cfg.manifest_file);
+                            if manifest_path.exists() && !dep_cfg.install_command.is_empty() {
+                                // Only attempt if the environment directory already exists
+                                // (i.e., the venv creation above succeeded).
+                                let env_exists = env_dir.exists();
+
+                                if env_exists {
+                                    let vars = exec_config
+                                        .build_template_vars_with_env(&pack_path, Some(&env_dir));
+                                    let resolved_cmd = attune_common::models::runtime::RuntimeExecutionConfig::resolve_command(
+                                        &dep_cfg.install_command,
+                                        &vars,
+                                    );
+
+                                    tracing::info!(
+                                        "Installing dependencies for pack '{}': {:?}",
+                                        pack.r#ref,
+                                        resolved_cmd
+                                    );
+
+                                    if let Some((program, args)) = resolved_cmd.split_first() {
+                                        match tokio::process::Command::new(program)
+                                            .args(args)
+                                            .current_dir(&pack_path)
+                                            .output()
+                                            .await
+                                        {
+                                            Ok(output) if output.status.success() => {
+                                                tracing::info!(
+                                                    "Dependencies installed for pack '{}'",
+                                                    pack.r#ref
+                                                );
+                                            }
+                                            Ok(output) => {
+                                                let stderr =
+                                                    String::from_utf8_lossy(&output.stderr);
+                                                tracing::info!(
+                                                    "Dependency installation skipped in API service (exit {}): {}. \
+                                                     The worker will handle this on first execution.",
+                                                    output.status.code().unwrap_or(-1),
+                                                    stderr.trim()
+                                                );
+                                            }
+                                            Err(e) => {
+                                                tracing::info!(
+                                                    "Dependency installer not available in API service: {}. \
+                                                     The worker will handle this on first execution.",
+                                                    e
+                                                );
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    tracing::info!(
+                                        "Skipping dependency installation for pack '{}' — \
+                                         environment not yet created. The worker will handle \
+                                         environment setup and dependency installation on first execution.",
+                                        pack.r#ref
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {
+                    tracing::debug!(
+                        "Runtime ID {} not found, skipping environment setup",
+                        runtime_id
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load runtime {}: {}", runtime_id, e);
+                }
+            }
+        }
+    }
+
+    // Execute tests if not skipped
+    if !skip_tests {
+        if let Some(test_outcome) = execute_and_store_pack_tests(
+            &state,
+            pack.id,
+            &pack.r#ref,
+            &pack.version,
+            "register",
+            Some(&pack_path),
+        )
+        .await
+        {
+            match test_outcome {
+                Ok(result) => {
+                    let test_passed = result.status == "passed";
+
+                    if !test_passed && !force {
+                        // Tests failed and force is not set - rollback pack creation
+                        let _ = PackRepository::delete(&state.db, pack.id).await;
+                        return Err(ApiError::BadRequest(format!(
+                            "Pack registration failed: tests did not pass. Use force=true to register anyway."
+                        )));
+                    }
+
+                    if !test_passed && force {
+                        tracing::warn!(
+                            "Pack '{}' tests failed but force=true, continuing with registration",
+                            pack.r#ref
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to execute tests for pack '{}': {}", pack.r#ref, e);
+                    // If tests can't be executed and force is not set, fail the registration
+                    if !force {
+                        let _ = PackRepository::delete(&state.db, pack.id).await;
+                        return Err(ApiError::BadRequest(format!(
+                            "Pack registration failed: could not execute tests. Error: {}. Use force=true to register anyway.",
+                            e
+                        )));
+                    }
+                }
+            }
+        } else {
+            tracing::info!(
+                "No tests to run for pack '{}', proceeding with registration",
+                pack.r#ref
+            );
+        }
+    }
+
+    // Publish pack.registered event so workers can proactively set up
+    // runtime environments (virtualenvs, node_modules, etc.).
+    if let Some(ref publisher) = state.publisher {
+        let runtime_names = attune_common::pack_environment::collect_runtime_names_for_pack(
+            &state.db, pack.id, &pack_path,
+        )
+        .await;
+
+        if !runtime_names.is_empty() {
+            let payload = PackRegisteredPayload {
+                pack_id: pack.id,
+                pack_ref: pack.r#ref.clone(),
+                version: pack.version.clone(),
+                runtime_names: runtime_names.clone(),
+            };
+
+            let envelope = MessageEnvelope::new(MessageType::PackRegistered, payload);
+
+            match publisher.publish_envelope(&envelope).await {
+                Ok(()) => {
+                    tracing::info!(
+                        "Published pack.registered event for pack '{}' (runtimes: {:?})",
+                        pack.r#ref,
+                        runtime_names,
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to publish pack.registered event for pack '{}': {}. \
+                         Workers will set up environments lazily on first execution.",
+                        pack.r#ref,
+                        e,
+                    );
                 }
             }
         }
@@ -756,36 +1093,54 @@ pub async fn install_pack(
         tracing::info!("Skipping dependency validation (disabled by user)");
     }
 
-    // Register the pack in database (from temp location)
-    let register_request = crate::dto::pack::RegisterPackRequest {
-        path: installed.path.to_string_lossy().to_string(),
-        force: request.force,
-        skip_tests: request.skip_tests,
+    // Read pack.yaml to get pack_ref so we can move to permanent storage first.
+    // This ensures virtualenvs and dependencies are created at the final location
+    // (Python venvs are NOT relocatable — they contain hardcoded paths).
+    let pack_yaml_path_for_ref = installed.path.join("pack.yaml");
+    let pack_ref_for_storage = {
+        let content = std::fs::read_to_string(&pack_yaml_path_for_ref).map_err(|e| {
+            ApiError::InternalServerError(format!("Failed to read pack.yaml: {}", e))
+        })?;
+        let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).map_err(|e| {
+            ApiError::InternalServerError(format!("Failed to parse pack.yaml: {}", e))
+        })?;
+        yaml.get("ref")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ApiError::BadRequest("Missing 'ref' field in pack.yaml".to_string()))?
+            .to_string()
     };
 
-    let pack_id = register_pack_internal(
-        state.clone(),
-        user_sub,
-        register_request.path.clone(),
-        register_request.force,
-        register_request.skip_tests,
-    )
-    .await?;
-
-    // Fetch the registered pack to get pack_ref and version
-    let pack = PackRepository::find_by_id(&state.db, pack_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Pack with ID {} not found", pack_id)))?;
-
-    // Move pack to permanent storage
+    // Move pack to permanent storage BEFORE registration so that environment
+    // setup (virtualenv creation, dependency installation) happens at the
+    // final location rather than a temporary directory.
     let storage = PackStorage::new(&state.config.packs_base_dir);
     let final_path = storage
-        .install_pack(&installed.path, &pack.r#ref, Some(&pack.version))
+        .install_pack(&installed.path, &pack_ref_for_storage, None)
         .map_err(|e| {
             ApiError::InternalServerError(format!("Failed to move pack to storage: {}", e))
         })?;
 
-    tracing::info!("Pack installed to permanent storage: {:?}", final_path);
+    tracing::info!("Pack moved to permanent storage: {:?}", final_path);
+
+    // Register the pack in database (from permanent storage location)
+    let pack_id = register_pack_internal(
+        state.clone(),
+        user_sub,
+        final_path.to_string_lossy().to_string(),
+        request.force,
+        request.skip_tests,
+    )
+    .await
+    .map_err(|e| {
+        // Clean up the permanent storage if registration fails
+        let _ = std::fs::remove_dir_all(&final_path);
+        e
+    })?;
+
+    // Fetch the registered pack
+    let pack = PackRepository::find_by_id(&state.db, pack_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Pack with ID {} not found", pack_id)))?;
 
     // Calculate checksum of installed pack
     let checksum = calculate_directory_checksum(&final_path)
@@ -823,7 +1178,7 @@ pub async fn install_pack(
     let response = PackInstallResponse {
         pack: PackResponse::from(pack),
         test_result: None, // TODO: Include test results
-        tests_skipped: register_request.skip_tests,
+        tests_skipped: request.skip_tests,
     };
 
     Ok((StatusCode::OK, Json(crate::dto::ApiResponse::new(response))))
@@ -1105,7 +1460,7 @@ pub async fn test_pack(
 
     // Execute tests
     let result = executor
-        .execute_pack_tests(&pack_ref, &pack.version, &test_config)
+        .execute_pack_tests_at(&pack_dir, &pack_ref, &pack.version, &test_config)
         .await
         .map_err(|e| ApiError::InternalServerError(format!("Test execution failed: {}", e)))?;
 

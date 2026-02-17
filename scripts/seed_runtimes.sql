@@ -1,229 +1,238 @@
 -- Seed Default Runtimes
--- Description: Inserts default runtime configurations for actions and sensors
+-- Description: Inserts default runtime configurations for the core pack
 -- This should be run after migrations to populate the runtime table with core runtimes
+--
+-- Runtimes are unified (no action/sensor distinction). Whether a runtime can
+-- execute actions is determined by the presence of an execution_config with an
+-- interpreter. The builtin runtime has no execution_config and is used only for
+-- internal sensors (timers, webhooks, etc.).
+--
+-- The execution_config JSONB column drives how the worker executes actions and
+-- how pack installation sets up environments. Template variables:
+--   {pack_dir}      - absolute path to the pack directory
+--   {env_dir}       - resolved environment directory (runtime_envs_dir/pack_ref/runtime_name)
+--   {interpreter}   - resolved interpreter path
+--   {action_file}   - absolute path to the action script file
+--   {manifest_path} - absolute path to the dependency manifest file
 
 SET search_path TO attune, public;
 
 -- ============================================================================
--- ACTION RUNTIMES
+-- UNIFIED RUNTIMES (5 total)
 -- ============================================================================
 
--- Python 3 Action Runtime
-INSERT INTO attune.runtime (
+-- Python 3 Runtime
+INSERT INTO runtime (
     ref,
     pack_ref,
     name,
     description,
-    runtime_type,
     distributions,
-    installation
+    installation,
+    execution_config
 ) VALUES (
-    'core.action.python3',
+    'core.python',
     'core',
-    'Python 3 Action Runtime',
-    'Execute actions using Python 3.x interpreter',
-    'action',
-    '["python3"]'::jsonb,
+    'Python',
+    'Python 3 runtime for actions and sensors with automatic environment management',
     '{
-        "method": "system",
-        "package_manager": "pip",
-        "requirements_file": "requirements.txt"
+        "verification": {
+            "commands": [
+                {"binary": "python3", "args": ["--version"], "exit_code": 0, "pattern": "Python 3\\\\.", "priority": 1},
+                {"binary": "python", "args": ["--version"], "exit_code": 0, "pattern": "Python 3\\\\.", "priority": 2}
+            ]
+        },
+        "min_version": "3.8",
+        "recommended_version": "3.11"
+    }'::jsonb,
+    '{
+        "package_managers": ["pip", "pipenv", "poetry"],
+        "virtual_env_support": true
+    }'::jsonb,
+    '{
+        "interpreter": {
+            "binary": "python3",
+            "args": ["-u"],
+            "file_extension": ".py"
+        },
+        "environment": {
+            "env_type": "virtualenv",
+            "dir_name": ".venv",
+            "create_command": ["python3", "-m", "venv", "{env_dir}"],
+            "interpreter_path": "{env_dir}/bin/python3"
+        },
+        "dependencies": {
+            "manifest_file": "requirements.txt",
+            "install_command": ["{interpreter}", "-m", "pip", "install", "-r", "{manifest_path}"]
+        }
     }'::jsonb
 ) ON CONFLICT (ref) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,
     distributions = EXCLUDED.distributions,
     installation = EXCLUDED.installation,
+    execution_config = EXCLUDED.execution_config,
     updated = NOW();
 
--- Shell Action Runtime
-INSERT INTO attune.runtime (
+-- Shell Runtime
+INSERT INTO runtime (
     ref,
     pack_ref,
     name,
     description,
-    runtime_type,
     distributions,
-    installation
+    installation,
+    execution_config
 ) VALUES (
-    'core.action.shell',
+    'core.shell',
     'core',
-    'Shell Action Runtime',
-    'Execute actions using system shell (bash/sh)',
-    'action',
-    '["bash", "sh"]'::jsonb,
+    'Shell',
+    'Shell (bash/sh) runtime for script execution - always available',
     '{
-        "method": "system",
-        "shell": "/bin/bash"
+        "verification": {
+            "commands": [
+                {"binary": "sh", "args": ["--version"], "exit_code": 0, "optional": true, "priority": 1},
+                {"binary": "bash", "args": ["--version"], "exit_code": 0, "optional": true, "priority": 2}
+            ],
+            "always_available": true
+        }
+    }'::jsonb,
+    '{
+        "interpreters": ["sh", "bash", "dash"],
+        "portable": true
+    }'::jsonb,
+    '{
+        "interpreter": {
+            "binary": "/bin/bash",
+            "args": [],
+            "file_extension": ".sh"
+        }
     }'::jsonb
 ) ON CONFLICT (ref) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,
     distributions = EXCLUDED.distributions,
     installation = EXCLUDED.installation,
+    execution_config = EXCLUDED.execution_config,
     updated = NOW();
 
--- Node.js Action Runtime
-INSERT INTO attune.runtime (
+-- Node.js Runtime
+INSERT INTO runtime (
     ref,
     pack_ref,
     name,
     description,
-    runtime_type,
     distributions,
-    installation
+    installation,
+    execution_config
 ) VALUES (
-    'core.action.nodejs',
+    'core.nodejs',
     'core',
-    'Node.js Action Runtime',
-    'Execute actions using Node.js runtime',
-    'action',
-    '["nodejs", "node"]'::jsonb,
+    'Node.js',
+    'Node.js runtime for JavaScript-based actions and sensors',
     '{
-        "method": "system",
-        "package_manager": "npm",
-        "requirements_file": "package.json"
+        "verification": {
+            "commands": [
+                {"binary": "node", "args": ["--version"], "exit_code": 0, "pattern": "v\\\\d+\\\\.\\\\d+\\\\.\\\\d+", "priority": 1}
+            ]
+        },
+        "min_version": "16.0.0",
+        "recommended_version": "20.0.0"
+    }'::jsonb,
+    '{
+        "package_managers": ["npm", "yarn", "pnpm"],
+        "module_support": true
+    }'::jsonb,
+    '{
+        "interpreter": {
+            "binary": "node",
+            "args": [],
+            "file_extension": ".js"
+        },
+        "environment": {
+            "env_type": "node_modules",
+            "dir_name": "node_modules",
+            "create_command": ["npm", "init", "-y"],
+            "interpreter_path": null
+        },
+        "dependencies": {
+            "manifest_file": "package.json",
+            "install_command": ["npm", "install", "--prefix", "{pack_dir}"]
+        }
     }'::jsonb
 ) ON CONFLICT (ref) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,
     distributions = EXCLUDED.distributions,
     installation = EXCLUDED.installation,
+    execution_config = EXCLUDED.execution_config,
     updated = NOW();
 
--- Native Action Runtime (for compiled Rust binaries and other native executables)
-INSERT INTO attune.runtime (
+-- Native Runtime (for compiled binaries: Rust, Go, C, etc.)
+INSERT INTO runtime (
     ref,
     pack_ref,
     name,
     description,
-    runtime_type,
     distributions,
-    installation
+    installation,
+    execution_config
 ) VALUES (
-    'core.action.native',
+    'core.native',
     'core',
-    'Native Action Runtime',
-    'Execute actions as native compiled binaries',
-    'action',
-    '["native"]'::jsonb,
+    'Native',
+    'Native compiled runtime (Rust, Go, C, etc.) - always available',
     '{
-        "method": "binary",
-        "description": "Native executable - no runtime installation required"
+        "verification": {
+            "always_available": true,
+            "check_required": false
+        },
+        "languages": ["rust", "go", "c", "c++"]
+    }'::jsonb,
+    '{
+        "build_required": false,
+        "system_native": true
+    }'::jsonb,
+    '{
+        "interpreter": {
+            "binary": "/bin/sh",
+            "args": ["-c"],
+            "file_extension": null
+        }
     }'::jsonb
 ) ON CONFLICT (ref) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,
     distributions = EXCLUDED.distributions,
     installation = EXCLUDED.installation,
+    execution_config = EXCLUDED.execution_config,
     updated = NOW();
 
--- ============================================================================
--- SENSOR RUNTIMES
--- ============================================================================
-
--- Python 3 Sensor Runtime
-INSERT INTO attune.runtime (
+-- Builtin Runtime (for internal sensors: timers, webhooks, etc.)
+-- NOTE: No execution_config - this runtime cannot execute actions.
+-- The worker skips runtimes without execution_config when loading.
+INSERT INTO runtime (
     ref,
     pack_ref,
     name,
     description,
-    runtime_type,
     distributions,
     installation
 ) VALUES (
-    'core.sensor.python3',
+    'core.builtin',
     'core',
-    'Python 3 Sensor Runtime',
-    'Execute sensors using Python 3.x interpreter',
-    'sensor',
-    '["python3"]'::jsonb,
+    'Builtin',
+    'Built-in sensor runtime for native Attune sensors (timers, webhooks, etc.)',
     '{
-        "method": "system",
-        "package_manager": "pip",
-        "requirements_file": "requirements.txt"
-    }'::jsonb
-) ON CONFLICT (ref) DO UPDATE SET
-    name = EXCLUDED.name,
-    description = EXCLUDED.description,
-    distributions = EXCLUDED.distributions,
-    installation = EXCLUDED.installation,
-    updated = NOW();
-
--- Shell Sensor Runtime
-INSERT INTO attune.runtime (
-    ref,
-    pack_ref,
-    name,
-    description,
-    runtime_type,
-    distributions,
-    installation
-) VALUES (
-    'core.sensor.shell',
-    'core',
-    'Shell Sensor Runtime',
-    'Execute sensors using system shell (bash/sh)',
-    'sensor',
-    '["bash", "sh"]'::jsonb,
+        "verification": {
+            "always_available": true,
+            "check_required": false
+        },
+        "type": "builtin"
+    }'::jsonb,
     '{
-        "method": "system",
-        "shell": "/bin/bash"
-    }'::jsonb
-) ON CONFLICT (ref) DO UPDATE SET
-    name = EXCLUDED.name,
-    description = EXCLUDED.description,
-    distributions = EXCLUDED.distributions,
-    installation = EXCLUDED.installation,
-    updated = NOW();
-
--- Node.js Sensor Runtime
-INSERT INTO attune.runtime (
-    ref,
-    pack_ref,
-    name,
-    description,
-    runtime_type,
-    distributions,
-    installation
-) VALUES (
-    'core.sensor.nodejs',
-    'core',
-    'Node.js Sensor Runtime',
-    'Execute sensors using Node.js runtime',
-    'sensor',
-    '["nodejs", "node"]'::jsonb,
-    '{
-        "method": "system",
-        "package_manager": "npm",
-        "requirements_file": "package.json"
-    }'::jsonb
-) ON CONFLICT (ref) DO UPDATE SET
-    name = EXCLUDED.name,
-    description = EXCLUDED.description,
-    distributions = EXCLUDED.distributions,
-    installation = EXCLUDED.installation,
-    updated = NOW();
-
--- Native Sensor Runtime (for compiled Rust binaries and other native executables)
-INSERT INTO attune.runtime (
-    ref,
-    pack_ref,
-    name,
-    description,
-    runtime_type,
-    distributions,
-    installation
-) VALUES (
-    'core.sensor.native',
-    'core',
-    'Native Sensor Runtime',
-    'Execute sensors as native compiled binaries',
-    'sensor',
-    '["native"]'::jsonb,
-    '{
-        "method": "binary",
-        "description": "Native executable - no runtime installation required"
+        "method": "builtin",
+        "included_with_service": true
     }'::jsonb
 ) ON CONFLICT (ref) DO UPDATE SET
     name = EXCLUDED.name,
@@ -241,16 +250,16 @@ DO $$
 DECLARE
     runtime_count INTEGER;
 BEGIN
-    SELECT COUNT(*) INTO runtime_count FROM attune.runtime WHERE pack_ref = 'core';
+    SELECT COUNT(*) INTO runtime_count FROM runtime WHERE pack_ref = 'core';
     RAISE NOTICE 'Seeded % core runtime(s)', runtime_count;
 END $$;
 
 -- Show summary
 SELECT
-    runtime_type,
-    COUNT(*) as count,
-    ARRAY_AGG(ref ORDER BY ref) as refs
-FROM attune.runtime
+    ref,
+    name,
+    CASE WHEN execution_config IS NOT NULL AND execution_config != '{}'::jsonb
+         THEN 'yes' ELSE 'no' END AS executable
+FROM runtime
 WHERE pack_ref = 'core'
-GROUP BY runtime_type
-ORDER BY runtime_type;
+ORDER BY ref;

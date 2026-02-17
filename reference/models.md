@@ -52,27 +52,22 @@ Attune is an event-driven automation and orchestration platform with built-in mu
 
 ## Runtime Environment
 
-### `RuntimeType` (Enum)
-**Values**: `action`, `sensor`
-
-**Purpose**: Distinguishes between action execution environments and sensor monitoring environments.
-
 ### `Runtime`
-**Purpose**: Defines an execution environment for actions or sensors.
+**Purpose**: Defines a unified execution environment for actions and sensors.
 
 **Key Fields**:
-- `ref`: Unique reference (format: `pack.(action|sensor).name`)
-- `runtime_type`: Type of runtime (action or sensor)
-- `name`: Runtime name (e.g., "python3.11", "nodejs20")
-- `distributions`: JSON describing available distributions
+- `ref`: Unique reference (format: `pack.name`, e.g., `core.python`, `core.shell`)
+- `name`: Runtime name (e.g., "Python", "Shell", "Node.js")
+- `distributions`: JSON describing available distributions and verification metadata
 - `installation`: JSON describing installation requirements
+- `execution_config`: JSON describing how to execute code (interpreter, environment setup, dependencies). Runtimes without an `execution_config` (e.g., `core.builtin`) cannot execute actions — the worker skips them.
 - `pack`: Parent pack ID
 
 **Relationships**:
 - Belongs to: pack
 - Used by: workers, sensors, actions
 
-**Purpose**: Defines how to install and execute code (Python, Node.js, containers, etc.).
+**Purpose**: Defines how to install and execute code (Python, Node.js, containers, etc.). Runtimes are shared between actions and sensors — there is no type distinction.
 
 ### `WorkerType` (Enum)
 **Values**: `local`, `remote`, `container`
@@ -479,7 +474,7 @@ These ensure data consistency and provide audit trails throughout the system.
 ## Common Patterns
 
 ### Reference Format
-Most components use a `ref` field with format `pack.name` (e.g., `slack.webhook_trigger`). Runtimes use `pack.(action|sensor).name`.
+All components use a `ref` field with format `pack.name` (e.g., `slack.webhook_trigger`, `core.python`, `core.shell`).
 
 ### Ref vs ID
 - Foreign key relationships use IDs

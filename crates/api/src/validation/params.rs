@@ -219,6 +219,7 @@ mod tests {
             is_adhoc: false,
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
+            output_format: attune_common::models::OutputFormat::default(),
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
         };
@@ -238,7 +239,7 @@ mod tests {
         });
 
         let action = Action {
-            id: 1,
+            id: 2,
             r#ref: "test.action".to_string(),
             pack: 1,
             pack_ref: "test".to_string(),
@@ -253,6 +254,7 @@ mod tests {
             is_adhoc: false,
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
+            output_format: attune_common::models::OutputFormat::default(),
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
         };

@@ -345,9 +345,9 @@ pub async fn create_rule(
         let payload = RuleCreatedPayload {
             rule_id: rule.id,
             rule_ref: rule.r#ref.clone(),
-            trigger_id: Some(rule.trigger),
+            trigger_id: rule.trigger,
             trigger_ref: rule.trigger_ref.clone(),
-            action_id: Some(rule.action),
+            action_id: rule.action,
             action_ref: rule.action_ref.clone(),
             trigger_params: Some(rule.trigger_params.clone()),
             enabled: rule.enabled,

@@ -1,21 +1,28 @@
 //! Runtime Module
 //!
 //! Provides runtime abstraction and implementations for executing actions
-//! in different environments (Python, Shell, Node.js, Containers).
+//! in different environments. The primary runtime is `ProcessRuntime`, a
+//! generic, configuration-driven runtime that reads its behavior from the
+//! database `runtime.execution_config` JSONB column.
+//!
+//! Language-specific runtimes (Python, Node.js, etc.) are NOT implemented
+//! as separate Rust types. Instead, the `ProcessRuntime` handles all
+//! languages by using the interpreter, environment, and dependency
+//! configuration stored in the database.
 
 pub mod dependency;
 pub mod local;
 pub mod log_writer;
 pub mod native;
 pub mod parameter_passing;
-pub mod python;
-pub mod python_venv;
+pub mod process;
+pub mod process_executor;
 pub mod shell;
 
 // Re-export runtime implementations
 pub use local::LocalRuntime;
 pub use native::NativeRuntime;
-pub use python::PythonRuntime;
+pub use process::ProcessRuntime;
 pub use shell::ShellRuntime;
 
 use async_trait::async_trait;
@@ -31,7 +38,6 @@ pub use dependency::{
 };
 pub use log_writer::{BoundedLogResult, BoundedLogWriter};
 pub use parameter_passing::{ParameterDeliveryConfig, PreparedParameters};
-pub use python_venv::PythonVenvManager;
 
 // Re-export parameter types from common
 pub use attune_common::models::{OutputFormat, ParameterDelivery, ParameterFormat};

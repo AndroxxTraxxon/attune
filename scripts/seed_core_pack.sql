@@ -32,16 +32,15 @@ BEGIN
     -- Get core pack ID
     SELECT id INTO v_pack_id FROM attune.pack WHERE ref = 'core';
 
-    -- Create shell runtime for actions
-    INSERT INTO attune.runtime (ref, pack, pack_ref, name, description, runtime_type, distributions)
+    -- Create shell runtime
+    INSERT INTO attune.runtime (ref, pack, pack_ref, name, description, distributions)
     VALUES (
-        'core.action.shell',
+        'core.shell',
         v_pack_id,
         'core',
-        'shell',
-        'Execute shell commands',
-        'action',
-        '{"shell": {"command": "sh"}}'::jsonb
+        'Shell',
+        'Shell (bash/sh) runtime for script execution - always available',
+        '{"verification": {"always_available": true}}'::jsonb
     )
     ON CONFLICT (ref) DO UPDATE SET
         name = EXCLUDED.name,
@@ -49,16 +48,15 @@ BEGIN
         updated = NOW()
     RETURNING id INTO v_action_runtime_id;
 
-    -- Create built-in runtime for sensors
-    INSERT INTO attune.runtime (ref, pack, pack_ref, name, description, runtime_type, distributions)
+    -- Create built-in runtime for sensors (no execution_config = not executable by worker)
+    INSERT INTO attune.runtime (ref, pack, pack_ref, name, description, distributions)
     VALUES (
-        'core.sensor.builtin',
+        'core.builtin',
         v_pack_id,
         'core',
-        'Built-in',
-        'Built-in runtime for system timers and sensors',
-        'sensor',
-        '[]'::jsonb
+        'Builtin',
+        'Built-in sensor runtime for native Attune sensors (timers, webhooks, etc.)',
+        '{"verification": {"always_available": true, "check_required": false}, "type": "builtin"}'::jsonb
     )
     ON CONFLICT (ref) DO UPDATE SET
         name = EXCLUDED.name,
@@ -370,7 +368,7 @@ BEGIN
         'Timer sensor that fires every 10 seconds',
         'builtin:interval_timer',
         v_sensor_runtime_id,
-        'core.sensor.builtin',
+        'core.builtin',
         v_intervaltimer_id,
         'core.intervaltimer',
         true,

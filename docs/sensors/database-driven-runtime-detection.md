@@ -3,6 +3,8 @@
 **Version:** 1.0  
 **Last Updated:** 2026-02-02
 
+> **⚠️ Note:** This document was written before the `runtime_type` column was removed from the runtime table. SQL examples referencing `WHERE runtime_type = 'sensor'`, `INSERT ... runtime_type`, and 3-part refs like `core.sensor.python` are outdated. The current architecture uses unified runtimes with 2-part refs (`core.python`, `core.shell`) and determines executability by the presence of `execution_config`. See `docs/QUICKREF-unified-runtime-detection.md` for the current model.
+
 ---
 
 ## Overview

@@ -65,7 +65,21 @@ echo -e "${GREEN}✓${NC} Database is ready"
 # Create target packs directory if it doesn't exist
 echo -e "${YELLOW}→${NC} Ensuring packs directory exists..."
 mkdir -p "$TARGET_PACKS_DIR"
+# Ensure the attune user (uid 1000) can write to the packs directory
+# so the API service can install packs at runtime
+chown -R 1000:1000 "$TARGET_PACKS_DIR"
 echo -e "${GREEN}✓${NC} Packs directory ready at: $TARGET_PACKS_DIR"
+
+# Initialise runtime environments volume with correct ownership.
+# Workers (running as attune uid 1000) need write access to create
+# virtualenvs, node_modules, etc. at runtime.
+RUNTIME_ENVS_DIR="${RUNTIME_ENVS_DIR:-/opt/attune/runtime_envs}"
+if [ -d "$RUNTIME_ENVS_DIR" ] || mkdir -p "$RUNTIME_ENVS_DIR" 2>/dev/null; then
+    chown -R 1000:1000 "$RUNTIME_ENVS_DIR"
+    echo -e "${GREEN}✓${NC} Runtime environments directory ready at: $RUNTIME_ENVS_DIR"
+else
+    echo -e "${YELLOW}⚠${NC} Runtime environments directory not mounted, skipping"
+fi
 
 # Check if source packs directory exists
 if [ ! -d "$SOURCE_PACKS_DIR" ]; then
@@ -208,6 +222,10 @@ for pack_dir in "$TARGET_PACKS_DIR"/*; do
 done
 
 echo ""
+# Ensure ownership is correct after all packs have been copied
+# The API service (running as attune uid 1000) needs write access to install new packs
+chown -R 1000:1000 "$TARGET_PACKS_DIR"
+
 echo -e "${BLUE}ℹ${NC} Pack files are accessible to all services via shared volume"
 echo ""
 

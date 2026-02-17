@@ -117,7 +117,7 @@ CREATE TABLE event (
     trigger_ref TEXT NOT NULL,
     config JSONB,
     payload JSONB,
-    source BIGINT REFERENCES sensor(id),
+    source BIGINT REFERENCES sensor(id) ON DELETE SET NULL,
     source_ref TEXT,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     rule BIGINT,

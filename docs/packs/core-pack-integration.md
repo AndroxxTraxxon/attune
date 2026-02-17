@@ -3,6 +3,8 @@
 **Last Updated**: 2026-01-20  
 **Status**: Implementation Guide
 
+> **⚠️ Note:** This document was written during early planning. Some code examples reference the now-removed `runtime_type` field and old 3-part runtime ref format (`core.action.shell`). The current architecture uses unified runtimes with 2-part refs (`core.shell`) and determines executability by the presence of `execution_config`. See `docs/QUICKREF-unified-runtime-detection.md` for the current model.
+
 ---
 
 ## Overview
@@ -316,11 +318,11 @@ pub async fn execute_action(
     // Prepare environment variables
     let env = prepare_action_env(&params);
 
-    // Execute based on runner type
-    let output = match action.runtime_type.as_str() {
+    // Execute based on runtime name (resolved from runtime.name, lowercased)
+    let output = match runtime_name.as_str() {
         "shell" => self.execute_shell_action(script_path, env).await?,
         "python" => self.execute_python_action(script_path, env).await?,
-        _ => return Err(Error::UnsupportedRuntime(action.runtime_type.clone())),
+        _ => return Err(Error::UnsupportedRuntime(runtime_name.clone())),
     };
 
     Ok(output)

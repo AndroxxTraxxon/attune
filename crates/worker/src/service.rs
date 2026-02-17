@@ -10,28 +10,33 @@ use attune_common::models::ExecutionStatus;
 use attune_common::mq::{
     config::MessageQueueConfig as MqConfig, Connection, Consumer, ConsumerConfig,
     ExecutionCompletedPayload, ExecutionStatusChangedPayload, MessageEnvelope, MessageType,
-    Publisher, PublisherConfig,
+    PackRegisteredPayload, Publisher, PublisherConfig,
 };
 use attune_common::repositories::{execution::ExecutionRepository, FindById};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::artifacts::ArtifactManager;
+use crate::env_setup;
 use crate::executor::ActionExecutor;
 use crate::heartbeat::HeartbeatManager;
 use crate::registration::WorkerRegistration;
 use crate::runtime::local::LocalRuntime;
 use crate::runtime::native::NativeRuntime;
-use crate::runtime::python::PythonRuntime;
+use crate::runtime::process::ProcessRuntime;
 use crate::runtime::shell::ShellRuntime;
-use crate::runtime::{DependencyManagerRegistry, PythonVenvManager, RuntimeRegistry};
+use crate::runtime::RuntimeRegistry;
 use crate::secrets::SecretManager;
+
+use attune_common::repositories::runtime::RuntimeRepository;
+use attune_common::repositories::List;
 
 /// Message payload for execution.scheduled events
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,7 +58,15 @@ pub struct WorkerService {
     publisher: Arc<Publisher>,
     consumer: Option<Arc<Consumer>>,
     consumer_handle: Option<JoinHandle<()>>,
+    pack_consumer: Option<Arc<Consumer>>,
+    pack_consumer_handle: Option<JoinHandle<()>>,
     worker_id: Option<i64>,
+    /// Runtime filter derived from ATTUNE_WORKER_RUNTIMES
+    runtime_filter: Option<Vec<String>>,
+    /// Base directory for pack files
+    packs_base_dir: PathBuf,
+    /// Base directory for isolated runtime environments
+    runtime_envs_dir: PathBuf,
 }
 
 impl WorkerService {
@@ -119,86 +132,104 @@ impl WorkerService {
         let artifact_manager = ArtifactManager::new(artifact_base_dir);
         artifact_manager.initialize().await?;
 
+        let packs_base_dir = std::path::PathBuf::from(&config.packs_base_dir);
+        let runtime_envs_dir = std::path::PathBuf::from(&config.runtime_envs_dir);
+
         // Determine which runtimes to register based on configuration
-        // This reads from ATTUNE_WORKER_RUNTIMES env var (highest priority)
-        let configured_runtimes = if let Ok(runtimes_env) = std::env::var("ATTUNE_WORKER_RUNTIMES")
-        {
-            info!(
-                "Registering runtimes from ATTUNE_WORKER_RUNTIMES: {}",
-                runtimes_env
-            );
-            runtimes_env
-                .split(',')
-                .map(|s| s.trim().to_lowercase())
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<String>>()
-        } else {
-            // Fallback to auto-detection if not configured
-            info!("No ATTUNE_WORKER_RUNTIMES found, registering all available runtimes");
-            vec![
-                "shell".to_string(),
-                "python".to_string(),
-                "native".to_string(),
-            ]
-        };
-
-        info!("Configured runtimes: {:?}", configured_runtimes);
-
-        // Initialize dependency manager registry for isolated environments
-        let mut dependency_manager_registry = DependencyManagerRegistry::new();
-
-        // Only setup Python virtual environment manager if Python runtime is needed
-        if configured_runtimes.contains(&"python".to_string()) {
-            let venv_base_dir = std::path::PathBuf::from(
-                config
-                    .worker
-                    .as_ref()
-                    .and_then(|w| w.name.clone())
-                    .map(|name| format!("/tmp/attune/venvs/{}", name))
-                    .unwrap_or_else(|| "/tmp/attune/venvs".to_string()),
-            );
-            let python_venv_manager = PythonVenvManager::new(venv_base_dir);
-            dependency_manager_registry.register(Box::new(python_venv_manager));
-            info!("Dependency manager initialized with Python venv support");
-        }
-
-        let dependency_manager_arc = Arc::new(dependency_manager_registry);
+        // ATTUNE_WORKER_RUNTIMES env var filters which runtimes this worker handles.
+        // If not set, all action runtimes from the database are loaded.
+        let runtime_filter: Option<Vec<String>> =
+            std::env::var("ATTUNE_WORKER_RUNTIMES").ok().map(|env_val| {
+                info!(
+                    "Filtering runtimes from ATTUNE_WORKER_RUNTIMES: {}",
+                    env_val
+                );
+                env_val
+                    .split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            });
 
         // Initialize runtime registry
         let mut runtime_registry = RuntimeRegistry::new();
 
-        // Register runtimes based on configuration
-        for runtime_name in &configured_runtimes {
-            match runtime_name.as_str() {
-                "python" => {
-                    let python_runtime = PythonRuntime::with_dependency_manager(
-                        std::path::PathBuf::from("python3"),
-                        std::path::PathBuf::from("/tmp/attune/actions"),
-                        dependency_manager_arc.clone(),
+        // Load runtimes from the database and create ProcessRuntime instances.
+        // Each runtime row's `execution_config` JSONB drives how the ProcessRuntime
+        // invokes interpreters, manages environments, and installs dependencies.
+        // We skip runtimes with empty execution_config (e.g., the built-in sensor
+        // runtime) since they have no interpreter and cannot execute as a process.
+        match RuntimeRepository::list(&pool).await {
+            Ok(db_runtimes) => {
+                let executable_runtimes: Vec<_> = db_runtimes
+                    .into_iter()
+                    .filter(|r| {
+                        let config = r.parsed_execution_config();
+                        // A runtime is executable if it has a non-default interpreter
+                        // (the default is "/bin/sh" from InterpreterConfig::default,
+                        // but runtimes with no execution_config at all will have an
+                        // empty JSON object that deserializes to defaults with no
+                        // file_extension — those are not real process runtimes).
+                        config.interpreter.file_extension.is_some()
+                            || r.execution_config != serde_json::json!({})
+                    })
+                    .collect();
+
+                info!(
+                    "Found {} executable runtime(s) in database",
+                    executable_runtimes.len()
+                );
+
+                for rt in executable_runtimes {
+                    let rt_name = rt.name.to_lowercase();
+
+                    // Apply filter if ATTUNE_WORKER_RUNTIMES is set
+                    if let Some(ref filter) = runtime_filter {
+                        if !filter.contains(&rt_name) {
+                            debug!(
+                                "Skipping runtime '{}' (not in ATTUNE_WORKER_RUNTIMES filter)",
+                                rt_name
+                            );
+                            continue;
+                        }
+                    }
+
+                    let exec_config = rt.parsed_execution_config();
+                    let process_runtime = ProcessRuntime::new(
+                        rt_name.clone(),
+                        exec_config,
+                        packs_base_dir.clone(),
+                        runtime_envs_dir.clone(),
                     );
-                    runtime_registry.register(Box::new(python_runtime));
-                    info!("Registered Python runtime");
+                    runtime_registry.register(Box::new(process_runtime));
+                    info!(
+                        "Registered ProcessRuntime '{}' from database (ref: {})",
+                        rt_name, rt.r#ref
+                    );
                 }
-                "shell" => {
-                    runtime_registry.register(Box::new(ShellRuntime::new()));
-                    info!("Registered Shell runtime");
-                }
-                "native" => {
-                    runtime_registry.register(Box::new(NativeRuntime::new()));
-                    info!("Registered Native runtime");
-                }
-                "node" => {
-                    warn!("Node.js runtime requested but not yet implemented, skipping");
-                }
-                _ => {
-                    warn!("Unknown runtime type '{}', skipping", runtime_name);
-                }
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to load runtimes from database: {}. \
+                     Falling back to built-in defaults.",
+                    e
+                );
             }
         }
 
-        // Only register local runtime as fallback if no specific runtimes configured
-        // (LocalRuntime contains Python/Shell/Native and tries to validate all)
-        if configured_runtimes.is_empty() {
+        // If no runtimes were loaded from the DB, register built-in defaults
+        if runtime_registry.list_runtimes().is_empty() {
+            info!("No runtimes loaded from database, registering built-in defaults");
+
+            // Shell runtime (always available)
+            runtime_registry.register(Box::new(ShellRuntime::new()));
+            info!("Registered built-in Shell runtime");
+
+            // Native runtime (for compiled binaries)
+            runtime_registry.register(Box::new(NativeRuntime::new()));
+            info!("Registered built-in Native runtime");
+
+            // Local runtime as catch-all fallback
             let local_runtime = LocalRuntime::new();
             runtime_registry.register(Box::new(local_runtime));
             info!("Registered Local runtime (fallback)");
@@ -231,7 +262,6 @@ impl WorkerService {
             .as_ref()
             .map(|w| w.max_stderr_bytes)
             .unwrap_or(10 * 1024 * 1024);
-        let packs_base_dir = std::path::PathBuf::from(&config.packs_base_dir);
 
         // Get API URL from environment or construct from server config
         let api_url = std::env::var("ATTUNE_API_URL")
@@ -244,7 +274,7 @@ impl WorkerService {
             secret_manager,
             max_stdout_bytes,
             max_stderr_bytes,
-            packs_base_dir,
+            packs_base_dir.clone(),
             api_url,
         ));
 
@@ -259,6 +289,9 @@ impl WorkerService {
             heartbeat_interval,
         ));
 
+        // Capture the runtime filter for use in env setup
+        let runtime_filter_for_service = runtime_filter.clone();
+
         Ok(Self {
             config,
             db_pool: pool,
@@ -269,7 +302,12 @@ impl WorkerService {
             publisher: Arc::new(publisher),
             consumer: None,
             consumer_handle: None,
+            pack_consumer: None,
+            pack_consumer_handle: None,
             worker_id: None,
+            runtime_filter: runtime_filter_for_service,
+            packs_base_dir,
+            runtime_envs_dir,
         })
     }
 
@@ -288,6 +326,7 @@ impl WorkerService {
         info!("Worker registered with ID: {}", worker_id);
 
         // Setup worker-specific message queue infrastructure
+        // (includes per-worker execution queue AND pack registration queue)
         let mq_config = MqConfig::default();
         self.mq_connection
             .setup_worker_infrastructure(worker_id, &mq_config)
@@ -297,11 +336,19 @@ impl WorkerService {
             })?;
         info!("Worker-specific message queue infrastructure setup completed");
 
+        // Proactively set up runtime environments for all registered packs.
+        // This runs before we start consuming execution messages so that
+        // environments are ready by the time the first execution arrives.
+        self.scan_and_setup_environments().await;
+
         // Start heartbeat
         self.heartbeat.start().await?;
 
         // Start consuming execution messages
         self.start_execution_consumer().await?;
+
+        // Start consuming pack registration events
+        self.start_pack_consumer().await?;
 
         info!("Worker Service started successfully");
 
@@ -316,6 +363,137 @@ impl WorkerService {
     /// 3. Wait for in-flight tasks with timeout
     /// 4. Close MQ connection
     /// 5. Close DB connection
+    /// Scan all registered packs and create missing runtime environments.
+    async fn scan_and_setup_environments(&self) {
+        let filter_refs: Option<Vec<String>> = self.runtime_filter.clone();
+        let filter_slice: Option<&[String]> = filter_refs.as_deref();
+
+        let result = env_setup::scan_and_setup_all_environments(
+            &self.db_pool,
+            filter_slice,
+            &self.packs_base_dir,
+            &self.runtime_envs_dir,
+        )
+        .await;
+
+        if !result.errors.is_empty() {
+            warn!(
+                "Environment startup scan completed with {} error(s): {:?}",
+                result.errors.len(),
+                result.errors,
+            );
+        } else {
+            info!(
+                "Environment startup scan completed: {} pack(s) scanned, \
+                 {} environment(s) ensured, {} skipped",
+                result.packs_scanned, result.environments_created, result.environments_skipped,
+            );
+        }
+    }
+
+    /// Start consuming pack.registered events from the per-worker packs queue.
+    async fn start_pack_consumer(&mut self) -> Result<()> {
+        let worker_id = self
+            .worker_id
+            .ok_or_else(|| Error::Internal("Worker not registered".to_string()))?;
+
+        let queue_name = format!("worker.{}.packs", worker_id);
+        info!(
+            "Starting pack registration consumer for queue: {}",
+            queue_name
+        );
+
+        let consumer = Arc::new(
+            Consumer::new(
+                &self.mq_connection,
+                ConsumerConfig {
+                    queue: queue_name.clone(),
+                    tag: format!("worker-{}-packs", worker_id),
+                    prefetch_count: 5,
+                    auto_ack: false,
+                    exclusive: false,
+                },
+            )
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to create pack consumer: {}", e)))?,
+        );
+
+        let db_pool = self.db_pool.clone();
+        let consumer_for_task = consumer.clone();
+        let queue_name_for_log = queue_name.clone();
+        let runtime_filter = self.runtime_filter.clone();
+        let packs_base_dir = self.packs_base_dir.clone();
+        let runtime_envs_dir = self.runtime_envs_dir.clone();
+
+        let handle = tokio::spawn(async move {
+            info!(
+                "Pack consumer loop started for queue '{}'",
+                queue_name_for_log
+            );
+            let result = consumer_for_task
+                .consume_with_handler(move |envelope: MessageEnvelope<PackRegisteredPayload>| {
+                    let db_pool = db_pool.clone();
+                    let runtime_filter = runtime_filter.clone();
+                    let packs_base_dir = packs_base_dir.clone();
+                    let runtime_envs_dir = runtime_envs_dir.clone();
+
+                    async move {
+                        info!(
+                            "Received pack.registered event for pack '{}' (version {})",
+                            envelope.payload.pack_ref, envelope.payload.version,
+                        );
+
+                        let filter_slice: Option<Vec<String>> = runtime_filter;
+                        let filter_ref: Option<&[String]> = filter_slice.as_deref();
+
+                        let pack_result = env_setup::setup_environments_for_registered_pack(
+                            &db_pool,
+                            &envelope.payload,
+                            filter_ref,
+                            &packs_base_dir,
+                            &runtime_envs_dir,
+                        )
+                        .await;
+
+                        if !pack_result.errors.is_empty() {
+                            warn!(
+                                "Pack '{}' environment setup had {} error(s): {:?}",
+                                pack_result.pack_ref,
+                                pack_result.errors.len(),
+                                pack_result.errors,
+                            );
+                        } else if !pack_result.environments_created.is_empty() {
+                            info!(
+                                "Pack '{}' environments set up: {:?}",
+                                pack_result.pack_ref, pack_result.environments_created,
+                            );
+                        }
+
+                        Ok(())
+                    }
+                })
+                .await;
+
+            match result {
+                Ok(()) => info!(
+                    "Pack consumer loop for queue '{}' ended",
+                    queue_name_for_log
+                ),
+                Err(e) => error!(
+                    "Pack consumer loop for queue '{}' failed: {}",
+                    queue_name_for_log, e
+                ),
+            }
+        });
+
+        self.pack_consumer = Some(consumer);
+        self.pack_consumer_handle = Some(handle);
+
+        info!("Pack registration consumer initialized");
+
+        Ok(())
+    }
+
     pub async fn stop(&mut self) -> Result<()> {
         info!("Stopping Worker Service - initiating graceful shutdown");
 
@@ -355,11 +533,17 @@ impl WorkerService {
             Err(_) => warn!("Shutdown timeout reached - some tasks may have been interrupted"),
         }
 
-        // 4. Abort consumer task and close message queue connection
+        // 4. Abort consumer tasks and close message queue connection
         if let Some(handle) = self.consumer_handle.take() {
-            info!("Stopping consumer task...");
+            info!("Stopping execution consumer task...");
             handle.abort();
             // Wait briefly for the task to finish
+            let _ = handle.await;
+        }
+
+        if let Some(handle) = self.pack_consumer_handle.take() {
+            info!("Stopping pack consumer task...");
+            handle.abort();
             let _ = handle.await;
         }
 

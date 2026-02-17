@@ -97,6 +97,7 @@ services:
       - ./scripts/load_core_pack.py:/scripts/load_core_pack.py:ro
       - ./docker/init-packs.sh:/init-packs.sh:ro
       - packs_data:/opt/attune/packs
+      - runtime_envs:/opt/attune/runtime_envs
     environment:
       DB_HOST: postgres
       DB_PORT: 5432
@@ -185,8 +186,9 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - packs_data:/opt/attune/packs:ro
+      - packs_data:/opt/attune/packs:rw
       - ./packs.dev:/opt/attune/packs.dev:rw
+      - runtime_envs:/opt/attune/runtime_envs
       - api_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -280,6 +282,7 @@ services:
     volumes:
       - packs_data:/opt/attune/packs:ro
       - ./packs.dev:/opt/attune/packs.dev:rw
+      - runtime_envs:/opt/attune/runtime_envs
       - worker_shell_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -325,6 +328,7 @@ services:
     volumes:
       - packs_data:/opt/attune/packs:ro
       - ./packs.dev:/opt/attune/packs.dev:rw
+      - runtime_envs:/opt/attune/runtime_envs
       - worker_python_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -370,6 +374,7 @@ services:
     volumes:
       - packs_data:/opt/attune/packs:ro
       - ./packs.dev:/opt/attune/packs.dev:rw
+      - runtime_envs:/opt/attune/runtime_envs
       - worker_node_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -415,6 +420,7 @@ services:
     volumes:
       - packs_data:/opt/attune/packs:ro
       - ./packs.dev:/opt/attune/packs.dev:rw
+      - runtime_envs:/opt/attune/runtime_envs
       - worker_full_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -584,6 +590,8 @@ volumes:
   notifier_logs:
     driver: local
   packs_data:
+    driver: local
+  runtime_envs:
     driver: local
 
 # ============================================================================

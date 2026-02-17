@@ -1,5 +1,5 @@
 -- Migration: Pack System
--- Description: Creates pack and runtime tables (runtime without runtime_type)
+-- Description: Creates pack and runtime tables
 -- Version: 20250101000002
 
 -- ============================================================================
@@ -96,9 +96,41 @@ CREATE TABLE runtime (
     pack_ref TEXT,
     description TEXT,
     name TEXT NOT NULL,
+
     distributions JSONB NOT NULL,
     installation JSONB,
     installers JSONB DEFAULT '[]'::jsonb,
+
+    -- Execution configuration: describes how to execute actions using this runtime,
+    -- how to create isolated environments, and how to install dependencies.
+    --
+    -- Structure:
+    -- {
+    --   "interpreter": {
+    --     "binary": "python3",          -- interpreter binary name or path
+    --     "args": [],                   -- additional args before the action file
+    --     "file_extension": ".py"       -- file extension this runtime handles
+    --   },
+    --   "environment": {               -- optional: isolated environment config
+    --     "env_type": "virtualenv",     -- "virtualenv", "node_modules", "none"
+    --     "dir_name": ".venv",          -- directory name relative to pack dir
+    --     "create_command": ["python3", "-m", "venv", "{env_dir}"],
+    --     "interpreter_path": "{env_dir}/bin/python3"  -- overrides interpreter.binary
+    --   },
+    --   "dependencies": {              -- optional: dependency management config
+    --     "manifest_file": "requirements.txt",
+    --     "install_command": ["{interpreter}", "-m", "pip", "install", "-r", "{manifest_path}"]
+    --   }
+    -- }
+    --
+    -- Template variables:
+    --   {pack_dir}      - absolute path to the pack directory
+    --   {env_dir}       - resolved environment directory (pack_dir/dir_name)
+    --   {interpreter}   - resolved interpreter path
+    --   {action_file}   - absolute path to the action script file
+    --   {manifest_path} - absolute path to the dependency manifest file
+    execution_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -112,6 +144,7 @@ CREATE INDEX idx_runtime_pack ON runtime(pack);
 CREATE INDEX idx_runtime_created ON runtime(created DESC);
 CREATE INDEX idx_runtime_name ON runtime(name);
 CREATE INDEX idx_runtime_verification ON runtime USING GIN ((distributions->'verification'));
+CREATE INDEX idx_runtime_execution_config ON runtime USING GIN (execution_config);
 
 -- Trigger
 CREATE TRIGGER update_runtime_updated
@@ -126,3 +159,4 @@ COMMENT ON COLUMN runtime.name IS 'Runtime name (e.g., "Python", "Node.js", "She
 COMMENT ON COLUMN runtime.distributions IS 'Runtime distribution metadata including verification commands, version requirements, and capabilities';
 COMMENT ON COLUMN runtime.installation IS 'Installation requirements and instructions including package managers and setup steps';
 COMMENT ON COLUMN runtime.installers IS 'Array of installer actions to create pack-specific runtime environments. Each installer defines commands to set up isolated environments (e.g., Python venv, npm install).';
+COMMENT ON COLUMN runtime.execution_config IS 'Execution configuration: interpreter, environment setup, and dependency management. Drives how the worker executes actions and how pack install sets up environments.';

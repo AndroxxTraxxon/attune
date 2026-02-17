@@ -69,6 +69,13 @@ async fn create_test_runtime(pool: &PgPool, suffix: &str) -> i64 {
         name: format!("Python {}", suffix),
         distributions: json!({"ubuntu": "python3"}),
         installation: Some(json!({"method": "apt"})),
+        execution_config: json!({
+            "interpreter": {
+                "binary": "python3",
+                "args": ["-u"],
+                "file_extension": ".py"
+            }
+        }),
     };
 
     let runtime = RuntimeRepository::create(pool, runtime_input)

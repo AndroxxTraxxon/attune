@@ -72,6 +72,13 @@ impl RuntimeFixture {
                 "method": "pip",
                 "packages": ["requests", "pyyaml"]
             })),
+            execution_config: json!({
+                "interpreter": {
+                    "binary": "python3",
+                    "args": ["-u"],
+                    "file_extension": ".py"
+                }
+            }),
         }
     }
 
@@ -88,6 +95,13 @@ impl RuntimeFixture {
             name,
             distributions: json!({}),
             installation: None,
+            execution_config: json!({
+                "interpreter": {
+                    "binary": "/bin/bash",
+                    "args": [],
+                    "file_extension": ".sh"
+                }
+            }),
         }
     }
 }
@@ -245,6 +259,7 @@ async fn test_update_runtime() {
         installation: Some(json!({
             "method": "npm"
         })),
+        execution_config: None,
     };
 
     let updated = RuntimeRepository::update(&pool, created.id, update_input.clone())
@@ -274,6 +289,7 @@ async fn test_update_runtime_partial() {
         name: None,
         distributions: None,
         installation: None,
+        execution_config: None,
     };
 
     let updated = RuntimeRepository::update(&pool, created.id, update_input.clone())
@@ -428,16 +444,6 @@ async fn test_find_by_pack_empty() {
     assert_eq!(runtimes.len(), 0);
 }
 
-// ============================================================================
-// Enum Tests
-// ============================================================================
-
-// Test removed - runtime_type field no longer exists
-// #[tokio::test]
-// async fn test_runtime_type_enum() {
-//     // runtime_type field removed from Runtime model
-// }
-
 #[tokio::test]
 async fn test_runtime_created_successfully() {
     let pool = setup_db().await;
@@ -515,13 +521,13 @@ async fn test_list_ordering() {
     let fixture = RuntimeFixture::new("list_ordering");
 
     let mut input1 = fixture.create_input("z_last");
-    input1.r#ref = format!("{}.action.zzz", fixture.test_id);
+    input1.r#ref = format!("{}.zzz", fixture.test_id);
 
     let mut input2 = fixture.create_input("a_first");
-    input2.r#ref = format!("{}.sensor.aaa", fixture.test_id);
+    input2.r#ref = format!("{}.aaa", fixture.test_id);
 
     let mut input3 = fixture.create_input("m_middle");
-    input3.r#ref = format!("{}.action.mmm", fixture.test_id);
+    input3.r#ref = format!("{}.mmm", fixture.test_id);
 
     RuntimeRepository::create(&pool, input1)
         .await

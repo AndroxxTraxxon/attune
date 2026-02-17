@@ -1,4 +1,4 @@
-ref: core.sensor.builtin
+ref: core.builtin
 pack_ref: core
 name: Builtin
 description: Built-in sensor runtime for native Attune sensors (timers, webhooks, etc.)

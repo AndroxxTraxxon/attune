@@ -555,7 +555,6 @@ async fn test_enum_types_exist() {
         "notification_status_enum",
         "owner_type_enum",
         "policy_method_enum",
-        "runtime_type_enum",
         "worker_status_enum",
         "worker_type_enum",
     ];

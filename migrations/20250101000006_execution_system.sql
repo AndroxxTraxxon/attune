@@ -8,12 +8,12 @@
 
 CREATE TABLE execution (
     id BIGSERIAL PRIMARY KEY,
-    action BIGINT REFERENCES action(id),
+    action BIGINT REFERENCES action(id) ON DELETE SET NULL,
     action_ref TEXT NOT NULL,
     config JSONB,
     env_vars JSONB,
-    parent BIGINT REFERENCES execution(id),
-    enforcement BIGINT REFERENCES enforcement(id),
+    parent BIGINT REFERENCES execution(id) ON DELETE SET NULL,
+    enforcement BIGINT REFERENCES enforcement(id) ON DELETE SET NULL,
     executor BIGINT REFERENCES identity(id) ON DELETE SET NULL,
     status execution_status_enum NOT NULL DEFAULT 'requested',
     result JSONB,
@@ -120,9 +120,9 @@ CREATE TABLE rule (
     pack_ref TEXT NOT NULL,
     label TEXT NOT NULL,
     description TEXT NOT NULL,
-    action BIGINT NOT NULL REFERENCES action(id),
+    action BIGINT REFERENCES action(id) ON DELETE SET NULL,
     action_ref TEXT NOT NULL,
-    trigger BIGINT NOT NULL REFERENCES trigger(id),
+    trigger BIGINT REFERENCES trigger(id) ON DELETE SET NULL,
     trigger_ref TEXT NOT NULL,
     conditions JSONB NOT NULL DEFAULT '[]'::jsonb,
     action_params JSONB DEFAULT '{}'::jsonb,
@@ -161,8 +161,8 @@ CREATE TRIGGER update_rule_updated
 COMMENT ON TABLE rule IS 'Rules link triggers to actions with conditions';
 COMMENT ON COLUMN rule.ref IS 'Unique rule reference (format: pack.name)';
 COMMENT ON COLUMN rule.label IS 'Human-readable rule name';
-COMMENT ON COLUMN rule.action IS 'Action to execute when rule triggers';
-COMMENT ON COLUMN rule.trigger IS 'Trigger that activates this rule';
+COMMENT ON COLUMN rule.action IS 'Action to execute when rule triggers (null if action deleted)';
+COMMENT ON COLUMN rule.trigger IS 'Trigger that activates this rule (null if trigger deleted)';
 COMMENT ON COLUMN rule.conditions IS 'Condition expressions to evaluate before executing action';
 COMMENT ON COLUMN rule.action_params IS 'Parameter overrides for the action';
 COMMENT ON COLUMN rule.trigger_params IS 'Parameter overrides for the trigger';

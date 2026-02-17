@@ -27,3 +27,29 @@ installation:
     - pipenv
     - poetry
   virtual_env_support: true
+
+execution_config:
+  interpreter:
+    binary: python3
+    args:
+      - "-u"
+    file_extension: ".py"
+  environment:
+    env_type: virtualenv
+    dir_name: ".venv"
+    create_command:
+      - python3
+      - "-m"
+      - venv
+      - "--copies"
+      - "{env_dir}"
+    interpreter_path: "{env_dir}/bin/python3"
+  dependencies:
+    manifest_file: requirements.txt
+    install_command:
+      - "{interpreter}"
+      - "-m"
+      - pip
+      - install
+      - "-r"
+      - "{manifest_path}"

@@ -9,9 +9,12 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::models::Runtime;
+use crate::repositories::action::ActionRepository;
+use crate::repositories::runtime::RuntimeRepository;
+use crate::repositories::FindById as _;
 use serde_json::Value as JsonValue;
 use sqlx::{PgPool, Row};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tokio::fs;
@@ -370,7 +373,8 @@ impl PackEnvironmentManager {
         sqlx::query_as::<_, Runtime>(
             r#"
             SELECT id, ref, pack, pack_ref, description, name,
-                   distributions, installation, installers, created, updated
+                   distributions, installation, installers, execution_config,
+                   created, updated
             FROM runtime
             WHERE id = $1
             "#,
@@ -816,6 +820,53 @@ impl PackEnvironmentManager {
             .await?;
         Ok(())
     }
+}
+
+/// Collect the lowercase runtime names that require environment setup for a pack.
+///
+/// This queries the pack's actions, resolves their runtimes, and returns the names
+/// of any runtimes that have environment or dependency configuration. It is used by
+/// the API when publishing `PackRegistered` MQ events so that workers know which
+/// runtimes to set up without re-querying the database.
+pub async fn collect_runtime_names_for_pack(
+    db_pool: &PgPool,
+    pack_id: i64,
+    pack_path: &Path,
+) -> Vec<String> {
+    let actions = match ActionRepository::find_by_pack(db_pool, pack_id).await {
+        Ok(a) => a,
+        Err(e) => {
+            warn!("Failed to load actions for pack ID {}: {}", pack_id, e);
+            return Vec::new();
+        }
+    };
+
+    let mut seen_runtime_ids = HashSet::new();
+    for action in &actions {
+        if let Some(runtime_id) = action.runtime {
+            seen_runtime_ids.insert(runtime_id);
+        }
+    }
+
+    let mut runtime_names = Vec::new();
+    for runtime_id in seen_runtime_ids {
+        match RuntimeRepository::find_by_id(db_pool, runtime_id).await {
+            Ok(Some(rt)) => {
+                let exec_config = rt.parsed_execution_config();
+                if exec_config.environment.is_some() || exec_config.has_dependencies(pack_path) {
+                    runtime_names.push(rt.name.to_lowercase());
+                }
+            }
+            Ok(None) => {
+                debug!("Runtime ID {} not found, skipping", runtime_id);
+            }
+            Err(e) => {
+                warn!("Failed to load runtime {}: {}", runtime_id, e);
+            }
+        }
+    }
+
+    runtime_names
 }
 
 #[cfg(test)]

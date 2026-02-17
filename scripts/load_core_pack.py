@@ -212,7 +212,109 @@ class PackLoader:
         cursor.close()
         return trigger_ids
 
-    def upsert_actions(self) -> Dict[str, int]:
+    def upsert_runtimes(self) -> Dict[str, int]:
+        """Load runtime definitions from runtimes/*.yaml"""
+        print("\n→ Loading runtimes...")
+
+        runtimes_dir = self.pack_dir / "runtimes"
+        if not runtimes_dir.exists():
+            print("  No runtimes directory found")
+            return {}
+
+        runtime_ids = {}
+        cursor = self.conn.cursor()
+
+        for yaml_file in sorted(runtimes_dir.glob("*.yaml")):
+            runtime_data = self.load_yaml(yaml_file)
+            if not runtime_data:
+                continue
+
+            ref = runtime_data.get("ref")
+            if not ref:
+                print(
+                    f"  ⚠ Runtime YAML {yaml_file.name} missing 'ref' field, skipping"
+                )
+                continue
+
+            name = runtime_data.get("name", ref.split(".")[-1])
+            description = runtime_data.get("description", "")
+            distributions = json.dumps(runtime_data.get("distributions", {}))
+            installation = json.dumps(runtime_data.get("installation", {}))
+            execution_config = json.dumps(runtime_data.get("execution_config", {}))
+
+            cursor.execute(
+                """
+                INSERT INTO runtime (
+                    ref, pack, pack_ref, name, description,
+                    distributions, installation, execution_config
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (ref) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    description = EXCLUDED.description,
+                    distributions = EXCLUDED.distributions,
+                    installation = EXCLUDED.installation,
+                    execution_config = EXCLUDED.execution_config,
+                    updated = NOW()
+                RETURNING id
+            """,
+                (
+                    ref,
+                    self.pack_id,
+                    self.pack_ref,
+                    name,
+                    description,
+                    distributions,
+                    installation,
+                    execution_config,
+                ),
+            )
+
+            runtime_id = cursor.fetchone()[0]
+            runtime_ids[ref] = runtime_id
+            # Also index by lowercase name for easy lookup by runner_type
+            runtime_ids[name.lower()] = runtime_id
+            print(f"  ✓ Runtime '{ref}' (ID: {runtime_id})")
+
+        cursor.close()
+        return runtime_ids
+
+    def resolve_action_runtime(
+        self, action_data: Dict, runtime_ids: Dict[str, int]
+    ) -> Optional[int]:
+        """Resolve the runtime ID for an action based on runner_type or entrypoint."""
+        runner_type = action_data.get("runner_type", "").lower()
+
+        if not runner_type:
+            # Try to infer from entrypoint extension
+            entrypoint = action_data.get("entry_point", "")
+            if entrypoint.endswith(".py"):
+                runner_type = "python"
+            elif entrypoint.endswith(".js"):
+                runner_type = "node.js"
+            else:
+                runner_type = "shell"
+
+        # Map runner_type names to runtime refs/names
+        lookup_keys = {
+            "shell": ["shell", "core.shell"],
+            "python": ["python", "core.python"],
+            "python3": ["python", "core.python"],
+            "node": ["node.js", "nodejs", "core.nodejs"],
+            "nodejs": ["node.js", "nodejs", "core.nodejs"],
+            "node.js": ["node.js", "nodejs", "core.nodejs"],
+            "native": ["native", "core.native"],
+        }
+
+        keys_to_try = lookup_keys.get(runner_type, [runner_type])
+        for key in keys_to_try:
+            if key in runtime_ids:
+                return runtime_ids[key]
+
+        print(f"  ⚠ Could not resolve runtime for runner_type '{runner_type}'")
+        return None
+
+    def upsert_actions(self, runtime_ids: Dict[str, int]) -> Dict[str, int]:
         """Load action definitions"""
         print("\n→ Loading actions...")
 
@@ -223,9 +325,6 @@ class PackLoader:
 
         action_ids = {}
         cursor = self.conn.cursor()
-
-        # First, ensure we have a runtime for actions
-        runtime_id = self.ensure_shell_runtime(cursor)
 
         for yaml_file in sorted(actions_dir.glob("*.yaml")):
             action_data = self.load_yaml(yaml_file)
@@ -250,6 +349,9 @@ class PackLoader:
                     if script_path.exists():
                         entrypoint = str(script_path.relative_to(self.packs_dir))
                         break
+
+            # Resolve runtime ID for this action
+            runtime_id = self.resolve_action_runtime(action_data, runtime_ids)
 
             param_schema = json.dumps(action_data.get("parameters", {}))
             out_schema = json.dumps(action_data.get("output", {}))
@@ -326,32 +428,9 @@ class PackLoader:
         cursor.close()
         return action_ids
 
-    def ensure_shell_runtime(self, cursor) -> int:
-        """Ensure shell runtime exists"""
-        cursor.execute(
-            """
-            INSERT INTO runtime (
-                ref, pack, pack_ref, name, description, distributions
-            )
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (ref) DO UPDATE SET
-                name = EXCLUDED.name,
-                description = EXCLUDED.description,
-                updated = NOW()
-            RETURNING id
-        """,
-            (
-                "core.action.shell",
-                self.pack_id,
-                self.pack_ref,
-                "Shell",
-                "Shell script runtime",
-                json.dumps({"shell": {"command": "sh"}}),
-            ),
-        )
-        return cursor.fetchone()[0]
-
-    def upsert_sensors(self, trigger_ids: Dict[str, int]) -> Dict[str, int]:
+    def upsert_sensors(
+        self, trigger_ids: Dict[str, int], runtime_ids: Dict[str, int]
+    ) -> Dict[str, int]:
         """Load sensor definitions"""
         print("\n→ Loading sensors...")
 
@@ -363,8 +442,12 @@ class PackLoader:
         sensor_ids = {}
         cursor = self.conn.cursor()
 
-        # Ensure sensor runtime exists
-        sensor_runtime_id = self.ensure_sensor_runtime(cursor)
+        # Look up sensor runtime from already-loaded runtimes
+        sensor_runtime_id = runtime_ids.get("builtin") or runtime_ids.get(
+            "core.builtin"
+        )
+        if not sensor_runtime_id:
+            print("  ⚠ No sensor runtime found, sensors will have no runtime")
 
         for yaml_file in sorted(sensors_dir.glob("*.yaml")):
             sensor_data = self.load_yaml(yaml_file)
@@ -438,7 +521,7 @@ class PackLoader:
                     description,
                     entry_point,
                     sensor_runtime_id,
-                    "core.sensor.builtin",
+                    "core.builtin",
                     trigger_id,
                     trigger_ref,
                     enabled,
@@ -452,31 +535,6 @@ class PackLoader:
 
         cursor.close()
         return sensor_ids
-
-    def ensure_sensor_runtime(self, cursor) -> int:
-        """Ensure sensor runtime exists"""
-        cursor.execute(
-            """
-            INSERT INTO runtime (
-                ref, pack, pack_ref, name, description, distributions
-            )
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (ref) DO UPDATE SET
-                name = EXCLUDED.name,
-                description = EXCLUDED.description,
-                updated = NOW()
-            RETURNING id
-        """,
-            (
-                "core.sensor.builtin",
-                self.pack_id,
-                self.pack_ref,
-                "Built-in Sensor",
-                "Built-in sensor runtime",
-                json.dumps([]),
-            ),
-        )
-        return cursor.fetchone()[0]
 
     def load_pack(self):
         """Main loading process"""
@@ -493,14 +551,17 @@ class PackLoader:
             # Load pack metadata
             self.upsert_pack()
 
+            # Load runtimes first (actions and sensors depend on them)
+            runtime_ids = self.upsert_runtimes()
+
             # Load triggers
             trigger_ids = self.upsert_triggers()
 
-            # Load actions
-            action_ids = self.upsert_actions()
+            # Load actions (with runtime resolution)
+            action_ids = self.upsert_actions(runtime_ids)
 
             # Load sensors
-            sensor_ids = self.upsert_sensors(trigger_ids)
+            sensor_ids = self.upsert_sensors(trigger_ids, runtime_ids)
 
             # Commit all changes
             self.conn.commit()
@@ -509,6 +570,7 @@ class PackLoader:
             print(f"✓ Pack '{self.pack_name}' loaded successfully!")
             print("=" * 60)
             print(f"  Pack ID: {self.pack_id}")
+            print(f"  Runtimes: {len(set(runtime_ids.values()))}")
             print(f"  Triggers: {len(trigger_ids)}")
             print(f"  Actions: {len(action_ids)}")
             print(f"  Sensors: {len(sensor_ids)}")

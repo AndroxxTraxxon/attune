@@ -109,13 +109,13 @@ impl RuntimeDetector {
     pub async fn detect_from_database(&self) -> Result<Vec<String>> {
         info!("Querying database for runtime definitions...");
 
-        // Query all runtimes from database (no longer filtered by type)
+        // Query all runtimes from database
         let runtimes = sqlx::query_as::<_, Runtime>(
             r#"
             SELECT id, ref, pack, pack_ref, description, name,
-                   distributions, installation, installers, created, updated
+                   distributions, installation, installers, execution_config,
+                   created, updated
             FROM runtime
-            WHERE ref NOT LIKE '%.sensor.builtin'
             ORDER BY ref
             "#,
         )

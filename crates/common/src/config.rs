@@ -576,6 +576,12 @@ pub struct Config {
     #[serde(default = "default_packs_base_dir")]
     pub packs_base_dir: String,
 
+    /// Runtime environments directory (isolated envs like virtualenvs, node_modules).
+    /// Pattern: {runtime_envs_dir}/{pack_ref}/{runtime_name}
+    /// e.g., /opt/attune/runtime_envs/python_example/python
+    #[serde(default = "default_runtime_envs_dir")]
+    pub runtime_envs_dir: String,
+
     /// Notifier configuration (optional, for notifier service)
     pub notifier: Option<NotifierConfig>,
 
@@ -597,6 +603,10 @@ fn default_environment() -> String {
 
 fn default_packs_base_dir() -> String {
     "/opt/attune/packs".to_string()
+}
+
+fn default_runtime_envs_dir() -> String {
+    "/opt/attune/runtime_envs".to_string()
 }
 
 impl Default for DatabaseConfig {
@@ -833,8 +843,10 @@ mod tests {
             worker: None,
             sensor: None,
             packs_base_dir: default_packs_base_dir(),
+            runtime_envs_dir: default_runtime_envs_dir(),
             notifier: None,
             pack_registry: PackRegistryConfig::default(),
+            executor: None,
         };
 
         assert_eq!(config.service_name, "attune");
@@ -904,8 +916,10 @@ mod tests {
             worker: None,
             sensor: None,
             packs_base_dir: default_packs_base_dir(),
+            runtime_envs_dir: default_runtime_envs_dir(),
             notifier: None,
             pack_registry: PackRegistryConfig::default(),
+            executor: None,
         };
 
         assert!(config.validate().is_ok());

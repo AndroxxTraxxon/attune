@@ -9,7 +9,7 @@
 //! - Creating execution records
 //! - Publishing ExecutionRequested messages
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use attune_common::{
     models::{Enforcement, Event, Rule},
     mq::{
@@ -166,6 +166,24 @@ impl EnforcementProcessor {
             return Ok(false);
         }
 
+        // Check if the rule's action still exists (may have been deleted with its pack)
+        if rule.action.is_none() {
+            warn!(
+                "Rule {} references a deleted action (action_ref: {}), skipping execution",
+                rule.id, rule.action_ref
+            );
+            return Ok(false);
+        }
+
+        // Check if the rule's trigger still exists
+        if rule.trigger.is_none() {
+            warn!(
+                "Rule {} references a deleted trigger (trigger_ref: {}), skipping execution",
+                rule.id, rule.trigger_ref
+            );
+            return Ok(false);
+        }
+
         // TODO: Evaluate rule conditions against event payload
         // For now, we'll create executions for all valid enforcements
 
@@ -186,13 +204,27 @@ impl EnforcementProcessor {
         enforcement: &Enforcement,
         rule: &Rule,
     ) -> Result<()> {
+        // Extract action ID — should_create_execution already verified it's Some,
+        // but guard defensively here as well.
+        let action_id = match rule.action {
+            Some(id) => id,
+            None => {
+                error!(
+                    "Rule {} has no action ID (deleted?), cannot create execution for enforcement {}",
+                    rule.id, enforcement.id
+                );
+                bail!(
+                    "Rule {} references a deleted action (action_ref: {})",
+                    rule.id, rule.action_ref
+                );
+            }
+        };
+
         info!(
             "Creating execution for enforcement: {}, rule: {}, action: {}",
-            enforcement.id, rule.id, rule.action
+            enforcement.id, rule.id, action_id
         );
 
-        // Get action and pack IDs from rule
-        let action_id = rule.action;
         let pack_id = rule.pack;
         let action_ref = &rule.action_ref;
 
@@ -305,9 +337,9 @@ mod tests {
             label: "Test Rule".to_string(),
             description: "Test rule description".to_string(),
             trigger_ref: "test.trigger".to_string(),
-            trigger: 1,
+            trigger: Some(1),
             action_ref: "test.action".to_string(),
-            action: 1,
+            action: Some(1),
             enabled: false, // Disabled
             conditions: json!({}),
             action_params: json!({}),

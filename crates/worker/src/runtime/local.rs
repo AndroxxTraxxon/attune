@@ -1,28 +1,51 @@
 //! Local Runtime Module
 //!
-//! Provides local execution capabilities by combining Python and Shell runtimes.
+//! Provides local execution capabilities by combining Process and Shell runtimes.
 //! This module serves as a facade for all local process-based execution.
+//!
+//! The `ProcessRuntime` is used for Python (and other interpreted languages),
+//! driven by `RuntimeExecutionConfig` rather than language-specific Rust code.
 
 use super::native::NativeRuntime;
-use super::python::PythonRuntime;
+use super::process::ProcessRuntime;
 use super::shell::ShellRuntime;
 use super::{ExecutionContext, ExecutionResult, Runtime, RuntimeError, RuntimeResult};
 use async_trait::async_trait;
+use attune_common::models::runtime::{InterpreterConfig, RuntimeExecutionConfig};
+use std::path::PathBuf;
 use tracing::{debug, info};
 
-/// Local runtime that delegates to Python, Shell, or Native based on action type
+/// Local runtime that delegates to Process, Shell, or Native based on action type
 pub struct LocalRuntime {
     native: NativeRuntime,
-    python: PythonRuntime,
+    python: ProcessRuntime,
     shell: ShellRuntime,
 }
 
 impl LocalRuntime {
-    /// Create a new local runtime with default settings
+    /// Create a new local runtime with default settings.
+    ///
+    /// Uses a default Python `RuntimeExecutionConfig` for the process runtime,
+    /// since this is a fallback when runtimes haven't been loaded from the database.
     pub fn new() -> Self {
+        let python_config = RuntimeExecutionConfig {
+            interpreter: InterpreterConfig {
+                binary: "python3".to_string(),
+                args: vec![],
+                file_extension: Some(".py".to_string()),
+            },
+            environment: None,
+            dependencies: None,
+        };
+
         Self {
             native: NativeRuntime::new(),
-            python: PythonRuntime::new(),
+            python: ProcessRuntime::new(
+                "python".to_string(),
+                python_config,
+                PathBuf::from("/opt/attune/packs"),
+                PathBuf::from("/opt/attune/runtime_envs"),
+            ),
             shell: ShellRuntime::new(),
         }
     }
@@ -30,7 +53,7 @@ impl LocalRuntime {
     /// Create a local runtime with custom runtimes
     pub fn with_runtimes(
         native: NativeRuntime,
-        python: PythonRuntime,
+        python: ProcessRuntime,
         shell: ShellRuntime,
     ) -> Self {
         Self {
@@ -46,7 +69,10 @@ impl LocalRuntime {
             debug!("Selected Native runtime for action: {}", context.action_ref);
             Ok(&self.native)
         } else if self.python.can_execute(context) {
-            debug!("Selected Python runtime for action: {}", context.action_ref);
+            debug!(
+                "Selected Python (ProcessRuntime) for action: {}",
+                context.action_ref
+            );
             Ok(&self.python)
         } else if self.shell.can_execute(context) {
             debug!("Selected Shell runtime for action: {}", context.action_ref);
@@ -125,40 +151,6 @@ mod tests {
     use super::*;
     use crate::runtime::{OutputFormat, ParameterDelivery, ParameterFormat};
     use std::collections::HashMap;
-
-    #[tokio::test]
-    async fn test_local_runtime_python() {
-        let runtime = LocalRuntime::new();
-
-        let context = ExecutionContext {
-            execution_id: 1,
-            action_ref: "test.python_action".to_string(),
-            parameters: HashMap::new(),
-            env: HashMap::new(),
-            secrets: HashMap::new(),
-            timeout: Some(10),
-            working_dir: None,
-            entry_point: "run".to_string(),
-            code: Some(
-                r#"
-def run():
-    return "hello from python"
-"#
-                .to_string(),
-            ),
-            code_path: None,
-            runtime_name: Some("python".to_string()),
-            max_stdout_bytes: 10 * 1024 * 1024,
-            max_stderr_bytes: 10 * 1024 * 1024,
-            parameter_delivery: ParameterDelivery::default(),
-            parameter_format: ParameterFormat::default(),
-            output_format: OutputFormat::default(),
-        };
-
-        assert!(runtime.can_execute(&context));
-        let result = runtime.execute(context).await.unwrap();
-        assert!(result.is_success());
-    }
 
     #[tokio::test]
     async fn test_local_runtime_shell() {

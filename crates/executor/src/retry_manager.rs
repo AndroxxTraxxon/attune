@@ -345,22 +345,7 @@ impl RetryManager {
 
     /// Calculate exponential backoff with jitter
     fn calculate_backoff(&self, retry_count: i32) -> Duration {
-        let base_secs = self.config.base_backoff_secs as f64;
-        let multiplier = self.config.backoff_multiplier;
-        let max_secs = self.config.max_backoff_secs as f64;
-        let jitter_factor = self.config.jitter_factor;
-
-        // Calculate exponential backoff: base * multiplier^retry_count
-        let backoff_secs = base_secs * multiplier.powi(retry_count);
-
-        // Cap at max
-        let backoff_secs = backoff_secs.min(max_secs);
-
-        // Add jitter: random value between (1 - jitter) and (1 + jitter)
-        let jitter = 1.0 + (rand::random::<f64>() * 2.0 - 1.0) * jitter_factor;
-        let backoff_with_jitter = backoff_secs * jitter;
-
-        Duration::from_secs(backoff_with_jitter.max(0.0) as u64)
+        calculate_backoff_duration(&self.config, retry_count)
     }
 
     /// Update execution with retry metadata
@@ -406,6 +391,28 @@ impl RetryManager {
 
         Ok(())
     }
+}
+
+/// Calculate exponential backoff with jitter from a retry config.
+///
+/// Extracted as a free function so it can be tested without a database pool.
+fn calculate_backoff_duration(config: &RetryConfig, retry_count: i32) -> Duration {
+    let base_secs = config.base_backoff_secs as f64;
+    let multiplier = config.backoff_multiplier;
+    let max_secs = config.max_backoff_secs as f64;
+    let jitter_factor = config.jitter_factor;
+
+    // Calculate exponential backoff: base * multiplier^retry_count
+    let backoff_secs = base_secs * multiplier.powi(retry_count);
+
+    // Cap at max
+    let backoff_secs = backoff_secs.min(max_secs);
+
+    // Add jitter: random value between (1 - jitter) and (1 + jitter)
+    let jitter = 1.0 + (rand::random::<f64>() * 2.0 - 1.0) * jitter_factor;
+    let backoff_with_jitter = backoff_secs * jitter;
+
+    Duration::from_secs(backoff_with_jitter.max(0.0) as u64)
 }
 
 /// Check if an error message indicates a retriable failure
@@ -466,17 +473,14 @@ mod tests {
 
     #[test]
     fn test_backoff_calculation() {
-        let manager = RetryManager::with_defaults(
-            // Mock pool - won't be used in this test
-            unsafe { std::mem::zeroed() },
-        );
+        let config = RetryConfig::default();
 
-        let backoff0 = manager.calculate_backoff(0);
-        let backoff1 = manager.calculate_backoff(1);
-        let backoff2 = manager.calculate_backoff(2);
+        let backoff0 = calculate_backoff_duration(&config, 0);
+        let backoff1 = calculate_backoff_duration(&config, 1);
+        let backoff2 = calculate_backoff_duration(&config, 2);
 
-        // First attempt: ~1s
-        assert!(backoff0.as_secs() >= 0 && backoff0.as_secs() <= 2);
+        // First attempt: ~1s (with jitter 0..2s)
+        assert!(backoff0.as_secs() <= 2);
         // Second attempt: ~2s
         assert!(backoff1.as_secs() >= 1 && backoff1.as_secs() <= 3);
         // Third attempt: ~4s

@@ -16,3 +16,10 @@ distributions:
 installation:
   build_required: false
   system_native: true
+
+execution_config:
+  interpreter:
+    binary: "/bin/sh"
+    args:
+      - "-c"
+    file_extension: null

@@ -1,5 +1,7 @@
 # Native Runtime Support
 
+> **⚠️ Note:** This document was written before the `runtime_type` column was removed from the runtime table. SQL examples referencing `INSERT ... runtime_type` and 3-part refs like `core.action.native` / `core.sensor.native` are outdated. The current architecture uses unified runtimes with 2-part refs (`core.native`) and determines executability by the presence of `execution_config`. See `docs/QUICKREF-unified-runtime-detection.md` for the current model.
+
 ## Overview
 
 The native runtime allows Attune to execute compiled binaries directly without requiring any language interpreter or shell wrapper. This is ideal for:

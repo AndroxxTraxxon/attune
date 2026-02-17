@@ -52,6 +52,10 @@ security:
 # Test packs directory (use /tmp for tests to avoid permission issues)
 packs_base_dir: /tmp/attune-test-packs
 
+# Test runtime environments directory (virtualenvs, node_modules, etc.)
+# Isolated from pack directories to keep packs clean and read-only.
+runtime_envs_dir: /tmp/attune-test-runtime-envs
+
 # Test pack registry
 pack_registry:
   enabled: true

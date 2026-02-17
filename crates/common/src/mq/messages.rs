@@ -65,6 +65,8 @@ pub enum MessageType {
     RuleEnabled,
     /// Rule disabled
     RuleDisabled,
+    /// Pack registered or installed (triggers runtime environment setup in workers)
+    PackRegistered,
 }
 
 impl MessageType {
@@ -82,6 +84,7 @@ impl MessageType {
             Self::RuleCreated => "rule.created".to_string(),
             Self::RuleEnabled => "rule.enabled".to_string(),
             Self::RuleDisabled => "rule.disabled".to_string(),
+            Self::PackRegistered => "pack.registered".to_string(),
         }
     }
 
@@ -98,6 +101,7 @@ impl MessageType {
             Self::RuleCreated | Self::RuleEnabled | Self::RuleDisabled => {
                 "attune.events".to_string()
             }
+            Self::PackRegistered => "attune.events".to_string(),
         }
     }
 
@@ -115,6 +119,7 @@ impl MessageType {
             Self::RuleCreated => "RuleCreated",
             Self::RuleEnabled => "RuleEnabled",
             Self::RuleDisabled => "RuleDisabled",
+            Self::PackRegistered => "PackRegistered",
         }
     }
 }
@@ -431,6 +436,23 @@ pub struct RuleDisabledPayload {
     pub rule_ref: String,
     /// Trigger reference
     pub trigger_ref: String,
+}
+
+/// Payload for PackRegistered message
+///
+/// Published when a pack is registered or installed so that workers can
+/// proactively create runtime environments (virtualenvs, node_modules, etc.)
+/// instead of waiting until the first execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackRegisteredPayload {
+    /// Pack ID
+    pub pack_id: Id,
+    /// Pack reference (e.g., "python_example")
+    pub pack_ref: String,
+    /// Pack version
+    pub version: String,
+    /// Runtime names that require environment setup (lowercase, e.g., ["python"])
+    pub runtime_names: Vec<String>,
 }
 
 #[cfg(test)]

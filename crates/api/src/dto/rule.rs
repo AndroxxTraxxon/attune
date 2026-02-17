@@ -117,17 +117,17 @@ pub struct RuleResponse {
     #[schema(example = "Send Slack notification when an error occurs")]
     pub description: String,
 
-    /// Action ID
+    /// Action ID (null if the referenced action has been deleted)
     #[schema(example = 1)]
-    pub action: i64,
+    pub action: Option<i64>,
 
     /// Action reference
     #[schema(example = "slack.post_message")]
     pub action_ref: String,
 
-    /// Trigger ID
+    /// Trigger ID (null if the referenced trigger has been deleted)
     #[schema(example = 1)]
-    pub trigger: i64,
+    pub trigger: Option<i64>,
 
     /// Trigger reference
     #[schema(example = "system.error_event")]

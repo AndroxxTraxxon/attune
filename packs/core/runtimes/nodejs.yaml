@@ -21,3 +21,24 @@ installation:
     - yarn
     - pnpm
   module_support: true
+
+execution_config:
+  interpreter:
+    binary: node
+    args: []
+    file_extension: ".js"
+  environment:
+    env_type: node_modules
+    dir_name: node_modules
+    create_command:
+      - npm
+      - init
+      - "-y"
+    interpreter_path: null
+  dependencies:
+    manifest_file: package.json
+    install_command:
+      - npm
+      - install
+      - "--prefix"
+      - "{pack_dir}"

@@ -54,9 +54,26 @@ impl TestExecutor {
         Self { pack_base_dir }
     }
 
-    /// Execute all tests for a pack
+    /// Execute all tests for a pack, looking up the pack directory from the base dir
     pub async fn execute_pack_tests(
         &self,
+        pack_ref: &str,
+        pack_version: &str,
+        test_config: &TestConfig,
+    ) -> Result<PackTestResult> {
+        let pack_dir = self.pack_base_dir.join(pack_ref);
+        self.execute_pack_tests_at(&pack_dir, pack_ref, pack_version, test_config)
+            .await
+    }
+
+    /// Execute all tests for a pack at a specific directory path.
+    ///
+    /// Use this when the pack files are not yet at the standard
+    /// `packs_base_dir/pack_ref` location (e.g., during installation
+    /// from a temp directory).
+    pub async fn execute_pack_tests_at(
+        &self,
+        pack_dir: &Path,
         pack_ref: &str,
         pack_version: &str,
         test_config: &TestConfig,
@@ -69,7 +86,6 @@ impl TestExecutor {
             ));
         }
 
-        let pack_dir = self.pack_base_dir.join(pack_ref);
         if !pack_dir.exists() {
             return Err(Error::not_found(
                 "pack_directory",

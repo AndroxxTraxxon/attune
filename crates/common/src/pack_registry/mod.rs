@@ -9,17 +9,19 @@
 pub mod client;
 pub mod dependency;
 pub mod installer;
+pub mod loader;
 pub mod storage;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-// Re-export client, installer, storage, and dependency utilities
+// Re-export client, installer, loader, storage, and dependency utilities
 pub use client::RegistryClient;
 pub use dependency::{
     DependencyValidation, DependencyValidator, PackDepValidation, RuntimeDepValidation,
 };
 pub use installer::{InstalledPack, PackInstaller, PackSource};
+pub use loader::{PackComponentLoader, PackLoadResult};
 pub use storage::{
     calculate_directory_checksum, calculate_file_checksum, verify_checksum, PackStorage,
 };
@@ -245,7 +247,10 @@ impl Checksum {
     pub fn parse(s: &str) -> Result<Self, String> {
         let parts: Vec<&str> = s.splitn(2, ':').collect();
         if parts.len() != 2 {
-            return Err(format!("Invalid checksum format: {}. Expected 'algorithm:hash'", s));
+            return Err(format!(
+                "Invalid checksum format: {}. Expected 'algorithm:hash'",
+                s
+            ));
         }
 
         let algorithm = parts[0].to_lowercase();
@@ -259,7 +264,10 @@ impl Checksum {
 
         // Basic validation of hash format (hex string)
         if !hash.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(format!("Invalid hash format: {}. Must be hexadecimal", hash));
+            return Err(format!(
+                "Invalid hash format: {}. Must be hexadecimal",
+                hash
+            ));
         }
 
         Ok(Self { algorithm, hash })

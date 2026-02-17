@@ -33,6 +33,7 @@ pub struct CreateRuntimeInput {
     pub name: String,
     pub distributions: JsonDict,
     pub installation: Option<JsonDict>,
+    pub execution_config: JsonDict,
 }
 
 /// Input for updating a runtime
@@ -42,6 +43,7 @@ pub struct UpdateRuntimeInput {
     pub name: Option<String>,
     pub distributions: Option<JsonDict>,
     pub installation: Option<JsonDict>,
+    pub execution_config: Option<JsonDict>,
 }
 
 #[async_trait::async_trait]
@@ -53,7 +55,8 @@ impl FindById for RuntimeRepository {
         let runtime = sqlx::query_as::<_, Runtime>(
             r#"
             SELECT id, ref, pack, pack_ref, description, name,
-                   distributions, installation, installers, created, updated
+                   distributions, installation, installers, execution_config,
+                   created, updated
             FROM runtime
             WHERE id = $1
             "#,
@@ -75,7 +78,8 @@ impl FindByRef for RuntimeRepository {
         let runtime = sqlx::query_as::<_, Runtime>(
             r#"
             SELECT id, ref, pack, pack_ref, description, name,
-                   distributions, installation, installers, created, updated
+                   distributions, installation, installers, execution_config,
+                   created, updated
             FROM runtime
             WHERE ref = $1
             "#,
@@ -97,7 +101,8 @@ impl List for RuntimeRepository {
         let runtimes = sqlx::query_as::<_, Runtime>(
             r#"
             SELECT id, ref, pack, pack_ref, description, name,
-                   distributions, installation, installers, created, updated
+                   distributions, installation, installers, execution_config,
+                   created, updated
             FROM runtime
             ORDER BY ref ASC
             "#,
@@ -120,10 +125,11 @@ impl Create for RuntimeRepository {
         let runtime = sqlx::query_as::<_, Runtime>(
             r#"
             INSERT INTO runtime (ref, pack, pack_ref, description, name,
-                                 distributions, installation, installers)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                                 distributions, installation, installers, execution_config)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING id, ref, pack, pack_ref, description, name,
-                      distributions, installation, installers, created, updated
+                      distributions, installation, installers, execution_config,
+                      created, updated
             "#,
         )
         .bind(&input.r#ref)
@@ -134,6 +140,7 @@ impl Create for RuntimeRepository {
         .bind(&input.distributions)
         .bind(&input.installation)
         .bind(serde_json::json!({}))
+        .bind(&input.execution_config)
         .fetch_one(executor)
         .await?;
 
@@ -187,6 +194,15 @@ impl Update for RuntimeRepository {
             has_updates = true;
         }
 
+        if let Some(execution_config) = &input.execution_config {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("execution_config = ");
+            query.push_bind(execution_config);
+            has_updates = true;
+        }
+
         if !has_updates {
             // No updates requested, fetch and return existing entity
             return Self::get_by_id(executor, id).await;
@@ -194,7 +210,10 @@ impl Update for RuntimeRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(" RETURNING id, ref, pack, pack_ref, description, name, distributions, installation, installers, created, updated");
+        query.push(
+            " RETURNING id, ref, pack, pack_ref, description, name, \
+             distributions, installation, installers, execution_config, created, updated",
+        );
 
         let runtime = query
             .build_query_as::<Runtime>()
@@ -229,7 +248,8 @@ impl RuntimeRepository {
         let runtimes = sqlx::query_as::<_, Runtime>(
             r#"
             SELECT id, ref, pack, pack_ref, description, name,
-                   distributions, installation, installers, created, updated
+                   distributions, installation, installers, execution_config,
+                   created, updated
             FROM runtime
             WHERE pack = $1
             ORDER BY ref ASC
@@ -241,6 +261,29 @@ impl RuntimeRepository {
 
         Ok(runtimes)
     }
+
+    /// Find a runtime by name (case-insensitive)
+    pub async fn find_by_name<'e, E>(executor: E, name: &str) -> Result<Option<Runtime>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let runtime = sqlx::query_as::<_, Runtime>(
+            r#"
+            SELECT id, ref, pack, pack_ref, description, name,
+                   distributions, installation, installers, execution_config,
+                   created, updated
+            FROM runtime
+            WHERE LOWER(name) = LOWER($1)
+            LIMIT 1
+            "#,
+        )
+        .bind(name)
+        .fetch_optional(executor)
+        .await?;
+
+        Ok(runtime)
+    }
+
 }
 
 // ============================================================================
@@ -338,7 +381,7 @@ impl Create for WorkerRepository {
             INSERT INTO worker (name, worker_type, runtime, host, port, status,
                                 capabilities, meta)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            RETURNING id, name, worker_type, runtime, host, port, status,
+            RETURNING id, name, worker_type, worker_role, runtime, host, port, status,
                       capabilities, meta, last_heartbeat, created, updated
             "#,
         )
@@ -428,7 +471,10 @@ impl Update for WorkerRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(" RETURNING id, name, worker_type, worker_role, runtime, host, port, status, capabilities, meta, last_heartbeat, created, updated");
+        query.push(
+            " RETURNING id, name, worker_type, worker_role, runtime, host, port, status, \
+             capabilities, meta, last_heartbeat, created, updated",
+        );
 
         let worker = query.build_query_as::<Worker>().fetch_one(executor).await?;
 

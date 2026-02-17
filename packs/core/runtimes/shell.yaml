@@ -26,3 +26,9 @@ installation:
     - bash
     - dash
   portable: true
+
+execution_config:
+  interpreter:
+    binary: "/bin/bash"
+    args: []
+    file_extension: ".sh"

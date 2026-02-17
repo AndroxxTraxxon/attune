@@ -459,18 +459,19 @@ impl Connection {
             worker_id
         );
 
+        let dlx = if config.rabbitmq.dead_letter.enabled {
+            Some(config.rabbitmq.dead_letter.exchange.as_str())
+        } else {
+            None
+        };
+
+        // --- Execution dispatch queue ---
         let queue_name = format!("worker.{}.executions", worker_id);
         let queue_config = QueueConfig {
             name: queue_name.clone(),
             durable: true,
             exclusive: false,
             auto_delete: false,
-        };
-
-        let dlx = if config.rabbitmq.dead_letter.enabled {
-            Some(config.rabbitmq.dead_letter.exchange.as_str())
-        } else {
-            None
         };
 
         // Worker queues use TTL to expire unprocessed messages
@@ -484,6 +485,29 @@ impl Connection {
             &queue_name,
             &config.rabbitmq.exchanges.executions.name,
             &format!("execution.dispatch.worker.{}", worker_id),
+        )
+        .await?;
+
+        // --- Pack registration queue ---
+        // Each worker gets its own queue for pack.registered events so that
+        // every worker instance can independently set up runtime environments
+        // (e.g., Python virtualenvs) when a new pack is registered.
+        let packs_queue_name = format!("worker.{}.packs", worker_id);
+        let packs_queue_config = QueueConfig {
+            name: packs_queue_name.clone(),
+            durable: true,
+            exclusive: false,
+            auto_delete: false,
+        };
+
+        self.declare_queue_with_optional_dlx(&packs_queue_config, dlx)
+            .await?;
+
+        // Bind to pack.registered routing key on the events exchange
+        self.bind_queue(
+            &packs_queue_name,
+            &config.rabbitmq.exchanges.events.name,
+            "pack.registered",
         )
         .await?;
 

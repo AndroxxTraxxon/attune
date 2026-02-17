@@ -66,9 +66,9 @@ async fn test_create_rule() {
     assert_eq!(rule.pack_ref, pack.r#ref);
     assert_eq!(rule.label, "Test Rule");
     assert_eq!(rule.description, "A test rule");
-    assert_eq!(rule.action, action.id);
+    assert_eq!(rule.action, Some(action.id));
     assert_eq!(rule.action_ref, action.r#ref);
-    assert_eq!(rule.trigger, trigger.id);
+    assert_eq!(rule.trigger, Some(trigger.id));
     assert_eq!(rule.trigger_ref, trigger.r#ref);
     assert_eq!(
         rule.conditions,
@@ -1091,14 +1091,14 @@ async fn test_find_rules_by_action() {
         .unwrap();
 
     assert_eq!(action1_rules.len(), 2);
-    assert!(action1_rules.iter().all(|r| r.action == action1.id));
+    assert!(action1_rules.iter().all(|r| r.action == Some(action1.id)));
 
     let action2_rules = RuleRepository::find_by_action(&pool, action2.id)
         .await
         .unwrap();
 
     assert_eq!(action2_rules.len(), 1);
-    assert_eq!(action2_rules[0].action, action2.id);
+    assert_eq!(action2_rules[0].action, Some(action2.id));
 }
 
 #[tokio::test]
@@ -1172,14 +1172,14 @@ async fn test_find_rules_by_trigger() {
         .unwrap();
 
     assert_eq!(trigger1_rules.len(), 2);
-    assert!(trigger1_rules.iter().all(|r| r.trigger == trigger1.id));
+    assert!(trigger1_rules.iter().all(|r| r.trigger == Some(trigger1.id)));
 
     let trigger2_rules = RuleRepository::find_by_trigger(&pool, trigger2.id)
         .await
         .unwrap();
 
     assert_eq!(trigger2_rules.len(), 1);
-    assert_eq!(trigger2_rules[0].trigger, trigger2.id);
+    assert_eq!(trigger2_rules[0].trigger, Some(trigger2.id));
 }
 
 #[tokio::test]

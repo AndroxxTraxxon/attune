@@ -60,7 +60,7 @@ pub use messages::{
     EnforcementCreatedPayload, EventCreatedPayload, ExecutionCompletedPayload,
     ExecutionRequestedPayload, ExecutionStatusChangedPayload, InquiryCreatedPayload,
     InquiryRespondedPayload, Message, MessageEnvelope, MessageType, NotificationCreatedPayload,
-    RuleCreatedPayload, RuleDisabledPayload, RuleEnabledPayload,
+    PackRegisteredPayload, RuleCreatedPayload, RuleDisabledPayload, RuleEnabledPayload,
 };
 pub use publisher::{Publisher, PublisherConfig};
 
@@ -220,6 +220,8 @@ pub mod routing_keys {
     pub const INQUIRY_RESPONDED: &str = "inquiry.responded";
     /// Notification created routing key
     pub const NOTIFICATION_CREATED: &str = "notification.created";
+    /// Pack registered routing key
+    pub const PACK_REGISTERED: &str = "pack.registered";
 }
 
 #[cfg(test)]

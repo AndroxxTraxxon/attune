@@ -7,6 +7,7 @@ use attune_common::error::{Error, Result};
 use attune_common::models::{runtime::Runtime as RuntimeModel, Action, Execution, ExecutionStatus};
 use attune_common::repositories::execution::{ExecutionRepository, UpdateExecutionInput};
 use attune_common::repositories::{FindById, Update};
+use std::path::PathBuf as StdPathBuf;
 
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
@@ -78,7 +79,12 @@ impl ActionExecutor {
             Ok(ctx) => ctx,
             Err(e) => {
                 error!("Failed to prepare execution context: {}", e);
-                self.handle_execution_failure(execution_id, None).await?;
+                self.handle_execution_failure(
+                    execution_id,
+                    None,
+                    Some(&format!("Failed to prepare execution context: {}", e)),
+                )
+                .await?;
                 return Err(e);
             }
         };
@@ -91,7 +97,12 @@ impl ActionExecutor {
             Err(e) => {
                 error!("Action execution failed catastrophically: {}", e);
                 // This should only happen for unrecoverable errors like runtime not found
-                self.handle_execution_failure(execution_id, None).await?;
+                self.handle_execution_failure(
+                    execution_id,
+                    None,
+                    Some(&format!("Action execution failed: {}", e)),
+                )
+                .await?;
                 return Err(e);
             }
         };
@@ -112,7 +123,7 @@ impl ActionExecutor {
         if is_success {
             self.handle_execution_success(execution_id, &result).await?;
         } else {
-            self.handle_execution_failure(execution_id, Some(&result))
+            self.handle_execution_failure(execution_id, Some(&result), None)
                 .await?;
         }
 
@@ -306,18 +317,23 @@ impl ActionExecutor {
         let timeout = Some(300_u64);
 
         // Load runtime information if specified
-        let runtime_name = if let Some(runtime_id) = action.runtime {
-            match sqlx::query_as::<_, RuntimeModel>("SELECT * FROM runtime WHERE id = $1")
-                .bind(runtime_id)
-                .fetch_optional(&self.pool)
-                .await
+        let runtime_record = if let Some(runtime_id) = action.runtime {
+            match sqlx::query_as::<_, RuntimeModel>(
+                r#"SELECT id, ref, pack, pack_ref, description, name,
+                          distributions, installation, installers, execution_config,
+                          created, updated
+                   FROM runtime WHERE id = $1"#,
+            )
+            .bind(runtime_id)
+            .fetch_optional(&self.pool)
+            .await
             {
                 Ok(Some(runtime)) => {
                     debug!(
-                        "Loaded runtime '{}' for action '{}'",
-                        runtime.name, action.r#ref
+                        "Loaded runtime '{}' (ref: {}) for action '{}'",
+                        runtime.name, runtime.r#ref, action.r#ref
                     );
-                    Some(runtime.name.to_lowercase())
+                    Some(runtime)
                 }
                 Ok(None) => {
                     warn!(
@@ -338,15 +354,16 @@ impl ActionExecutor {
             None
         };
 
+        let runtime_name = runtime_record.as_ref().map(|r| r.name.to_lowercase());
+
+        // Determine the pack directory for this action
+        let pack_dir = self.packs_base_dir.join(&action.pack_ref);
+
         // Construct code_path for pack actions
         // Pack actions have their script files in packs/{pack_ref}/actions/{entrypoint}
         let code_path = if action.pack_ref.starts_with("core") || !action.is_adhoc {
             // This is a pack action, construct the file path
-            let action_file_path = self
-                .packs_base_dir
-                .join(&action.pack_ref)
-                .join("actions")
-                .join(&entry_point);
+            let action_file_path = pack_dir.join("actions").join(&entry_point);
 
             if action_file_path.exists() {
                 Some(action_file_path)
@@ -368,6 +385,15 @@ impl ActionExecutor {
             None
         };
 
+        // Resolve the working directory from the runtime's execution_config.
+        // The ProcessRuntime also does this internally, but setting it in the
+        // context allows the executor to override if needed.
+        let working_dir: Option<StdPathBuf> = if pack_dir.exists() {
+            Some(pack_dir)
+        } else {
+            None
+        };
+
         let context = ExecutionContext {
             execution_id: execution.id,
             action_ref: execution.action_ref.clone(),
@@ -375,7 +401,7 @@ impl ActionExecutor {
             env,
             secrets, // Passed securely via stdin
             timeout,
-            working_dir: None, // Could be configured per action
+            working_dir,
             entry_point,
             code,
             code_path,
@@ -482,6 +508,7 @@ impl ActionExecutor {
         &self,
         execution_id: i64,
         result: Option<&ExecutionResult>,
+        error_message: Option<&str>,
     ) -> Result<()> {
         if let Some(r) = result {
             error!(
@@ -489,7 +516,11 @@ impl ActionExecutor {
                 execution_id, r.exit_code, r.error, r.duration_ms
             );
         } else {
-            error!("Execution {} failed during preparation", execution_id);
+            error!(
+                "Execution {} failed during preparation: {}",
+                execution_id,
+                error_message.unwrap_or("unknown error")
+            );
         }
 
         let exec_dir = self.artifact_manager.get_execution_dir(execution_id);
@@ -531,9 +562,15 @@ impl ActionExecutor {
         } else {
             // No execution result available (early failure during setup/preparation)
             // This should be rare - most errors should be captured in ExecutionResult
-            result_data["error"] = serde_json::json!("Execution failed during preparation");
+            let err_msg = error_message.unwrap_or("Execution failed during preparation");
+            result_data["error"] = serde_json::json!(err_msg);
 
-            warn!("Execution {} failed without ExecutionResult - this indicates an early/catastrophic failure", execution_id);
+            warn!(
+                "Execution {} failed without ExecutionResult - {}: {}",
+                execution_id,
+                "early/catastrophic failure",
+                err_msg
+            );
 
             // Check if stderr log exists and is non-empty from artifact storage
             let stderr_path = exec_dir.join("stderr.log");

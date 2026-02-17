@@ -174,24 +174,18 @@ impl RefValidator {
         Ok(())
     }
 
-    /// Validate pack.type.component format (e.g., "core.action.webhook")
+    /// Validate pack.name format (e.g., "core.python", "core.shell")
     pub fn validate_runtime_ref(ref_str: &str) -> Result<()> {
         let parts: Vec<&str> = ref_str.split('.').collect();
-        if parts.len() != 3 {
+        if parts.len() != 2 {
             return Err(Error::validation(format!(
-                "Invalid runtime reference format: '{}'. Expected 'pack.type.component'",
+                "Invalid runtime reference format: '{}'. Expected 'pack.name' (e.g., 'core.python')",
                 ref_str
             )));
         }
 
         Self::validate_identifier(parts[0])?;
-        if parts[1] != "action" && parts[1] != "sensor" {
-            return Err(Error::validation(format!(
-                "Invalid runtime type: '{}'. Must be 'action' or 'sensor'",
-                parts[1]
-            )));
-        }
-        Self::validate_identifier(parts[2])?;
+        Self::validate_identifier(parts[1])?;
 
         Ok(())
     }
@@ -267,13 +261,15 @@ mod tests {
 
     #[test]
     fn test_ref_validator_runtime() {
-        assert!(RefValidator::validate_runtime_ref("core.action.webhook").is_ok());
-        assert!(RefValidator::validate_runtime_ref("mypack.sensor.monitor").is_ok());
+        assert!(RefValidator::validate_runtime_ref("core.python").is_ok());
+        assert!(RefValidator::validate_runtime_ref("core.shell").is_ok());
+        assert!(RefValidator::validate_runtime_ref("mypack.nodejs").is_ok());
+        assert!(RefValidator::validate_runtime_ref("core.builtin").is_ok());
 
         // Invalid formats
-        assert!(RefValidator::validate_runtime_ref("core.webhook").is_err());
-        assert!(RefValidator::validate_runtime_ref("core.invalid.webhook").is_err());
-        assert!(RefValidator::validate_runtime_ref("Core.action.webhook").is_err());
+        assert!(RefValidator::validate_runtime_ref("core.action.webhook").is_err()); // 3-part no longer valid
+        assert!(RefValidator::validate_runtime_ref("python").is_err()); // missing pack
+        assert!(RefValidator::validate_runtime_ref("Core.python").is_err()); // uppercase
     }
 
     #[test]

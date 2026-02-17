@@ -11,7 +11,6 @@
 
 ARG RUST_VERSION=1.92
 ARG DEBIAN_VERSION=bookworm
-ARG PYTHON_VERSION=3.11
 ARG NODE_VERSION=20
 
 # ============================================================================
@@ -102,29 +101,40 @@ CMD ["/usr/local/bin/attune-worker"]
 # Stage 2b: Python Worker (Shell + Python)
 # Runtime capabilities: shell, python
 # Use case: Python actions and scripts with dependencies
+#
+# Uses debian-slim + apt python3 (NOT the python: Docker image) so that
+# python3 lives at /usr/bin/python3 — the same path as worker-full.
+# This avoids broken venv symlinks when multiple workers share the
+# runtime_envs volume.
 # ============================================================================
-FROM python:${PYTHON_VERSION}-slim-${DEBIAN_VERSION} AS worker-python
+FROM debian:${DEBIAN_VERSION}-slim AS worker-python
 
-# Install system dependencies
+# Install system dependencies including Python
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
     curl \
     build-essential \
+    python3 \
+    python3-pip \
+    python3-venv \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
+# Create python symlink for convenience
+RUN ln -sf /usr/bin/python3 /usr/bin/python
+
 # Install common Python packages
-# These are commonly used in automation scripts
-RUN pip install --no-cache-dir \
+# Use --break-system-packages for Debian 12+ pip-in-system-python restrictions
+RUN pip3 install --no-cache-dir --break-system-packages \
     requests>=2.31.0 \
     pyyaml>=6.0 \
     jinja2>=3.1.0 \
     python-dateutil>=2.8.0
 
 # Create worker user and directories
-RUN useradd -m -u 1001 attune && \
-    mkdir -p /opt/attune/packs /opt/attune/logs && \
+RUN useradd -m -u 1000 attune && \
+    mkdir -p /opt/attune/packs /opt/attune/logs /opt/attune/runtime_envs && \
     chown -R attune:attune /opt/attune
 
 WORKDIR /opt/attune
@@ -161,8 +171,12 @@ CMD ["/usr/local/bin/attune-worker"]
 # Stage 2c: Node Worker (Shell + Node.js)
 # Runtime capabilities: shell, node
 # Use case: JavaScript/TypeScript actions and npm packages
+#
+# Uses debian-slim + NodeSource apt repo (NOT the node: Docker image) so that
+# node lives at /usr/bin/node — the same path as worker-full.
+# This avoids path mismatches when multiple workers share volumes.
 # ============================================================================
-FROM node:${NODE_VERSION}-slim AS worker-node
+FROM debian:${DEBIAN_VERSION}-slim AS worker-node
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -172,10 +186,14 @@ RUN apt-get update && apt-get install -y \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Node.js from NodeSource (same method as worker-full)
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
 # Create worker user and directories
-# Note: Node base image has 'node' user at UID 1000, so we use UID 1001
-RUN useradd -m -u 1001 attune && \
-    mkdir -p /opt/attune/packs /opt/attune/logs && \
+RUN useradd -m -u 1000 attune && \
+    mkdir -p /opt/attune/packs /opt/attune/logs /opt/attune/runtime_envs && \
     chown -R attune:attune /opt/attune
 
 WORKDIR /opt/attune
@@ -227,13 +245,13 @@ RUN apt-get update && apt-get install -y \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js from NodeSource
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+# Install Node.js from NodeSource (same method and version as worker-node)
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*
 
 # Create python symlink for convenience
-RUN ln -s /usr/bin/python3 /usr/bin/python
+RUN ln -sf /usr/bin/python3 /usr/bin/python
 
 # Install common Python packages
 # Use --break-system-packages for Debian 12+ pip-in-system-python restrictions
@@ -244,8 +262,8 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     python-dateutil>=2.8.0
 
 # Create worker user and directories
-RUN useradd -m -u 1001 attune && \
-    mkdir -p /opt/attune/packs /opt/attune/logs && \
+RUN useradd -m -u 1000 attune && \
+    mkdir -p /opt/attune/packs /opt/attune/logs /opt/attune/runtime_envs && \
     chown -R attune:attune /opt/attune
 
 WORKDIR /opt/attune

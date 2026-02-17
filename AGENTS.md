@@ -100,6 +100,15 @@ docker compose logs -f <svc>  # View logs
 - **Development**: Use `./packs.dev/` for instant testing (direct bind mount, no restart needed)
 - **Documentation**: See `docs/QUICKREF-packs-volumes.md`
 
+### Runtime Environments Volume
+- **Key Principle**: Runtime environments (virtualenvs, node_modules) are stored OUTSIDE pack directories
+- **Volume**: `runtime_envs` named volume mounted at `/opt/attune/runtime_envs` in worker and API containers
+- **Path Pattern**: `{runtime_envs_dir}/{pack_ref}/{runtime_name}` (e.g., `/opt/attune/runtime_envs/python_example/python`)
+- **Creation**: Worker creates environments on-demand before first action execution (idempotent)
+- **API best-effort**: API attempts environment setup during pack registration but logs and defers to worker on failure (Docker API containers lack interpreters)
+- **Pack directories remain read-only**: Packs mounted `:ro` in workers; all generated env files go to `runtime_envs` volume
+- **Config**: `runtime_envs_dir` setting in config YAML (default: `/opt/attune/runtime_envs`)
+
 ## Domain Model & Event Flow
 
 **Critical Event Flow**:
@@ -109,7 +118,8 @@ Enforcement created → Execution scheduled → Worker executes Action
 ```
 
 **Key Entities** (all in `public` schema, IDs are `i64`):
-- **Pack**: Bundle of automation components (actions, sensors, rules, triggers)
+- **Pack**: Bundle of automation components (actions, sensors, rules, triggers, runtimes)
+- **Runtime**: Unified execution environment definition (Python, Shell, Node.js, etc.) — used by both actions and sensors. Configured via `execution_config` JSONB (interpreter, environment setup, dependency management). No type distinction; whether a runtime is executable is determined by its `execution_config` content.
 - **Trigger**: Event type definition (e.g., "webhook_received")
 - **Sensor**: Monitors for trigger conditions, creates events
 - **Event**: Instance of a trigger firing with payload
@@ -151,10 +161,13 @@ Enforcement created → Execution scheduled → Worker executes Action
 ## Configuration System
 - **Primary**: YAML config files (`config.yaml`, `config.{env}.yaml`)
 - **Overrides**: Environment variables with prefix `ATTUNE__` and separator `__`
-  - Example: `ATTUNE__DATABASE__URL`, `ATTUNE__SERVER__PORT`
+  - Example: `ATTUNE__DATABASE__URL`, `ATTUNE__SERVER__PORT`, `ATTUNE__RUNTIME_ENVS_DIR`
 - **Loading Priority**: Base config → env-specific config → env vars
 - **Required for Production**: `JWT_SECRET`, `ENCRYPTION_KEY` (32+ chars)
 - **Location**: Root directory or `ATTUNE_CONFIG` env var path
+- **Key Settings**:
+  - `packs_base_dir` - Where pack files are stored (default: `/opt/attune/packs`)
+  - `runtime_envs_dir` - Where isolated runtime environments are created (default: `/opt/attune/runtime_envs`)
 
 ## Authentication & Security
 - **Auth Type**: JWT (access tokens: 1h, refresh tokens: 7d)
@@ -184,7 +197,10 @@ Enforcement created → Execution scheduled → Worker executes Action
 - **JSON Fields**: Use `serde_json::Value` for flexible attributes/parameters, including `execution.workflow_task` JSONB
 - **Enums**: PostgreSQL enum types mapped with `#[sqlx(type_name = "...")]`
 - **Workflow Tasks**: Stored as JSONB in `execution.workflow_task` (consolidated from separate table 2026-01-27)
+- **FK ON DELETE Policy**: Historical records (executions, events, enforcements) use `ON DELETE SET NULL` so they survive entity deletion while preserving text ref fields (`action_ref`, `trigger_ref`, etc.) for auditing. Pack-owned entities (actions, triggers, sensors, rules, runtimes) use `ON DELETE CASCADE` from pack. Workflow executions cascade-delete with their workflow definition.
+- **Nullable FK Fields**: `rule.action` and `rule.trigger` are nullable (`Option<Id>` in Rust) — a rule with NULL action/trigger is non-functional but preserved for traceability. `execution.action`, `execution.parent`, `execution.enforcement`, and `event.source` are also nullable.
 **Table Count**: 17 tables total in the schema
+- **Pack Component Loading Order**: Runtimes → Triggers → Actions → Sensors (dependency order). Both `PackComponentLoader` (Rust) and `load_core_pack.py` (Python) follow this order.
 
 ### Pack File Loading & Action Execution
 - **Pack Base Directory**: Configured via `packs_base_dir` in config (defaults to `/opt/attune/packs`, development uses `./packs`)
@@ -193,7 +209,10 @@ Enforcement created → Execution scheduled → Worker executes Action
   - Development packs in `./packs.dev/` are bind-mounted directly for instant updates
 - **Pack Binaries**: Native binaries (sensors) built separately with `./scripts/build-pack-binaries.sh`
 - **Action Script Resolution**: Worker constructs file paths as `{packs_base_dir}/{pack_ref}/actions/{entrypoint}`
-- **Runtime Selection**: Determined by action's runtime field (e.g., "Shell", "Python") - compared case-insensitively
+- **Runtime YAML Loading**: Pack registration reads `runtimes/*.yaml` files and inserts them into the `runtime` table. Runtime refs use format `{pack_ref}.{name}` (e.g., `core.python`, `core.shell`).
+- **Runtime Selection**: Determined by action's runtime field (e.g., "Shell", "Python") - compared case-insensitively; when an explicit `runtime_name` is set in execution context, it is authoritative (no fallback to extension matching)
+- **Worker Runtime Loading**: Worker loads all runtimes from DB that have a non-empty `execution_config` (i.e., runtimes with an interpreter configured). Builtin runtimes (e.g., sensor runtime with empty config) are automatically skipped.
+- **Runtime Environment Setup**: Worker creates isolated environments (virtualenvs, node_modules) on-demand at `{runtime_envs_dir}/{pack_ref}/{runtime_name}` before first execution; setup is idempotent
 - **Parameter Delivery**: Actions receive parameters via stdin as JSON (never environment variables)
 - **Output Format**: Actions declare output format (text/json/yaml) - json/yaml are parsed into execution.result JSONB
 - **Standard Environment Variables**: Worker provides execution context via `ATTUNE_*` environment variables:

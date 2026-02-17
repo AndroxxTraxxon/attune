@@ -297,64 +297,73 @@ impl WorkerHealthProbe {
 
     /// Extract health metrics from worker capabilities
     fn extract_health_metrics(&self, worker: &Worker) -> HealthMetrics {
-        let mut metrics = HealthMetrics {
-            last_check: Utc::now(),
-            ..Default::default()
+        extract_health_metrics(worker)
+    }
+}
+
+/// Extract health metrics from worker capabilities.
+///
+/// Extracted as a free function so it can be tested without a database pool.
+fn extract_health_metrics(worker: &Worker) -> HealthMetrics {
+    let mut metrics = HealthMetrics {
+        last_check: Utc::now(),
+        ..Default::default()
+    };
+
+    let Some(capabilities) = &worker.capabilities else {
+        return metrics;
+    };
+
+    let Some(health_obj) = capabilities.get("health") else {
+        return metrics;
+    };
+
+    // Extract metrics from health object
+    if let Some(status_str) = health_obj.get("status").and_then(|v| v.as_str()) {
+        metrics.status = match status_str {
+            "healthy" => HealthStatus::Healthy,
+            "degraded" => HealthStatus::Degraded,
+            "unhealthy" => HealthStatus::Unhealthy,
+            _ => HealthStatus::Healthy,
         };
-
-        let Some(capabilities) = &worker.capabilities else {
-            return metrics;
-        };
-
-        let Some(health_obj) = capabilities.get("health") else {
-            return metrics;
-        };
-
-        // Extract metrics from health object
-        if let Some(status_str) = health_obj.get("status").and_then(|v| v.as_str()) {
-            metrics.status = match status_str {
-                "healthy" => HealthStatus::Healthy,
-                "degraded" => HealthStatus::Degraded,
-                "unhealthy" => HealthStatus::Unhealthy,
-                _ => HealthStatus::Healthy,
-            };
-        }
-
-        if let Some(last_check_str) = health_obj.get("last_check").and_then(|v| v.as_str()) {
-            if let Ok(last_check) = DateTime::parse_from_rfc3339(last_check_str) {
-                metrics.last_check = last_check.with_timezone(&Utc);
-            }
-        }
-
-        if let Some(failures) = health_obj
-            .get("consecutive_failures")
-            .and_then(|v| v.as_u64())
-        {
-            metrics.consecutive_failures = failures as u32;
-        }
-
-        if let Some(total) = health_obj.get("total_executions").and_then(|v| v.as_u64()) {
-            metrics.total_executions = total;
-        }
-
-        if let Some(failed) = health_obj.get("failed_executions").and_then(|v| v.as_u64()) {
-            metrics.failed_executions = failed;
-        }
-
-        if let Some(avg_time) = health_obj
-            .get("average_execution_time_ms")
-            .and_then(|v| v.as_u64())
-        {
-            metrics.average_execution_time_ms = avg_time;
-        }
-
-        if let Some(depth) = health_obj.get("queue_depth").and_then(|v| v.as_u64()) {
-            metrics.queue_depth = depth as u32;
-        }
-
-        metrics
     }
 
+    if let Some(last_check_str) = health_obj.get("last_check").and_then(|v| v.as_str()) {
+        if let Ok(last_check) = DateTime::parse_from_rfc3339(last_check_str) {
+            metrics.last_check = last_check.with_timezone(&Utc);
+        }
+    }
+
+    if let Some(failures) = health_obj
+        .get("consecutive_failures")
+        .and_then(|v| v.as_u64())
+    {
+        metrics.consecutive_failures = failures as u32;
+    }
+
+    if let Some(total) = health_obj.get("total_executions").and_then(|v| v.as_u64()) {
+        metrics.total_executions = total;
+    }
+
+    if let Some(failed) = health_obj.get("failed_executions").and_then(|v| v.as_u64()) {
+        metrics.failed_executions = failed;
+    }
+
+    if let Some(avg_time) = health_obj
+        .get("average_execution_time_ms")
+        .and_then(|v| v.as_u64())
+    {
+        metrics.average_execution_time_ms = avg_time;
+    }
+
+    if let Some(depth) = health_obj.get("queue_depth").and_then(|v| v.as_u64()) {
+        metrics.queue_depth = depth as u32;
+    }
+
+    metrics
+}
+
+impl WorkerHealthProbe {
     /// Get recommended worker for execution based on health
     #[allow(dead_code)]
     pub async fn get_best_worker(&self, runtime_name: &str) -> Result<Option<Worker>> {
@@ -435,8 +444,6 @@ mod tests {
 
     #[test]
     fn test_extract_health_metrics() {
-        let probe = WorkerHealthProbe::with_defaults(Arc::new(unsafe { std::mem::zeroed() }));
-
         let worker = Worker {
             id: 1,
             name: "test-worker".to_string(),
@@ -461,7 +468,7 @@ mod tests {
             updated: Utc::now(),
         };
 
-        let metrics = probe.extract_health_metrics(&worker);
+        let metrics = extract_health_metrics(&worker);
         assert_eq!(metrics.status, HealthStatus::Degraded);
         assert_eq!(metrics.consecutive_failures, 5);
         assert_eq!(metrics.queue_depth, 25);

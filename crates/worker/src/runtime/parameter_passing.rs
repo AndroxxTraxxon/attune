@@ -92,9 +92,13 @@ fn format_dotenv(parameters: &HashMap<String, JsonValue>) -> Result<String, Runt
     Ok(lines.join("\n"))
 }
 
-/// Format parameters as JSON
+/// Format parameters as JSON (compact, single-line)
+///
+/// Uses compact format so that actions reading stdin line-by-line
+/// (e.g., `json.loads(sys.stdin.readline())`) receive the entire
+/// JSON object on a single line.
 fn format_json(parameters: &HashMap<String, JsonValue>) -> Result<String, RuntimeError> {
-    serde_json::to_string_pretty(parameters).map_err(|e| {
+    serde_json::to_string(parameters).map_err(|e| {
         RuntimeError::ExecutionFailed(format!("Failed to serialize parameters to JSON: {}", e))
     })
 }

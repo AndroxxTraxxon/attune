@@ -31,7 +31,7 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
   const [description, setDescription] = useState(pack?.description || "");
   const [version, setVersion] = useState(pack?.version || "1.0.0");
   const [tags, setTags] = useState(pack?.tags?.join(", ") || "");
-  const [deps, setDeps] = useState(pack?.dependencies?.join(", ") || "");
+  const [deps, setDeps] = useState(pack?.runtime_deps?.join(", ") || "");
   const [isStandard, setIsStandard] = useState(pack?.is_standard ?? false);
 
   const [configValues, setConfigValues] =
@@ -132,10 +132,10 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
       .split(",")
       .map((t) => t.trim())
       .filter((t) => t);
-    const depsList = deps
+    const depsList: string[] = deps
       .split(",")
-      .map((d) => d.trim())
-      .filter((d) => d);
+      .map((d: string) => d.trim())
+      .filter((d: string) => d);
 
     try {
       if (isEditing) {
@@ -147,7 +147,7 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
           config: configValues,
           meta: parsedMeta,
           tags: tagsList,
-          dependencies: depsList,
+          runtime_deps: depsList,
           is_standard: isStandard,
         };
         await updatePack.mutateAsync({ ref: pack!.ref, data: updateData });
@@ -164,7 +164,7 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
           config: configValues,
           meta: parsedMeta,
           tags: tagsList,
-          dependencies: depsList,
+          runtime_deps: depsList,
           is_standard: isStandard,
         };
         const newPackResponse = await createPack.mutateAsync(createData);

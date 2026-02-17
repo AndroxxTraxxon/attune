@@ -874,6 +874,7 @@ pub struct RuntimeFixture {
     pub name: String,
     pub distributions: serde_json::Value,
     pub installation: Option<serde_json::Value>,
+    pub execution_config: serde_json::Value,
 }
 
 impl RuntimeFixture {
@@ -896,6 +897,13 @@ impl RuntimeFixture {
                 "darwin": { "supported": true }
             }),
             installation: None,
+            execution_config: json!({
+                "interpreter": {
+                    "binary": "/bin/bash",
+                    "args": [],
+                    "file_extension": ".sh"
+                }
+            }),
         }
     }
 
@@ -920,6 +928,13 @@ impl RuntimeFixture {
                 "darwin": { "supported": true }
             }),
             installation: None,
+            execution_config: json!({
+                "interpreter": {
+                    "binary": "/bin/bash",
+                    "args": [],
+                    "file_extension": ".sh"
+                }
+            }),
         }
     }
 
@@ -947,6 +962,7 @@ impl RuntimeFixture {
             name: self.name,
             distributions: self.distributions,
             installation: self.installation,
+            execution_config: self.execution_config,
         };
 
         RuntimeRepository::create(pool, input).await

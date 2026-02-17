@@ -414,6 +414,324 @@ pub mod pack {
 /// Runtime model
 pub mod runtime {
     use super::*;
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use tracing::{debug, warn};
+
+    /// Configuration for how a runtime executes actions.
+    ///
+    /// Stored as JSONB in the `runtime.execution_config` column.
+    /// Uses template variables that are resolved at execution time:
+    /// - `{pack_dir}` — absolute path to the pack directory
+    /// - `{env_dir}` — resolved environment directory
+    ///   When an external `env_dir` is provided (e.g., from `runtime_envs_dir`
+    ///   config), that path is used directly. Otherwise falls back to
+    ///   `pack_dir/dir_name` for backward compatibility.
+    /// - `{interpreter}` — resolved interpreter path
+    /// - `{action_file}` — absolute path to the action script file
+    /// - `{manifest_path}` — absolute path to the dependency manifest file
+    #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+    pub struct RuntimeExecutionConfig {
+        /// Interpreter configuration (how to invoke the action script)
+        #[serde(default)]
+        pub interpreter: InterpreterConfig,
+
+        /// Optional isolated environment configuration (venv, node_modules, etc.)
+        #[serde(default)]
+        pub environment: Option<EnvironmentConfig>,
+
+        /// Optional dependency management configuration
+        #[serde(default)]
+        pub dependencies: Option<DependencyConfig>,
+    }
+
+    /// Describes the interpreter binary and how it invokes action scripts.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct InterpreterConfig {
+        /// Path or name of the interpreter binary (e.g., "python3", "/bin/bash").
+        #[serde(default = "default_interpreter_binary")]
+        pub binary: String,
+
+        /// Additional arguments inserted before the action file path
+        /// (e.g., `["-u"]` for unbuffered Python output).
+        #[serde(default)]
+        pub args: Vec<String>,
+
+        /// File extension this runtime handles (e.g., ".py", ".sh").
+        /// Used to match actions to runtimes when runtime_name is not explicit.
+        #[serde(default)]
+        pub file_extension: Option<String>,
+    }
+
+    fn default_interpreter_binary() -> String {
+        "/bin/sh".to_string()
+    }
+
+    impl Default for InterpreterConfig {
+        fn default() -> Self {
+            Self {
+                binary: default_interpreter_binary(),
+                args: Vec::new(),
+                file_extension: None,
+            }
+        }
+    }
+
+    /// Describes how to create and manage an isolated runtime environment
+    /// (e.g., Python virtualenv, Node.js node_modules).
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct EnvironmentConfig {
+        /// Type of environment: "virtualenv", "node_modules", "none".
+        pub env_type: String,
+
+        /// Fallback directory name relative to the pack directory (e.g., ".venv").
+        /// Only used when no external `env_dir` is provided (legacy/bare-metal).
+        /// In production, the env_dir is computed externally as
+        /// `{runtime_envs_dir}/{pack_ref}/{runtime_name}`.
+        #[serde(default = "super::runtime::default_env_dir_name")]
+        pub dir_name: String,
+
+        /// Command(s) to create the environment.
+        /// Template variables: `{env_dir}`, `{pack_dir}`.
+        /// Example: `["python3", "-m", "venv", "{env_dir}"]`
+        #[serde(default)]
+        pub create_command: Vec<String>,
+
+        /// Path to the interpreter inside the environment.
+        /// When the environment exists, this overrides `interpreter.binary`.
+        /// Template variables: `{env_dir}`.
+        /// Example: `"{env_dir}/bin/python3"`
+        pub interpreter_path: Option<String>,
+    }
+
+    /// Describes how to detect and install dependencies for a pack.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct DependencyConfig {
+        /// Name of the manifest file to look for in the pack directory
+        /// (e.g., "requirements.txt", "package.json").
+        pub manifest_file: String,
+
+        /// Command to install dependencies.
+        /// Template variables: `{interpreter}`, `{env_dir}`, `{manifest_path}`, `{pack_dir}`.
+        /// Example: `["{interpreter}", "-m", "pip", "install", "-r", "{manifest_path}"]`
+        #[serde(default)]
+        pub install_command: Vec<String>,
+    }
+
+    fn default_env_dir_name() -> String {
+        ".venv".to_string()
+    }
+
+    impl RuntimeExecutionConfig {
+        /// Resolve template variables in a single string.
+        pub fn resolve_template(template: &str, vars: &HashMap<&str, String>) -> String {
+            let mut result = template.to_string();
+            for (key, value) in vars {
+                result = result.replace(&format!("{{{}}}", key), value);
+            }
+            result
+        }
+
+        /// Resolve the interpreter binary path using a pack-relative env_dir
+        /// (legacy fallback — prefers [`resolve_interpreter_with_env`]).
+        pub fn resolve_interpreter(&self, pack_dir: &Path) -> PathBuf {
+            let fallback_env_dir = self
+                .environment
+                .as_ref()
+                .map(|cfg| pack_dir.join(&cfg.dir_name));
+            self.resolve_interpreter_with_env(pack_dir, fallback_env_dir.as_deref())
+        }
+
+        /// Resolve the interpreter binary path for a given pack directory and
+        /// an explicit environment directory.
+        ///
+        /// If `env_dir` is provided and exists on disk, returns the
+        /// environment's interpreter. Otherwise returns the system interpreter.
+        pub fn resolve_interpreter_with_env(
+            &self,
+            pack_dir: &Path,
+            env_dir: Option<&Path>,
+        ) -> PathBuf {
+            if let Some(ref env_cfg) = self.environment {
+                if let Some(ref interp_path_template) = env_cfg.interpreter_path {
+                    if let Some(env_dir) = env_dir {
+                        if env_dir.exists() {
+                            let mut vars = HashMap::new();
+                            vars.insert("env_dir", env_dir.to_string_lossy().to_string());
+                            vars.insert("pack_dir", pack_dir.to_string_lossy().to_string());
+                            let resolved = Self::resolve_template(interp_path_template, &vars);
+                            let resolved_path = PathBuf::from(&resolved);
+                            // Path::exists() follows symlinks — returns true only
+                            // if the final target is reachable. A valid symlink to
+                            // an existing executable passes this check just fine.
+                            if resolved_path.exists() {
+                                debug!(
+                                    "Using environment interpreter: {} (template: '{}', env_dir: {})",
+                                    resolved_path.display(),
+                                    interp_path_template,
+                                    env_dir.display(),
+                                );
+                                return resolved_path;
+                            }
+                            // exists() returned false — check whether the path is
+                            // a broken symlink (symlink_metadata succeeds for the
+                            // link itself even when its target is missing).
+                            let is_broken_symlink = std::fs::symlink_metadata(&resolved_path)
+                                .map(|m| m.file_type().is_symlink())
+                                .unwrap_or(false);
+                            if is_broken_symlink {
+                                // Read the dangling target for the diagnostic
+                                let target = std::fs::read_link(&resolved_path)
+                                    .map(|t| t.display().to_string())
+                                    .unwrap_or_else(|_| "<unreadable>".to_string());
+                                warn!(
+                                    "Environment interpreter at '{}' is a broken symlink \
+                                     (target '{}' does not exist). This typically happens \
+                                     when the venv was created by a different container \
+                                     where python3 lives at a different path. \
+                                     Recreate the venv with `--copies` or delete '{}' \
+                                     and restart the worker. \
+                                     Falling back to system interpreter '{}'",
+                                    resolved_path.display(),
+                                    target,
+                                    env_dir.display(),
+                                    self.interpreter.binary,
+                                );
+                            } else {
+                                warn!(
+                                    "Environment interpreter not found at resolved path '{}' \
+                                     (template: '{}', env_dir: {}). \
+                                     Falling back to system interpreter '{}'",
+                                    resolved_path.display(),
+                                    interp_path_template,
+                                    env_dir.display(),
+                                    self.interpreter.binary,
+                                );
+                            }
+                        } else {
+                            warn!(
+                                "Environment directory does not exist: {}. \
+                                 Expected interpreter template '{}' cannot be resolved. \
+                                 Falling back to system interpreter '{}'",
+                                env_dir.display(),
+                                interp_path_template,
+                                self.interpreter.binary,
+                            );
+                        }
+                    } else {
+                        debug!(
+                            "No env_dir provided; skipping environment interpreter resolution. \
+                             Using system interpreter '{}'",
+                            self.interpreter.binary,
+                        );
+                    }
+                } else {
+                    debug!(
+                        "No interpreter_path configured in environment config. \
+                         Using system interpreter '{}'",
+                        self.interpreter.binary,
+                    );
+                }
+            } else {
+                debug!(
+                    "No environment config present. Using system interpreter '{}'",
+                    self.interpreter.binary,
+                );
+            }
+            PathBuf::from(&self.interpreter.binary)
+        }
+
+        /// Resolve the working directory for action execution.
+        /// Returns the pack directory.
+        pub fn resolve_working_dir(&self, pack_dir: &Path) -> PathBuf {
+            pack_dir.to_path_buf()
+        }
+
+        /// Resolve the environment directory for a pack (legacy pack-relative
+        /// fallback — callers should prefer computing `env_dir` externally
+        /// from `runtime_envs_dir`).
+        pub fn resolve_env_dir(&self, pack_dir: &Path) -> Option<PathBuf> {
+            self.environment
+                .as_ref()
+                .map(|env_cfg| pack_dir.join(&env_cfg.dir_name))
+        }
+
+        /// Check whether the pack directory has a dependency manifest file.
+        pub fn has_dependencies(&self, pack_dir: &Path) -> bool {
+            if let Some(ref dep_cfg) = self.dependencies {
+                pack_dir.join(&dep_cfg.manifest_file).exists()
+            } else {
+                false
+            }
+        }
+
+        /// Build template variables using a pack-relative env_dir
+        /// (legacy fallback — prefers [`build_template_vars_with_env`]).
+        pub fn build_template_vars(&self, pack_dir: &Path) -> HashMap<&'static str, String> {
+            let fallback_env_dir = self
+                .environment
+                .as_ref()
+                .map(|cfg| pack_dir.join(&cfg.dir_name));
+            self.build_template_vars_with_env(pack_dir, fallback_env_dir.as_deref())
+        }
+
+        /// Build template variables for a given pack directory and an explicit
+        /// environment directory.
+        ///
+        /// The `env_dir` should be the external runtime environment path
+        /// (e.g., `/opt/attune/runtime_envs/{pack_ref}/{runtime_name}`).
+        /// If `None`, falls back to the pack-relative `dir_name`.
+        pub fn build_template_vars_with_env(
+            &self,
+            pack_dir: &Path,
+            env_dir: Option<&Path>,
+        ) -> HashMap<&'static str, String> {
+            let mut vars = HashMap::new();
+            vars.insert("pack_dir", pack_dir.to_string_lossy().to_string());
+
+            if let Some(env_dir) = env_dir {
+                vars.insert("env_dir", env_dir.to_string_lossy().to_string());
+            } else if let Some(ref env_cfg) = self.environment {
+                let fallback = pack_dir.join(&env_cfg.dir_name);
+                vars.insert("env_dir", fallback.to_string_lossy().to_string());
+            }
+
+            let interpreter = self.resolve_interpreter_with_env(pack_dir, env_dir);
+            vars.insert("interpreter", interpreter.to_string_lossy().to_string());
+
+            if let Some(ref dep_cfg) = self.dependencies {
+                let manifest_path = pack_dir.join(&dep_cfg.manifest_file);
+                vars.insert("manifest_path", manifest_path.to_string_lossy().to_string());
+            }
+
+            vars
+        }
+
+        /// Resolve a command template (Vec<String>) with the given variables.
+        pub fn resolve_command(
+            cmd_template: &[String],
+            vars: &HashMap<&str, String>,
+        ) -> Vec<String> {
+            cmd_template
+                .iter()
+                .map(|part| Self::resolve_template(part, vars))
+                .collect()
+        }
+
+        /// Check if this runtime can execute a file based on its extension.
+        pub fn matches_file_extension(&self, file_path: &Path) -> bool {
+            if let Some(ref ext) = self.interpreter.file_extension {
+                let expected = ext.trim_start_matches('.');
+                file_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.eq_ignore_ascii_case(expected))
+                    .unwrap_or(false)
+            } else {
+                false
+            }
+        }
+    }
 
     #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
     pub struct Runtime {
@@ -426,8 +744,16 @@ pub mod runtime {
         pub distributions: JsonDict,
         pub installation: Option<JsonDict>,
         pub installers: JsonDict,
+        pub execution_config: JsonDict,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
+    }
+
+    impl Runtime {
+        /// Parse the `execution_config` JSONB into a typed `RuntimeExecutionConfig`.
+        pub fn parsed_execution_config(&self) -> RuntimeExecutionConfig {
+            serde_json::from_value(self.execution_config.clone()).unwrap_or_default()
+        }
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -552,9 +878,9 @@ pub mod rule {
         pub pack_ref: String,
         pub label: String,
         pub description: String,
-        pub action: Id,
+        pub action: Option<Id>,
         pub action_ref: String,
-        pub trigger: Id,
+        pub trigger: Option<Id>,
         pub trigger_ref: String,
         pub conditions: JsonValue,
         pub action_params: JsonValue,

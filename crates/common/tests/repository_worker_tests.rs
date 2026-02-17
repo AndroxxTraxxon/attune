@@ -550,13 +550,20 @@ async fn test_worker_with_runtime() {
 
     // Create a runtime first
     let runtime_input = CreateRuntimeInput {
-        r#ref: format!("{}.action.test_runtime", fixture.test_id),
+        r#ref: format!("{}.test_runtime", fixture.test_id),
         pack: None,
         pack_ref: None,
         description: Some("Test runtime".to_string()),
         name: "test_runtime".to_string(),
         distributions: json!({}),
         installation: None,
+        execution_config: json!({
+            "interpreter": {
+                "binary": "/bin/bash",
+                "args": [],
+                "file_extension": ".sh"
+            }
+        }),
     };
 
     let runtime = RuntimeRepository::create(&pool, runtime_input)

@@ -49,7 +49,7 @@ COMMENT ON COLUMN workflow_definition.out_schema IS 'JSON schema for workflow ou
 CREATE TABLE workflow_execution (
     id BIGSERIAL PRIMARY KEY,
     execution BIGINT NOT NULL REFERENCES execution(id) ON DELETE CASCADE,
-    workflow_def BIGINT NOT NULL REFERENCES workflow_definition(id),
+    workflow_def BIGINT NOT NULL REFERENCES workflow_definition(id) ON DELETE CASCADE,
     current_tasks TEXT[] DEFAULT '{}',
     completed_tasks TEXT[] DEFAULT '{}',
     failed_tasks TEXT[] DEFAULT '{}',
