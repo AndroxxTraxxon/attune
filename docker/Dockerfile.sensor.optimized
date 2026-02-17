@@ -123,6 +123,10 @@ CMD ["/usr/local/bin/attune-sensor"]
 # ============================================================================
 FROM debian:${DEBIAN_VERSION}-slim AS sensor-full
 
+# Re-declare global ARG so it's available in RUN commands within this stage
+# (global ARGs are only automatically available in FROM instructions)
+ARG NODE_VERSION=20
+
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \

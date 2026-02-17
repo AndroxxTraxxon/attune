@@ -332,6 +332,11 @@ function TriggerDetail({ triggerRef }: { triggerRef: string }) {
   const requiredFields = paramSchema.required || [];
   const paramEntries = Object.entries(properties);
 
+  const outSchema = trigger.data?.out_schema || {};
+  const outProperties = outSchema.properties || {};
+  const outRequiredFields = outSchema.required || [];
+  const outEntries = Object.entries(outProperties);
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -521,6 +526,52 @@ function TriggerDetail({ triggerRef }: { triggerRef: string }) {
               </div>
             )}
           </div>
+
+          {/* Payload Schema Card */}
+          {outEntries.length > 0 && (
+            <div className="bg-white shadow rounded-lg p-6">
+              <h2 className="text-xl font-semibold mb-2">Payload Schema</h2>
+              <p className="text-sm text-gray-500 mb-4">
+                Schema of the event payload generated when this trigger fires.
+              </p>
+              <div className="space-y-3">
+                {outEntries.map(([key, param]: [string, any]) => (
+                  <div key={key} className="border border-gray-200 rounded p-3">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-semibold text-sm">
+                            {key}
+                          </span>
+                          {outRequiredFields.includes(key) && (
+                            <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded">
+                              Required
+                            </span>
+                          )}
+                          <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded">
+                            {param?.type || "any"}
+                          </span>
+                        </div>
+                        {param?.description && (
+                          <p className="text-sm text-gray-600 mt-1">
+                            {param.description}
+                          </p>
+                        )}
+                        {param?.default !== undefined && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            Default:{" "}
+                            <code className="bg-gray-100 px-1 rounded">
+                              {JSON.stringify(param.default)}
+                            </code>
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Sidebar */}

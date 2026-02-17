@@ -181,6 +181,8 @@ CMD ["/usr/local/bin/attune-worker"]
 # ============================================================================
 FROM debian:${DEBIAN_VERSION}-slim AS worker-node
 
+ARG NODE_VERSION=20
+
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
@@ -219,6 +221,8 @@ CMD ["/usr/local/bin/attune-worker"]
 # Runtime capabilities: shell, python, node, native
 # ============================================================================
 FROM debian:${DEBIAN_VERSION} AS worker-full
+
+ARG NODE_VERSION=20
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
