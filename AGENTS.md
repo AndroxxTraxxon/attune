@@ -84,13 +84,23 @@ docker compose logs -f <svc>  # View logs
 **Key environment overrides**: `JWT_SECRET`, `ENCRYPTION_KEY` (required for production)
 
 ### Docker Build Optimization
-- **Optimized Dockerfiles**: `docker/Dockerfile.optimized` and `docker/Dockerfile.worker.optimized`
+- **Optimized Dockerfiles**: `docker/Dockerfile.optimized`, `docker/Dockerfile.worker.optimized`, and `docker/Dockerfile.sensor.optimized`
 - **Strategy**: Selective crate copying - only copy crates needed for each service (not entire workspace)
 - **Performance**: 90% faster incremental builds (~30 sec vs ~5 min for code changes)
 - **BuildKit cache mounts**: Persist cargo registry and compilation artifacts between builds
   - **Cache strategy**: `sharing=shared` for registry/git (concurrent-safe), service-specific IDs for target caches
   - **Parallel builds**: 4x faster than old `sharing=locked` strategy - no serialization overhead
 - **Documentation**: See `docs/docker-layer-optimization.md`, `docs/QUICKREF-docker-optimization.md`, `docs/QUICKREF-buildkit-cache-strategy.md`
+
+### Docker Runtime Standardization
+- **Base image**: All worker and sensor runtime stages use `debian:bookworm-slim` (or `debian:bookworm` for worker-full)
+- **Python**: Always installed via `apt-get install python3 python3-pip python3-venv` → binary at `/usr/bin/python3`
+- **Node.js**: Always installed via NodeSource apt repo (`setup_${NODE_VERSION}.x`) → binary at `/usr/bin/node`
+- **NEVER** use `python:` or `node:` Docker images as base — they install binaries at `/usr/local/bin/` which causes broken venv symlinks when multiple containers share the `runtime_envs` volume
+- **UID**: All containers use UID 1000 for the `attune` user
+- **Venv creation**: Uses `--copies` flag (`python3 -m venv --copies`) to avoid cross-container broken symlinks
+- **Worker targets**: `worker-base` (shell), `worker-python` (shell+python), `worker-node` (shell+node), `worker-full` (all)
+- **Sensor targets**: `sensor-base` (native only), `sensor-full` (native+python+node)
 
 ### Packs Volume Architecture
 - **Key Principle**: Packs are NOT copied into Docker images - they are mounted as volumes
@@ -102,9 +112,10 @@ docker compose logs -f <svc>  # View logs
 
 ### Runtime Environments Volume
 - **Key Principle**: Runtime environments (virtualenvs, node_modules) are stored OUTSIDE pack directories
-- **Volume**: `runtime_envs` named volume mounted at `/opt/attune/runtime_envs` in worker and API containers
+- **Volume**: `runtime_envs` named volume mounted at `/opt/attune/runtime_envs` in worker, sensor, and API containers
 - **Path Pattern**: `{runtime_envs_dir}/{pack_ref}/{runtime_name}` (e.g., `/opt/attune/runtime_envs/python_example/python`)
-- **Creation**: Worker creates environments on-demand before first action execution (idempotent)
+- **Creation**: Worker creates environments proactively at startup and via `pack.registered` MQ events; lightweight existence check at execution time
+- **Broken venv auto-repair**: Worker detects broken interpreter symlinks (e.g., from mismatched container python paths) and automatically recreates the environment
 - **API best-effort**: API attempts environment setup during pack registration but logs and defers to worker on failure (Docker API containers lack interpreters)
 - **Pack directories remain read-only**: Packs mounted `:ro` in workers; all generated env files go to `runtime_envs` volume
 - **Config**: `runtime_envs_dir` setting in config YAML (default: `/opt/attune/runtime_envs`)
@@ -362,8 +373,9 @@ When reporting, ask: "Should I fix this first or continue with [original task]?"
 - `config.development.yaml` - Dev configuration
 - `Cargo.toml` - Workspace dependencies
 - `Makefile` - Development commands
-- `docker/Dockerfile.optimized` - Optimized service builds
-- `docker/Dockerfile.worker.optimized` - Optimized worker builds
+- `docker/Dockerfile.optimized` - Optimized service builds (api, executor, notifier)
+- `docker/Dockerfile.worker.optimized` - Optimized worker builds (shell, python, node, full)
+- `docker/Dockerfile.sensor.optimized` - Optimized sensor builds (base, full)
 - `docker/Dockerfile.pack-binaries` - Separate pack binary builder
 - `scripts/build-pack-binaries.sh` - Build pack binaries script
 

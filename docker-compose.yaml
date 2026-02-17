@@ -446,9 +446,9 @@ services:
   sensor:
     build:
       context: .
-      dockerfile: docker/Dockerfile.optimized
+      dockerfile: docker/Dockerfile.sensor.optimized
+      target: sensor-full
       args:
-        SERVICE: sensor
         BUILDKIT_INLINE_CACHE: 1
     container_name: attune-sensor
     stop_grace_period: 45s
@@ -467,6 +467,7 @@ services:
     volumes:
       - packs_data:/opt/attune/packs:rw
       - ./packs.dev:/opt/attune/packs.dev:rw
+      - runtime_envs:/opt/attune/runtime_envs
       - sensor_logs:/opt/attune/logs
     depends_on:
       init-packs:
