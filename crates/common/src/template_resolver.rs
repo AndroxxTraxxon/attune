@@ -1,27 +1,44 @@
 //! Template Resolver
 //!
 //! Resolves template variables in rule action parameters using context from
-//! trigger payloads, pack configuration, and system variables.
+//! event payloads, pack configuration, and system variables.
 //!
 //! Supports template syntax: `{{ source.path.to.value }}`
 //!
-//! Example:
+//! ## Available Template Sources
+//!
+//! - `event.payload.*` — Fields from the event payload
+//! - `event.id` — The event's database ID
+//! - `event.trigger` — The trigger ref that generated the event
+//! - `event.created` — The event's creation timestamp
+//! - `pack.config.*` — Pack configuration values
+//! - `system.*` — System-provided variables (timestamp, rule info, etc.)
+//!
+//! ## Example
+//!
 //! ```rust
 //! use serde_json::json;
-//! use attune_sensor::template_resolver::{TemplateContext, resolve_templates};
+//! use attune_common::template_resolver::{TemplateContext, resolve_templates};
+//!
+//! let context = TemplateContext::new(
+//!     json!({"service": "api-gateway"}),
+//!     json!({}),
+//!     json!({}),
+//! )
+//! .with_event_id(42)
+//! .with_event_trigger("core.webhook")
+//! .with_event_created("2026-02-05T10:00:00Z");
 //!
 //! let params = json!({
-//!     "message": "Error in {{ trigger.payload.service }}"
+//!     "message": "Error in {{ event.payload.service }}",
+//!     "trigger": "{{ event.trigger }}",
+//!     "event_id": "{{ event.id }}"
 //! });
-//!
-//! let context = TemplateContext {
-//!     trigger_payload: json!({"service": "api-gateway"}),
-//!     pack_config: json!({}),
-//!     system_vars: json!({}),
-//! };
 //!
 //! let resolved = resolve_templates(&params, &context).unwrap();
 //! assert_eq!(resolved["message"], "Error in api-gateway");
+//! assert_eq!(resolved["trigger"], "core.webhook");
+//! assert_eq!(resolved["event_id"], 42);
 //! ```
 
 use anyhow::Result;
@@ -30,33 +47,71 @@ use serde_json::Value as JsonValue;
 use std::sync::LazyLock;
 use tracing::{debug, warn};
 
-/// Template context containing all available data sources
+/// Template context containing all available data sources for template resolution.
+///
+/// The context is structured around three namespaces:
+/// - `event` — Event data including payload, id, trigger ref, and created timestamp
+/// - `pack.config` — Pack configuration values
+/// - `system` — System-provided variables
 #[derive(Debug, Clone)]
 pub struct TemplateContext {
-    /// Event/trigger payload data
-    pub trigger_payload: JsonValue,
-    /// Pack configuration
+    /// Event data (payload, id, trigger, created) — accessed as `event.*`
+    pub event: JsonValue,
+    /// Pack configuration — accessed as `pack.config.*`
     pub pack_config: JsonValue,
-    /// System-provided variables
+    /// System-provided variables — accessed as `system.*`
     pub system_vars: JsonValue,
 }
 
 impl TemplateContext {
-    /// Create a new template context
-    pub fn new(trigger_payload: JsonValue, pack_config: JsonValue, system_vars: JsonValue) -> Self {
+    /// Create a new template context with an event payload.
+    ///
+    /// The payload is nested under `event.payload`. Use builder methods
+    /// to add event metadata (`with_event_id`, `with_event_trigger`, `with_event_created`).
+    pub fn new(event_payload: JsonValue, pack_config: JsonValue, system_vars: JsonValue) -> Self {
+        let event = serde_json::json!({
+            "payload": event_payload,
+        });
         Self {
-            trigger_payload,
+            event,
             pack_config,
             system_vars,
         }
     }
 
-    /// Get a value from the context using a dotted path
+    /// Set the event ID in the context (accessible as `{{ event.id }}`).
+    pub fn with_event_id(mut self, id: i64) -> Self {
+        if let Some(obj) = self.event.as_object_mut() {
+            obj.insert("id".to_string(), serde_json::json!(id));
+        }
+        self
+    }
+
+    /// Set the trigger ref in the context (accessible as `{{ event.trigger }}`).
+    pub fn with_event_trigger(mut self, trigger_ref: &str) -> Self {
+        if let Some(obj) = self.event.as_object_mut() {
+            obj.insert("trigger".to_string(), serde_json::json!(trigger_ref));
+        }
+        self
+    }
+
+    /// Set the event created timestamp in the context (accessible as `{{ event.created }}`).
+    pub fn with_event_created(mut self, created: &str) -> Self {
+        if let Some(obj) = self.event.as_object_mut() {
+            obj.insert("created".to_string(), serde_json::json!(created));
+        }
+        self
+    }
+
+    /// Get a value from the context using a dotted path.
     ///
     /// Supports paths like:
-    /// - `trigger.payload.field`
-    /// - `pack.config.setting`
-    /// - `system.timestamp`
+    /// - `event.payload.field` — event payload data
+    /// - `event.id` — event ID
+    /// - `event.trigger` — trigger ref
+    /// - `event.created` — creation timestamp
+    /// - `pack.config.setting` — pack configuration
+    /// - `system.timestamp` — system variables
     pub fn get_value(&self, path: &str) -> Option<JsonValue> {
         let parts: Vec<&str> = path.split('.').collect();
 
@@ -64,18 +119,12 @@ impl TemplateContext {
             return None;
         }
 
-        // Determine the root source
-        let root = match parts[0] {
-            "trigger" => {
-                // trigger.payload.* paths
-                if parts.len() < 2 || parts[1] != "payload" {
-                    warn!(
-                        "Invalid trigger path: {}, expected 'trigger.payload.*'",
-                        path
-                    );
-                    return None;
-                }
-                &self.trigger_payload
+        // Determine the root source and how many path segments to skip
+        let (root, skip_count) = match parts[0] {
+            "event" => {
+                // event.* paths navigate directly into the event JSON object
+                // e.g. event.id, event.trigger, event.created, event.payload.field
+                (&self.event, 1)
             }
             "pack" => {
                 // pack.config.* paths
@@ -83,20 +132,13 @@ impl TemplateContext {
                     warn!("Invalid pack path: {}, expected 'pack.config.*'", path);
                     return None;
                 }
-                &self.pack_config
+                (&self.pack_config, 2)
             }
-            "system" => &self.system_vars,
+            "system" => (&self.system_vars, 1),
             _ => {
                 warn!("Unknown template source: {}", parts[0]);
                 return None;
             }
-        };
-
-        // Navigate the path (skip the first 2 parts for trigger/pack, 1 for system)
-        let skip_count = match parts[0] {
-            "trigger" | "pack" => 2,
-            "system" => 1,
-            _ => return None,
         };
 
         extract_nested_value(root, &parts[skip_count..])
@@ -108,7 +150,7 @@ static TEMPLATE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\{\{\s*([^}]+?)\s*\}\}").expect("Failed to compile template regex")
 });
 
-/// Resolve all template variables in a JSON value
+/// Resolve all template variables in a JSON value.
 ///
 /// Recursively processes objects and arrays, replacing template strings
 /// with values from the context.
@@ -132,7 +174,7 @@ pub fn resolve_templates(value: &JsonValue, context: &TemplateContext) -> Result
     }
 }
 
-/// Resolve templates in a string value
+/// Resolve templates in a string value.
 ///
 /// If the string contains a single template that matches the entire string,
 /// returns the value with its original type (preserving numbers, booleans, etc).
@@ -192,7 +234,7 @@ fn resolve_string_template(s: &str, context: &TemplateContext) -> Result<JsonVal
     Ok(JsonValue::String(result))
 }
 
-/// Extract a nested value from JSON using a path
+/// Extract a nested value from JSON using a path.
 fn extract_nested_value(root: &JsonValue, path: &[&str]) -> Option<JsonValue> {
     if path.is_empty() {
         return Some(root.clone());
@@ -220,7 +262,7 @@ fn extract_nested_value(root: &JsonValue, path: &[&str]) -> Option<JsonValue> {
     Some(current.clone())
 }
 
-/// Convert a JSON value to a string for interpolation
+/// Convert a JSON value to a string for interpolation.
 fn value_to_string(value: &JsonValue) -> String {
     match value {
         JsonValue::String(s) => s.clone(),
@@ -229,7 +271,7 @@ fn value_to_string(value: &JsonValue) -> String {
         JsonValue::Null => String::new(),
         JsonValue::Array(_) | JsonValue::Object(_) => {
             // For complex types, serialize as JSON
-            serde_json::to_string(value).unwrap_or_else(|_| String::new())
+            serde_json::to_string(value).unwrap_or_default()
         }
     }
 }
@@ -240,8 +282,8 @@ mod tests {
     use serde_json::json;
 
     fn create_test_context() -> TemplateContext {
-        TemplateContext {
-            trigger_payload: json!({
+        TemplateContext::new(
+            json!({
                 "service": "api-gateway",
                 "message": "Connection timeout",
                 "severity": "critical",
@@ -253,29 +295,29 @@ mod tests {
                 },
                 "tags": ["production", "backend"]
             }),
-            pack_config: json!({
+            json!({
                 "api_token": "secret123",
                 "alert_channel": "#incidents",
                 "timeout": 30
             }),
-            system_vars: json!({
+            json!({
                 "timestamp": "2026-01-17T15:30:00Z",
                 "rule": {
                     "id": 42,
                     "ref": "test.rule"
-                },
-                "event": {
-                    "id": 123
                 }
             }),
-        }
+        )
+        .with_event_id(123)
+        .with_event_trigger("core.error_event")
+        .with_event_created("2026-01-17T15:30:00Z")
     }
 
     #[test]
     fn test_simple_string_substitution() {
         let context = create_test_context();
         let template = json!({
-            "message": "Hello {{ trigger.payload.service }}"
+            "message": "Hello {{ event.payload.service }}"
         });
 
         let result = resolve_templates(&template, &context).unwrap();
@@ -287,12 +329,12 @@ mod tests {
         let context = create_test_context();
 
         // Number
-        let template = json!({"count": "{{ trigger.payload.count }}"});
+        let template = json!({"count": "{{ event.payload.count }}"});
         let result = resolve_templates(&template, &context).unwrap();
         assert_eq!(result["count"], 42);
 
         // Boolean
-        let template = json!({"enabled": "{{ trigger.payload.enabled }}"});
+        let template = json!({"enabled": "{{ event.payload.enabled }}"});
         let result = resolve_templates(&template, &context).unwrap();
         assert_eq!(result["enabled"], true);
     }
@@ -301,8 +343,8 @@ mod tests {
     fn test_nested_object_access() {
         let context = create_test_context();
         let template = json!({
-            "host": "{{ trigger.payload.metadata.host }}",
-            "port": "{{ trigger.payload.metadata.port }}"
+            "host": "{{ event.payload.metadata.host }}",
+            "port": "{{ event.payload.metadata.port }}"
         });
 
         let result = resolve_templates(&template, &context).unwrap();
@@ -314,8 +356,8 @@ mod tests {
     fn test_array_access() {
         let context = create_test_context();
         let template = json!({
-            "first_tag": "{{ trigger.payload.tags.0 }}",
-            "second_tag": "{{ trigger.payload.tags.1 }}"
+            "first_tag": "{{ event.payload.tags.0 }}",
+            "second_tag": "{{ event.payload.tags.1 }}"
         });
 
         let result = resolve_templates(&template, &context).unwrap();
@@ -342,20 +384,65 @@ mod tests {
         let template = json!({
             "timestamp": "{{ system.timestamp }}",
             "rule_id": "{{ system.rule.id }}",
-            "event_id": "{{ system.event.id }}"
         });
 
         let result = resolve_templates(&template, &context).unwrap();
         assert_eq!(result["timestamp"], "2026-01-17T15:30:00Z");
         assert_eq!(result["rule_id"], 42);
+    }
+
+    #[test]
+    fn test_event_metadata_id() {
+        let context = create_test_context();
+        let template = json!({
+            "event_id": "{{ event.id }}"
+        });
+
+        let result = resolve_templates(&template, &context).unwrap();
         assert_eq!(result["event_id"], 123);
+    }
+
+    #[test]
+    fn test_event_metadata_trigger() {
+        let context = create_test_context();
+        let template = json!({
+            "trigger_ref": "{{ event.trigger }}"
+        });
+
+        let result = resolve_templates(&template, &context).unwrap();
+        assert_eq!(result["trigger_ref"], "core.error_event");
+    }
+
+    #[test]
+    fn test_event_metadata_created() {
+        let context = create_test_context();
+        let template = json!({
+            "created_at": "{{ event.created }}"
+        });
+
+        let result = resolve_templates(&template, &context).unwrap();
+        assert_eq!(result["created_at"], "2026-01-17T15:30:00Z");
+    }
+
+    #[test]
+    fn test_event_metadata_in_interpolation() {
+        let context = create_test_context();
+        let template = json!({
+            "summary": "Event {{ event.id }} from {{ event.trigger }} at {{ event.created }}"
+        });
+
+        let result = resolve_templates(&template, &context).unwrap();
+        assert_eq!(
+            result["summary"],
+            "Event 123 from core.error_event at 2026-01-17T15:30:00Z"
+        );
     }
 
     #[test]
     fn test_missing_value_returns_null() {
         let context = create_test_context();
         let template = json!({
-            "missing": "{{ trigger.payload.nonexistent }}"
+            "missing": "{{ event.payload.nonexistent }}"
         });
 
         let result = resolve_templates(&template, &context).unwrap();
@@ -366,7 +453,7 @@ mod tests {
     fn test_multiple_templates_in_string() {
         let context = create_test_context();
         let template = json!({
-            "message": "Error in {{ trigger.payload.service }}: {{ trigger.payload.message }}"
+            "message": "Error in {{ event.payload.service }}: {{ event.payload.message }}"
         });
 
         let result = resolve_templates(&template, &context).unwrap();
@@ -396,11 +483,11 @@ mod tests {
         let context = create_test_context();
         let template = json!({
             "nested": {
-                "field1": "{{ trigger.payload.service }}",
+                "field1": "{{ event.payload.service }}",
                 "field2": "{{ pack.config.timeout }}"
             },
             "array": [
-                "{{ trigger.payload.severity }}",
+                "{{ event.payload.severity }}",
                 "static value"
             ]
         });
@@ -414,14 +501,10 @@ mod tests {
 
     #[test]
     fn test_empty_template_context() {
-        let context = TemplateContext {
-            trigger_payload: json!({}),
-            pack_config: json!({}),
-            system_vars: json!({}),
-        };
+        let context = TemplateContext::new(json!({}), json!({}), json!({}));
 
         let template = json!({
-            "message": "{{ trigger.payload.missing }}"
+            "message": "{{ event.payload.missing }}"
         });
 
         let result = resolve_templates(&template, &context).unwrap();
@@ -432,7 +515,7 @@ mod tests {
     fn test_whitespace_in_templates() {
         let context = create_test_context();
         let template = json!({
-            "message": "{{  trigger.payload.service  }}"
+            "message": "{{  event.payload.service  }}"
         });
 
         let result = resolve_templates(&template, &context).unwrap();
@@ -444,12 +527,14 @@ mod tests {
         let context = create_test_context();
         let template = json!({
             "channel": "{{ pack.config.alert_channel }}",
-            "message": "🚨 Error in {{ trigger.payload.service }}: {{ trigger.payload.message }}",
-            "severity": "{{ trigger.payload.severity }}",
+            "message": "🚨 Error in {{ event.payload.service }}: {{ event.payload.message }}",
+            "severity": "{{ event.payload.severity }}",
             "details": {
-                "host": "{{ trigger.payload.metadata.host }}",
-                "count": "{{ trigger.payload.count }}",
-                "tags": "{{ trigger.payload.tags }}"
+                "host": "{{ event.payload.metadata.host }}",
+                "count": "{{ event.payload.count }}",
+                "tags": "{{ event.payload.tags }}",
+                "event_id": "{{ event.id }}",
+                "trigger": "{{ event.trigger }}"
             },
             "timestamp": "{{ system.timestamp }}"
         });
@@ -463,6 +548,52 @@ mod tests {
         assert_eq!(result["severity"], "critical");
         assert_eq!(result["details"]["host"], "web-01");
         assert_eq!(result["details"]["count"], 42);
+        assert_eq!(result["details"]["event_id"], 123);
+        assert_eq!(result["details"]["trigger"], "core.error_event");
         assert_eq!(result["timestamp"], "2026-01-17T15:30:00Z");
+    }
+
+    #[test]
+    fn test_context_without_event_metadata() {
+        // Context with only a payload — no id, trigger, or created
+        let context = TemplateContext::new(
+            json!({"service": "test"}),
+            json!({}),
+            json!({}),
+        );
+
+        let template = json!({
+            "service": "{{ event.payload.service }}",
+            "id": "{{ event.id }}",
+            "trigger": "{{ event.trigger }}"
+        });
+
+        let result = resolve_templates(&template, &context).unwrap();
+        assert_eq!(result["service"], "test");
+        // Missing metadata returns null
+        assert!(result["id"].is_null());
+        assert!(result["trigger"].is_null());
+    }
+
+    #[test]
+    fn test_unknown_source() {
+        let context = create_test_context();
+        let template = json!({
+            "value": "{{ unknown.field }}"
+        });
+
+        let result = resolve_templates(&template, &context).unwrap();
+        assert!(result["value"].is_null());
+    }
+
+    #[test]
+    fn test_invalid_pack_path() {
+        let context = create_test_context();
+        let template = json!({
+            "value": "{{ pack.invalid.field }}"
+        });
+
+        let result = resolve_templates(&template, &context).unwrap();
+        assert!(result["value"].is_null());
     }
 }

@@ -35,7 +35,7 @@ This document provides practical, copy-paste ready examples of rule parameter ma
 
 ---
 
-## Example 2: Dynamic from Trigger Payload
+## Example 2: Dynamic from Event Payload
 
 **Use Case:** Alert with error details from event
 
@@ -58,9 +58,9 @@ This document provides practical, copy-paste ready examples of rule parameter ma
   "action_ref": "slack.post_message",
   "action_params": {
     "channel": "#incidents",
-    "message": "🚨 Error in {{ trigger.payload.service }}: {{ trigger.payload.error }}",
-    "severity": "{{ trigger.payload.severity }}",
-    "timestamp": "{{ trigger.payload.timestamp }}"
+    "message": "🚨 Error in {{ event.payload.service }}: {{ event.payload.error }}",
+    "severity": "{{ event.payload.severity }}",
+    "timestamp": "{{ event.payload.timestamp }}"
   },
   "enabled": true
 }
@@ -163,8 +163,8 @@ This document provides practical, copy-paste ready examples of rule parameter ma
   "action_params": {
     "token": "{{ pack.config.token }}",
     "repo": "{{ pack.config.repo_owner }}/{{ pack.config.repo_name }}",
-    "title": "[{{ trigger.payload.severity }}] {{ trigger.payload.service }}: {{ trigger.payload.error_message }}",
-    "body": "Error Details:\n\nService: {{ trigger.payload.service }}\nSeverity: {{ trigger.payload.severity }}\n\nStack Trace:\n{{ trigger.payload.stack_trace }}",
+    "title": "[{{ event.payload.severity }}] {{ event.payload.service }}: {{ event.payload.error_message }}",
+    "body": "Error Details:\n\nService: {{ event.payload.service }}\nSeverity: {{ event.payload.severity }}\n\nStack Trace:\n{{ event.payload.stack_trace }}",
     "labels": ["bug", "automated"],
     "assignees": ["oncall"]
   },
@@ -219,12 +219,12 @@ This document provides practical, copy-paste ready examples of rule parameter ma
   "trigger_ref": "core.user_event",
   "action_ref": "audit.log",
   "action_params": {
-    "user_id": "{{ trigger.payload.user.id }}",
-    "user_name": "{{ trigger.payload.user.profile.name }}",
-    "user_email": "{{ trigger.payload.user.profile.email }}",
-    "department": "{{ trigger.payload.user.profile.department }}",
-    "action": "{{ trigger.payload.action }}",
-    "ip_address": "{{ trigger.payload.metadata.ip }}"
+    "user_id": "{{ event.payload.user.id }}",
+    "user_name": "{{ event.payload.user.profile.name }}",
+    "user_email": "{{ event.payload.user.profile.email }}",
+    "department": "{{ event.payload.user.profile.department }}",
+    "action": "{{ event.payload.action }}",
+    "ip_address": "{{ event.payload.metadata.ip }}"
   },
   "enabled": true
 }
@@ -271,10 +271,10 @@ This document provides practical, copy-paste ready examples of rule parameter ma
   "action_ref": "slack.post_message",
   "action_params": {
     "channel": "#alerts",
-    "message": "Primary error: {{ trigger.payload.errors.0 }}",
-    "secondary_error": "{{ trigger.payload.errors.1 }}",
-    "environment": "{{ trigger.payload.tags.0 }}",
-    "severity": "{{ trigger.payload.tags.1 }}"
+    "message": "Primary error: {{ event.payload.errors.0 }}",
+    "secondary_error": "{{ event.payload.errors.1 }}",
+    "environment": "{{ event.payload.tags.0 }}",
+    "severity": "{{ event.payload.tags.1 }}"
   },
   "enabled": true
 }
@@ -377,17 +377,17 @@ This document provides practical, copy-paste ready examples of rule parameter ma
     "routing_key": "{{ pack.config.routing_key }}",
     "event_action": "trigger",
     "payload": {
-      "summary": "{{ trigger.payload.metric_name }} exceeded threshold on {{ trigger.payload.host }}",
+      "summary": "{{ event.payload.metric_name }} exceeded threshold on {{ event.payload.host }}",
       "severity": "critical",
-      "source": "{{ trigger.payload.host }}",
+      "source": "{{ event.payload.host }}",
       "custom_details": {
-        "metric": "{{ trigger.payload.metric_name }}",
-        "current_value": "{{ trigger.payload.current_value }}",
-        "threshold": "{{ trigger.payload.threshold }}",
-        "duration": "{{ trigger.payload.duration_seconds }}s"
+        "metric": "{{ event.payload.metric_name }}",
+        "current_value": "{{ event.payload.current_value }}",
+        "threshold": "{{ event.payload.threshold }}",
+        "duration": "{{ event.payload.duration_seconds }}s"
       }
     },
-    "dedup_key": "{{ trigger.payload.host }}_{{ trigger.payload.metric_name }}"
+    "dedup_key": "{{ event.payload.host }}_{{ event.payload.metric_name }}"
   },
   "enabled": true
 }
@@ -463,27 +463,27 @@ This document provides practical, copy-paste ready examples of rule parameter ma
         "fields": [
           {
             "title": "Service",
-            "value": "{{ trigger.payload.service }}",
+            "value": "{{ event.payload.service }}",
             "short": true
           },
           {
             "title": "Version",
-            "value": "{{ trigger.payload.version }}",
+            "value": "{{ event.payload.version }}",
             "short": true
           },
           {
             "title": "Environment",
-            "value": "{{ trigger.payload.environment }}",
+            "value": "{{ event.payload.environment }}",
             "short": true
           },
           {
             "title": "Deployed By",
-            "value": "{{ trigger.payload.deployed_by }}",
+            "value": "{{ event.payload.deployed_by }}",
             "short": true
           }
         ],
         "footer": "Attune Automation",
-        "ts": "{{ trigger.payload.timestamp }}"
+        "ts": "{{ event.payload.timestamp }}"
       }
     ]
   },
@@ -515,9 +515,9 @@ This document provides practical, copy-paste ready examples of rule parameter ma
   "trigger_ref": "core.alert_event",
   "action_ref": "slack.post_message",
   "action_params": {
-    "channel": "{{ trigger.payload.severity | default: 'info' | map: {'critical': '#incidents', 'high': '#alerts', 'medium': '#monitoring', 'low': '#logs'} }}",
-    "message": "{{ trigger.payload.message }}",
-    "color": "{{ trigger.payload.severity | map: {'critical': 'danger', 'high': 'warning', 'medium': 'good', 'low': '#cccccc'} }}"
+    "channel": "{{ event.payload.severity | default: 'info' | map: {'critical': '#incidents', 'high': '#alerts', 'medium': '#monitoring', 'low': '#logs'} }}",
+    "message": "{{ event.payload.message }}",
+    "color": "{{ event.payload.severity | map: {'critical': 'danger', 'high': 'warning', 'medium': 'good', 'low': '#cccccc'} }}"
   },
   "enabled": true
 }
@@ -584,12 +584,12 @@ The `config` field should contain the same resolved parameters.
 ```json
 {
   "action_params": {
-    "summary": "Error: {{ trigger.payload.message }}",
+    "summary": "Error: {{ event.payload.message }}",
     "details": {
-      "service": "{{ trigger.payload.service }}",
-      "host": "{{ trigger.payload.host }}",
-      "timestamp": "{{ trigger.payload.timestamp }}",
-      "stack_trace": "{{ trigger.payload.stack_trace }}"
+      "service": "{{ event.payload.service }}",
+      "host": "{{ event.payload.host }}",
+      "timestamp": "{{ event.payload.timestamp }}",
+      "stack_trace": "{{ event.payload.stack_trace }}"
     }
   }
 }
@@ -600,11 +600,11 @@ The `config` field should contain the same resolved parameters.
 {
   "action_params": {
     "user": {
-      "id": "{{ trigger.payload.user.id }}",
-      "name": "{{ trigger.payload.user.name }}",
-      "email": "{{ trigger.payload.user.email }}"
+      "id": "{{ event.payload.user.id }}",
+      "name": "{{ event.payload.user.name }}",
+      "email": "{{ event.payload.user.email }}"
     },
-    "action": "{{ trigger.payload.action_type }}"
+    "action": "{{ event.payload.action_type }}"
   }
 }
 ```

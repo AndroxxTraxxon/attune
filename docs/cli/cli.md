@@ -177,7 +177,7 @@ attune rule create \
   --pack core \
   --trigger core.webhook \
   --action core.notify \
-  --criteria '{"trigger.payload.severity": "critical"}'
+  --criteria '{"event.payload.severity": "critical"}'
 ```
 
 #### Delete Rule

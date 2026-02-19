@@ -5,7 +5,7 @@
 Rules in Attune can specify parameters to pass to actions when triggered. These parameters can be:
 
 1. **Static values** - Hard-coded values defined in the rule
-2. **Dynamic from trigger payload** - Values extracted from the event that triggered the rule
+2. **Dynamic from event payload** - Values extracted from the event that triggered the rule
 3. **Dynamic from pack config** - Values from the pack's configuration
 
 This enables flexible parameter passing without hardcoding values or requiring custom code.
@@ -27,7 +27,7 @@ Rule `action_params` uses a JSON object where each value can be:
 
 **Available Sources:**
 
-- `trigger.payload.*` - Data from the event payload
+- `event.payload.*` - Data from the event payload
 - `pack.config.*` - Configuration values from the pack
 - `system.*` - System-provided values (timestamp, execution context)
 
@@ -55,13 +55,13 @@ When this rule triggers, the action receives exactly these parameters.
 
 ---
 
-## Dynamic Parameters from Trigger Payload
+## Dynamic Parameters from Event Payload
 
 Extract values from the event that triggered the rule.
 
 ### Example: Alert with Event Data
 
-**Trigger Payload:**
+**Event Payload:**
 ```json
 {
   "severity": "error",
@@ -84,10 +84,10 @@ Extract values from the event that triggered the rule.
   "action_ref": "slack.post_message",
   "action_params": {
     "channel": "#incidents",
-    "message": "Error in {{ trigger.payload.service }}: {{ trigger.payload.message }}",
-    "severity": "{{ trigger.payload.severity }}",
-    "host": "{{ trigger.payload.metadata.host }}",
-    "timestamp": "{{ trigger.payload.timestamp }}"
+    "message": "Error in {{ event.payload.service }}: {{ event.payload.message }}",
+    "severity": "{{ event.payload.severity }}",
+    "host": "{{ event.payload.metadata.host }}",
+    "timestamp": "{{ event.payload.timestamp }}"
   }
 }
 ```
@@ -135,7 +135,7 @@ Use configuration values stored at the pack level (useful for API keys, URLs, et
     "token": "{{ pack.config.api_token }}",
     "channel": "{{ pack.config.default_channel }}",
     "username": "{{ pack.config.bot_name }}",
-    "message": "{{ trigger.payload.message }}"
+    "message": "{{ event.payload.message }}"
   }
 }
 ```
@@ -160,8 +160,8 @@ Combine static and dynamic values in the same rule:
   "action_params": {
     "repo": "myorg/myrepo",
     "token": "{{ pack.config.github_token }}",
-    "title": "Error: {{ trigger.payload.message }}",
-    "body": "Service {{ trigger.payload.service }} reported an error at {{ trigger.payload.timestamp }}",
+    "title": "Error: {{ event.payload.message }}",
+    "body": "Service {{ event.payload.service }} reported an error at {{ event.payload.timestamp }}",
     "labels": ["bug", "automated"],
     "assignees": ["oncall"]
   }
@@ -177,11 +177,11 @@ Access nested properties using dot notation:
 ```json
 {
   "action_params": {
-    "user_id": "{{ trigger.payload.user.id }}",
-    "user_name": "{{ trigger.payload.user.profile.name }}",
+    "user_id": "{{ event.payload.user.id }}",
+    "user_name": "{{ event.payload.user.profile.name }}",
     "metadata": {
-      "ip_address": "{{ trigger.payload.request.client_ip }}",
-      "user_agent": "{{ trigger.payload.request.headers.user_agent }}"
+      "ip_address": "{{ event.payload.request.client_ip }}",
+      "user_agent": "{{ event.payload.request.headers.user_agent }}"
     }
   }
 }
@@ -196,8 +196,8 @@ Access array elements by index:
 ```json
 {
   "action_params": {
-    "first_error": "{{ trigger.payload.errors.0 }}",
-    "primary_tag": "{{ trigger.payload.tags.0 }}"
+    "first_error": "{{ event.payload.errors.0 }}",
+    "primary_tag": "{{ event.payload.tags.0 }}"
   }
 }
 ```
@@ -211,8 +211,8 @@ Provide default values when the referenced field doesn't exist:
 ```json
 {
   "action_params": {
-    "priority": "{{ trigger.payload.priority | default: 'medium' }}",
-    "assignee": "{{ trigger.payload.assignee | default: 'unassigned' }}"
+    "priority": "{{ event.payload.priority | default: 'medium' }}",
+    "assignee": "{{ event.payload.assignee | default: 'unassigned' }}"
   }
 }
 ```
@@ -226,10 +226,10 @@ Template values preserve their JSON types:
 ```json
 {
   "action_params": {
-    "count": "{{ trigger.payload.count }}",          // Number: 42
-    "enabled": "{{ trigger.payload.enabled }}",      // Boolean: true
-    "tags": "{{ trigger.payload.tags }}",            // Array: ["a", "b"]
-    "metadata": "{{ trigger.payload.metadata }}"     // Object: {"key": "value"}
+    "count": "{{ event.payload.count }}",          // Number: 42
+    "enabled": "{{ event.payload.enabled }}",      // Boolean: true
+    "tags": "{{ event.payload.tags }}",            // Array: ["a", "b"]
+    "metadata": "{{ event.payload.metadata }}"     // Object: {"key": "value"}
   }
 }
 ```
@@ -261,8 +261,8 @@ Embed multiple values in a single string:
 ```json
 {
   "action_params": {
-    "message": "User {{ trigger.payload.user_id }} performed {{ trigger.payload.action }} at {{ system.timestamp }}",
-    "subject": "[{{ trigger.payload.severity | upper }}] {{ trigger.payload.service }} Alert"
+    "message": "User {{ event.payload.user_id }} performed {{ event.payload.action }} at {{ system.timestamp }}",
+    "subject": "[{{ event.payload.severity | upper }}] {{ event.payload.service }} Alert"
   }
 }
 ```
@@ -276,10 +276,10 @@ Apply transformations to values:
 ```json
 {
   "action_params": {
-    "uppercase_name": "{{ trigger.payload.name | upper }}",
-    "lowercase_email": "{{ trigger.payload.email | lower }}",
-    "formatted_date": "{{ trigger.payload.timestamp | date: '%Y-%m-%d' }}",
-    "truncated": "{{ trigger.payload.message | truncate: 100 }}"
+    "uppercase_name": "{{ event.payload.name | upper }}",
+    "lowercase_email": "{{ event.payload.email | lower }}",
+    "formatted_date": "{{ event.payload.timestamp | date: '%Y-%m-%d' }}",
+    "truncated": "{{ event.payload.message | truncate: 100 }}"
   }
 }
 ```
@@ -310,19 +310,19 @@ Apply transformations to values:
   "action_params": {
     "channel": "{{ pack.config.alert_channel }}",
     "token": "{{ pack.config.slack_token }}",
-    "message": "⚠️ Alert from {{ trigger.payload.source }}: {{ trigger.payload.message }}",
+    "message": "⚠️ Alert from {{ event.payload.source }}: {{ event.payload.message }}",
     "attachments": [
       {
-        "color": "{{ trigger.payload.severity | default: 'warning' }}",
+        "color": "{{ event.payload.severity | default: 'warning' }}",
         "fields": [
           {
             "title": "Service",
-            "value": "{{ trigger.payload.service }}",
+            "value": "{{ event.payload.service }}",
             "short": true
           },
           {
             "title": "Environment",
-            "value": "{{ trigger.payload.environment | default: 'production' }}",
+            "value": "{{ event.payload.environment | default: 'production' }}",
             "short": true
           }
         ],
@@ -349,7 +349,7 @@ Apply transformations to values:
       "token": "{{ pack.config.jira_token }}"
     },
     "issuetype": "Bug",
-    "summary": "[{{ trigger.payload.severity }}] {{ trigger.payload.service }}: {{ trigger.payload.message }}",
+    "summary": "[{{ event.payload.severity }}] {{ event.payload.service }}: {{ event.payload.message }}",
     "description": {
       "type": "doc",
       "content": [
@@ -358,14 +358,14 @@ Apply transformations to values:
           "content": [
             {
               "type": "text",
-              "text": "Error Details:\n\nService: {{ trigger.payload.service }}\nHost: {{ trigger.payload.host }}\nTimestamp: {{ trigger.payload.timestamp }}\n\nStack Trace:\n{{ trigger.payload.stack_trace }}"
+              "text": "Error Details:\n\nService: {{ event.payload.service }}\nHost: {{ event.payload.host }}\nTimestamp: {{ event.payload.timestamp }}\n\nStack Trace:\n{{ event.payload.stack_trace }}"
             }
           ]
         }
       ]
     },
-    "priority": "{{ trigger.payload.priority | default: 'Medium' }}",
-    "labels": ["automated", "{{ trigger.payload.service }}"]
+    "priority": "{{ event.payload.priority | default: 'Medium' }}",
+    "labels": ["automated", "{{ event.payload.service }}"]
   }
 }
 ```
@@ -382,17 +382,17 @@ Apply transformations to values:
     "routing_key": "{{ pack.config.pagerduty_routing_key }}",
     "event_action": "trigger",
     "payload": {
-      "summary": "{{ trigger.payload.metric_name }} exceeded threshold on {{ trigger.payload.host }}",
+      "summary": "{{ event.payload.metric_name }} exceeded threshold on {{ event.payload.host }}",
       "severity": "critical",
-      "source": "{{ trigger.payload.host }}",
+      "source": "{{ event.payload.host }}",
       "custom_details": {
-        "metric": "{{ trigger.payload.metric_name }}",
-        "current_value": "{{ trigger.payload.current_value }}",
-        "threshold": "{{ trigger.payload.threshold }}",
-        "duration": "{{ trigger.payload.duration_seconds }}s"
+        "metric": "{{ event.payload.metric_name }}",
+        "current_value": "{{ event.payload.current_value }}",
+        "threshold": "{{ event.payload.threshold }}",
+        "duration": "{{ event.payload.duration_seconds }}s"
       }
     },
-    "dedup_key": "{{ trigger.payload.host }}_{{ trigger.payload.metric_name }}"
+    "dedup_key": "{{ event.payload.host }}_{{ event.payload.metric_name }}"
   }
 }
 ```
@@ -431,9 +431,12 @@ Apply transformations to values:
 1. **Rule Evaluation** - When an event matches a rule
 2. **Template Extraction** - Identify `{{ }}` patterns in `action_params`
 3. **Context Building** - Assemble available data:
-   - `trigger.payload` - Event payload data
+   - `event.id` - Event database ID
+   - `event.trigger` - Trigger ref that generated the event
+   - `event.created` - Event creation timestamp
+   - `event.payload` - Event payload data
    - `pack.config` - Pack configuration
-   - `system.*` - System-provided values
+   - `system.*` - System-provided values (timestamp, rule info)
 4. **Value Resolution** - Extract values from context using dot notation paths
 5. **Type Conversion** - Preserve JSON types (string, number, boolean, object, array)
 6. **Parameter Assembly** - Build final parameter object
@@ -444,7 +447,7 @@ Apply transformations to values:
 
 **Missing Values:**
 - If a referenced value doesn't exist and no default is provided, use `null`
-- Log warning: `"Template reference not found: trigger.payload.missing_field"`
+- Log warning: `"Template variable not found: event.payload.missing_field"`
 
 **Invalid Syntax:**
 - If template syntax is invalid, log error and use the raw string
@@ -506,8 +509,8 @@ Pack configuration should be stored securely and can include:
 ```json
 {
   "action_params": {
-    "priority": "{{ trigger.payload.priority | default: 'medium' }}",
-    "assignee": "{{ trigger.payload.assignee | default: 'unassigned' }}"
+    "priority": "{{ event.payload.priority | default: 'medium' }}",
+    "assignee": "{{ event.payload.assignee | default: 'unassigned' }}"
   }
 }
 ```
@@ -516,8 +519,8 @@ Pack configuration should be stored securely and can include:
 ```json
 {
   "action_params": {
-    "user_email": "{{ trigger.payload.user.email }}",
-    "user_id": "{{ trigger.payload.user.id }}"
+    "user_email": "{{ event.payload.user.email }}",
+    "user_id": "{{ event.payload.user.id }}"
   }
 }
 ```
@@ -528,7 +531,7 @@ If a value never changes, keep it static:
 {
   "action_params": {
     "service_name": "my-service",  // Static - never changes
-    "error_code": "{{ trigger.payload.code }}"  // Dynamic - from event
+    "error_code": "{{ event.payload.code }}"  // Dynamic - from event
   }
 }
 ```
@@ -581,10 +584,12 @@ Look for the resolved parameters in the execution's `config` field:
 {
   "id": 1,
   "config": {
-    "message": "Test message",       // Resolved from trigger.payload.message
-    "severity": "info",              // Resolved from trigger.payload.severity
-    "user_id": 123,                  // Resolved from trigger.payload.user.id
-    "user_name": "Alice"             // Resolved from trigger.payload.user.name
+    "message": "Test message",       // Resolved from event.payload.message
+    "severity": "info",              // Resolved from event.payload.severity
+    "user_id": 123,                  // Resolved from event.payload.user.id
+    "user_name": "Alice"             // Resolved from event.payload.user.name
+    "event_id": 456,                 // Resolved from event.id
+    "trigger": "core.test_event"     // Resolved from event.trigger
   }
 }
 ```
@@ -608,7 +613,7 @@ Look for the resolved parameters in the execution's `config` field:
 ```json
 {
   "action_params": {
-    "message": "Error: {{ trigger.payload.message }}"
+    "message": "Error: {{ event.payload.message }}"
   }
 }
 ```
@@ -679,15 +684,15 @@ Look for the resolved parameters in the execution's `config` field:
 ```json
 {
   "action_params": {
-    "channel": "{% if trigger.payload.severity == 'critical' %}#incidents{% else %}#monitoring{% endif %}"
+    "channel": "{% if event.payload.severity == 'critical' %}#incidents{% else %}#monitoring{% endif %}"
   }
 }
 ```
 
 ### 2. Advanced Filters
-- Mathematical operations: `{{ trigger.payload.value | multiply: 100 }}`
-- String manipulation: `{{ trigger.payload.text | replace: 'old', 'new' }}`
-- Array operations: `{{ trigger.payload.items | join: ', ' }}`
+- Mathematical operations: `{{ event.payload.value | multiply: 100 }}`
+- String manipulation: `{{ event.payload.text | replace: 'old', 'new' }}`
+- Array operations: `{{ event.payload.items | join: ', ' }}`
 
 ### 3. Custom Functions
 ```json
@@ -695,7 +700,7 @@ Look for the resolved parameters in the execution's `config` field:
   "action_params": {
     "timestamp": "{{ now() }}",
     "uuid": "{{ uuid() }}",
-    "hash": "{{ hash(trigger.payload.data) }}"
+    "hash": "{{ hash(event.payload.data) }}"
   }
 }
 ```
@@ -704,7 +709,7 @@ Look for the resolved parameters in the execution's `config` field:
 ```json
 {
   "action_params": {
-    "user": "{{ trigger.payload.user | merge: pack.config.default_user }}"
+    "user": "{{ event.payload.user | merge: pack.config.default_user }}"
   }
 }
 ```
@@ -734,7 +739,8 @@ Rule parameter mapping provides a powerful way to:
 
 **Key Concepts:**
 - Static values for constants
-- `{{ trigger.payload.* }}` for event data
+- `{{ event.payload.* }}` for event payload data
+- `{{ event.id }}`, `{{ event.trigger }}`, `{{ event.created }}` for event metadata
 - `{{ pack.config.* }}` for pack configuration
 - `{{ system.* }}` for system-provided values
 - Filters and defaults for robust templates

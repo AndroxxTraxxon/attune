@@ -35,7 +35,7 @@ attune/
 ├── config.{development,test}.yaml # Environment configs
 ├── Makefile                      # Common dev tasks
 ├── crates/                       # Rust services
-│   ├── common/                   # Shared library (models, db, repos, mq, config, error)
+│   ├── common/                   # Shared library (models, db, repos, mq, config, error, template_resolver)
 │   ├── api/                      # REST API service (8080)
 │   ├── executor/                 # Execution orchestration service
 │   ├── worker/                   # Action execution service (multi-runtime)
@@ -243,10 +243,27 @@ Enforcement created → Execution scheduled → Worker executes Action
 - **Available at**: `http://localhost:8080` (dev), `/api-spec/openapi.json` for spec
 
 ### Common Library (`crates/common`)
-- **Modules**: `models`, `repositories`, `db`, `config`, `error`, `mq`, `crypto`, `utils`, `workflow`, `pack_registry`
+- **Modules**: `models`, `repositories`, `db`, `config`, `error`, `mq`, `crypto`, `utils`, `workflow`, `pack_registry`, `template_resolver`
 - **Exports**: Commonly used types re-exported from `lib.rs`
 - **Repository Layer**: All DB access goes through repositories in `repositories/`
 - **Message Queue**: Abstractions in `mq/` for RabbitMQ communication
+- **Template Resolver**: Resolves `{{ }}` template variables in rule `action_params` during enforcement creation. Re-exported from `attune_common::{TemplateContext, resolve_templates}`.
+
+### Template Variable Syntax
+Rule `action_params` support Jinja2-style `{{ source.path }}` templates resolved at enforcement creation time:
+
+| Namespace | Example | Description |
+|-----------|---------|-------------|
+| `event.payload.*` | `{{ event.payload.service }}` | Event payload fields |
+| `event.id` | `{{ event.id }}` | Event database ID |
+| `event.trigger` | `{{ event.trigger }}` | Trigger ref that generated the event |
+| `event.created` | `{{ event.created }}` | Event creation timestamp (RFC 3339) |
+| `pack.config.*` | `{{ pack.config.api_token }}` | Pack configuration values |
+| `system.*` | `{{ system.timestamp }}` | System variables (timestamp, rule info) |
+
+- **Implementation**: `crates/common/src/template_resolver.rs` (also re-exported from `attune_sensor::template_resolver`)
+- **Integration**: `crates/executor/src/event_processor.rs` calls `resolve_templates()` in `create_enforcement()`
+- **IMPORTANT**: The old `trigger.payload.*` syntax was renamed to `event.payload.*` — the payload data comes from the Event, not the Trigger
 
 ### Web UI (`web/`)
 - **Generated Client**: OpenAPI client auto-generated from API spec

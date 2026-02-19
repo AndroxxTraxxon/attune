@@ -282,7 +282,7 @@ def test_conditional_workflow_branching(client: AttuneClient, test_pack):
         "action": workflow["ref"],
         "enabled": True,
         "parameters": {
-            "condition": "{{ trigger.payload.condition }}",
+            "condition": "{{ event.payload.condition }}",
         },
     }
     rule_response = client.post("/rules", json=rule_payload)
@@ -665,7 +665,7 @@ print(json.dumps({'result': result, 'step': 2}))
         "action": workflow["ref"],
         "enabled": True,
         "parameters": {
-            "input_text": "{{ trigger.payload.text }}",
+            "input_text": "{{ event.payload.text }}",
         },
     }
     rule_response = client.post("/rules", json=rule_payload)

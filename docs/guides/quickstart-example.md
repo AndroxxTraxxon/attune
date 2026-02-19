@@ -226,7 +226,7 @@ Update the rule to use event data:
 
 ```sql
 UPDATE attune.rule
-SET action_params = '{"message": "Timer fired at {{ trigger.payload.fired_at }}"}'::jsonb
+SET action_params = '{"message": "Timer fired at {{ event.payload.fired_at }}"}'::jsonb
 WHERE ref = 'core.rule.timer_10s_echo';
 ```
 

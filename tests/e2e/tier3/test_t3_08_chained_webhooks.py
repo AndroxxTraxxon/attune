@@ -170,7 +170,7 @@ def test_webhook_triggers_workflow_triggers_webhook(client: AttuneClient, test_p
         "action": final_action["ref"],
         "enabled": True,
         "parameters": {
-            "message": "{{ trigger.payload.message }}",
+            "message": "{{ event.payload.message }}",
         },
     }
     rule_b_response = client.post("/rules", json=rule_b_payload)
@@ -522,7 +522,7 @@ print(json.dumps({'transformed_value': transformed, 'original': value}))
         "action": transform_action["ref"],
         "enabled": True,
         "parameters": {
-            "value": "{{ trigger.payload.input_value }}",
+            "value": "{{ event.payload.input_value }}",
         },
     }
     rule_a_response = client.post("/rules", json=rule_a_payload)
@@ -539,7 +539,7 @@ print(json.dumps({'transformed_value': transformed, 'original': value}))
         "action": final_action["ref"],
         "enabled": True,
         "parameters": {
-            "message": "Received: {{ trigger.payload.transformed_value }}",
+            "message": "Received: {{ event.payload.transformed_value }}",
         },
     }
     rule_b_response = client.post("/rules", json=rule_b_payload)

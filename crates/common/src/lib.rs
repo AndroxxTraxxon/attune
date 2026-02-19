@@ -17,12 +17,14 @@ pub mod pack_registry;
 pub mod repositories;
 pub mod runtime_detection;
 pub mod schema;
+pub mod template_resolver;
 pub mod test_executor;
 pub mod utils;
 pub mod workflow;
 
 // Re-export commonly used types
 pub use error::{Error, Result};
+pub use template_resolver::{resolve_templates, TemplateContext};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

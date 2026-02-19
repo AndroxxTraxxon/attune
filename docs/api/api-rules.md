@@ -32,8 +32,8 @@ Rules are the core automation logic in Attune that connect triggers to actions. 
   },
   "action_params": {
     "channel": "#alerts",
-    "message": "Error in {{ trigger.payload.service }}: {{ trigger.payload.message }}",
-    "severity": "{{ trigger.payload.severity }}"
+    "message": "Error in {{ event.payload.service }}: {{ event.payload.message }}",
+    "severity": "{{ event.payload.severity }}"
   },
   "enabled": true,
   "created": "2024-01-13T10:00:00Z",
@@ -64,7 +64,7 @@ Rules are the core automation logic in Attune that connect triggers to actions. 
 The `action_params` field supports both static values and dynamic templates:
 
 - **Static values**: `"channel": "#alerts"`
-- **Dynamic from trigger payload**: `"message": "{{ trigger.payload.message }}"`
+- **Dynamic from event payload**: `"message": "{{ event.payload.message }}"`
 - **Dynamic from pack config**: `"token": "{{ pack.config.api_token }}"`
 - **System variables**: `"timestamp": "{{ system.timestamp }}"`
 
@@ -295,8 +295,8 @@ Create a new rule in the system.
   },
   "action_params": {
     "channel": "#alerts",
-    "message": "Error detected: {{ trigger.payload.message }}",
-    "severity": "{{ trigger.payload.severity }}"
+    "message": "Error detected: {{ event.payload.message }}",
+    "severity": "{{ event.payload.severity }}"
   },
   "enabled": true
 }
@@ -314,7 +314,7 @@ Create a new rule in the system.
 - `conditions`: JSON Logic conditions for rule evaluation (default: `{}`)
 - `action_params`: Parameters to pass to the action (default: `{}`)
   - Supports static values: `"channel": "#alerts"`
-  - Supports dynamic templates: `"message": "{{ trigger.payload.message }}"`
+  - Supports dynamic templates: `"message": "{{ event.payload.message }}"`
   - Supports pack config: `"token": "{{ pack.config.api_token }}"`
 - `enabled`: Whether the rule is active (default: `true`)
 
@@ -341,8 +341,8 @@ Create a new rule in the system.
     },
     "action_params": {
       "channel": "#alerts",
-      "message": "Error detected: {{ trigger.payload.message }}",
-      "severity": "{{ trigger.payload.severity }}"
+      "message": "Error detected: {{ event.payload.message }}",
+      "severity": "{{ event.payload.severity }}"
     },
     "enabled": true,
     "created": "2024-01-13T10:00:00Z",
@@ -384,7 +384,7 @@ All fields are optional. Only provided fields will be updated.
   },
   "action_params": {
     "channel": "#critical-alerts",
-    "message": "CRITICAL: {{ trigger.payload.service }} - {{ trigger.payload.message }}",
+    "message": "CRITICAL: {{ event.payload.service }} - {{ event.payload.message }}",
     "priority": "high"
   },
   "enabled": false
@@ -416,7 +416,7 @@ All fields are optional. Only provided fields will be updated.
     },
     "action_params": {
       "channel": "#critical-alerts",
-      "message": "CRITICAL: {{ trigger.payload.service }} - {{ trigger.payload.message }}",
+      "message": "CRITICAL: {{ event.payload.service }} - {{ event.payload.message }}",
       "priority": "high"
     },
     "enabled": false,

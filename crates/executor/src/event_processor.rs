@@ -20,6 +20,7 @@ use attune_common::{
         rule::RuleRepository,
         Create, FindById, List,
     },
+    template_resolver::{resolve_templates, TemplateContext},
 };
 
 /// Event processor that handles event-to-rule matching
@@ -189,8 +190,8 @@ impl EventProcessor {
             .cloned()
             .unwrap_or_else(|| serde_json::Map::new());
 
-        // Resolve action parameters (simplified - full template resolution would go here)
-        let resolved_params = Self::resolve_action_params(&rule.action_params, &payload)?;
+        // Resolve action parameters using the template resolver
+        let resolved_params = Self::resolve_action_params(rule, event, &payload)?;
 
         let create_input = CreateEnforcementInput {
             rule: Some(rule.id),
@@ -240,10 +241,7 @@ impl EventProcessor {
         let payload = match &event.payload {
             Some(p) => p,
             None => {
-                debug!(
-                    "Event {} has no payload, matching by default",
-                    event.id
-                );
+                debug!("Event {} has no payload, matching by default", event.id);
                 return Ok(true);
             }
         };
@@ -351,14 +349,43 @@ impl EventProcessor {
         Ok(current)
     }
 
-    /// Resolve action parameters (simplified - full template resolution would go here)
+    /// Resolve action parameters by applying template variable substitution.
+    ///
+    /// Replaces `{{ event.payload.* }}`, `{{ event.id }}`, `{{ event.trigger }}`,
+    /// `{{ event.created }}`, `{{ pack.config.* }}`, and `{{ system.* }}` references
+    /// in the rule's `action_params` with values from the event and context.
     fn resolve_action_params(
-        action_params: &serde_json::Value,
-        _payload: &serde_json::Value,
+        rule: &Rule,
+        event: &Event,
+        event_payload: &serde_json::Value,
     ) -> Result<serde_json::Map<String, serde_json::Value>> {
-        // For now, just convert to map if it's an object
-        // Full implementation would do template resolution
-        if let Some(obj) = action_params.as_object() {
+        let action_params = &rule.action_params;
+
+        // If there are no action params, return empty
+        if action_params.is_null() || action_params.as_object().map_or(true, |o| o.is_empty()) {
+            return Ok(serde_json::Map::new());
+        }
+
+        // Build template context from the event
+        let context = TemplateContext::new(
+            event_payload.clone(),
+            // TODO: Load pack config from database for pack.config.* resolution
+            serde_json::json!({}),
+            serde_json::json!({
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "rule": {
+                    "id": rule.id,
+                    "ref": rule.r#ref,
+                },
+            }),
+        )
+        .with_event_id(event.id)
+        .with_event_trigger(&event.trigger_ref)
+        .with_event_created(&event.created.to_rfc3339());
+
+        let resolved = resolve_templates(action_params, &context)?;
+
+        if let Some(obj) = resolved.as_object() {
             Ok(obj.clone())
         } else {
             Ok(serde_json::Map::new())

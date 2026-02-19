@@ -394,7 +394,7 @@ def test_rule_criteria_evaluation_notification(client: AttuneClient, test_pack):
         "trigger": trigger["ref"],
         "action": action["ref"],
         "enabled": True,
-        "criteria": "{{ trigger.payload.environment == 'production' }}",
+        "criteria": "{{ event.payload.environment == 'production' }}",
         "parameters": {
             "message": "Production deployment approved",
         },

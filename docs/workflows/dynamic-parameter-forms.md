@@ -220,7 +220,7 @@ Potential improvements for the parameter form system:
 1. **Advanced validation**: Support for min/max, pattern matching, custom validators
 2. **Conditional fields**: Show/hide fields based on other field values
 3. **Field hints**: Helper text, examples, tooltips
-4. **Template variables**: Autocomplete for Jinja2 template syntax (e.g., `{{ trigger.payload.* }}`)
+4. **Template variables**: Autocomplete for Jinja2 template syntax (e.g., `{{ event.payload.* }}`)
 5. **Schema versioning**: Handle schema changes across pack versions
 6. **Array item editing**: Better UX for editing array items individually
 7. **Nested objects**: Support for deeply nested object schemas

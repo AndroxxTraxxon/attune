@@ -8,7 +8,11 @@ pub mod rule_lifecycle_listener;
 pub mod sensor_manager;
 pub mod sensor_worker_registration;
 pub mod service;
-pub mod template_resolver;
+
+// Re-export template resolver from common crate
+pub mod template_resolver {
+    pub use attune_common::template_resolver::*;
+}
 
 // Re-export commonly used types
 pub use rule_lifecycle_listener::RuleLifecycleListener;

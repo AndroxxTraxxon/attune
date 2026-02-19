@@ -60,7 +60,7 @@ RULE1=$(curl -s -X POST "$API_URL/api/v1/rules" \
       "interval": 1
     },
     "action_params": {
-      "message": "Hello from 1-second timer! Time: {{trigger.payload.executed_at}}"
+      "message": "Hello from 1-second timer! Time: {{event.payload.executed_at}}"
     }
   }')
 
@@ -126,7 +126,7 @@ RULE3=$(curl -s -X POST "$API_URL/api/v1/rules" \
     "action_params": {
       "url": "https://httpbin.org/post",
       "method": "POST",
-      "body": "{\"message\": \"Test from Attune\", \"timestamp\": \"{{trigger.payload.executed_at}}\", \"rule\": \"test.httpbin_post\"}",
+      "body": "{\"message\": \"Test from Attune\", \"timestamp\": \"{{event.payload.executed_at}}\", \"rule\": \"test.httpbin_post\"}",
       "headers": {
         "Content-Type": "application/json",
         "User-Agent": "Attune-Test/1.0"

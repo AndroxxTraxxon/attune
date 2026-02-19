@@ -80,7 +80,7 @@ def test_rule_criteria_basic_filtering(client: AttuneClient, test_pack):
         "trigger": trigger_ref,
         "action": action_info,
         "enabled": True,
-        "criteria": "{{ trigger.payload.level == 'info' }}",
+        "criteria": "{{ event.payload.level == 'info' }}",
     }
 
     rule_info_response = client.create_rule(rule_info_data)
@@ -95,7 +95,7 @@ def test_rule_criteria_basic_filtering(client: AttuneClient, test_pack):
         "trigger": trigger_ref,
         "action": action_error,
         "enabled": True,
-        "criteria": "{{ trigger.payload.level == 'error' }}",
+        "criteria": "{{ event.payload.level == 'error' }}",
     }
 
     rule_error_response = client.create_rule(rule_error_data)
@@ -262,7 +262,7 @@ def test_rule_criteria_numeric_comparison(client: AttuneClient, test_pack):
         "trigger": trigger_ref,
         "action": action_low,
         "enabled": True,
-        "criteria": "{{ trigger.payload.priority <= 3 }}",
+        "criteria": "{{ event.payload.priority <= 3 }}",
     }
     rule_low = client.create_rule(rule_low_data)
     print(f"✓ Low priority rule created (priority <= 3)")
@@ -273,7 +273,7 @@ def test_rule_criteria_numeric_comparison(client: AttuneClient, test_pack):
         "trigger": trigger_ref,
         "action": action_high,
         "enabled": True,
-        "criteria": "{{ trigger.payload.priority >= 7 }}",
+        "criteria": "{{ event.payload.priority >= 7 }}",
     }
     rule_high = client.create_rule(rule_high_data)
     print(f"✓ High priority rule created (priority >= 7)")
@@ -356,8 +356,8 @@ def test_rule_criteria_complex_expressions(client: AttuneClient, test_pack):
 
     # Criteria: (level == 'error' AND priority > 5) OR environment == 'production'
     complex_criteria = (
-        "{{ (trigger.payload.level == 'error' and trigger.payload.priority > 5) "
-        "or trigger.payload.environment == 'production' }}"
+        "{{ (event.payload.level == 'error' and event.payload.priority > 5) "
+        "or event.payload.environment == 'production' }}"
     )
 
     rule_data = {
@@ -450,7 +450,7 @@ def test_rule_criteria_list_membership(client: AttuneClient, test_pack):
     print("\n[STEP 2] Creating rule with list membership criteria...")
 
     # Criteria: status in ['critical', 'urgent', 'high']
-    list_criteria = "{{ trigger.payload.status in ['critical', 'urgent', 'high'] }}"
+    list_criteria = "{{ event.payload.status in ['critical', 'urgent', 'high'] }}"
 
     rule_data = {
         "name": f"List Membership Rule {unique_ref()}",

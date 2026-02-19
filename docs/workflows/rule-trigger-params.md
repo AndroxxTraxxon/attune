@@ -181,12 +181,12 @@ Both `trigger_params` and `conditions` can filter events, but they serve differe
   },
   "conditions": {
     "and": [
-      {"var": "trigger.payload.status_code", ">=": 500},
-      {"var": "trigger.payload.retry_count", ">": 3},
+      {"var": "event.payload.status_code", ">=": 500},
+      {"var": "event.payload.retry_count", ">": 3},
       {
         "or": [
-          {"var": "trigger.payload.endpoint", "in": ["/auth", "/payment"]},
-          {"var": "trigger.payload.customer_impact", "==": true}
+          {"var": "event.payload.endpoint", "in": ["/auth", "/payment"]},
+          {"var": "event.payload.customer_impact", "==": true}
         ]
       }
     ]
@@ -448,7 +448,7 @@ This improves performance by filtering earlier in the evaluation pipeline.
   "action_ref": "slack.post_message",
   "action_params": {
     "channel": "#pull-requests",
-    "message": "New PR: {{ trigger.payload.title }} by {{ trigger.payload.user }}"
+    "message": "New PR: {{ event.payload.title }} by {{ event.payload.user }}"
   }
 }
 ```

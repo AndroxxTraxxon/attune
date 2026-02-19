@@ -442,9 +442,9 @@ class TestBasicAutomation:
             "action_ref": action_ref,
             "trigger_ref": trigger_ref,
             "conditions": {
-                "and": [{"var": "trigger.payload.body.message", "!=": None}]
+                "and": [{"var": "event.payload.body.message", "!=": None}]
             },
-            "action_params": {"message": "{{ trigger.payload.body.message }}"},
+            "action_params": {"message": "{{ event.payload.body.message }}"},
             "enabled": True,
         }
 

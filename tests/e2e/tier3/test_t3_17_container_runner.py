@@ -212,8 +212,8 @@ print(json.dumps(result))
         "action": action["ref"],
         "enabled": True,
         "parameters": {
-            "name": "{{ trigger.payload.name }}",
-            "count": "{{ trigger.payload.count }}",
+            "name": "{{ event.payload.name }}",
+            "count": "{{ event.payload.count }}",
         },
     }
     rule_response = client.post("/rules", json=rule_payload)
