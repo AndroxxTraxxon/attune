@@ -27,7 +27,7 @@ CREATE TABLE key (
 
     -- Constraints
     CONSTRAINT key_ref_lowercase CHECK (ref = LOWER(ref)),
-    CONSTRAINT key_ref_format CHECK (ref ~ '^([^.]+\.)?[^.]+$')
+    CONSTRAINT key_ref_format CHECK (ref ~ '^[^.]+(\.[^.]+)*$')
 );
 
 -- Unique index on owner_type, owner, name
