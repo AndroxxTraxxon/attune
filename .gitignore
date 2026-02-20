@@ -79,3 +79,5 @@ tests/pids/*
 .env.docker
 docker-compose.override.yml
 *.pid
+
+packs.examples/

@@ -1,6 +1,7 @@
 #!/bin/sh
 # Initialize builtin packs for Attune
 # This script copies pack files to the shared volume and registers them in the database
+# Designed to run on python:3.11-slim (Debian-based) image
 
 set -e
 
@@ -32,20 +33,9 @@ echo -e "${BLUE}║    Attune Builtin Packs Initialization         ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════╝${NC}"
 echo ""
 
-# Install system dependencies
-echo -e "${YELLOW}→${NC} Installing system dependencies..."
-apk add --no-cache postgresql-client > /dev/null 2>&1
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✓${NC} System dependencies installed"
-else
-    echo -e "${RED}✗${NC} Failed to install system dependencies"
-    exit 1
-fi
-
 # Install Python dependencies
 echo -e "${YELLOW}→${NC} Installing Python dependencies..."
-pip install --quiet --no-cache-dir psycopg2-binary pyyaml 2>/dev/null
-if [ $? -eq 0 ]; then
+if pip install --quiet --no-cache-dir psycopg2-binary pyyaml; then
     echo -e "${GREEN}✓${NC} Python dependencies installed"
 else
     echo -e "${RED}✗${NC} Failed to install Python dependencies"
@@ -53,10 +43,17 @@ else
 fi
 echo ""
 
-# Wait for database to be ready
+# Wait for database to be ready (using Python instead of psql to avoid needing postgresql-client)
 echo -e "${YELLOW}→${NC} Waiting for database to be ready..."
-export PGPASSWORD="$DB_PASSWORD"
-until psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c '\q' 2>/dev/null; do
+until python3 -c "
+import psycopg2, sys
+try:
+    conn = psycopg2.connect(host='$DB_HOST', port=$DB_PORT, user='$DB_USER', password='$DB_PASSWORD', dbname='$DB_NAME', connect_timeout=3)
+    conn.close()
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+" 2>/dev/null; do
   echo -e "${YELLOW}  ...${NC} Database is unavailable - sleeping"
   sleep 2
 done
@@ -111,8 +108,7 @@ for pack_dir in "$SOURCE_PACKS_DIR"/*; do
             if [ -d "$target_pack_dir" ]; then
                 # Pack exists, update files to ensure we have latest (especially binaries)
                 echo -e "${YELLOW}  ⟳${NC} Pack exists at: $target_pack_dir, updating files..."
-                cp -rf "$pack_dir"/* "$target_pack_dir"/
-                if [ $? -eq 0 ]; then
+                if cp -rf "$pack_dir"/* "$target_pack_dir"/; then
                     echo -e "${GREEN}  ✓${NC} Updated pack files at: $target_pack_dir"
                 else
                     echo -e "${RED}  ✗${NC} Failed to update pack"
@@ -121,9 +117,7 @@ for pack_dir in "$SOURCE_PACKS_DIR"/*; do
             else
                 # Copy pack to target directory
                 echo -e "${YELLOW}  →${NC} Copying pack files..."
-                cp -r "$pack_dir" "$target_pack_dir"
-
-                if [ $? -eq 0 ]; then
+                if cp -r "$pack_dir" "$target_pack_dir"; then
                     COPIED_COUNT=$((COPIED_COUNT + 1))
                     echo -e "${GREEN}  ✓${NC} Copied to: $target_pack_dir"
                 else

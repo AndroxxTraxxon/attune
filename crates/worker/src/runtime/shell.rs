@@ -8,6 +8,7 @@ use super::{
     RuntimeResult,
 };
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Instant;
@@ -15,6 +16,15 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
+
+/// Escape a string for embedding inside a bash single-quoted string.
+///
+/// In single-quoted strings the only problematic character is `'` itself.
+/// We close the current single-quote, insert an escaped single-quote, and
+/// reopen: `'foo'\''bar'` → `foo'bar`.
+fn bash_single_quote_escape(s: &str) -> String {
+    s.replace('\'', "'\\''")
+}
 
 /// Shell runtime for executing shell scripts and commands
 pub struct ShellRuntime {
@@ -75,12 +85,20 @@ impl ShellRuntime {
         let stdin_write_error = if let Some(mut stdin) = child.stdin.take() {
             let mut error = None;
 
-            // Write parameters first if using stdin delivery
+            // Write parameters first if using stdin delivery.
+            // Skip empty/trivial content ("{}","","[]") to avoid polluting stdin
+            // before secrets — scripts that read secrets via readline() expect
+            // the secrets JSON as the first line.
+            let has_real_params = parameters_stdin
+                .map(|s| !matches!(s.trim(), "" | "{}" | "[]"))
+                .unwrap_or(false);
             if let Some(params_data) = parameters_stdin {
-                if let Err(e) = stdin.write_all(params_data.as_bytes()).await {
-                    error = Some(format!("Failed to write parameters to stdin: {}", e));
-                } else if let Err(e) = stdin.write_all(b"\n---ATTUNE_PARAMS_END---\n").await {
-                    error = Some(format!("Failed to write parameter delimiter: {}", e));
+                if has_real_params {
+                    if let Err(e) = stdin.write_all(params_data.as_bytes()).await {
+                        error = Some(format!("Failed to write parameters to stdin: {}", e));
+                    } else if let Err(e) = stdin.write_all(b"\n---ATTUNE_PARAMS_END---\n").await {
+                        error = Some(format!("Failed to write parameter delimiter: {}", e));
+                    }
                 }
             }
 
@@ -300,7 +318,12 @@ impl ShellRuntime {
         })
     }
 
-    /// Generate shell wrapper script that injects parameters as environment variables
+    /// Generate shell wrapper script that injects parameters and secrets directly.
+    ///
+    /// Secrets are embedded as bash associative-array entries at generation time
+    /// so the wrapper has **zero external runtime dependencies** (no Python, jq,
+    /// etc.).  The generated script is written to a temp file by the caller so
+    /// that secrets never appear in `/proc/<pid>/cmdline`.
     fn generate_wrapper_script(&self, context: &ExecutionContext) -> RuntimeResult<String> {
         let mut script = String::new();
 
@@ -308,25 +331,19 @@ impl ShellRuntime {
         script.push_str("#!/bin/bash\n");
         script.push_str("set -e\n\n"); // Exit on error
 
-        // Read secrets from stdin and store in associative array
-        script.push_str("# Read secrets from stdin (passed securely, not via environment)\n");
+        // Populate secrets associative array directly from Rust — no stdin
+        // reading, no JSON parsing, no external interpreters.
+        script.push_str("# Secrets (injected at generation time, not via environment)\n");
         script.push_str("declare -A ATTUNE_SECRETS\n");
-        script.push_str("read -r ATTUNE_SECRETS_JSON\n");
-        script.push_str("if [ -n \"$ATTUNE_SECRETS_JSON\" ]; then\n");
-        script.push_str("  # Parse JSON secrets using Python (always available)\n");
-        script.push_str("  eval \"$(echo \"$ATTUNE_SECRETS_JSON\" | python3 -c \"\n");
-        script.push_str("import sys, json\n");
-        script.push_str("try:\n");
-        script.push_str("    secrets = json.load(sys.stdin)\n");
-        script.push_str("    for key, value in secrets.items():\n");
-        script.push_str("        # Escape single quotes in value\n");
-        script.push_str(
-            "        safe_value = value.replace(\\\"'\\\", \\\"'\\\\\\\\\\\\\\\\'\\\")  \n",
-        );
-        script.push_str("        print(f\\\"ATTUNE_SECRETS['{key}']='{safe_value}'\\\")\n");
-        script.push_str("except: pass\n");
-        script.push_str("\")\"\n");
-        script.push_str("fi\n\n");
+        for (key, value) in &context.secrets {
+            let escaped_key = bash_single_quote_escape(key);
+            let escaped_val = bash_single_quote_escape(value);
+            script.push_str(&format!(
+                "ATTUNE_SECRETS['{}']='{}'\n",
+                escaped_key, escaped_val
+            ));
+        }
+        script.push('\n');
 
         // Helper function to get secrets
         script.push_str("# Helper function to access secrets\n");
@@ -344,16 +361,17 @@ impl ShellRuntime {
                 serde_json::Value::Bool(b) => b.to_string(),
                 _ => serde_json::to_string(value)?,
             };
+            let escaped = bash_single_quote_escape(&value_str);
             // Export with PARAM_ prefix for consistency
             script.push_str(&format!(
                 "export PARAM_{}='{}'\n",
                 key.to_uppercase(),
-                value_str
+                escaped
             ));
             // Also export without prefix for easier shell script writing
-            script.push_str(&format!("export {}='{}'\n", key, value_str));
+            script.push_str(&format!("export {}='{}'\n", key, escaped));
         }
-        script.push_str("\n");
+        script.push('\n');
 
         // Add the action code
         script.push_str("# Action code\n");
@@ -362,44 +380,6 @@ impl ShellRuntime {
         }
 
         Ok(script)
-    }
-
-    /// Execute shell script directly
-    async fn execute_shell_code(
-        &self,
-        code: String,
-        secrets: &std::collections::HashMap<String, String>,
-        env: &std::collections::HashMap<String, String>,
-        parameters_stdin: Option<&str>,
-        timeout_secs: Option<u64>,
-        max_stdout_bytes: usize,
-        max_stderr_bytes: usize,
-        output_format: OutputFormat,
-    ) -> RuntimeResult<ExecutionResult> {
-        debug!(
-            "Executing shell script with {} secrets (passed via stdin)",
-            secrets.len()
-        );
-
-        // Build command
-        let mut cmd = Command::new(&self.shell_path);
-        cmd.arg("-c").arg(&code);
-
-        // Add environment variables
-        for (key, value) in env {
-            cmd.env(key, value);
-        }
-
-        self.execute_with_streaming(
-            cmd,
-            secrets,
-            parameters_stdin,
-            timeout_secs,
-            max_stdout_bytes,
-            max_stderr_bytes,
-            output_format,
-        )
-        .await
     }
 
     /// Execute shell script from file
@@ -520,19 +500,42 @@ impl Runtime for ShellRuntime {
                 .await;
         }
 
-        // Otherwise, generate wrapper script and execute
+        // Otherwise, generate wrapper script and execute.
+        // Secrets and parameters are embedded directly in the wrapper script
+        // by generate_wrapper_script(), so we write it to a temp file (to keep
+        // secrets out of /proc/cmdline) and pass no secrets/params via stdin.
         let script = self.generate_wrapper_script(&context)?;
-        self.execute_shell_code(
-            script,
-            &context.secrets,
-            &env,
-            parameters_stdin,
-            context.timeout,
-            context.max_stdout_bytes,
-            context.max_stderr_bytes,
-            context.output_format,
-        )
-        .await
+
+        // Write wrapper to a temp file so secrets are not exposed in the
+        // process command line (which would happen with `bash -c "..."`).
+        let wrapper_dir = self.work_dir.join("wrappers");
+        tokio::fs::create_dir_all(&wrapper_dir).await.map_err(|e| {
+            RuntimeError::ExecutionFailed(format!("Failed to create wrapper directory: {}", e))
+        })?;
+        let wrapper_path = wrapper_dir.join(format!("wrapper_{}.sh", context.execution_id));
+        tokio::fs::write(&wrapper_path, &script)
+            .await
+            .map_err(|e| {
+                RuntimeError::ExecutionFailed(format!("Failed to write wrapper script: {}", e))
+            })?;
+
+        let result = self
+            .execute_shell_file(
+                wrapper_path.clone(),
+                &HashMap::new(), // secrets are in the script, not stdin
+                &env,
+                None,
+                context.timeout,
+                context.max_stdout_bytes,
+                context.max_stderr_bytes,
+                context.output_format,
+            )
+            .await;
+
+        // Clean up wrapper file (best-effort)
+        let _ = tokio::fs::remove_file(&wrapper_path).await;
+
+        result
     }
 
     async fn setup(&self) -> RuntimeResult<()> {
@@ -716,7 +719,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Pre-existing failure - secrets not being passed correctly"]
     async fn test_shell_runtime_with_secrets() {
         let runtime = ShellRuntime::new();
 

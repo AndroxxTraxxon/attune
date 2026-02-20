@@ -12,7 +12,7 @@
 
 use anyhow::{anyhow, Result};
 use attune_common::models::{Id, Sensor, Trigger};
-use attune_common::repositories::{FindById, List};
+use attune_common::repositories::{FindById, List, RuntimeRepository};
 
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
@@ -38,6 +38,7 @@ struct SensorManagerInner {
     sensors: Arc<RwLock<HashMap<Id, SensorInstance>>>,
     running: Arc<RwLock<bool>>,
     packs_base_dir: String,
+    runtime_envs_dir: String,
     api_client: ApiClient,
     api_url: String,
     mq_url: String,
@@ -58,6 +59,10 @@ impl SensorManager {
         let mq_url = std::env::var("ATTUNE_MQ_URL")
             .unwrap_or_else(|_| "amqp://guest:guest@localhost:5672".to_string());
 
+        let runtime_envs_dir = std::env::var("ATTUNE_RUNTIME_ENVS_DIR")
+            .or_else(|_| std::env::var("ATTUNE__RUNTIME_ENVS_DIR"))
+            .unwrap_or_else(|_| "/opt/attune/runtime_envs".to_string());
+
         // Create API client for token provisioning (no admin token - uses internal endpoint)
         let api_client = ApiClient::new(api_url.clone(), None);
 
@@ -67,6 +72,7 @@ impl SensorManager {
                 sensors: Arc::new(RwLock::new(HashMap::new())),
                 running: Arc::new(RwLock::new(false)),
                 packs_base_dir,
+                runtime_envs_dir,
                 api_client,
                 api_url,
                 mq_url,
@@ -212,9 +218,45 @@ impl SensorManager {
             self.inner.packs_base_dir, pack_ref, sensor.entrypoint
         );
 
+        // Load the runtime to determine how to execute the sensor
+        let runtime = RuntimeRepository::find_by_id(&self.inner.db, sensor.runtime)
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "Runtime {} not found for sensor {}",
+                    sensor.runtime,
+                    sensor.r#ref
+                )
+            })?;
+
+        let exec_config = runtime.parsed_execution_config();
+        let rt_name = runtime.name.to_lowercase();
+
+        // Resolve the interpreter: check for a virtualenv/node_modules first,
+        // then fall back to the system interpreter.
+        let pack_dir = std::path::PathBuf::from(&self.inner.packs_base_dir).join(pack_ref);
+        let env_dir = std::path::PathBuf::from(&self.inner.runtime_envs_dir)
+            .join(pack_ref)
+            .join(&rt_name);
+        let env_dir_opt = if env_dir.exists() {
+            Some(env_dir.as_path())
+        } else {
+            None
+        };
+
+        // Determine whether we need an interpreter or can execute directly.
+        // Determine native vs interpreted purely from the runtime's execution_config.
+        // A native runtime (e.g., core.native) has no interpreter configured —
+        // its binary field is empty. Interpreted runtimes (Python, Node, etc.)
+        // declare their interpreter binary explicitly in execution_config.
+        let interpreter_binary = &exec_config.interpreter.binary;
+        let is_native = interpreter_binary.is_empty()
+            || interpreter_binary == "native"
+            || interpreter_binary == "none";
+
         info!(
-            "TRACE: Before fetching trigger instances for sensor {}",
-            sensor.r#ref
+            "Sensor {} runtime={} interpreter={} native={}",
+            sensor.r#ref, rt_name, interpreter_binary, is_native
         );
         info!("Starting standalone sensor process: {}", sensor_script);
 
@@ -245,9 +287,30 @@ impl SensorManager {
             .map_err(|e| anyhow!("Failed to serialize trigger instances: {}", e))?;
         info!("Trigger instances JSON: {}", trigger_instances_json);
 
+        // Build the command: use the interpreter for non-native runtimes,
+        // execute the script directly for native binaries.
+        let mut cmd = if is_native {
+            Command::new(&sensor_script)
+        } else {
+            let resolved_interpreter =
+                exec_config.resolve_interpreter_with_env(&pack_dir, env_dir_opt);
+            info!(
+                "Using interpreter {} for sensor {}",
+                resolved_interpreter.display(),
+                sensor.r#ref
+            );
+            let mut c = Command::new(resolved_interpreter);
+            // Pass any extra interpreter args (e.g., -u for unbuffered Python)
+            for arg in &exec_config.interpreter.args {
+                c.arg(arg);
+            }
+            c.arg(&sensor_script);
+            c
+        };
+
         // Start the standalone sensor with token and configuration
         // Pass sensor ref (e.g., "core.interval_timer_sensor") for proper identification
-        let mut child = Command::new(&sensor_script)
+        let mut child = cmd
             .env("ATTUNE_API_URL", &self.inner.api_url)
             .env("ATTUNE_API_TOKEN", &token_response.token)
             .env("ATTUNE_SENSOR_ID", &sensor.id.to_string())

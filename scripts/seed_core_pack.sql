@@ -48,21 +48,29 @@ BEGIN
         updated = NOW()
     RETURNING id INTO v_action_runtime_id;
 
-    -- Create built-in runtime for sensors (no execution_config = not executable by worker)
-    INSERT INTO attune.runtime (ref, pack, pack_ref, name, description, distributions)
-    VALUES (
-        'core.builtin',
-        v_pack_id,
-        'core',
-        'Builtin',
-        'Built-in sensor runtime for native Attune sensors (timers, webhooks, etc.)',
-        '{"verification": {"always_available": true, "check_required": false}, "type": "builtin"}'::jsonb
-    )
-    ON CONFLICT (ref) DO UPDATE SET
-        name = EXCLUDED.name,
-        description = EXCLUDED.description,
-        updated = NOW()
-    RETURNING id INTO v_sensor_runtime_id;
+    -- Use the native runtime for sensors that are compiled binaries
+    SELECT id INTO v_sensor_runtime_id
+    FROM attune.runtime
+    WHERE ref = 'core.native';
+
+    -- If core.native doesn't exist yet (shouldn't happen), create it
+    IF v_sensor_runtime_id IS NULL THEN
+        INSERT INTO attune.runtime (ref, pack, pack_ref, name, description, distributions, execution_config)
+        VALUES (
+            'core.native',
+            v_pack_id,
+            'core',
+            'Native',
+            'Native compiled runtime (Rust, Go, C, etc.) - executes binaries directly without an interpreter',
+            '{"verification": {"always_available": true, "check_required": false}}'::jsonb,
+            '{}'::jsonb
+        )
+        ON CONFLICT (ref) DO UPDATE SET
+            name = EXCLUDED.name,
+            description = EXCLUDED.description,
+            updated = NOW()
+        RETURNING id INTO v_sensor_runtime_id;
+    END IF;
 
     -- Create generic timer triggers (these define trigger types, not instances)
 
@@ -366,9 +374,9 @@ BEGIN
         'core',
         '10 Second Timer Sensor',
         'Timer sensor that fires every 10 seconds',
-        'builtin:interval_timer',
+        'attune-core-timer-sensor',
         v_sensor_runtime_id,
-        'core.builtin',
+        'core.native',
         v_intervaltimer_id,
         'core.intervaltimer',
         true,

@@ -157,8 +157,8 @@ impl WorkerService {
         // Load runtimes from the database and create ProcessRuntime instances.
         // Each runtime row's `execution_config` JSONB drives how the ProcessRuntime
         // invokes interpreters, manages environments, and installs dependencies.
-        // We skip runtimes with empty execution_config (e.g., the built-in sensor
-        // runtime) since they have no interpreter and cannot execute as a process.
+        // We skip runtimes with empty execution_config (e.g., core.native) since
+        // they execute binaries directly and don't need a ProcessRuntime wrapper.
         match RuntimeRepository::list(&pool).await {
             Ok(db_runtimes) => {
                 let executable_runtimes: Vec<_> = db_runtimes

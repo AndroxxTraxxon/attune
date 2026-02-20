@@ -6,6 +6,30 @@ import axios, {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
+// A bare axios instance with NO interceptors, used exclusively for token refresh
+// requests. This prevents infinite loops when the refresh endpoint returns 401.
+const refreshClient = axios.create({
+  baseURL: API_BASE_URL || undefined,
+  timeout: 10000,
+  headers: { "Content-Type": "application/json" },
+});
+
+function getRefreshUrl(): string {
+  return API_BASE_URL ? `${API_BASE_URL}/auth/refresh` : "/auth/refresh";
+}
+
+// Clear auth state and redirect to the login page.
+function clearSessionAndRedirect(): void {
+  localStorage.removeItem("access_token");
+  localStorage.removeItem("refresh_token");
+
+  const currentPath = window.location.pathname;
+  if (currentPath !== "/login") {
+    sessionStorage.setItem("redirect_after_login", currentPath);
+    window.location.href = "/login";
+  }
+}
+
 // Create axios instance
 export const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
@@ -37,7 +61,7 @@ apiClient.interceptors.response.use(
       _retry?: boolean;
     };
 
-    // Handle 401 Unauthorized - token expired or invalid
+    // Handle 401 Unauthorized — token expired or invalid
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
 
@@ -48,11 +72,8 @@ apiClient.interceptors.response.use(
           throw new Error("No refresh token available");
         }
 
-        // Attempt token refresh
-        const refreshUrl = API_BASE_URL
-          ? `${API_BASE_URL}/auth/refresh`
-          : "/auth/refresh";
-        const response = await axios.post(refreshUrl, {
+        // Use the bare refreshClient (no interceptors) to avoid infinite loops
+        const response = await refreshClient.post(getRefreshUrl(), {
           refresh_token: refreshToken,
         });
 
@@ -75,23 +96,13 @@ apiClient.interceptors.response.use(
         console.error(
           "Token refresh failed, clearing session and redirecting to login",
         );
-        localStorage.removeItem("access_token");
-        localStorage.removeItem("refresh_token");
-
-        // Store the current path so we can redirect back after login
-        const currentPath = window.location.pathname;
-        if (currentPath !== "/login") {
-          sessionStorage.setItem("redirect_after_login", currentPath);
-        }
-
-        window.location.href = "/login";
+        clearSessionAndRedirect();
         return Promise.reject(refreshError);
       }
     }
 
     // Handle 403 Forbidden - valid token but insufficient permissions
     if (error.response?.status === 403) {
-      // Enhance error message to distinguish from 401
       const enhancedError = error as AxiosError & {
         isAuthorizationError?: boolean;
       };

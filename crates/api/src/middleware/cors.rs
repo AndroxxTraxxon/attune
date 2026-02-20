@@ -14,9 +14,11 @@ pub fn create_cors_layer(allowed_origins: Vec<String>) -> CorsLayer {
         // Default development origins
         vec![
             "http://localhost:3000".to_string(),
+            "http://localhost:3001".to_string(),
             "http://localhost:5173".to_string(),
             "http://localhost:8080".to_string(),
             "http://127.0.0.1:3000".to_string(),
+            "http://127.0.0.1:3001".to_string(),
             "http://127.0.0.1:5173".to_string(),
             "http://127.0.0.1:8080".to_string(),
         ]

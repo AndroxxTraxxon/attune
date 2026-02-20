@@ -222,7 +222,9 @@ Enforcement created → Execution scheduled → Worker executes Action
 - **Action Script Resolution**: Worker constructs file paths as `{packs_base_dir}/{pack_ref}/actions/{entrypoint}`
 - **Runtime YAML Loading**: Pack registration reads `runtimes/*.yaml` files and inserts them into the `runtime` table. Runtime refs use format `{pack_ref}.{name}` (e.g., `core.python`, `core.shell`).
 - **Runtime Selection**: Determined by action's runtime field (e.g., "Shell", "Python") - compared case-insensitively; when an explicit `runtime_name` is set in execution context, it is authoritative (no fallback to extension matching)
-- **Worker Runtime Loading**: Worker loads all runtimes from DB that have a non-empty `execution_config` (i.e., runtimes with an interpreter configured). Builtin runtimes (e.g., sensor runtime with empty config) are automatically skipped.
+- **Worker Runtime Loading**: Worker loads all runtimes from DB that have a non-empty `execution_config` (i.e., runtimes with an interpreter configured). Native runtimes (e.g., `core.native` with empty config) are automatically skipped since they execute binaries directly.
+- **Native Runtime Detection**: Runtime detection is purely data-driven via `execution_config` in the runtime table. A runtime with empty `execution_config` (or empty `interpreter.binary`) is native — the entrypoint is executed directly without an interpreter. There is no special "builtin" runtime concept.
+- **Sensor Runtime Assignment**: Sensors declare their `runner_type` in YAML (e.g., `python`, `native`). The pack loader resolves this to the correct runtime from the database. Default is `native` (compiled binary, no interpreter). Legacy values `standalone` and `builtin` map to `core.native`.
 - **Runtime Environment Setup**: Worker creates isolated environments (virtualenvs, node_modules) on-demand at `{runtime_envs_dir}/{pack_ref}/{runtime_name}` before first execution; setup is idempotent
 - **Parameter Delivery**: Actions receive parameters via stdin as JSON (never environment variables)
 - **Output Format**: Actions declare output format (text/json/yaml) - json/yaml are parsed into execution.result JSONB

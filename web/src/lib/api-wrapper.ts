@@ -13,7 +13,38 @@ import axios from "axios";
  * Strategy:
  * Since the generated API client creates its own axios instances, we configure
  * axios defaults globally and ensure the OpenAPI client uses our configured instance.
+ *
+ * IMPORTANT: All refresh calls use `refreshClient` — a bare axios instance with
+ * NO interceptors — to prevent infinite 401 retry loops when the refresh token
+ * itself is expired or invalid.
  */
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+
+// A bare axios instance with NO interceptors, used exclusively for token refresh
+// requests. This prevents infinite loops when the refresh endpoint returns 401.
+const refreshClient = axios.create({
+  baseURL: API_BASE_URL || undefined,
+  timeout: 10000,
+  headers: { "Content-Type": "application/json" },
+});
+
+function getRefreshUrl(): string {
+  return API_BASE_URL ? `${API_BASE_URL}/auth/refresh` : "/auth/refresh";
+}
+
+// Clear auth state and redirect to the login page.
+// Safe to call multiple times — only the first redirect takes effect.
+function clearSessionAndRedirect(): void {
+  localStorage.removeItem("access_token");
+  localStorage.removeItem("refresh_token");
+
+  const currentPath = window.location.pathname;
+  if (currentPath !== "/login") {
+    sessionStorage.setItem("redirect_after_login", currentPath);
+    window.location.href = "/login";
+  }
+}
 
 // Helper to decode JWT and check if it's expired or about to expire
 export function isTokenExpiringSoon(
@@ -59,6 +90,39 @@ export function isTokenExpired(token: string): boolean {
   }
 }
 
+// Attempt to refresh the access token using the refresh token.
+// Returns true on success, false on failure.
+// On failure, clears session and redirects to login.
+async function attemptTokenRefresh(): Promise<boolean> {
+  const currentRefreshToken = localStorage.getItem("refresh_token");
+  if (!currentRefreshToken) {
+    console.warn("No refresh token available, redirecting to login");
+    clearSessionAndRedirect();
+    return false;
+  }
+
+  try {
+    const response = await refreshClient.post(getRefreshUrl(), {
+      refresh_token: currentRefreshToken,
+    });
+
+    const { access_token, refresh_token: newRefreshToken } = response.data.data;
+
+    localStorage.setItem("access_token", access_token);
+    if (newRefreshToken) {
+      localStorage.setItem("refresh_token", newRefreshToken);
+    }
+
+    return true;
+  } catch (error) {
+    console.error(
+      "Token refresh failed, clearing session and redirecting to login",
+    );
+    clearSessionAndRedirect();
+    return false;
+  }
+}
+
 // Helper to proactively refresh token if needed
 export async function ensureValidToken(): Promise<void> {
   const token = localStorage.getItem("access_token");
@@ -70,30 +134,7 @@ export async function ensureValidToken(): Promise<void> {
 
   // Check if token is expiring soon (within 5 minutes)
   if (isTokenExpiringSoon(token, 300)) {
-    try {
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
-      const refreshUrl = API_BASE_URL
-        ? `${API_BASE_URL}/auth/refresh`
-        : "/auth/refresh";
-
-      // Use base axios to avoid circular refresh attempts
-      const response = await axios.post(refreshUrl, {
-        refresh_token: refreshToken,
-      });
-
-      const { access_token, refresh_token: newRefreshToken } =
-        response.data.data;
-
-      localStorage.setItem("access_token", access_token);
-      if (newRefreshToken) {
-        localStorage.setItem("refresh_token", newRefreshToken);
-      }
-
-      // Token proactively refreshed
-    } catch (error) {
-      console.error("Proactive token refresh failed:", error);
-      // Don't throw - let the interceptor handle it on the next request
-    }
+    await attemptTokenRefresh();
   }
 }
 
@@ -104,8 +145,6 @@ export function startTokenRefreshMonitor(): void {
   if (tokenCheckInterval) {
     return; // Already running
   }
-
-  // Starting token refresh monitor
 
   // Check token every 60 seconds
   tokenCheckInterval = setInterval(async () => {
@@ -121,7 +160,6 @@ export function startTokenRefreshMonitor(): void {
 
 export function stopTokenRefreshMonitor(): void {
   if (tokenCheckInterval) {
-    // Stopping token refresh monitor
     clearInterval(tokenCheckInterval);
     tokenCheckInterval = null;
   }
@@ -130,7 +168,6 @@ export function stopTokenRefreshMonitor(): void {
 // Configure axios defaults to apply to all instances
 export function configureAxiosDefaults(): void {
   // Set default base URL
-  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
   if (API_BASE_URL) {
     axios.defaults.baseURL = API_BASE_URL;
   }
@@ -138,8 +175,7 @@ export function configureAxiosDefaults(): void {
   // Set default headers
   axios.defaults.headers.common["Content-Type"] = "application/json";
 
-  // Copy our interceptors to the default axios instance
-  // This ensures that even new axios instances inherit the behavior
+  // Request interceptor — attach JWT to outgoing requests
   axios.interceptors.request.use(
     (config) => {
       const token = localStorage.getItem("access_token");
@@ -153,66 +189,31 @@ export function configureAxiosDefaults(): void {
     },
   );
 
+  // Response interceptor — handle 401 with a single refresh attempt
   axios.interceptors.response.use(
     (response) => response,
     async (error) => {
       const originalRequest = error.config as any;
 
-      // Handle 401 Unauthorized - token expired or invalid
+      // Handle 401 Unauthorized — token expired or invalid
       if (error.response?.status === 401 && !originalRequest._retry) {
         originalRequest._retry = true;
 
-        try {
-          const refreshToken = localStorage.getItem("refresh_token");
-          if (!refreshToken) {
-            console.warn("No refresh token available, redirecting to login");
-            throw new Error("No refresh token available");
-          }
-
-          // Access token expired, attempting refresh
-
-          const refreshUrl = API_BASE_URL
-            ? `${API_BASE_URL}/auth/refresh`
-            : "/auth/refresh";
-
-          const response = await axios.post(refreshUrl, {
-            refresh_token: refreshToken,
-          });
-
-          const { access_token, refresh_token: newRefreshToken } =
-            response.data.data;
-
-          localStorage.setItem("access_token", access_token);
-          if (newRefreshToken) {
-            localStorage.setItem("refresh_token", newRefreshToken);
-          }
-
-          // Token refreshed successfully
-
+        const refreshed = await attemptTokenRefresh();
+        if (refreshed) {
           // Retry original request with new token
-          if (originalRequest.headers) {
-            originalRequest.headers.Authorization = `Bearer ${access_token}`;
+          const newToken = localStorage.getItem("access_token");
+          if (originalRequest.headers && newToken) {
+            originalRequest.headers.Authorization = `Bearer ${newToken}`;
           }
           return axios(originalRequest);
-        } catch (refreshError) {
-          console.error(
-            "Token refresh failed, clearing session and redirecting to login",
-          );
-          localStorage.removeItem("access_token");
-          localStorage.removeItem("refresh_token");
-
-          // Store the current path for redirect after login
-          const currentPath = window.location.pathname;
-          if (currentPath !== "/login") {
-            sessionStorage.setItem("redirect_after_login", currentPath);
-          }
-
-          window.location.href = "/login";
-          return Promise.reject(refreshError);
         }
+
+        // attemptTokenRefresh already cleared session and redirected
+        return Promise.reject(error);
       }
 
-      // Handle 403 Forbidden - valid token but insufficient permissions
+      // Handle 403 Forbidden — valid token but insufficient permissions
       if (error.response?.status === 403) {
         const enhancedError = error as any;
         enhancedError.isAuthorizationError = true;
@@ -226,18 +227,9 @@ export function configureAxiosDefaults(): void {
       return Promise.reject(error);
     },
   );
-
-  // Axios defaults configured with interceptors
 }
 
 // Initialize the API wrapper
 export function initializeApiWrapper(): void {
-  // Initializing API wrapper
-
-  // Configure axios defaults so all instances get the interceptors
   configureAxiosDefaults();
-
-  // The generated API client will now inherit these interceptors
-
-  // API wrapper initialized
 }

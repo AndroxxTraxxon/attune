@@ -144,10 +144,7 @@ impl<'a> PackComponentLoader<'a> {
             let runtime_ref = match data.get("ref").and_then(|v| v.as_str()) {
                 Some(r) => r.to_string(),
                 None => {
-                    let msg = format!(
-                        "Runtime YAML {} missing 'ref' field, skipping",
-                        filename
-                    );
+                    let msg = format!("Runtime YAML {} missing 'ref' field, skipping", filename);
                     warn!("{}", msg);
                     result.warnings.push(msg);
                     continue;
@@ -155,9 +152,7 @@ impl<'a> PackComponentLoader<'a> {
             };
 
             // Check if runtime already exists
-            if let Some(existing) =
-                RuntimeRepository::find_by_ref(self.pool, &runtime_ref).await?
-            {
+            if let Some(existing) = RuntimeRepository::find_by_ref(self.pool, &runtime_ref).await? {
                 info!(
                     "Runtime '{}' already exists (ID: {}), skipping",
                     runtime_ref, existing.id
@@ -204,10 +199,7 @@ impl<'a> PackComponentLoader<'a> {
 
             match RuntimeRepository::create(self.pool, input).await {
                 Ok(rt) => {
-                    info!(
-                        "Created runtime '{}' (ID: {})",
-                        runtime_ref, rt.id
-                    );
+                    info!("Created runtime '{}' (ID: {})", runtime_ref, rt.id);
                     result.runtimes_loaded += 1;
                 }
                 Err(e) => {
@@ -509,14 +501,18 @@ impl<'a> PackComponentLoader<'a> {
             self.pack_ref
         );
 
-        // Resolve sensor runtime
-        let sensor_runtime_id = self.resolve_runtime_id("builtin").await?;
-        let sensor_runtime_ref = "core.builtin".to_string();
-
         for (filename, content) in &yaml_files {
             let data: serde_yaml_ng::Value = serde_yaml_ng::from_str(content).map_err(|e| {
                 Error::validation(format!("Failed to parse sensor YAML {}: {}", filename, e))
             })?;
+
+            // Resolve sensor runtime from YAML runner_type field.
+            // Defaults to "native" if not specified (compiled binary, no interpreter).
+            let runner_type = data
+                .get("runner_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("native");
+            let (sensor_runtime_id, sensor_runtime_ref) = self.resolve_runtime(runner_type).await?;
 
             let sensor_ref = match data.get("ref").and_then(|v| v.as_str()) {
                 Some(r) => r.to_string(),
@@ -581,7 +577,7 @@ impl<'a> PackComponentLoader<'a> {
                 label,
                 description,
                 entrypoint,
-                runtime: sensor_runtime_id.unwrap_or(0),
+                runtime: sensor_runtime_id,
                 runtime_ref: sensor_runtime_ref.clone(),
                 trigger: trigger_id.unwrap_or(0),
                 trigger_ref: trigger_ref.unwrap_or_default(),
@@ -606,7 +602,7 @@ impl<'a> PackComponentLoader<'a> {
         Ok(())
     }
 
-    /// Resolve a runtime ID from a runner type string (e.g., "shell", "python", "builtin").
+    /// Resolve a runtime ID from a runner type string (e.g., "shell", "python", "native").
     ///
     /// Looks up the runtime in the database by `core.{name}` ref pattern,
     /// then falls back to name-based lookup (case-insensitive).
@@ -614,8 +610,20 @@ impl<'a> PackComponentLoader<'a> {
     /// - "shell" -> "core.shell"
     /// - "python" -> "core.python"
     /// - "node"  -> "core.nodejs"
-    /// - "builtin" -> "core.builtin"
+    /// - "native" -> "core.native"
     async fn resolve_runtime_id(&self, runner_type: &str) -> Result<Option<Id>> {
+        let (id, _ref) = self.resolve_runtime(runner_type).await?;
+        if id == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(id))
+        }
+    }
+
+    /// Map a runner_type string to a (runtime_id, runtime_ref) pair.
+    ///
+    /// Returns `(0, "unknown")` when no matching runtime is found.
+    async fn resolve_runtime(&self, runner_type: &str) -> Result<(Id, String)> {
         let runner_lower = runner_type.to_lowercase();
 
         // Runtime refs use the format `{pack_ref}.{name}` (e.g., "core.python").
@@ -623,28 +631,27 @@ impl<'a> PackComponentLoader<'a> {
             "shell" | "bash" | "sh" => vec!["core.shell"],
             "python" | "python3" => vec!["core.python"],
             "node" | "nodejs" | "node.js" => vec!["core.nodejs"],
-            "native" => vec!["core.native"],
-            "builtin" => vec!["core.builtin"],
+            "native" | "builtin" | "standalone" => vec!["core.native"],
             other => vec![other],
         };
 
         for runtime_ref in &refs_to_try {
             if let Some(runtime) = RuntimeRepository::find_by_ref(self.pool, runtime_ref).await? {
-                return Ok(Some(runtime.id));
+                return Ok((runtime.id, runtime.r#ref));
             }
         }
 
         // Fall back to name-based lookup (case-insensitive)
         use crate::repositories::runtime::RuntimeRepository as RR;
         if let Some(runtime) = RR::find_by_name(self.pool, &runner_lower).await? {
-            return Ok(Some(runtime.id));
+            return Ok((runtime.id, runtime.r#ref));
         }
 
         warn!(
-            "Could not find runtime for runner_type '{}', action will have no runtime",
+            "Could not find runtime for runner_type '{}', component will have no runtime",
             runner_type
         );
-        Ok(None)
+        Ok((0, "unknown".to_string()))
     }
 
     /// Resolve the trigger reference and ID for a sensor.

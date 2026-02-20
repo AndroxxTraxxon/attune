@@ -7,7 +7,7 @@ description: "Built-in sensor that monitors time and fires timer triggers (inter
 enabled: true
 
 # Sensor runner type
-runner_type: standalone
+runner_type: native
 
 # Entry point for sensor execution
 entry_point: attune-core-timer-sensor

@@ -464,7 +464,7 @@ pub mod runtime {
     }
 
     fn default_interpreter_binary() -> String {
-        "/bin/sh".to_string()
+        String::new()
     }
 
     impl Default for InterpreterConfig {

@@ -32,12 +32,76 @@ interface ParamSchemaFormProps {
   errors?: Record<string, string>;
   disabled?: boolean;
   className?: string;
+  /**
+   * When true, all inputs render as text fields that accept template expressions
+   * like {{ event.payload.field }}, {{ pack.config.key }}, {{ system.timestamp }}.
+   * Used in rule configuration where parameters may be dynamically resolved
+   * at enforcement time rather than set to literal values.
+   */
+  allowTemplates?: boolean;
+}
+
+/**
+ * Check if a string value contains a template expression ({{ ... }})
+ */
+function isTemplateExpression(value: any): boolean {
+  return typeof value === "string" && /\{\{.*\}\}/.test(value);
+}
+
+/**
+ * Format a value for display in a text input.
+ * Non-string values (booleans, numbers, objects, arrays) are JSON-stringified
+ * so the user can edit them as text.
+ */
+function valueToString(value: any): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
+}
+
+/**
+ * Attempt to parse a text input value back to the appropriate JS type.
+ * Template expressions are always kept as strings.
+ * Plain values are coerced to the schema type when possible.
+ */
+function parseTemplateValue(raw: string, type: string): any {
+  if (raw === "") return "";
+  // Template expressions stay as strings - resolved server-side
+  if (isTemplateExpression(raw)) return raw;
+
+  switch (type) {
+    case "boolean":
+      if (raw === "true") return true;
+      if (raw === "false") return false;
+      return raw; // keep as string if not a recognised literal
+    case "number":
+      if (!isNaN(Number(raw))) return parseFloat(raw);
+      return raw;
+    case "integer":
+      if (!isNaN(Number(raw)) && Number.isInteger(Number(raw)))
+        return parseInt(raw, 10);
+      return raw;
+    case "array":
+    case "object":
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return raw;
+      }
+    default:
+      return raw;
+  }
 }
 
 /**
  * Dynamic form component that renders inputs based on a parameter schema.
  * Supports standard JSON Schema format with properties and required array.
  * Supports string, number, integer, boolean, array, object, and enum types.
+ *
+ * When `allowTemplates` is enabled, every field renders as a text input that
+ * accepts Jinja2-style template expressions (e.g. {{ event.payload.x }}).
+ * This is essential for rule configuration, where parameter values may reference
+ * event payloads, pack configs, keys, or system variables.
  */
 export default function ParamSchemaForm({
   schema,
@@ -46,6 +110,7 @@ export default function ParamSchemaForm({
   errors = {},
   disabled = false,
   className = "",
+  allowTemplates = false,
 }: ParamSchemaFormProps) {
   const [localErrors, setLocalErrors] = useState<Record<string, string>>({});
 
@@ -98,7 +163,71 @@ export default function ParamSchemaForm({
   };
 
   /**
-   * Render input field based on parameter type
+   * Get a placeholder hint for template-mode inputs
+   */
+  const getTemplatePlaceholder = (key: string, param: any): string => {
+    const type = param?.type || "string";
+    switch (type) {
+      case "boolean":
+        return `true, false, or {{ event.payload.${key} }}`;
+      case "number":
+      case "integer":
+        return `${type} value or {{ event.payload.${key} }}`;
+      case "array":
+        return `["a","b"] or {{ event.payload.${key} }}`;
+      case "object":
+        return `{"k":"v"} or {{ event.payload.${key} }}`;
+      default:
+        if (param?.enum && param.enum.length > 0) {
+          const options = param.enum.slice(0, 3).join(", ");
+          const suffix = param.enum.length > 3 ? ", ..." : "";
+          return `${options}${suffix} or {{ event.payload.${key} }}`;
+        }
+        return param?.description || `{{ event.payload.${key} }}`;
+    }
+  };
+
+  /**
+   * Render a template-mode text input for any parameter type
+   */
+  const renderTemplateInput = (key: string, param: any) => {
+    const type = param?.type || "string";
+    const rawValue = values[key] ?? param?.default ?? "";
+    const isDisabled = disabled;
+    const displayValue = valueToString(rawValue);
+
+    // Use a textarea for complex types (array/object) to give more room
+    if (type === "array" || type === "object") {
+      return (
+        <textarea
+          value={displayValue}
+          onChange={(e) =>
+            handleInputChange(key, parseTemplateValue(e.target.value, type))
+          }
+          disabled={isDisabled}
+          rows={3}
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm disabled:bg-gray-100 disabled:cursor-not-allowed"
+          placeholder={getTemplatePlaceholder(key, param)}
+        />
+      );
+    }
+
+    return (
+      <input
+        type="text"
+        value={displayValue}
+        onChange={(e) =>
+          handleInputChange(key, parseTemplateValue(e.target.value, type))
+        }
+        disabled={isDisabled}
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+        placeholder={getTemplatePlaceholder(key, param)}
+      />
+    );
+  };
+
+  /**
+   * Render input field based on parameter type (standard mode)
    */
   const renderInput = (key: string, param: any) => {
     const type = param?.type || "string";
@@ -249,6 +378,38 @@ export default function ParamSchemaForm({
     }
   };
 
+  /**
+   * Render type hint badge and additional context for template-mode fields
+   */
+  const renderTemplateHints = (_key: string, param: any) => {
+    const type = param?.type || "string";
+    const hints: string[] = [];
+
+    if (type === "boolean") {
+      hints.push("Accepts: true, false, or a template expression");
+    } else if (type === "number" || type === "integer") {
+      const parts = [`Accepts: ${type} value`];
+      if (param?.minimum !== undefined) parts.push(`min: ${param.minimum}`);
+      if (param?.maximum !== undefined) parts.push(`max: ${param.maximum}`);
+      hints.push(parts.join(", ") + ", or a template expression");
+    } else if (param?.enum && param.enum.length > 0) {
+      hints.push(`Options: ${param.enum.join(", ")}`);
+      hints.push("Also accepts a template expression");
+    }
+
+    if (hints.length === 0) return null;
+
+    return (
+      <div className="mt-1 space-y-0.5">
+        {hints.map((hint, i) => (
+          <p key={i} className="text-xs text-gray-500">
+            {hint}
+          </p>
+        ))}
+      </div>
+    );
+  };
+
   const paramEntries = Object.entries(properties);
 
   if (paramEntries.length === 0) {
@@ -261,6 +422,26 @@ export default function ParamSchemaForm({
 
   return (
     <div className={`space-y-4 ${className}`}>
+      {allowTemplates && (
+        <div className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+          <p className="text-xs text-amber-800">
+            <span className="font-semibold">Template expressions</span> are
+            supported. Use{" "}
+            <code className="px-1 py-0.5 bg-amber-100 rounded text-[11px]">
+              {"{{ event.payload.field }}"}
+            </code>
+            ,{" "}
+            <code className="px-1 py-0.5 bg-amber-100 rounded text-[11px]">
+              {"{{ pack.config.key }}"}
+            </code>
+            , or{" "}
+            <code className="px-1 py-0.5 bg-amber-100 rounded text-[11px]">
+              {"{{ system.timestamp }}"}
+            </code>{" "}
+            to dynamically resolve values when the rule fires.
+          </p>
+        </div>
+      )}
       {paramEntries.map(([key, param]) => (
         <div key={key}>
           <label className="block mb-2">
@@ -283,8 +464,19 @@ export default function ParamSchemaForm({
             {param?.description && param?.type !== "boolean" && (
               <p className="text-xs text-gray-600 mb-2">{param.description}</p>
             )}
+            {/* For boolean in template mode, show description since there's no checkbox label */}
+            {param?.description &&
+              param?.type === "boolean" &&
+              allowTemplates && (
+                <p className="text-xs text-gray-600 mb-2">
+                  {param.description}
+                </p>
+              )}
           </label>
-          {renderInput(key, param)}
+          {allowTemplates
+            ? renderTemplateInput(key, param)
+            : renderInput(key, param)}
+          {allowTemplates && renderTemplateHints(key, param)}
           {allErrors[key] && (
             <p className="text-xs text-red-600 mt-1">{allErrors[key]}</p>
           )}
@@ -302,12 +494,16 @@ export default function ParamSchemaForm({
 }
 
 /**
- * Utility function to validate parameter values against a schema
- * Supports standard JSON Schema format
+ * Utility function to validate parameter values against a schema.
+ * Supports standard JSON Schema format.
+ *
+ * When `allowTemplates` is true, template expressions ({{ ... }}) are
+ * accepted for any field type and skip type-specific validation.
  */
 export function validateParamSchema(
   schema: ParamSchema,
   values: Record<string, any>,
+  allowTemplates: boolean = false,
 ): Record<string, string> {
   const errors: Record<string, string> = {};
   const properties = schema.properties || {};
@@ -333,12 +529,23 @@ export function validateParamSchema(
       return;
     }
 
+    // Template expressions are always valid in template mode
+    if (allowTemplates && isTemplateExpression(value)) {
+      return;
+    }
+
     const type = param?.type || "string";
 
     switch (type) {
       case "number":
       case "integer":
         if (typeof value !== "number" && isNaN(Number(value))) {
+          if (allowTemplates) {
+            // In template mode, non-numeric strings that aren't templates
+            // are still allowed — the user might be mid-edit or using a
+            // non-standard expression format. Only warn on submission.
+            break;
+          }
           errors[key] = `Must be a valid ${type}`;
         } else {
           const numValue = typeof value === "number" ? value : Number(value);
@@ -351,8 +558,23 @@ export function validateParamSchema(
         }
         break;
 
+      case "boolean":
+        // In template mode, string values like "true"/"false" are fine
+        if (
+          allowTemplates &&
+          typeof value === "string" &&
+          (value === "true" || value === "false")
+        ) {
+          break;
+        }
+        break;
+
       case "array":
         if (!Array.isArray(value)) {
+          if (allowTemplates && typeof value === "string") {
+            // In template mode, strings are acceptable (could be template or JSON)
+            break;
+          }
           try {
             JSON.parse(value);
           } catch {
@@ -363,6 +585,9 @@ export function validateParamSchema(
 
       case "object":
         if (typeof value !== "object" || Array.isArray(value)) {
+          if (allowTemplates && typeof value === "string") {
+            break;
+          }
           try {
             const parsed = JSON.parse(value);
             if (typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -392,8 +617,9 @@ export function validateParamSchema(
         break;
     }
 
-    // Enum validation
-    if (param?.enum && param.enum.length > 0) {
+    // Enum validation — skip in template mode (value may be a template expression
+    // or a string that will be resolved at runtime)
+    if (!allowTemplates && param?.enum && param.enum.length > 0) {
       if (!param.enum.includes(value)) {
         errors[key] = `Must be one of: ${param.enum.join(", ")}`;
       }

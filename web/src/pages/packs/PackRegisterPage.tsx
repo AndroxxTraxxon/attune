@@ -39,7 +39,7 @@ export default function PackRegisterPage() {
           result.data.tests_skipped
             ? "Tests were skipped."
             : result.data.test_result
-              ? `Tests ${result.data.test_result.status}: ${result.data.test_result.passed}/${result.data.test_result.total_tests} passed.`
+              ? `Tests ${result.data.test_result.status}: ${result.data.test_result.passed}/${result.data.test_result.totalTests} passed.`
               : ""
         }`,
       );

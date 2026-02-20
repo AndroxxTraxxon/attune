@@ -144,17 +144,19 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
       }
     }
 
-    // Validate trigger parameters
+    // Validate trigger parameters (allow templates in rule context)
     const triggerErrors = validateParamSchema(
       triggerParamSchema,
       triggerParameters,
+      true,
     );
     setTriggerParamErrors(triggerErrors);
 
-    // Validate action parameters
+    // Validate action parameters (allow templates in rule context)
     const actionErrors = validateParamSchema(
       actionParamSchema,
       actionParameters,
+      true,
     );
     setActionParamErrors(actionErrors);
 
@@ -428,6 +430,7 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
                   values={triggerParameters}
                   onChange={setTriggerParameters}
                   errors={triggerParamErrors}
+                  allowTemplates
                 />
               </div>
             )}
@@ -517,6 +520,7 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
                   values={actionParameters}
                   onChange={setActionParameters}
                   errors={actionParamErrors}
+                  allowTemplates
                 />
               </div>
             )}

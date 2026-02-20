@@ -434,12 +434,18 @@ async fn process_runtime_for_pack(
 ///
 /// Returns `None` if the variable is not set (meaning all runtimes are accepted).
 pub fn runtime_filter_from_env() -> Option<Vec<String>> {
-    std::env::var("ATTUNE_WORKER_RUNTIMES").ok().map(|val| {
-        val.split(',')
-            .map(|s| s.trim().to_lowercase())
-            .filter(|s| !s.is_empty())
-            .collect()
-    })
+    std::env::var("ATTUNE_WORKER_RUNTIMES")
+        .ok()
+        .map(|val| parse_runtime_filter(&val))
+}
+
+/// Parse a comma-separated runtime filter string into a list of lowercase runtime names.
+/// Empty entries are filtered out.
+fn parse_runtime_filter(val: &str) -> Vec<String> {
+    val.split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 #[cfg(test)]
@@ -447,26 +453,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_runtime_filter_from_env_not_set() {
-        // When ATTUNE_WORKER_RUNTIMES is not set, filter should be None
-        std::env::remove_var("ATTUNE_WORKER_RUNTIMES");
-        assert!(runtime_filter_from_env().is_none());
-    }
-
-    #[test]
-    fn test_runtime_filter_from_env_set() {
-        std::env::set_var("ATTUNE_WORKER_RUNTIMES", "shell,Python, Node");
-        let filter = runtime_filter_from_env().unwrap();
+    fn test_parse_runtime_filter_values() {
+        let filter = parse_runtime_filter("shell,Python, Node");
         assert_eq!(filter, vec!["shell", "python", "node"]);
-        std::env::remove_var("ATTUNE_WORKER_RUNTIMES");
     }
 
     #[test]
-    fn test_runtime_filter_from_env_empty() {
-        std::env::set_var("ATTUNE_WORKER_RUNTIMES", "");
-        let filter = runtime_filter_from_env().unwrap();
+    fn test_parse_runtime_filter_empty() {
+        let filter = parse_runtime_filter("");
         assert!(filter.is_empty());
-        std::env::remove_var("ATTUNE_WORKER_RUNTIMES");
+    }
+
+    #[test]
+    fn test_parse_runtime_filter_whitespace() {
+        let filter = parse_runtime_filter("  shell , , python  ");
+        assert_eq!(filter, vec!["shell", "python"]);
     }
 
     #[test]

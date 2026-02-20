@@ -53,7 +53,7 @@ export default function PackInstallPage() {
           result.data.tests_skipped
             ? "Tests were skipped."
             : result.data.test_result
-              ? `Tests ${result.data.test_result.status}: ${result.data.test_result.passed}/${result.data.test_result.total_tests} passed.`
+              ? `Tests ${result.data.test_result.status}: ${result.data.test_result.passed}/${result.data.test_result.totalTests} passed.`
               : ""
         }`,
       );
@@ -138,8 +138,7 @@ export default function PackInstallPage() {
                 any git server
               </li>
               <li>
-                <strong>Archive URL</strong> - Download from .zip or .tar.gz
-                URL
+                <strong>Archive URL</strong> - Download from .zip or .tar.gz URL
               </li>
               <li>
                 <strong>Pack Registry</strong> - Install from configured
@@ -192,8 +191,7 @@ export default function PackInstallPage() {
           {/* Source Type Selection */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Installation Source Type{" "}
-              <span className="text-red-500">*</span>
+              Installation Source Type <span className="text-red-500">*</span>
             </label>
             <div className="grid grid-cols-3 gap-3">
               <button

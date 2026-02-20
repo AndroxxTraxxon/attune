@@ -146,7 +146,7 @@ impl RuntimeDetector {
 
     /// Verify if a runtime is available on this system
     pub async fn verify_runtime_available(runtime: &Runtime) -> bool {
-        // Check if runtime is always available (e.g., shell, native, builtin)
+        // Check if runtime is always available (e.g., shell, native)
         if let Some(verification) = runtime.distributions.get("verification") {
             if let Some(always_available) = verification.get("always_available") {
                 if always_available.as_bool() == Some(true) {

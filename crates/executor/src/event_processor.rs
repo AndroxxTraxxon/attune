@@ -17,6 +17,7 @@ use attune_common::{
     },
     repositories::{
         event::{CreateEnforcementInput, EnforcementRepository, EventRepository},
+        pack::PackRepository,
         rule::RuleRepository,
         Create, FindById, List,
     },
@@ -191,7 +192,7 @@ impl EventProcessor {
             .unwrap_or_else(|| serde_json::Map::new());
 
         // Resolve action parameters using the template resolver
-        let resolved_params = Self::resolve_action_params(rule, event, &payload)?;
+        let resolved_params = Self::resolve_action_params(pool, rule, event, &payload).await?;
 
         let create_input = CreateEnforcementInput {
             rule: Some(rule.id),
@@ -354,7 +355,8 @@ impl EventProcessor {
     /// Replaces `{{ event.payload.* }}`, `{{ event.id }}`, `{{ event.trigger }}`,
     /// `{{ event.created }}`, `{{ pack.config.* }}`, and `{{ system.* }}` references
     /// in the rule's `action_params` with values from the event and context.
-    fn resolve_action_params(
+    async fn resolve_action_params(
+        pool: &PgPool,
         rule: &Rule,
         event: &Event,
         event_payload: &serde_json::Value,
@@ -366,11 +368,26 @@ impl EventProcessor {
             return Ok(serde_json::Map::new());
         }
 
+        // Load pack config from database for pack.config.* resolution
+        let pack_config = match PackRepository::find_by_id(pool, rule.pack).await {
+            Ok(Some(pack)) => pack.config,
+            Ok(None) => {
+                warn!(
+                    "Pack {} not found for rule {} — pack.config.* templates will resolve to null",
+                    rule.pack, rule.r#ref
+                );
+                serde_json::json!({})
+            }
+            Err(e) => {
+                warn!("Failed to load pack {} for rule {}: {} — pack.config.* templates will resolve to null", rule.pack, rule.r#ref, e);
+                serde_json::json!({})
+            }
+        };
+
         // Build template context from the event
         let context = TemplateContext::new(
             event_payload.clone(),
-            // TODO: Load pack config from database for pack.config.* resolution
-            serde_json::json!({}),
+            pack_config,
             serde_json::json!({
                 "timestamp": chrono::Utc::now().to_rfc3339(),
                 "rule": {

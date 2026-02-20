@@ -442,12 +442,20 @@ class PackLoader:
         sensor_ids = {}
         cursor = self.conn.cursor()
 
-        # Look up sensor runtime from already-loaded runtimes
-        sensor_runtime_id = runtime_ids.get("builtin") or runtime_ids.get(
-            "core.builtin"
-        )
-        if not sensor_runtime_id:
-            print("  ⚠ No sensor runtime found, sensors will have no runtime")
+        # Runtime name mapping: runner_type values to core runtime refs
+        runner_type_to_ref = {
+            "native": "core.native",
+            "standalone": "core.native",
+            "builtin": "core.native",
+            "shell": "core.shell",
+            "bash": "core.shell",
+            "sh": "core.shell",
+            "python": "core.python",
+            "python3": "core.python",
+            "node": "core.nodejs",
+            "nodejs": "core.nodejs",
+            "node.js": "core.nodejs",
+        }
 
         for yaml_file in sorted(sensors_dir.glob("*.yaml")):
             sensor_data = self.load_yaml(yaml_file)
@@ -482,6 +490,20 @@ class PackLoader:
                 else:
                     trigger_ref = f"{self.pack_ref}.{first_trigger}"
                 trigger_id = trigger_ids.get(trigger_ref)
+
+            # Resolve sensor runtime from YAML runner_type field
+            # Defaults to "native" (compiled binary, no interpreter)
+            runner_type = sensor_data.get("runner_type", "native").lower()
+            runtime_ref = runner_type_to_ref.get(runner_type, runner_type)
+            # Look up runtime ID: try the mapped ref, then the raw runner_type
+            sensor_runtime_id = runtime_ids.get(runtime_ref)
+            if not sensor_runtime_id:
+                # Try looking up by the short name (e.g., "python" key in runtime_ids)
+                sensor_runtime_id = runtime_ids.get(runner_type)
+            if not sensor_runtime_id:
+                print(
+                    f"  ⚠ No runtime found for runner_type '{runner_type}' (ref: {runtime_ref}), sensor will have no runtime"
+                )
 
             # Determine entrypoint
             entry_point = sensor_data.get("entry_point", "")
@@ -521,7 +543,7 @@ class PackLoader:
                     description,
                     entry_point,
                     sensor_runtime_id,
-                    "core.builtin",
+                    runtime_ref,
                     trigger_id,
                     trigger_ref,
                     enabled,

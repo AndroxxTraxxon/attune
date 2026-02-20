@@ -264,7 +264,7 @@ mod tests {
         assert!(RefValidator::validate_runtime_ref("core.python").is_ok());
         assert!(RefValidator::validate_runtime_ref("core.shell").is_ok());
         assert!(RefValidator::validate_runtime_ref("mypack.nodejs").is_ok());
-        assert!(RefValidator::validate_runtime_ref("core.builtin").is_ok());
+        assert!(RefValidator::validate_runtime_ref("core.native").is_ok());
 
         // Invalid formats
         assert!(RefValidator::validate_runtime_ref("core.action.webhook").is_err()); // 3-part no longer valid

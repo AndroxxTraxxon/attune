@@ -18,8 +18,7 @@ Each runtime YAML file contains only the fields that are stored in the database:
 - **python.yaml** - Python 3 runtime for actions and sensors
 - **nodejs.yaml** - Node.js runtime for JavaScript-based actions and sensors
 - **shell.yaml** - Shell (bash/sh) runtime - always available
-- **native.yaml** - Native compiled runtime (Rust, Go, C, etc.) - always available
-- **sensor_builtin.yaml** - Built-in sensor runtime for native Attune sensors
+- **native.yaml** - Native compiled runtime (Rust, Go, C, etc.) - executes binaries directly without an interpreter
 
 ## Loading
 
