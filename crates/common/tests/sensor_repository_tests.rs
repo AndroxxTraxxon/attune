@@ -34,14 +34,10 @@ async fn test_create_sensor_minimal() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     // Create sensor
     let sensor = SensorFixture::new_unique(
@@ -85,14 +81,10 @@ async fn test_create_sensor_with_param_schema() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let param_schema = json!({
         "type": "object",
@@ -171,14 +163,10 @@ async fn test_create_sensor_duplicate_ref_fails() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     // Create first sensor
     let sensor_ref = format!("{}.duplicate_sensor", pack.r#ref);
@@ -223,14 +211,10 @@ async fn test_create_sensor_invalid_ref_format_fails() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     // Try invalid ref formats
     let invalid_refs = vec![
@@ -378,14 +362,10 @@ async fn test_find_by_id_exists() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -433,14 +413,10 @@ async fn test_get_by_id_exists() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -484,14 +460,10 @@ async fn test_find_by_ref_exists() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -540,14 +512,10 @@ async fn test_get_by_ref_exists() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -593,14 +561,10 @@ async fn test_list_all_sensors() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     // Create multiple sensors
     let _sensor1 = SensorFixture::new_unique(
@@ -668,14 +632,10 @@ async fn test_update_label() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -724,14 +684,10 @@ async fn test_update_description() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -772,14 +728,10 @@ async fn test_update_entrypoint() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -820,14 +772,10 @@ async fn test_update_enabled_status() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -883,14 +831,10 @@ async fn test_update_param_schema() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -941,14 +885,10 @@ async fn test_update_multiple_fields() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -969,6 +909,7 @@ async fn test_update_multiple_fields() {
         entrypoint: Some("sensors/multi.py".to_string()),
         enabled: Some(false),
         param_schema: Some(json!({"type": "object"})),
+        ..Default::default()
     };
 
     let updated = SensorRepository::update(&pool, sensor.id, input)
@@ -996,14 +937,10 @@ async fn test_update_no_changes() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -1066,14 +1003,10 @@ async fn test_delete_existing_sensor() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -1120,14 +1053,10 @@ async fn test_delete_sensor_when_pack_deleted() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -1167,14 +1096,10 @@ async fn test_delete_sensor_when_trigger_deleted() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -1214,14 +1139,10 @@ async fn test_delete_sensor_when_runtime_deleted() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -1270,14 +1191,10 @@ async fn test_find_by_trigger() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     // Create sensors for trigger1
     let sensor1 = SensorFixture::new_unique(
@@ -1364,14 +1281,10 @@ async fn test_find_enabled() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     // Create enabled sensor
     let enabled_sensor = SensorFixture::new_unique(
@@ -1424,14 +1337,10 @@ async fn test_find_enabled_empty() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     // Create only disabled sensor
     let disabled = SensorFixture::new_unique(
@@ -1477,23 +1386,15 @@ async fn test_find_by_pack() {
         .await
         .unwrap();
 
-    let runtime1 = RuntimeFixture::new_unique(
-        Some(pack1.id),
-        Some(pack1.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime1 = RuntimeFixture::new_unique(Some(pack1.id), Some(pack1.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
-    let runtime2 = RuntimeFixture::new_unique(
-        Some(pack2.id),
-        Some(pack2.r#ref.clone()),
-        "nodejs",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime2 = RuntimeFixture::new_unique(Some(pack2.id), Some(pack2.r#ref.clone()), "nodejs")
+        .create(&pool)
+        .await
+        .unwrap();
 
     // Create sensors for pack1
     let sensor1 = SensorFixture::new_unique(
@@ -1580,14 +1481,10 @@ async fn test_created_timestamp_set_automatically() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let before = chrono::Utc::now();
 
@@ -1625,14 +1522,10 @@ async fn test_updated_timestamp_changes_on_update() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -1679,14 +1572,10 @@ async fn test_updated_timestamp_unchanged_on_read() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),
@@ -1733,14 +1622,10 @@ async fn test_param_schema_complex_structure() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let complex_schema = json!({
         "type": "object",
@@ -1811,14 +1696,10 @@ async fn test_param_schema_can_be_null() {
         .await
         .unwrap();
 
-    let runtime = RuntimeFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        "python3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
+    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
+        .create(&pool)
+        .await
+        .unwrap();
 
     let sensor = SensorFixture::new_unique(
         Some(pack.id),

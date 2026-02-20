@@ -531,8 +531,13 @@ pub struct UpdateSensorInput {
     pub label: Option<String>,
     pub description: Option<String>,
     pub entrypoint: Option<String>,
+    pub runtime: Option<Id>,
+    pub runtime_ref: Option<String>,
+    pub trigger: Option<Id>,
+    pub trigger_ref: Option<String>,
     pub enabled: Option<bool>,
     pub param_schema: Option<JsonSchema>,
+    pub config: Option<JsonValue>,
 }
 
 #[async_trait::async_trait]
@@ -688,12 +693,57 @@ impl Update for SensorRepository {
             has_updates = true;
         }
 
+        if let Some(runtime) = input.runtime {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("runtime = ");
+            query.push_bind(runtime);
+            has_updates = true;
+        }
+
+        if let Some(runtime_ref) = &input.runtime_ref {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("runtime_ref = ");
+            query.push_bind(runtime_ref);
+            has_updates = true;
+        }
+
+        if let Some(trigger) = input.trigger {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("trigger = ");
+            query.push_bind(trigger);
+            has_updates = true;
+        }
+
+        if let Some(trigger_ref) = &input.trigger_ref {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("trigger_ref = ");
+            query.push_bind(trigger_ref);
+            has_updates = true;
+        }
+
         if let Some(param_schema) = &input.param_schema {
             if has_updates {
                 query.push(", ");
             }
             query.push("param_schema = ");
             query.push_bind(param_schema);
+            has_updates = true;
+        }
+
+        if let Some(config) = &input.config {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("config = ");
+            query.push_bind(config);
             has_updates = true;
         }
 

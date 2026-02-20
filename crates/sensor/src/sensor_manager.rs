@@ -232,6 +232,11 @@ impl SensorManager {
         let exec_config = runtime.parsed_execution_config();
         let rt_name = runtime.name.to_lowercase();
 
+        info!(
+            "Sensor {} runtime details: id={}, ref='{}', name='{}', execution_config={}",
+            sensor.r#ref, runtime.id, runtime.r#ref, runtime.name, runtime.execution_config
+        );
+
         // Resolve the interpreter: check for a virtualenv/node_modules first,
         // then fall back to the system interpreter.
         let pack_dir = std::path::PathBuf::from(&self.inner.packs_base_dir).join(pack_ref);
@@ -255,8 +260,13 @@ impl SensorManager {
             || interpreter_binary == "none";
 
         info!(
-            "Sensor {} runtime={} interpreter={} native={}",
-            sensor.r#ref, rt_name, interpreter_binary, is_native
+            "Sensor {} runtime={} (ref={}) interpreter='{}' native={} env_dir_exists={}",
+            sensor.r#ref,
+            rt_name,
+            runtime.r#ref,
+            interpreter_binary,
+            is_native,
+            env_dir.exists()
         );
         info!("Starting standalone sensor process: {}", sensor_script);
 
@@ -289,8 +299,8 @@ impl SensorManager {
 
         // Build the command: use the interpreter for non-native runtimes,
         // execute the script directly for native binaries.
-        let mut cmd = if is_native {
-            Command::new(&sensor_script)
+        let (spawn_binary, mut cmd) = if is_native {
+            (sensor_script.clone(), Command::new(&sensor_script))
         } else {
             let resolved_interpreter =
                 exec_config.resolve_interpreter_with_env(&pack_dir, env_dir_opt);
@@ -299,14 +309,48 @@ impl SensorManager {
                 resolved_interpreter.display(),
                 sensor.r#ref
             );
-            let mut c = Command::new(resolved_interpreter);
+            let binary_str = resolved_interpreter.display().to_string();
+            let mut c = Command::new(&resolved_interpreter);
             // Pass any extra interpreter args (e.g., -u for unbuffered Python)
             for arg in &exec_config.interpreter.args {
                 c.arg(arg);
             }
             c.arg(&sensor_script);
-            c
+            (binary_str, c)
         };
+
+        // Log the full command for diagnostics
+        info!(
+            "Spawning sensor {}: binary='{}' is_native={} script='{}'",
+            sensor.r#ref, spawn_binary, is_native, sensor_script
+        );
+
+        // Pre-flight check: verify the binary exists and is accessible
+        let spawn_path = std::path::Path::new(&spawn_binary);
+        if spawn_path.is_absolute() || spawn_path.components().count() > 1 {
+            // Absolute or relative path with directory component — check it directly
+            match std::fs::metadata(spawn_path) {
+                Ok(meta) => {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = meta.permissions().mode();
+                    let is_exec = mode & 0o111 != 0;
+                    if !is_exec {
+                        error!(
+                            "Binary '{}' exists but is not executable (mode: {:o}). \
+                             Sensor runtime ref='{}', execution_config interpreter='{}'.",
+                            spawn_binary, mode, runtime.r#ref, interpreter_binary
+                        );
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        "Cannot access binary '{}': {}. \
+                         Sensor runtime ref='{}', execution_config interpreter='{}'.",
+                        spawn_binary, e, runtime.r#ref, interpreter_binary
+                    );
+                }
+            }
+        }
 
         // Start the standalone sensor with token and configuration
         // Pass sensor ref (e.g., "core.interval_timer_sensor") for proper identification
@@ -323,7 +367,19 @@ impl SensorManager {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| anyhow!("Failed to start standalone sensor process: {}", e))?;
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to start sensor process for '{}': {} \
+                     (binary='{}', is_native={}, runtime_ref='{}', \
+                     interpreter_config='{}')",
+                    sensor.r#ref,
+                    e,
+                    spawn_binary,
+                    is_native,
+                    runtime.r#ref,
+                    interpreter_binary
+                )
+            })?;
 
         // Get stdout and stderr for logging (standalone sensors output JSON logs to stdout)
         let stdout = child

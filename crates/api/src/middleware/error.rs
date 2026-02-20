@@ -148,8 +148,42 @@ impl From<sqlx::Error> for ApiError {
         match err {
             sqlx::Error::RowNotFound => ApiError::NotFound("Resource not found".to_string()),
             sqlx::Error::Database(db_err) => {
-                // Check for unique constraint violations
-                if let Some(constraint) = db_err.constraint() {
+                // PostgreSQL error codes:
+                //   23505 = unique_violation    → 409 Conflict
+                //   23503 = foreign_key_violation → 422 Unprocessable Entity
+                //   23514 = check_violation     → 422 Unprocessable Entity
+                //   P0001 = raise_exception     → 400 Bad Request (trigger-raised errors)
+                let pg_code = db_err.code().map(|c| c.to_string()).unwrap_or_default();
+                if pg_code == "23505" {
+                    // Unique constraint violation — duplicate key
+                    let detail = db_err
+                        .constraint()
+                        .map(|c| format!(" ({})", c))
+                        .unwrap_or_default();
+                    ApiError::Conflict(format!("Already exists{}", detail))
+                } else if pg_code == "23503" {
+                    // Foreign key violation — the referenced row doesn't exist
+                    let detail = db_err
+                        .constraint()
+                        .map(|c| format!(" ({})", c))
+                        .unwrap_or_default();
+                    ApiError::UnprocessableEntity(format!(
+                        "Referenced entity does not exist{}",
+                        detail
+                    ))
+                } else if pg_code == "23514" {
+                    // CHECK constraint violation — value doesn't meet constraint
+                    let detail = db_err
+                        .constraint()
+                        .map(|c| format!(": {}", c))
+                        .unwrap_or_default();
+                    ApiError::UnprocessableEntity(format!("Validation constraint failed{}", detail))
+                } else if pg_code == "P0001" {
+                    // RAISE EXCEPTION from a trigger or function
+                    // Extract the human-readable message from the exception
+                    let msg = db_err.message().to_string();
+                    ApiError::BadRequest(msg)
+                } else if let Some(constraint) = db_err.constraint() {
                     ApiError::Conflict(format!("Constraint violation: {}", constraint))
                 } else {
                     ApiError::DatabaseError(format!("Database error: {}", db_err))

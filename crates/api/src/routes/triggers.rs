@@ -719,8 +719,13 @@ pub async fn update_sensor(
         label: request.label,
         description: request.description,
         entrypoint: request.entrypoint,
+        runtime: None,
+        runtime_ref: None,
+        trigger: None,
+        trigger_ref: None,
         enabled: request.enabled,
         param_schema: request.param_schema,
+        config: None,
     };
 
     let sensor = SensorRepository::update(&state.db, existing_sensor.id, update_input).await?;
@@ -799,8 +804,13 @@ pub async fn enable_sensor(
         label: None,
         description: None,
         entrypoint: None,
+        runtime: None,
+        runtime_ref: None,
+        trigger: None,
+        trigger_ref: None,
         enabled: Some(true),
         param_schema: None,
+        config: None,
     };
 
     let sensor = SensorRepository::update(&state.db, existing_sensor.id, update_input).await?;
@@ -840,8 +850,13 @@ pub async fn disable_sensor(
         label: None,
         description: None,
         entrypoint: None,
+        runtime: None,
+        runtime_ref: None,
+        trigger: None,
+        trigger_ref: None,
         enabled: Some(false),
         param_schema: None,
+        config: None,
     };
 
     let sensor = SensorRepository::update(&state.db, existing_sensor.id, update_input).await?;

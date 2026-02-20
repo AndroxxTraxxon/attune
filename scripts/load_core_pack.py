@@ -528,6 +528,8 @@ class PackLoader:
                     label = EXCLUDED.label,
                     description = EXCLUDED.description,
                     entrypoint = EXCLUDED.entrypoint,
+                    runtime = EXCLUDED.runtime,
+                    runtime_ref = EXCLUDED.runtime_ref,
                     trigger = EXCLUDED.trigger,
                     trigger_ref = EXCLUDED.trigger_ref,
                     enabled = EXCLUDED.enabled,

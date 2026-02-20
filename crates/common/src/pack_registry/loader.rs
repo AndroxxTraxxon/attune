@@ -23,7 +23,7 @@ use crate::repositories::runtime::{CreateRuntimeInput, RuntimeRepository};
 use crate::repositories::trigger::{
     CreateSensorInput, CreateTriggerInput, SensorRepository, TriggerRepository,
 };
-use crate::repositories::{Create, FindByRef};
+use crate::repositories::{Create, FindById, FindByRef, Update};
 
 /// Result of loading pack components into the database.
 #[derive(Debug, Default)]
@@ -514,6 +514,47 @@ impl<'a> PackComponentLoader<'a> {
                 .unwrap_or("native");
             let (sensor_runtime_id, sensor_runtime_ref) = self.resolve_runtime(runner_type).await?;
 
+            // Validate: if the runner_type suggests an interpreted runtime (not native)
+            // but we couldn't resolve it, or it resolved to a runtime with no
+            // execution_config, warn at registration time rather than failing
+            // opaquely at sensor startup with "Permission denied".
+            let is_native_runner = matches!(
+                runner_type.to_lowercase().as_str(),
+                "native" | "builtin" | "standalone"
+            );
+            if sensor_runtime_id == 0 && !is_native_runner {
+                let msg = format!(
+                    "Sensor '{}' declares runner_type '{}' but no matching runtime \
+                     was found in the database. The sensor will not be able to start. \
+                     Ensure the core pack (with runtimes) is loaded before registering \
+                     packs that depend on its runtimes.",
+                    filename, runner_type
+                );
+                warn!("{}", msg);
+                result.warnings.push(msg);
+            } else if sensor_runtime_id != 0 && !is_native_runner {
+                // Verify the resolved runtime has a non-empty execution_config
+                if let Some(runtime) =
+                    RuntimeRepository::find_by_id(self.pool, sensor_runtime_id).await?
+                {
+                    let exec_config = runtime.parsed_execution_config();
+                    if exec_config.interpreter.binary.is_empty()
+                        || exec_config.interpreter.binary == "native"
+                        || exec_config.interpreter.binary == "none"
+                    {
+                        let msg = format!(
+                            "Sensor '{}' declares runner_type '{}' (resolved to runtime '{}') \
+                             but that runtime has no interpreter configured in its \
+                             execution_config. The sensor will fail to start. \
+                             Check the runtime definition for '{}'.",
+                            filename, runner_type, runtime.r#ref, runtime.r#ref
+                        );
+                        warn!("{}", msg);
+                        result.warnings.push(msg);
+                    }
+                }
+            }
+
             let sensor_ref = match data.get("ref").and_then(|v| v.as_str()) {
                 Some(r) => r.to_string(),
                 None => {
@@ -523,16 +564,6 @@ impl<'a> PackComponentLoader<'a> {
                     continue;
                 }
             };
-
-            // Check if sensor already exists
-            if let Some(existing) = SensorRepository::find_by_ref(self.pool, &sensor_ref).await? {
-                info!(
-                    "Sensor '{}' already exists (ID: {}), skipping",
-                    sensor_ref, existing.id
-                );
-                result.sensors_skipped += 1;
-                continue;
-            }
 
             let name = extract_name_from_ref(&sensor_ref);
             let label = data
@@ -569,6 +600,41 @@ impl<'a> PackComponentLoader<'a> {
                 .get("config")
                 .and_then(|v| serde_json::to_value(v).ok())
                 .unwrap_or_else(|| serde_json::json!({}));
+
+            // Upsert: update existing sensors so re-registration corrects
+            // stale metadata (especially runtime assignments).
+            if let Some(existing) = SensorRepository::find_by_ref(self.pool, &sensor_ref).await? {
+                use crate::repositories::trigger::UpdateSensorInput;
+
+                let update_input = UpdateSensorInput {
+                    label: Some(label),
+                    description: Some(description),
+                    entrypoint: Some(entrypoint),
+                    runtime: Some(sensor_runtime_id),
+                    runtime_ref: Some(sensor_runtime_ref.clone()),
+                    trigger: Some(trigger_id.unwrap_or(existing.trigger)),
+                    trigger_ref: Some(trigger_ref.unwrap_or(existing.trigger_ref.clone())),
+                    enabled: Some(enabled),
+                    param_schema,
+                    config: Some(config),
+                };
+
+                match SensorRepository::update(self.pool, existing.id, update_input).await {
+                    Ok(_) => {
+                        info!(
+                            "Updated sensor '{}' (ID: {}, runtime: {} → {})",
+                            sensor_ref, existing.id, existing.runtime_ref, sensor_runtime_ref
+                        );
+                        result.sensors_loaded += 1;
+                    }
+                    Err(e) => {
+                        let msg = format!("Failed to update sensor '{}': {}", sensor_ref, e);
+                        warn!("{}", msg);
+                        result.warnings.push(msg);
+                    }
+                }
+                continue;
+            }
 
             let input = CreateSensorInput {
                 r#ref: sensor_ref.clone(),
