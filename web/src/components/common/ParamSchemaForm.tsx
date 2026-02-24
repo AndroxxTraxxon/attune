@@ -68,6 +68,12 @@ interface ParamSchemaFormProps {
    * at enforcement time rather than set to literal values.
    */
   allowTemplates?: boolean;
+  /**
+   * When true, hides the amber "Template expressions" info banner at the top
+   * while still enabling template-mode inputs. Useful when template syntax is
+   * supported but the contextual hint (rule-specific namespaces) doesn't apply.
+   */
+  hideTemplateHint?: boolean;
 }
 
 /**
@@ -140,6 +146,7 @@ export default function ParamSchemaForm({
   disabled = false,
   className = "",
   allowTemplates = false,
+  hideTemplateHint = false,
 }: ParamSchemaFormProps) {
   const [localErrors, setLocalErrors] = useState<Record<string, string>>({});
 
@@ -450,7 +457,7 @@ export default function ParamSchemaForm({
 
   return (
     <div className={`space-y-4 ${className}`}>
-      {allowTemplates && (
+      {allowTemplates && !hideTemplateHint && (
         <div className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
           <p className="text-xs text-amber-800">
             <span className="font-semibold">Template expressions</span> are

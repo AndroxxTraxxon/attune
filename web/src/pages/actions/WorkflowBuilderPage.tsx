@@ -1,5 +1,6 @@
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useQueries } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Save,
@@ -7,6 +8,7 @@ import {
   FileCode,
   Code,
   LayoutDashboard,
+  X,
 } from "lucide-react";
 import yaml from "js-yaml";
 import type { WorkflowYamlDefinition } from "@/types/workflow";
@@ -15,6 +17,7 @@ import WorkflowCanvas from "@/components/workflows/WorkflowCanvas";
 import type { EdgeHoverInfo } from "@/components/workflows/WorkflowEdges";
 import TaskInspector from "@/components/workflows/TaskInspector";
 import { useActions } from "@/hooks/useActions";
+import { ActionsService } from "@/api";
 import { usePacks } from "@/hooks/usePacks";
 import { useWorkflow } from "@/hooks/useWorkflows";
 import {
@@ -35,6 +38,8 @@ import {
   validateWorkflow,
   addTransitionTarget,
   removeTaskFromTransitions,
+  renameTaskInTransitions,
+  findStartingTaskIds,
 } from "@/types/workflow";
 
 const INITIAL_STATE: WorkflowBuilderState = {
@@ -82,28 +87,20 @@ export default function WorkflowBuilderPage() {
     taskId: string;
     transitionIndex: number;
   } | null>(null);
-  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
 
-  const handleEdgeHover = useCallback(
+  // Start-node warning toast state
+  const [startWarningVisible, setStartWarningVisible] = useState(false);
+  const [startWarningDismissed, setStartWarningDismissed] = useState(false);
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+  const [prevWarningKey, setPrevWarningKey] = useState<string | null>(null);
+  const [justInitialized, setJustInitialized] = useState(false);
+
+  const handleEdgeClick = useCallback(
     (info: EdgeHoverInfo | null) => {
-      // Clear any pending auto-clear timeout
-      if (highlightTimeoutRef.current) {
-        clearTimeout(highlightTimeoutRef.current);
-        highlightTimeoutRef.current = null;
-      }
-
       if (info) {
         // Select the source task so TaskInspector opens for it
         setSelectedTaskId(info.taskId);
         setHighlightedTransition(info);
-
-        // Auto-clear highlight after 2 seconds so the flash animation plays once
-        highlightTimeoutRef.current = setTimeout(() => {
-          setHighlightedTransition(null);
-          highlightTimeoutRef.current = null;
-        }, 2000);
       } else {
         setHighlightedTransition(null);
       }
@@ -138,6 +135,7 @@ export default function WorkflowBuilderPage() {
       );
       setState(builderState);
       setInitialized(true);
+      setJustInitialized(true);
     }
   }
 
@@ -149,8 +147,6 @@ export default function WorkflowBuilderPage() {
       label: string;
       description?: string;
       pack_ref: string;
-      param_schema?: Record<string, unknown> | null;
-      out_schema?: Record<string, unknown> | null;
     }>;
     return actions.map((a) => ({
       id: a.id,
@@ -158,19 +154,42 @@ export default function WorkflowBuilderPage() {
       label: a.label,
       description: a.description || "",
       pack_ref: a.pack_ref,
-      param_schema: a.param_schema || null,
-      out_schema: a.out_schema || null,
     }));
   }, [actionsData]);
 
-  // Build action schema map for stripping defaults during serialization
+  // Fetch full action details for every unique action ref used in the workflow.
+  // React Query caches each response, so repeated refs don't cause extra requests.
+  const uniqueActionRefs = useMemo(() => {
+    const refs = new Set<string>();
+    for (const task of state.tasks) {
+      if (task.action) refs.add(task.action);
+    }
+    return [...refs];
+  }, [state.tasks]);
+
+  const actionDetailQueries = useQueries({
+    queries: uniqueActionRefs.map((ref) => ({
+      queryKey: ["actions", ref],
+      queryFn: () => ActionsService.getAction({ ref }),
+      staleTime: 30_000,
+      enabled: !!ref,
+    })),
+  });
+
+  // Build action schema map from individually-fetched action details
   const actionSchemaMap = useMemo(() => {
     const map = new Map<string, Record<string, unknown> | null>();
-    for (const action of paletteActions) {
-      map.set(action.ref, action.param_schema);
+    for (let i = 0; i < uniqueActionRefs.length; i++) {
+      const query = actionDetailQueries[i];
+      if (query.data?.data) {
+        map.set(
+          uniqueActionRefs[i],
+          (query.data.data.param_schema as Record<string, unknown>) || null,
+        );
+      }
     }
     return map;
-  }, [paletteActions]);
+  }, [uniqueActionRefs, actionDetailQueries]);
 
   const packs = useMemo(() => {
     return (packsData?.data || []) as Array<{
@@ -189,6 +208,65 @@ export default function WorkflowBuilderPage() {
     () => state.tasks.map((t) => t.name),
     [state.tasks],
   );
+
+  const startingTaskIds = useMemo(
+    () => findStartingTaskIds(state.tasks),
+    [state.tasks],
+  );
+
+  const startNodeWarning = useMemo(() => {
+    if (state.tasks.length === 0) return null;
+    const count = startingTaskIds.size;
+    if (count === 0)
+      return {
+        level: "error" as const,
+        message:
+          "No starting tasks found — every task is a target of another transition, so the workflow has no entry point.",
+      };
+    if (count > 1)
+      return {
+        level: "warn" as const,
+        message: `${count} starting tasks found (${state.tasks
+          .filter((t) => startingTaskIds.has(t.id))
+          .map((t) => `"${t.name}"`)
+          .join(", ")}). Workflows typically have a single entry point.`,
+      };
+    return null;
+  }, [state.tasks, startingTaskIds]);
+
+  // Render-phase state adjustment: detect warning key changes for immediate
+  // show/hide without refs or synchronous setState inside effects.
+  const warningKey = startNodeWarning
+    ? `${startNodeWarning.level}:${startingTaskIds.size}`
+    : null;
+
+  if (warningKey !== prevWarningKey) {
+    setPrevWarningKey(warningKey);
+
+    if (!warningKey) {
+      // Condition resolved → immediately hide and allow future warnings
+      if (startWarningVisible) setStartWarningVisible(false);
+      if (startWarningDismissed) setStartWarningDismissed(false);
+    } else if (justInitialized) {
+      // Loaded from persistent storage with a problem → show immediately
+      if (!startWarningVisible) setStartWarningVisible(true);
+      setJustInitialized(false);
+    }
+  }
+
+  // Debounce timer: starts a 15-second countdown for non-initial warning
+  // appearances. The timer callback is async so it satisfies React's rules.
+  useEffect(() => {
+    if (!startNodeWarning || startWarningVisible || startWarningDismissed) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setStartWarningVisible(true);
+    }, 15_000);
+
+    return () => clearTimeout(timer);
+  }, [startNodeWarning, startWarningVisible, startWarningDismissed]);
 
   // State updaters
   const updateMetadata = useCallback(
@@ -214,20 +292,11 @@ export default function WorkflowBuilderPage() {
         }
       }
 
-      // Pre-populate input from action's param_schema
-      const input: Record<string, unknown> = {};
-      if (action.param_schema && typeof action.param_schema === "object") {
-        for (const [key, param] of Object.entries(action.param_schema)) {
-          const meta = param as { default?: unknown };
-          input[key] = meta?.default !== undefined ? meta.default : "";
-        }
-      }
-
       const newTask: WorkflowTask = {
         id: generateTaskId(),
         name,
         action: action.ref,
-        input,
+        input: {},
         position: {
           x: 300,
           y: state.tasks.length === 0 ? 60 : maxY + 160,
@@ -254,12 +323,49 @@ export default function WorkflowBuilderPage() {
 
   const handleUpdateTask = useCallback(
     (taskId: string, updates: Partial<WorkflowTask>) => {
-      setState((prev) => ({
-        ...prev,
-        tasks: prev.tasks.map((t) =>
-          t.id === taskId ? { ...t, ...updates } : t,
-        ),
-      }));
+      setState((prev) => {
+        // Detect a name change so we can propagate it to transitions
+        const oldName =
+          updates.name !== undefined
+            ? prev.tasks.find((t) => t.id === taskId)?.name
+            : undefined;
+        const newName = updates.name;
+        const isRename =
+          oldName !== undefined && newName !== undefined && oldName !== newName;
+
+        return {
+          ...prev,
+          tasks: prev.tasks.map((t) => {
+            if (t.id === taskId) {
+              // Apply the updates, then also fix self-referencing transitions
+              const merged = { ...t, ...updates };
+              if (isRename) {
+                const updatedNext = renameTaskInTransitions(
+                  merged.next,
+                  oldName,
+                  newName,
+                );
+                if (updatedNext !== merged.next) {
+                  return { ...merged, next: updatedNext };
+                }
+              }
+              return merged;
+            }
+            // Update transition `do` lists that reference the old name
+            if (isRename) {
+              const updatedNext = renameTaskInTransitions(
+                t.next,
+                oldName,
+                newName,
+              );
+              if (updatedNext !== t.next) {
+                return { ...t, next: updatedNext };
+              }
+            }
+            return t;
+          }),
+        };
+      });
       setSaveSuccess(false);
     },
     [],
@@ -310,7 +416,7 @@ export default function WorkflowBuilderPage() {
     [],
   );
 
-  const handleSave = useCallback(async () => {
+  const doSave = useCallback(async () => {
     // Validate
     const errors = validateWorkflow(state);
     setValidationErrors(errors);
@@ -380,6 +486,18 @@ export default function WorkflowBuilderPage() {
     updateWorkflowFile,
     actionSchemaMap,
   ]);
+
+  const handleSave = useCallback(() => {
+    // If there's a start-node problem, show the toast immediately and
+    // require confirmation before saving
+    if (startNodeWarning) {
+      setStartWarningVisible(true);
+      setStartWarningDismissed(false);
+      setShowSaveConfirm(true);
+      return;
+    }
+    doSave();
+  }, [startNodeWarning, doSave]);
 
   // YAML preview — generate proper YAML from builder state
   const yamlPreview = useMemo(() => {
@@ -640,13 +758,12 @@ export default function WorkflowBuilderPage() {
             <WorkflowCanvas
               tasks={state.tasks}
               selectedTaskId={selectedTaskId}
-              availableActions={paletteActions}
               onSelectTask={setSelectedTaskId}
               onUpdateTask={handleUpdateTask}
               onDeleteTask={handleDeleteTask}
               onAddTask={handleAddTask}
               onSetConnection={handleSetConnection}
-              onEdgeHover={handleEdgeHover}
+              onEdgeClick={handleEdgeClick}
             />
 
             {/* Right: Task Inspector */}
@@ -667,6 +784,122 @@ export default function WorkflowBuilderPage() {
           </>
         )}
       </div>
+
+      {/* Floating start-node warning toast */}
+      {startNodeWarning && startWarningVisible && (
+        <div
+          className="fixed top-20 left-1/2 -translate-x-1/2 z-50 animate-fade-in"
+          style={{
+            animation: "fadeInDown 0.25s ease-out both",
+          }}
+        >
+          <div
+            className={`flex items-center gap-2.5 px-4 py-2.5 rounded-lg shadow-lg border ${
+              startNodeWarning.level === "error"
+                ? "bg-red-50 border-red-300 text-red-800"
+                : "bg-amber-50 border-amber-300 text-amber-800"
+            }`}
+            style={{ maxWidth: 520 }}
+          >
+            <AlertTriangle
+              className={`w-4 h-4 flex-shrink-0 ${
+                startNodeWarning.level === "error"
+                  ? "text-red-500"
+                  : "text-amber-500"
+              }`}
+            />
+            <p className="text-xs font-medium flex-1">
+              {startNodeWarning.message}
+            </p>
+            <button
+              onClick={() => {
+                setStartWarningVisible(false);
+                setStartWarningDismissed(true);
+              }}
+              className={`p-0.5 rounded hover:bg-black/5 flex-shrink-0 ${
+                startNodeWarning.level === "error"
+                  ? "text-red-400 hover:text-red-600"
+                  : "text-amber-400 hover:text-amber-600"
+              }`}
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation modal for saving with start-node warnings */}
+      {showSaveConfirm && startNodeWarning && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setShowSaveConfirm(false)}
+          />
+          {/* Modal */}
+          <div className="relative bg-white rounded-lg shadow-xl border border-gray-200 p-6 max-w-md w-full mx-4">
+            <div className="flex items-start gap-3">
+              <div
+                className={`p-2 rounded-full flex-shrink-0 ${
+                  startNodeWarning.level === "error"
+                    ? "bg-red-100"
+                    : "bg-amber-100"
+                }`}
+              >
+                <AlertTriangle
+                  className={`w-5 h-5 ${
+                    startNodeWarning.level === "error"
+                      ? "text-red-600"
+                      : "text-amber-600"
+                  }`}
+                />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-sm font-semibold text-gray-900 mb-1">
+                  {startNodeWarning.level === "error"
+                    ? "No starting tasks"
+                    : "Multiple starting tasks"}
+                </h3>
+                <p className="text-xs text-gray-600 mb-4">
+                  {startNodeWarning.message} Are you sure you want to save this
+                  workflow?
+                </p>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    onClick={() => setShowSaveConfirm(false)}
+                    className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 rounded hover:bg-gray-200 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowSaveConfirm(false);
+                      doSave();
+                    }}
+                    className="px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded hover:bg-blue-700 transition-colors"
+                  >
+                    Save Anyway
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Inline style for fade-in animation */}
+      <style>{`
+          @keyframes fadeInDown {
+            from {
+              opacity: 0;
+              transform: translate(-50%, -8px);
+            }
+            to {
+              opacity: 1;
+              transform: translate(-50%, 0);
+            }
+          }
+        `}</style>
     </div>
   );
 }

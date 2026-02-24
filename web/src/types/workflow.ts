@@ -105,6 +105,13 @@ export const PRESET_LABELS: Record<TransitionPreset, string> = {
   always: "Always",
 };
 
+/** Default edge colors for each preset */
+export const PRESET_COLORS: Record<TransitionPreset, string> = {
+  succeeded: "#22c55e", // green-500
+  failed: "#ef4444", // red-500
+  always: "#6b7280", // gray-500
+};
+
 /**
  * Classify a `when` expression into an edge visual type.
  * Used for edge coloring and labeling.
@@ -197,15 +204,27 @@ export interface WorkflowYamlDefinition {
   tags?: string[];
 }
 
+/** Chart-only metadata for a transition edge (not consumed by the backend) */
+export interface TransitionChartMeta {
+  /** Custom display label for the transition */
+  label?: string;
+  /** Custom color for the transition edge (CSS color string) */
+  color?: string;
+}
+
 /** Transition as represented in YAML format */
 export interface WorkflowYamlTransition {
   when?: string;
   publish?: PublishDirective[];
   do?: string[];
-  /** Custom display label for the transition */
-  label?: string;
-  /** Custom color for the transition edge */
-  color?: string;
+  /** Visual metadata (label, color) — ignored by backend */
+  __chart_meta__?: TransitionChartMeta;
+}
+
+/** Chart-only metadata for a task node (not consumed by the backend) */
+export interface TaskChartMeta {
+  /** Visual position on the canvas */
+  position?: NodePosition;
 }
 
 /** Task as represented in YAML format */
@@ -221,6 +240,8 @@ export interface WorkflowYamlTask {
   timeout?: number;
   next?: WorkflowYamlTransition[];
   join?: number;
+  /** Visual metadata (position) — ignored by backend */
+  __chart_meta__?: TaskChartMeta;
 }
 
 /** Request to save a workflow file to disk and sync to DB */
@@ -254,8 +275,6 @@ export interface PaletteAction {
   label: string;
   description: string;
   pack_ref: string;
-  param_schema: Record<string, unknown> | null;
-  out_schema: Record<string, unknown> | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +371,11 @@ export function builderStateToDefinition(
     if (task.timeout) yamlTask.timeout = task.timeout;
     if (task.join) yamlTask.join = task.join;
 
+    // Persist canvas position in __chart_meta__ so layout is restored on reload
+    yamlTask.__chart_meta__ = {
+      position: { x: task.position.x, y: task.position.y },
+    };
+
     // Serialize transitions as `next` array
     if (task.next && task.next.length > 0) {
       yamlTask.next = task.next.map((t) => {
@@ -359,8 +383,12 @@ export function builderStateToDefinition(
         if (t.when) yt.when = t.when;
         if (t.publish && t.publish.length > 0) yt.publish = t.publish;
         if (t.do && t.do.length > 0) yt.do = t.do;
-        if (t.label) yt.label = t.label;
-        if (t.color) yt.color = t.color;
+        // Store label/color in __chart_meta__ to avoid polluting the transition namespace
+        if (t.label || t.color) {
+          yt.__chart_meta__ = {};
+          if (t.label) yt.__chart_meta__.label = t.label;
+          if (t.color) yt.__chart_meta__.color = t.color;
+        }
         return yt;
       });
     }
@@ -499,8 +527,8 @@ export function definitionToBuilderState(
           when: t.when,
           publish: t.publish,
           do: t.do,
-          label: t.label,
-          color: t.color,
+          label: t.__chart_meta__?.label,
+          color: t.__chart_meta__?.color,
         }));
       } else {
         const converted = legacyTransitionsToNext(task);
@@ -520,7 +548,7 @@ export function definitionToBuilderState(
         batch_size: task.batch_size,
         concurrency: task.concurrency,
         join: task.join,
-        position: {
+        position: task.__chart_meta__?.position ?? {
           x: 300,
           y: 80 + index * 160,
         },
@@ -623,8 +651,11 @@ export function findOrCreateTransition(
     return { next, index: existingIndex };
   }
 
-  // Create new transition
-  const newTransition: TaskTransition = {};
+  // Create new transition with default label and color for the preset
+  const newTransition: TaskTransition = {
+    label: PRESET_LABELS[preset],
+    color: PRESET_COLORS[preset],
+  };
   if (whenExpr) newTransition.when = whenExpr;
   next.push(newTransition);
   return { next, index: next.length - 1 };
@@ -675,6 +706,60 @@ export function removeTaskFromTransitions(
     );
 
   return cleaned.length > 0 ? cleaned : undefined;
+}
+
+/**
+ * Rename a task in all transition `do` lists.
+ * Returns a new array (or undefined) only when something changed;
+ * otherwise returns the original reference so callers can cheaply
+ * detect a no-op via `===`.
+ */
+export function renameTaskInTransitions(
+  next: TaskTransition[] | undefined,
+  oldName: string,
+  newName: string,
+): TaskTransition[] | undefined {
+  if (!next) return undefined;
+
+  let changed = false;
+  const updated = next.map((t) => {
+    if (!t.do || !t.do.includes(oldName)) return t;
+    changed = true;
+    return {
+      ...t,
+      do: t.do.map((name) => (name === oldName ? newName : name)),
+    };
+  });
+
+  return changed ? updated : next;
+}
+
+/**
+ * Find "starting" tasks — those whose name does not appear in any
+ * transition `do` list (i.e. no other task transitions into them).
+ * Returns a Set of task IDs.
+ */
+export function findStartingTaskIds(tasks: WorkflowTask[]): Set<string> {
+  // Collect every task name that is referenced as a transition target
+  const targeted = new Set<string>();
+  for (const task of tasks) {
+    if (!task.next) continue;
+    for (const t of task.next) {
+      if (t.do) {
+        for (const name of t.do) {
+          targeted.add(name);
+        }
+      }
+    }
+  }
+
+  const startIds = new Set<string>();
+  for (const task of tasks) {
+    if (!targeted.has(task.name)) {
+      startIds.add(task.id);
+    }
+  }
+  return startIds;
 }
 
 // ---------------------------------------------------------------------------

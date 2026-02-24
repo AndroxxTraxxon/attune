@@ -8,6 +8,7 @@ import {
   GripVertical,
   ArrowRight,
   Palette,
+  Loader2,
 } from "lucide-react";
 import type {
   WorkflowTask,
@@ -19,6 +20,7 @@ import type {
 import {
   PRESET_WHEN,
   PRESET_LABELS,
+  PRESET_COLORS,
   classifyTransitionWhen,
   transitionLabel,
 } from "@/types/workflow";
@@ -26,6 +28,7 @@ import ParamSchemaForm, {
   extractProperties,
   type ParamSchema,
 } from "@/components/common/ParamSchemaForm";
+import { useAction } from "@/hooks/useActions";
 
 /** Preset color swatches for quick transition color selection */
 const TRANSITION_COLOR_SWATCHES = [
@@ -67,6 +70,10 @@ export default function TaskInspector({
   onClose,
   highlightTransitionIndex,
 }: TaskInspectorProps) {
+  // Fetch full action details (including param_schema) on demand
+  const { data: actionDetail, isLoading: actionLoading } = useAction(
+    task.action || "",
+  );
   const transitionRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const [flashIndex, setFlashIndex] = useState<number | null>(null);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
@@ -187,6 +194,8 @@ export default function TaskInspector({
       if (preset) {
         const whenExpr = PRESET_WHEN[preset];
         if (whenExpr) newTransition.when = whenExpr;
+        newTransition.label = PRESET_LABELS[preset];
+        newTransition.color = PRESET_COLORS[preset];
       }
       next.push(newTransition);
       update({ next });
@@ -263,41 +272,18 @@ export default function TaskInspector({
     [task.next, update],
   );
 
-  // Get the selected action's param schema
+  // Get the selected action's param schema from fetched action detail
   const selectedAction = availableActions.find((a) => a.ref === task.action);
+  const fetchedAction = actionDetail?.data;
   const actionParamSchema: ParamSchema = useMemo(
-    () => (selectedAction?.param_schema as ParamSchema) || {},
-    [selectedAction?.param_schema],
+    () => (fetchedAction?.param_schema as ParamSchema) || {},
+    [fetchedAction?.param_schema],
   );
   const schemaProperties = useMemo(
     () => extractProperties(actionParamSchema),
     [actionParamSchema],
   );
   const hasSchema = Object.keys(schemaProperties).length > 0;
-
-  // Separate task inputs into schema-driven and extra custom params
-  const schemaKeys = useMemo(
-    () => new Set(Object.keys(schemaProperties)),
-    [schemaProperties],
-  );
-  const schemaValues = useMemo(() => {
-    const vals: Record<string, unknown> = {};
-    for (const key of schemaKeys) {
-      if (task.input[key] !== undefined) {
-        vals[key] = task.input[key];
-      }
-    }
-    return vals;
-  }, [task.input, schemaKeys]);
-  const extraParams = useMemo(() => {
-    const extras: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(task.input)) {
-      if (!schemaKeys.has(key)) {
-        extras[key] = value;
-      }
-    }
-    return extras;
-  }, [task.input, schemaKeys]);
 
   const otherTaskNames = allTaskNames.filter((n) => n !== task.name);
 
@@ -375,14 +361,20 @@ export default function TaskInspector({
                   </option>
                 ))}
               </select>
-              {selectedAction?.description && (
+              {(fetchedAction?.description || selectedAction?.description) && (
                 <p className="text-[10px] text-gray-400 mt-1">
-                  {selectedAction.description}
+                  {fetchedAction?.description || selectedAction?.description}
                 </p>
               )}
             </div>
 
             {/* Input Parameters — schema-driven form */}
+            {task.action && actionLoading && (
+              <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Loading parameters…
+              </div>
+            )}
             {hasSchema && (
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1.5">
@@ -390,130 +382,21 @@ export default function TaskInspector({
                 </label>
                 <ParamSchemaForm
                   schema={actionParamSchema}
-                  values={schemaValues}
+                  values={task.input}
                   onChange={(newValues) => {
-                    // Merge schema-driven values back with extra params
-                    update({ input: { ...newValues, ...extraParams } });
+                    update({ input: newValues });
                   }}
                   allowTemplates
+                  hideTemplateHint
                   className="text-xs"
                 />
               </div>
             )}
-
-            {/* Extra custom parameters (not in schema) */}
-            {hasSchema && Object.keys(extraParams).length > 0 && (
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">
-                  Custom Parameters
-                </label>
-                <div className="space-y-2">
-                  {Object.entries(extraParams).map(([key, value]) => (
-                    <div
-                      key={key}
-                      className="border border-gray-200 rounded p-2 bg-gray-50"
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-mono text-xs font-medium text-gray-800">
-                          {key}
-                        </span>
-                        <button
-                          onClick={() => {
-                            const newInput = { ...task.input };
-                            delete newInput[key];
-                            update({ input: newInput });
-                          }}
-                          className="p-0.5 text-gray-400 hover:text-red-500"
-                          title="Remove parameter"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                      <input
-                        type="text"
-                        value={
-                          typeof value === "string"
-                            ? value
-                            : JSON.stringify(value ?? "")
-                        }
-                        onChange={(e) =>
-                          update({
-                            input: { ...task.input, [key]: e.target.value },
-                          })
-                        }
-                        className="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="{{ parameters.value }} or literal"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
+            {task.action && !actionLoading && !hasSchema && (
+              <p className="text-[10px] text-gray-400 italic">
+                This action has no declared parameters.
+              </p>
             )}
-
-            {/* No schema — free-form input editing */}
-            {!hasSchema && task.action && (
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">
-                  Input Parameters
-                </label>
-                <div className="space-y-2">
-                  {Object.entries(task.input).map(([key, value]) => (
-                    <div
-                      key={key}
-                      className="border border-gray-200 rounded p-2 bg-gray-50"
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-mono text-xs font-medium text-gray-800">
-                          {key}
-                        </span>
-                        <button
-                          onClick={() => {
-                            const newInput = { ...task.input };
-                            delete newInput[key];
-                            update({ input: newInput });
-                          }}
-                          className="p-0.5 text-gray-400 hover:text-red-500"
-                          title="Remove parameter"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                      <input
-                        type="text"
-                        value={
-                          typeof value === "string"
-                            ? value
-                            : JSON.stringify(value ?? "")
-                        }
-                        onChange={(e) =>
-                          update({
-                            input: { ...task.input, [key]: e.target.value },
-                          })
-                        }
-                        className="w-full px-2 py-1 border border-gray-300 rounded text-xs font-mono focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="{{ parameters.value }} or literal"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Add custom parameter button */}
-            <button
-              onClick={() => {
-                const key = prompt("Parameter name:");
-                if (key && key.trim()) {
-                  update({
-                    input: { ...task.input, [key.trim()]: "" },
-                  });
-                }
-              }}
-              className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800"
-            >
-              <Plus className="w-3 h-3" />
-              Add custom parameter
-            </button>
           </div>
         </CollapsibleSection>
 
@@ -850,48 +733,50 @@ export default function TaskInspector({
               </p>
             </div>
 
-            {task.with_items && (
-              <>
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">
-                    Batch Size
-                  </label>
-                  <input
-                    type="number"
-                    value={task.batch_size || ""}
-                    onChange={(e) =>
-                      update({
-                        batch_size: e.target.value
-                          ? parseInt(e.target.value)
-                          : undefined,
-                      })
-                    }
-                    className="w-full px-2.5 py-1.5 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="Process all at once"
-                    min={1}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">
-                    Concurrency
-                  </label>
-                  <input
-                    type="number"
-                    value={task.concurrency || ""}
-                    onChange={(e) =>
-                      update({
-                        concurrency: e.target.value
-                          ? parseInt(e.target.value)
-                          : undefined,
-                      })
-                    }
-                    className="w-full px-2.5 py-1.5 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="No limit"
-                    min={1}
-                  />
-                </div>
-              </>
-            )}
+            <div>
+              <label
+                className={`block text-xs font-medium mb-1 ${localWithItems ? "text-gray-700" : "text-gray-400"}`}
+              >
+                Batch Size
+              </label>
+              <input
+                type="number"
+                value={task.batch_size || ""}
+                disabled={!localWithItems}
+                onChange={(e) =>
+                  update({
+                    batch_size: e.target.value
+                      ? parseInt(e.target.value)
+                      : undefined,
+                  })
+                }
+                className="w-full px-2.5 py-1.5 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
+                placeholder="Process all at once"
+                min={1}
+              />
+            </div>
+            <div>
+              <label
+                className={`block text-xs font-medium mb-1 ${localWithItems ? "text-gray-700" : "text-gray-400"}`}
+              >
+                Concurrency
+              </label>
+              <input
+                type="number"
+                value={task.concurrency || ""}
+                disabled={!localWithItems}
+                onChange={(e) =>
+                  update({
+                    concurrency: e.target.value
+                      ? parseInt(e.target.value)
+                      : undefined,
+                  })
+                }
+                className="w-full px-2.5 py-1.5 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
+                placeholder="No limit"
+                min={1}
+              />
+            </div>
           </div>
         </CollapsibleSection>
 

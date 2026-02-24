@@ -1,5 +1,6 @@
 import { memo, useMemo } from "react";
 import type { WorkflowEdge, WorkflowTask, EdgeType } from "@/types/workflow";
+import { PRESET_COLORS } from "@/types/workflow";
 import type { TransitionPreset } from "./TaskNode";
 
 export interface EdgeHoverInfo {
@@ -18,8 +19,8 @@ interface WorkflowEdgesProps {
   connectingFrom?: { taskId: string; preset: TransitionPreset } | null;
   /** Mouse position for drawing the preview connection line */
   mousePosition?: { x: number; y: number } | null;
-  /** Called when the mouse enters/leaves an edge hit area */
-  onEdgeHover?: (info: EdgeHoverInfo | null) => void;
+  /** Called when an edge is clicked */
+  onEdgeClick?: (info: EdgeHoverInfo | null) => void;
 }
 
 const NODE_WIDTH = 240;
@@ -38,13 +39,6 @@ const EDGE_DASH: Record<EdgeType, string> = {
   failure: "6,4",
   complete: "4,4",
   custom: "8,4,2,4",
-};
-
-/** Map presets to edge colors for the preview line */
-const PRESET_COLORS: Record<TransitionPreset, string> = {
-  succeeded: EDGE_COLORS.success,
-  failed: EDGE_COLORS.failure,
-  always: EDGE_COLORS.complete,
 };
 
 /** Calculate the center-bottom of a task node */
@@ -89,14 +83,31 @@ function getNodeRightCenter(
 
 /**
  * Determine the best connection points between two nodes.
- * Returns the start and end points for the edge.
+ * Returns the start and end points for the edge, plus whether this is a
+ * self-loop (from === to).
  */
 function getBestConnectionPoints(
   fromTask: WorkflowTask,
   toTask: WorkflowTask,
   nodeWidth: number,
   nodeHeight: number,
-): { start: { x: number; y: number }; end: { x: number; y: number } } {
+): {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+  selfLoop?: boolean;
+} {
+  // Self-loop: start from right side, end at top-right area
+  if (fromTask.id === toTask.id) {
+    return {
+      start: getNodeRightCenter(fromTask, nodeWidth, nodeHeight),
+      end: {
+        x: fromTask.position.x + nodeWidth * 0.75,
+        y: fromTask.position.y,
+      },
+      selfLoop: true,
+    };
+  }
+
   const fromCenter = {
     x: fromTask.position.x + nodeWidth / 2,
     y: fromTask.position.y + nodeHeight / 2,
@@ -117,10 +128,15 @@ function getBestConnectionPoints(
     };
   }
 
-  // If the target is mostly above the source, use top→bottom
+  // If the target is mostly above the source, use a side edge (never top).
+  // Pick the side closer to the target, and arrive at the target's bottom.
   if (dy < 0 && Math.abs(dy) > Math.abs(dx) * 0.5) {
+    const start =
+      dx >= 0
+        ? getNodeRightCenter(fromTask, nodeWidth, nodeHeight)
+        : getNodeLeftCenter(fromTask, nodeHeight);
     return {
-      start: getNodeTopCenter(fromTask, nodeWidth),
+      start,
       end: getNodeBottomCenter(toTask, nodeWidth, nodeHeight),
     };
   }
@@ -138,6 +154,21 @@ function getBestConnectionPoints(
     start: getNodeLeftCenter(fromTask, nodeHeight),
     end: getNodeRightCenter(toTask, nodeWidth, nodeHeight),
   };
+}
+
+/**
+ * Build an SVG path for a self-loop: exits from the right side, arcs out
+ * to the right and upward, then curves back to the top of the node.
+ */
+function buildSelfLoopPath(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+): string {
+  const loopOffset = 50;
+  // Control points: push out to the right and then curve up and back
+  const cp1 = { x: start.x + loopOffset, y: start.y - 20 };
+  const cp2 = { x: end.x + loopOffset, y: end.y - 40 };
+  return `M ${start.x} ${start.y} C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${end.x} ${end.y}`;
 }
 
 /**
@@ -179,7 +210,7 @@ function WorkflowEdgesInner({
   nodeHeight = NODE_HEIGHT,
   connectingFrom,
   mousePosition,
-  onEdgeHover,
+  onEdgeClick,
 }: WorkflowEdgesProps) {
   const taskMap = useMemo(() => {
     const map = new Map<string, WorkflowTask>();
@@ -211,21 +242,25 @@ function WorkflowEdgesInner({
         const toTask = taskMap.get(edge.to);
         if (!fromTask || !toTask) return null;
 
-        const { start, end } = getBestConnectionPoints(
+        const { start, end, selfLoop } = getBestConnectionPoints(
           fromTask,
           toTask,
           nodeWidth,
           nodeHeight,
         );
 
-        const pathD = buildCurvePath(start, end);
+        const pathD = selfLoop
+          ? buildSelfLoopPath(start, end)
+          : buildCurvePath(start, end);
         const color =
           edge.color || EDGE_COLORS[edge.type] || EDGE_COLORS.complete;
         const dash = EDGE_DASH[edge.type] || "";
 
-        // Calculate label position (midpoint of curve)
-        const labelX = (start.x + end.x) / 2;
-        const labelY = (start.y + end.y) / 2 - 8;
+        // Calculate label position — offset to the right for self-loops
+        const labelX = selfLoop ? start.x + 50 : (start.x + end.x) / 2;
+        const labelY = selfLoop
+          ? (start.y + end.y) / 2 - 20
+          : (start.y + end.y) / 2 - 8;
 
         // Measure approximate label width
         const labelText = edge.label || "";
@@ -254,13 +289,12 @@ function WorkflowEdgesInner({
               stroke="transparent"
               strokeWidth={12}
               className="cursor-pointer"
-              onMouseEnter={() =>
-                onEdgeHover?.({
+              onClick={() =>
+                onEdgeClick?.({
                   taskId: edge.from,
                   transitionIndex: edge.transitionIndex,
                 })
               }
-              onMouseLeave={() => onEdgeHover?.(null)}
             />
             {/* Label */}
             {edge.label && (
@@ -295,7 +329,7 @@ function WorkflowEdgesInner({
         );
       })
       .filter(Boolean);
-  }, [edges, taskMap, nodeWidth, nodeHeight, onEdgeHover]);
+  }, [edges, taskMap, nodeWidth, nodeHeight, onEdgeClick]);
 
   // Preview line when connecting
   const previewLine = useMemo(() => {

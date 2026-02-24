@@ -3,15 +3,12 @@ import TaskNode from "./TaskNode";
 import type { TransitionPreset } from "./TaskNode";
 import WorkflowEdges from "./WorkflowEdges";
 import type { EdgeHoverInfo } from "./WorkflowEdges";
-import type {
-  WorkflowTask,
-  PaletteAction,
-  WorkflowEdge,
-} from "@/types/workflow";
+import type { WorkflowTask, WorkflowEdge } from "@/types/workflow";
 import {
   deriveEdges,
   generateUniqueTaskName,
   generateTaskId,
+  findStartingTaskIds,
   PRESET_LABELS,
 } from "@/types/workflow";
 import { Plus } from "lucide-react";
@@ -19,7 +16,6 @@ import { Plus } from "lucide-react";
 interface WorkflowCanvasProps {
   tasks: WorkflowTask[];
   selectedTaskId: string | null;
-  availableActions: PaletteAction[];
   onSelectTask: (taskId: string | null) => void;
   onUpdateTask: (taskId: string, updates: Partial<WorkflowTask>) => void;
   onDeleteTask: (taskId: string) => void;
@@ -29,7 +25,7 @@ interface WorkflowCanvasProps {
     preset: TransitionPreset,
     toTaskName: string,
   ) => void;
-  onEdgeHover?: (info: EdgeHoverInfo | null) => void;
+  onEdgeClick?: (info: EdgeHoverInfo | null) => void;
 }
 
 /** Label color mapping for the connecting banner */
@@ -47,7 +43,7 @@ export default function WorkflowCanvas({
   onDeleteTask,
   onAddTask,
   onSetConnection,
-  onEdgeHover,
+  onEdgeClick,
 }: WorkflowCanvasProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const [connectingFrom, setConnectingFrom] = useState<{
@@ -62,6 +58,8 @@ export default function WorkflowCanvas({
   const allTaskNames = useMemo(() => tasks.map((t) => t.name), [tasks]);
 
   const edges: WorkflowEdge[] = useMemo(() => deriveEdges(tasks), [tasks]);
+
+  const startingTaskIds = useMemo(() => findStartingTaskIds(tasks), [tasks]);
 
   const handleCanvasClick = useCallback(
     (e: React.MouseEvent) => {
@@ -213,7 +211,7 @@ export default function WorkflowCanvas({
         tasks={tasks}
         connectingFrom={connectingFrom}
         mousePosition={mousePosition}
-        onEdgeHover={onEdgeHover}
+        onEdgeClick={onEdgeClick}
       />
 
       {/* Task nodes */}
@@ -222,6 +220,7 @@ export default function WorkflowCanvas({
           key={task.id}
           task={task}
           isSelected={task.id === selectedTaskId}
+          isStartNode={startingTaskIds.has(task.id)}
           allTaskNames={allTaskNames}
           onSelect={onSelectTask}
           onDelete={onDeleteTask}

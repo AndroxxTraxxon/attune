@@ -1,5 +1,5 @@
 import { memo, useCallback, useRef, useState } from "react";
-import { Trash2, Settings, GripVertical } from "lucide-react";
+import { Trash2, GripVertical, Play, Octagon } from "lucide-react";
 import type { WorkflowTask, TransitionPreset } from "@/types/workflow";
 import {
   PRESET_LABELS,
@@ -12,6 +12,7 @@ export type { TransitionPreset };
 interface TaskNodeProps {
   task: WorkflowTask;
   isSelected: boolean;
+  isStartNode: boolean;
   allTaskNames: string[];
   onSelect: (taskId: string) => void;
   onDelete: (taskId: string) => void;
@@ -95,6 +96,7 @@ function transitionSummary(task: WorkflowTask): string | null {
 function TaskNodeInner({
   task,
   isSelected,
+  isStartNode,
   onSelect,
   onDelete,
   onPositionChange,
@@ -107,7 +109,6 @@ function TaskNodeInner({
   const [hoveredHandle, setHoveredHandle] = useState<TransitionPreset | null>(
     null,
   );
-  const [isInputHandleHovered, setIsInputHandleHovered] = useState(false);
   const dragOffset = useRef({ x: 0, y: 0 });
 
   const handleMouseDown = useCallback(
@@ -147,9 +148,9 @@ function TaskNodeInner({
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (connectingFrom && connectingFrom.taskId !== task.id) {
+      if (connectingFrom) {
         onCompleteConnection(task.id);
-      } else if (!connectingFrom) {
+      } else {
         onSelect(task.id);
       }
     },
@@ -173,18 +174,7 @@ function TaskNodeInner({
     [task.id, onStartConnection],
   );
 
-  const handleInputHandleMouseUp = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
-      if (connectingFrom && connectingFrom.taskId !== task.id) {
-        onCompleteConnection(task.id);
-      }
-    },
-    [task.id, connectingFrom, onCompleteConnection],
-  );
-
-  const isConnectionTarget =
-    connectingFrom !== null && connectingFrom.taskId !== task.id;
+  const isConnectionTarget = connectingFrom !== null;
 
   const borderColor = isSelected
     ? "border-blue-500 ring-2 ring-blue-200"
@@ -194,6 +184,12 @@ function TaskNodeInner({
 
   const hasAction = task.action && task.action.length > 0;
   const summary = transitionSummary(task);
+
+  // A stop node has no outgoing transitions to other tasks
+  const isStopNode =
+    !task.next ||
+    task.next.length === 0 ||
+    task.next.every((t) => !t.do || t.do.length === 0);
 
   // Count custom transitions (those not matching any preset)
   const customTransitionCount = (task.next || []).filter((t) => {
@@ -212,55 +208,35 @@ function TaskNodeInner({
       }}
       onMouseDown={handleMouseDown}
       onClick={handleClick}
+      onMouseUp={(e) => {
+        if (connectingFrom) {
+          e.stopPropagation();
+          onCompleteConnection(task.id);
+        }
+      }}
     >
-      {/* Input handle (top center) — drop target */}
-      <div
-        data-handle
-        className="absolute left-1/2 -translate-x-1/2 -top-[7px] z-20"
-        onMouseUp={handleInputHandleMouseUp}
-        onMouseEnter={() => setIsInputHandleHovered(true)}
-        onMouseLeave={() => setIsInputHandleHovered(false)}
-      >
-        <div
-          className="transition-all duration-150 rounded-full border-2 border-white shadow-sm"
-          style={{
-            width:
-              isConnectionTarget && isInputHandleHovered
-                ? 16
-                : isConnectionTarget
-                  ? 14
-                  : 10,
-            height:
-              isConnectionTarget && isInputHandleHovered
-                ? 16
-                : isConnectionTarget
-                  ? 14
-                  : 10,
-            backgroundColor:
-              isConnectionTarget && isInputHandleHovered
-                ? "#8b5cf6"
-                : isConnectionTarget
-                  ? "#a78bfa"
-                  : "#9ca3af",
-            boxShadow:
-              isConnectionTarget && isInputHandleHovered
-                ? "0 0 0 4px rgba(139, 92, 246, 0.3), 0 1px 3px rgba(0,0,0,0.2)"
-                : isConnectionTarget
-                  ? "0 0 0 3px rgba(167, 139, 250, 0.3), 0 1px 2px rgba(0,0,0,0.15)"
-                  : "0 1px 2px rgba(0,0,0,0.1)",
-            cursor: isConnectionTarget ? "pointer" : "default",
-          }}
-        />
-      </div>
-
       <div
         className={`bg-white rounded-lg border-2 shadow-sm transition-colors ${borderColor}`}
       >
         {/* Header */}
-        <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-t-md bg-blue-500 bg-opacity-10 border-b border-gray-100">
-          <GripVertical className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+        <div
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-t-md border-b ${
+            isStartNode
+              ? "bg-green-500 bg-opacity-15 border-green-200"
+              : "bg-blue-500 bg-opacity-10 border-gray-100"
+          }`}
+        >
+          {isStartNode ? (
+            <Play className="w-3.5 h-3.5 text-green-600 flex-shrink-0" />
+          ) : (
+            <GripVertical className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+          )}
           <div className="flex-1 min-w-0">
-            <div className="font-semibold text-xs text-gray-900 truncate">
+            <div
+              className={`font-semibold text-xs truncate ${
+                isStartNode ? "text-green-900" : "text-gray-900"
+              }`}
+            >
               {task.name}
             </div>
           </div>
@@ -322,35 +298,40 @@ function TaskNodeInner({
         </div>
 
         {/* Footer actions */}
-        <div className="flex items-center justify-end px-2 py-1.5 border-t border-gray-100 bg-gray-50 rounded-b-md">
-          <div className="flex gap-1">
-            <button
-              data-action-button
-              onClick={(e) => {
-                e.stopPropagation();
-                onSelect(task.id);
-              }}
-              className="p-1 rounded hover:bg-blue-100 text-gray-400 hover:text-blue-600 transition-colors"
-              title="Configure task"
-            >
-              <Settings className="w-3 h-3" />
-            </button>
-            <button
-              data-action-button
-              onClick={handleDelete}
-              className="p-1 rounded hover:bg-red-100 text-gray-400 hover:text-red-600 transition-colors"
-              title="Delete task"
-            >
-              <Trash2 className="w-3 h-3" />
-            </button>
-          </div>
+        <div
+          className={`flex items-center px-2 py-1.5 border-t rounded-b-md ${
+            isStopNode
+              ? "border-red-200 bg-red-50"
+              : "border-gray-100 bg-gray-50"
+          } ${isStopNode ? "justify-between" : "justify-end"}`}
+        >
+          {isStopNode && (
+            <div className="flex items-center gap-1">
+              <Octagon
+                className="w-3.5 h-3.5 text-red-500"
+                fill="currentColor"
+                strokeWidth={0}
+              />
+              <span className="text-[10px] font-medium text-red-600">Stop</span>
+            </div>
+          )}
+          <button
+            data-action-button
+            onClick={handleDelete}
+            className="p-1 rounded hover:bg-red-100 text-gray-400 hover:text-red-600 transition-colors"
+            title="Delete task"
+          >
+            <Trash2 className="w-3 h-3" />
+          </button>
         </div>
 
         {/* Connection target overlay */}
         {isConnectionTarget && (
           <div className="absolute inset-0 rounded-lg bg-purple-100 bg-opacity-20 pointer-events-none flex items-center justify-center">
             <div className="text-xs font-medium text-purple-600 bg-white px-2 py-1 rounded shadow-sm">
-              Drop to connect
+              {connectingFrom?.taskId === task.id
+                ? "Drop to self-loop"
+                : "Drop to connect"}
             </div>
           </div>
         )}
