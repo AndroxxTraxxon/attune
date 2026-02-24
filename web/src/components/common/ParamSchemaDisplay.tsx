@@ -1,29 +1,12 @@
 /**
  * ParamSchemaDisplay - Read-only display component for parameters
- * Shows parameter values in a human-friendly format based on their schema
- * Supports standard JSON Schema format (https://json-schema.org/draft/2020-12/schema)
+ * Shows parameter values in a human-friendly format based on their schema.
+ * Expects StackStorm-style flat parameter format with inline required/secret.
  */
 
-/**
- * Standard JSON Schema format for parameters
- */
-export interface ParamSchema {
-  type?: "object";
-  properties?: {
-    [key: string]: {
-      type?: "string" | "number" | "integer" | "boolean" | "array" | "object";
-      description?: string;
-      default?: any;
-      enum?: string[];
-      minimum?: number;
-      maximum?: number;
-      minLength?: number;
-      maxLength?: number;
-      secret?: boolean;
-    };
-  };
-  required?: string[];
-}
+import type { ParamSchema } from "./ParamSchemaForm";
+export type { ParamSchema };
+import { extractProperties } from "./ParamSchemaForm";
 
 interface ParamSchemaDisplayProps {
   schema: ParamSchema;
@@ -41,8 +24,7 @@ export default function ParamSchemaDisplay({
   className = "",
   emptyMessage = "No parameters configured",
 }: ParamSchemaDisplayProps) {
-  const properties = schema.properties || {};
-  const requiredFields = schema.required || [];
+  const properties = extractProperties(schema);
   const paramEntries = Object.entries(properties);
 
   // Filter to only show parameters that have values
@@ -63,7 +45,7 @@ export default function ParamSchemaDisplay({
    * Check if a field is required
    */
   const isRequired = (key: string): boolean => {
-    return requiredFields.includes(key);
+    return !!properties[key]?.required;
   };
 
   /**
@@ -320,7 +302,7 @@ export function ParamSchemaDisplayCompact({
   values,
   className = "",
 }: ParamSchemaDisplayProps) {
-  const properties = schema.properties || {};
+  const properties = extractProperties(schema);
   const paramEntries = Object.entries(properties);
   const populatedParams = paramEntries.filter(([key]) => {
     const value = values[key];

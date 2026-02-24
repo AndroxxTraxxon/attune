@@ -3,6 +3,12 @@
 //! This module builds executable task graphs from workflow definitions.
 //! Workflows are directed graphs where tasks are nodes and transitions are edges.
 //! Execution follows transitions from completed tasks, naturally supporting cycles.
+//!
+//! Uses the Orquesta-style `next` transition model where each task has an ordered
+//! list of transitions. Each transition can specify:
+//!   - `when` — a condition expression (e.g., "{{ succeeded() }}", "{{ failed() }}")
+//!   - `publish` — variables to publish into the workflow context
+//!   - `do` — next tasks to invoke when the condition is met
 
 use attune_common::workflow::{Task, TaskType, WorkflowDefinition};
 use std::collections::{HashMap, HashSet};
@@ -51,7 +57,7 @@ pub struct TaskNode {
     /// Input template
     pub input: serde_json::Value,
 
-    /// Conditional execution
+    /// Conditional execution (task-level — controls whether the task runs at all)
     pub when: Option<String>,
 
     /// With-items iteration
@@ -63,17 +69,14 @@ pub struct TaskNode {
     /// Concurrency limit
     pub concurrency: Option<usize>,
 
-    /// Variable publishing directives
-    pub publish: Vec<String>,
-
     /// Retry configuration
     pub retry: Option<RetryConfig>,
 
     /// Timeout in seconds
     pub timeout: Option<u32>,
 
-    /// Transitions
-    pub transitions: TaskTransitions,
+    /// Orquesta-style transitions — evaluated in order after task completes
+    pub transitions: Vec<GraphTransition>,
 
     /// Sub-tasks (for parallel tasks)
     pub sub_tasks: Option<Vec<TaskNode>>,
@@ -85,22 +88,27 @@ pub struct TaskNode {
     pub join: Option<usize>,
 }
 
-/// Task transitions
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct TaskTransitions {
-    pub on_success: Option<String>,
-    pub on_failure: Option<String>,
-    pub on_complete: Option<String>,
-    pub on_timeout: Option<String>,
-    pub decision: Vec<DecisionBranch>,
+/// A single transition in the task graph (Orquesta-style).
+///
+/// Transitions are evaluated in order after a task completes. When `when` is
+/// `None` the transition is unconditional.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphTransition {
+    /// Condition expression (e.g., "{{ succeeded() }}", "{{ failed() }}")
+    pub when: Option<String>,
+
+    /// Variable publishing directives (key-value pairs)
+    pub publish: Vec<PublishVar>,
+
+    /// Next tasks to invoke when transition criteria is met
+    pub do_tasks: Vec<String>,
 }
 
-/// Decision branch
+/// A single publish variable (key = expression)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct DecisionBranch {
-    pub when: Option<String>,
-    pub next: String,
-    pub default: bool,
+pub struct PublishVar {
+    pub name: String,
+    pub expression: String,
 }
 
 /// Retry configuration
@@ -121,8 +129,56 @@ pub enum BackoffStrategy {
     Exponential,
 }
 
+// ---------------------------------------------------------------------------
+// Transition classification helpers
+// ---------------------------------------------------------------------------
+
+/// Classify a `when` expression for quick matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionKind {
+    /// Matches `succeeded()` expressions
+    Succeeded,
+    /// Matches `failed()` expressions
+    Failed,
+    /// Matches `timed_out()` expressions
+    TimedOut,
+    /// No condition — fires on any completion
+    Always,
+    /// Custom condition expression
+    Custom,
+}
+
+impl GraphTransition {
+    /// Classify this transition's `when` expression into a [`TransitionKind`].
+    pub fn kind(&self) -> TransitionKind {
+        match &self.when {
+            None => TransitionKind::Always,
+            Some(expr) => {
+                let normalized = expr.to_lowercase().replace(|c: char| c.is_whitespace(), "");
+                if normalized.contains("succeeded()") {
+                    TransitionKind::Succeeded
+                } else if normalized.contains("failed()") {
+                    TransitionKind::Failed
+                } else if normalized.contains("timed_out()") {
+                    TransitionKind::TimedOut
+                } else {
+                    TransitionKind::Custom
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TaskGraph implementation
+// ---------------------------------------------------------------------------
+
 impl TaskGraph {
-    /// Create a graph from a workflow definition
+    /// Create a graph from a workflow definition.
+    ///
+    /// The workflow's tasks should already have their transitions normalized
+    /// (legacy `on_success`/`on_failure` fields merged into `next`) — this is
+    /// done automatically by [`attune_common::workflow::parse_workflow_yaml`].
     pub fn from_workflow(workflow: &WorkflowDefinition) -> GraphResult<Self> {
         let mut builder = GraphBuilder::new();
 
@@ -149,39 +205,92 @@ impl TaskGraph {
     }
 
     /// Get the next tasks to execute after a task completes.
-    /// Evaluates transitions based on task status.
+    ///
+    /// Evaluates transitions in order based on the task's completion status.
+    /// A transition fires if its `when` condition matches the task status:
+    ///   - `succeeded()` fires when `success == true`
+    ///   - `failed()` fires when `success == false`
+    ///   - No condition (always) fires regardless
+    ///   - Custom conditions are included (actual expression evaluation
+    ///     happens in the workflow coordinator with runtime context)
+    ///
+    /// Multiple transitions can fire — they are independent of each other.
     ///
     /// # Arguments
     /// * `task_name` - The name of the task that completed
     /// * `success` - Whether the task succeeded
     ///
     /// # Returns
-    /// A vector of task names to schedule next
+    /// A vector of (task_name, publish_vars) tuples to schedule next
     pub fn next_tasks(&self, task_name: &str, success: bool) -> Vec<String> {
         let mut next = Vec::new();
 
         if let Some(node) = self.nodes.get(task_name) {
-            // Check explicit transitions based on task status
-            if success {
-                if let Some(ref next_task) = node.transitions.on_success {
-                    next.push(next_task.clone());
+            for transition in &node.transitions {
+                let should_fire = match transition.kind() {
+                    TransitionKind::Succeeded => success,
+                    TransitionKind::Failed => !success,
+                    TransitionKind::TimedOut => !success, // timeout is a form of failure
+                    TransitionKind::Always => true,
+                    TransitionKind::Custom => true, // include custom — real eval in coordinator
+                };
+
+                if should_fire {
+                    for target in &transition.do_tasks {
+                        if !next.contains(target) {
+                            next.push(target.clone());
+                        }
+                    }
                 }
-            } else if let Some(ref next_task) = node.transitions.on_failure {
-                next.push(next_task.clone());
             }
-
-            // on_complete runs regardless of success/failure
-            if let Some(ref next_task) = node.transitions.on_complete {
-                next.push(next_task.clone());
-            }
-
-            // Decision branches (evaluated separately in coordinator with context)
-            // We don't evaluate them here since they need runtime context
         }
 
         next
     }
+
+    /// Get the next tasks with full transition information.
+    ///
+    /// Returns matching transitions with their publish directives and targets,
+    /// giving the coordinator full context for variable publishing.
+    pub fn matching_transitions(&self, task_name: &str, success: bool) -> Vec<&GraphTransition> {
+        let mut matching = Vec::new();
+
+        if let Some(node) = self.nodes.get(task_name) {
+            for transition in &node.transitions {
+                let should_fire = match transition.kind() {
+                    TransitionKind::Succeeded => success,
+                    TransitionKind::Failed => !success,
+                    TransitionKind::TimedOut => !success,
+                    TransitionKind::Always => true,
+                    TransitionKind::Custom => true,
+                };
+
+                if should_fire {
+                    matching.push(transition);
+                }
+            }
+        }
+
+        matching
+    }
+
+    /// Collect all unique target task names from all transitions of a given task.
+    pub fn all_transition_targets(&self, task_name: &str) -> HashSet<String> {
+        let mut targets = HashSet::new();
+        if let Some(node) = self.nodes.get(task_name) {
+            for transition in &node.transitions {
+                for target in &transition.do_tasks {
+                    targets.insert(target.clone());
+                }
+            }
+        }
+        targets
+    }
 }
+
+// ---------------------------------------------------------------------------
+// Graph builder
+// ---------------------------------------------------------------------------
 
 /// Graph builder helper
 struct GraphBuilder {
@@ -198,14 +307,12 @@ impl GraphBuilder {
     }
 
     fn add_task(&mut self, task: &Task) -> GraphResult<()> {
-        let node = self.task_to_node(task)?;
+        let node = Self::task_to_node(task)?;
         self.nodes.insert(task.name.clone(), node);
         Ok(())
     }
 
-    fn task_to_node(&self, task: &Task) -> GraphResult<TaskNode> {
-        let publish = extract_publish_vars(&task.publish);
-
+    fn task_to_node(task: &Task) -> GraphResult<TaskNode> {
         let retry = task.retry.as_ref().map(|r| RetryConfig {
             count: r.count,
             delay: r.delay,
@@ -220,26 +327,21 @@ impl GraphBuilder {
             on_error: r.on_error.clone(),
         });
 
-        let transitions = TaskTransitions {
-            on_success: task.on_success.clone(),
-            on_failure: task.on_failure.clone(),
-            on_complete: task.on_complete.clone(),
-            on_timeout: task.on_timeout.clone(),
-            decision: task
-                .decision
-                .iter()
-                .map(|d| DecisionBranch {
-                    when: d.when.clone(),
-                    next: d.next.clone(),
-                    default: d.default,
-                })
-                .collect(),
-        };
+        // Convert parser TaskTransition list → graph GraphTransition list
+        let transitions: Vec<GraphTransition> = task
+            .next
+            .iter()
+            .map(|t| GraphTransition {
+                when: t.when.clone(),
+                publish: extract_publish_vars(&t.publish),
+                do_tasks: t.r#do.clone().unwrap_or_default(),
+            })
+            .collect();
 
         let sub_tasks = if let Some(ref tasks) = task.tasks {
             let mut sub_nodes = Vec::new();
             for subtask in tasks {
-                sub_nodes.push(self.task_to_node(subtask)?);
+                sub_nodes.push(Self::task_to_node(subtask)?);
             }
             Some(sub_nodes)
         } else {
@@ -255,7 +357,6 @@ impl GraphBuilder {
             with_items: task.with_items.clone(),
             batch_size: task.batch_size,
             concurrency: task.concurrency,
-            publish,
             retry,
             timeout: task.timeout,
             transitions,
@@ -268,7 +369,6 @@ impl GraphBuilder {
     fn build(mut self) -> GraphResult<Self> {
         // Compute inbound edges from transitions
         self.compute_inbound_edges()?;
-
         Ok(self)
     }
 
@@ -276,44 +376,27 @@ impl GraphBuilder {
         let node_names: Vec<String> = self.nodes.keys().cloned().collect();
 
         for node_name in &node_names {
-            if let Some(node) = self.nodes.get(node_name) {
-                // Collect all tasks this task can transition to
-                let successors = vec![
-                    node.transitions.on_success.as_ref(),
-                    node.transitions.on_failure.as_ref(),
-                    node.transitions.on_complete.as_ref(),
-                    node.transitions.on_timeout.as_ref(),
-                ];
+            // Collect all successor task names from this node's transitions
+            let successors: Vec<String> = {
+                let node = self.nodes.get(node_name).unwrap();
+                node.transitions
+                    .iter()
+                    .flat_map(|t| t.do_tasks.iter().cloned())
+                    .collect()
+            };
 
-                // For each successor, record this task as an inbound edge
-                for successor in successors.into_iter().flatten() {
-                    if !self.nodes.contains_key(successor) {
-                        return Err(GraphError::InvalidTaskReference(format!(
-                            "Task '{}' references non-existent task '{}'",
-                            node_name, successor
-                        )));
-                    }
-
-                    self.inbound_edges
-                        .entry(successor.clone())
-                        .or_insert_with(HashSet::new)
-                        .insert(node_name.clone());
+            for successor in &successors {
+                if !self.nodes.contains_key(successor) {
+                    return Err(GraphError::InvalidTaskReference(format!(
+                        "Task '{}' references non-existent task '{}'",
+                        node_name, successor
+                    )));
                 }
 
-                // Add decision branch edges
-                for branch in &node.transitions.decision {
-                    if !self.nodes.contains_key(&branch.next) {
-                        return Err(GraphError::InvalidTaskReference(format!(
-                            "Task '{}' decision references non-existent task '{}'",
-                            node_name, branch.next
-                        )));
-                    }
-
-                    self.inbound_edges
-                        .entry(branch.next.clone())
-                        .or_insert_with(HashSet::new)
-                        .insert(node_name.clone());
-                }
+                self.inbound_edges
+                    .entry(successor.clone())
+                    .or_default()
+                    .insert(node_name.clone());
             }
         }
 
@@ -350,7 +433,7 @@ impl From<GraphBuilder> for TaskGraph {
             for source in inbound {
                 outbound_edges
                     .entry(source.clone())
-                    .or_insert_with(HashSet::new)
+                    .or_default()
                     .insert(task.clone());
             }
         }
@@ -364,23 +447,39 @@ impl From<GraphBuilder> for TaskGraph {
     }
 }
 
-/// Extract variable names from publish directives
-fn extract_publish_vars(publish: &[attune_common::workflow::PublishDirective]) -> Vec<String> {
+// ---------------------------------------------------------------------------
+// Publish variable extraction
+// ---------------------------------------------------------------------------
+
+/// Extract publish variable names and expressions from parser publish directives.
+fn extract_publish_vars(publish: &[attune_common::workflow::PublishDirective]) -> Vec<PublishVar> {
     use attune_common::workflow::PublishDirective;
 
     let mut vars = Vec::new();
     for directive in publish {
         match directive {
             PublishDirective::Simple(map) => {
-                vars.extend(map.keys().cloned());
+                for (key, value) in map {
+                    vars.push(PublishVar {
+                        name: key.clone(),
+                        expression: value.clone(),
+                    });
+                }
             }
             PublishDirective::Key(key) => {
-                vars.push(key.clone());
+                vars.push(PublishVar {
+                    name: key.clone(),
+                    expression: "{{ result() }}".to_string(),
+                });
             }
         }
     }
     vars
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -396,10 +495,16 @@ version: 1.0.0
 tasks:
   - name: task1
     action: core.echo
-    on_success: task2
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - task2
   - name: task2
     action: core.echo
-    on_success: task3
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - task3
   - name: task3
     action: core.echo
 "#;
@@ -422,7 +527,7 @@ tasks:
         assert_eq!(graph.inbound_edges["task3"].len(), 1);
         assert!(graph.inbound_edges["task3"].contains("task2"));
 
-        // Check transitions
+        // Check transitions via next_tasks
         let next = graph.next_tasks("task1", true);
         assert_eq!(next.len(), 1);
         assert_eq!(next[0], "task2");
@@ -433,40 +538,11 @@ tasks:
     }
 
     #[test]
-    fn test_parallel_entry_points() {
+    fn test_simple_sequential_graph_legacy() {
+        // Legacy format should still work (parser normalizes to `next`)
         let yaml = r#"
-ref: test.parallel_start
-label: Parallel Start
-version: 1.0.0
-tasks:
-  - name: task1
-    action: core.echo
-    on_success: final
-  - name: task2
-    action: core.echo
-    on_success: final
-  - name: final
-    action: core.complete
-"#;
-
-        let workflow = workflow::parse_workflow_yaml(yaml).unwrap();
-        let graph = TaskGraph::from_workflow(&workflow).unwrap();
-
-        assert_eq!(graph.entry_points.len(), 2);
-        assert!(graph.entry_points.contains(&"task1".to_string()));
-        assert!(graph.entry_points.contains(&"task2".to_string()));
-
-        // final task should have both as inbound edges
-        assert_eq!(graph.inbound_edges["final"].len(), 2);
-        assert!(graph.inbound_edges["final"].contains("task1"));
-        assert!(graph.inbound_edges["final"].contains("task2"));
-    }
-
-    #[test]
-    fn test_transitions() {
-        let yaml = r#"
-ref: test.transitions
-label: Transition Test
+ref: test.sequential_legacy
+label: Sequential Workflow (Legacy)
 version: 1.0.0
 tasks:
   - name: task1
@@ -482,16 +558,153 @@ tasks:
         let workflow = workflow::parse_workflow_yaml(yaml).unwrap();
         let graph = TaskGraph::from_workflow(&workflow).unwrap();
 
-        // Test next_tasks follows transitions
+        assert_eq!(graph.nodes.len(), 3);
+        assert_eq!(graph.entry_points.len(), 1);
+
         let next = graph.next_tasks("task1", true);
         assert_eq!(next, vec!["task2"]);
 
         let next = graph.next_tasks("task2", true);
         assert_eq!(next, vec!["task3"]);
+    }
 
-        // task3 has no transitions
-        let next = graph.next_tasks("task3", true);
+    #[test]
+    fn test_parallel_entry_points() {
+        let yaml = r#"
+ref: test.parallel_start
+label: Parallel Start
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - final_task
+  - name: task2
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - final_task
+  - name: final_task
+    action: core.complete
+"#;
+
+        let workflow = workflow::parse_workflow_yaml(yaml).unwrap();
+        let graph = TaskGraph::from_workflow(&workflow).unwrap();
+
+        assert_eq!(graph.entry_points.len(), 2);
+        assert!(graph.entry_points.contains(&"task1".to_string()));
+        assert!(graph.entry_points.contains(&"task2".to_string()));
+
+        // final_task should have both as inbound edges
+        assert_eq!(graph.inbound_edges["final_task"].len(), 2);
+        assert!(graph.inbound_edges["final_task"].contains("task1"));
+        assert!(graph.inbound_edges["final_task"].contains("task2"));
+    }
+
+    #[test]
+    fn test_transitions_success_and_failure() {
+        let yaml = r#"
+ref: test.transitions
+label: Transition Test
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - task2
+      - when: "{{ failed() }}"
+        do:
+          - error_handler
+  - name: task2
+    action: core.echo
+  - name: error_handler
+    action: core.handle_error
+"#;
+
+        let workflow = workflow::parse_workflow_yaml(yaml).unwrap();
+        let graph = TaskGraph::from_workflow(&workflow).unwrap();
+
+        // On success, should go to task2
+        let next = graph.next_tasks("task1", true);
+        assert_eq!(next, vec!["task2"]);
+
+        // On failure, should go to error_handler
+        let next = graph.next_tasks("task1", false);
+        assert_eq!(next, vec!["error_handler"]);
+
+        // task2 has no transitions
+        let next = graph.next_tasks("task2", true);
         assert!(next.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_do_targets() {
+        let yaml = r#"
+ref: test.multi_do
+label: Multi Do Targets
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        publish:
+          - msg: "task1 done"
+        do:
+          - log
+          - task2
+  - name: task2
+    action: core.echo
+  - name: log
+    action: core.log
+"#;
+
+        let workflow = workflow::parse_workflow_yaml(yaml).unwrap();
+        let graph = TaskGraph::from_workflow(&workflow).unwrap();
+
+        let next = graph.next_tasks("task1", true);
+        assert_eq!(next.len(), 2);
+        assert!(next.contains(&"log".to_string()));
+        assert!(next.contains(&"task2".to_string()));
+
+        // Check publish vars
+        let transitions = graph.matching_transitions("task1", true);
+        assert_eq!(transitions.len(), 1);
+        assert_eq!(transitions[0].publish.len(), 1);
+        assert_eq!(transitions[0].publish[0].name, "msg");
+        assert_eq!(transitions[0].publish[0].expression, "task1 done");
+    }
+
+    #[test]
+    fn test_unconditional_transition() {
+        let yaml = r#"
+ref: test.unconditional
+label: Unconditional
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    next:
+      - do:
+          - task2
+  - name: task2
+    action: core.echo
+"#;
+
+        let workflow = workflow::parse_workflow_yaml(yaml).unwrap();
+        let graph = TaskGraph::from_workflow(&workflow).unwrap();
+
+        // Unconditional fires on both success and failure
+        let next = graph.next_tasks("task1", true);
+        assert_eq!(next, vec!["task2"]);
+
+        let next = graph.next_tasks("task1", false);
+        assert_eq!(next, vec!["task2"]);
     }
 
     #[test]
@@ -503,8 +716,13 @@ version: 1.0.0
 tasks:
   - name: check
     action: core.check
-    on_success: process
-    on_failure: check
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - process
+      - when: "{{ failed() }}"
+        do:
+          - check
   - name: process
     action: core.process
 "#;
@@ -513,13 +731,12 @@ tasks:
         // Should not error on cycles
         let graph = TaskGraph::from_workflow(&workflow).unwrap();
 
-        // Note: check has a self-reference (check -> check on failure)
+        // check has a self-reference (check -> check on failure)
         // So it has an inbound edge and is not an entry point
         // process also has an inbound edge (check -> process on success)
-        // Therefore, there are no entry points in this workflow
         assert_eq!(graph.entry_points.len(), 0);
 
-        // check can transition to itself on failure (cycle)
+        // check transitions to itself on failure (cycle)
         let next = graph.next_tasks("check", false);
         assert_eq!(next, vec!["check"]);
 
@@ -537,23 +754,181 @@ version: 1.0.0
 tasks:
   - name: task1
     action: core.echo
-    on_success: final
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - final_task
   - name: task2
     action: core.echo
-    on_success: final
-  - name: final
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - final_task
+  - name: final_task
     action: core.complete
 "#;
 
         let workflow = workflow::parse_workflow_yaml(yaml).unwrap();
         let graph = TaskGraph::from_workflow(&workflow).unwrap();
 
-        let inbound = graph.get_inbound_tasks("final");
+        let inbound = graph.get_inbound_tasks("final_task");
         assert_eq!(inbound.len(), 2);
         assert!(inbound.contains(&"task1".to_string()));
         assert!(inbound.contains(&"task2".to_string()));
 
         let inbound = graph.get_inbound_tasks("task1");
         assert_eq!(inbound.len(), 0);
+    }
+
+    #[test]
+    fn test_transition_kind_classification() {
+        let succeeded = GraphTransition {
+            when: Some("{{ succeeded() }}".to_string()),
+            publish: vec![],
+            do_tasks: vec!["t".to_string()],
+        };
+        assert_eq!(succeeded.kind(), TransitionKind::Succeeded);
+
+        let failed = GraphTransition {
+            when: Some("{{ failed() }}".to_string()),
+            publish: vec![],
+            do_tasks: vec!["t".to_string()],
+        };
+        assert_eq!(failed.kind(), TransitionKind::Failed);
+
+        let timed_out = GraphTransition {
+            when: Some("{{ timed_out() }}".to_string()),
+            publish: vec![],
+            do_tasks: vec!["t".to_string()],
+        };
+        assert_eq!(timed_out.kind(), TransitionKind::TimedOut);
+
+        let always = GraphTransition {
+            when: None,
+            publish: vec![],
+            do_tasks: vec!["t".to_string()],
+        };
+        assert_eq!(always.kind(), TransitionKind::Always);
+
+        let custom = GraphTransition {
+            when: Some("{{ result().status == 'ok' }}".to_string()),
+            publish: vec![],
+            do_tasks: vec!["t".to_string()],
+        };
+        assert_eq!(custom.kind(), TransitionKind::Custom);
+    }
+
+    #[test]
+    fn test_publish_extraction() {
+        let yaml = r#"
+ref: test.publish
+label: Publish Test
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        publish:
+          - result_val: "{{ result() }}"
+          - msg: "done"
+        do:
+          - task2
+  - name: task2
+    action: core.echo
+"#;
+
+        let workflow = workflow::parse_workflow_yaml(yaml).unwrap();
+        let graph = TaskGraph::from_workflow(&workflow).unwrap();
+
+        let task1 = graph.get_task("task1").unwrap();
+        assert_eq!(task1.transitions.len(), 1);
+        assert_eq!(task1.transitions[0].publish.len(), 2);
+
+        // Note: HashMap ordering is not guaranteed, so just check both exist
+        let publish_names: Vec<&str> = task1.transitions[0]
+            .publish
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert!(publish_names.contains(&"result_val"));
+        assert!(publish_names.contains(&"msg"));
+    }
+
+    #[test]
+    fn test_all_transition_targets() {
+        let yaml = r#"
+ref: test.all_targets
+label: All Targets Test
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - task2
+          - task3
+      - when: "{{ failed() }}"
+        do:
+          - error_handler
+  - name: task2
+    action: core.echo
+  - name: task3
+    action: core.echo
+  - name: error_handler
+    action: core.handle_error
+"#;
+
+        let workflow = workflow::parse_workflow_yaml(yaml).unwrap();
+        let graph = TaskGraph::from_workflow(&workflow).unwrap();
+
+        let targets = graph.all_transition_targets("task1");
+        assert_eq!(targets.len(), 3);
+        assert!(targets.contains("task2"));
+        assert!(targets.contains("task3"));
+        assert!(targets.contains("error_handler"));
+    }
+
+    #[test]
+    fn test_mixed_success_failure_and_always() {
+        let yaml = r#"
+ref: test.mixed
+label: Mixed Transitions
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - success_task
+      - when: "{{ failed() }}"
+        do:
+          - failure_task
+      - do:
+          - always_task
+  - name: success_task
+    action: core.echo
+  - name: failure_task
+    action: core.echo
+  - name: always_task
+    action: core.echo
+"#;
+
+        let workflow = workflow::parse_workflow_yaml(yaml).unwrap();
+        let graph = TaskGraph::from_workflow(&workflow).unwrap();
+
+        // On success: succeeded + always fire
+        let next = graph.next_tasks("task1", true);
+        assert_eq!(next.len(), 2);
+        assert!(next.contains(&"success_task".to_string()));
+        assert!(next.contains(&"always_task".to_string()));
+
+        // On failure: failed + always fire
+        let next = graph.next_tasks("task1", false);
+        assert_eq!(next.len(), 2);
+        assert!(next.contains(&"failure_task".to_string()));
+        assert!(next.contains(&"always_task".to_string()));
     }
 }

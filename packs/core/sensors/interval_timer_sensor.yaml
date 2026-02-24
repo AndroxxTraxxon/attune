@@ -18,16 +18,14 @@ trigger_types:
   - core.crontimer
   - core.datetimetimer
 
-# Sensor configuration schema (standard JSON Schema format)
+# Sensor configuration schema (StackStorm-style flat format)
 parameters:
-  type: object
-  properties:
-    check_interval_seconds:
-      type: integer
-      description: "How often to check if triggers should fire (in seconds)"
-      default: 1
-      minimum: 1
-      maximum: 60
+  check_interval_seconds:
+    type: integer
+    description: "How often to check if triggers should fire (in seconds)"
+    default: 1
+    minimum: 1
+    maximum: 60
 
 # Poll interval (how often the sensor checks for events)
 poll_interval: 1

@@ -1,30 +1,59 @@
 import { useState, useEffect } from "react";
 
 /**
- * Standard JSON Schema format for parameters
- * Follows https://json-schema.org/draft/2020-12/schema
+ * StackStorm-style parameter schema format.
+ * Parameters are defined as a flat map of parameter name to definition,
+ * with `required` and `secret` inlined per-parameter.
+ *
+ * Example:
+ * {
+ *   "url": { "type": "string", "description": "Target URL", "required": true },
+ *   "token": { "type": "string", "secret": true }
+ * }
  */
+export interface ParamSchemaProperty {
+  type?: "string" | "number" | "integer" | "boolean" | "array" | "object";
+  description?: string;
+  default?: any;
+  enum?: string[];
+  minimum?: number;
+  maximum?: number;
+  minLength?: number;
+  maxLength?: number;
+  secret?: boolean;
+  required?: boolean;
+  position?: number;
+  items?: any;
+}
+
 export interface ParamSchema {
-  type?: "object";
-  properties?: {
-    [key: string]: {
-      type?: "string" | "number" | "integer" | "boolean" | "array" | "object";
-      description?: string;
-      default?: any;
-      enum?: string[];
-      minimum?: number;
-      maximum?: number;
-      minLength?: number;
-      maxLength?: number;
-      secret?: boolean;
-    };
-  };
-  required?: string[];
+  [key: string]: ParamSchemaProperty;
 }
 
 /**
  * Props for ParamSchemaForm component
  */
+/**
+ * Extract the parameter properties from a flat parameter schema.
+ *
+ * All schemas (param_schema, out_schema, conf_schema) use the same flat format:
+ * { param_name: { type, description, required, secret, ... }, ... }
+ */
+export function extractProperties(
+  schema: ParamSchema | any,
+): Record<string, ParamSchemaProperty> {
+  if (!schema || typeof schema !== "object") return {};
+  // StackStorm-style flat format: { param_name: { type, description, required, ... }, ... }
+  // Filter out entries that don't look like parameter definitions (e.g., stray "type" or "required" keys)
+  const props: Record<string, ParamSchemaProperty> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      props[key] = value as ParamSchemaProperty;
+    }
+  }
+  return props;
+}
+
 interface ParamSchemaFormProps {
   schema: ParamSchema;
   values: Record<string, any>;
@@ -117,8 +146,7 @@ export default function ParamSchemaForm({
   // Merge external and local errors
   const allErrors = { ...localErrors, ...errors };
 
-  const properties = schema.properties || {};
-  const requiredFields = schema.required || [];
+  const properties = extractProperties(schema);
 
   // Initialize values with defaults from schema
   useEffect(() => {
@@ -159,7 +187,7 @@ export default function ParamSchemaForm({
    * Check if a field is required
    */
   const isRequired = (key: string): boolean => {
-    return requiredFields.includes(key);
+    return !!properties[key]?.required;
   };
 
   /**
@@ -506,14 +534,15 @@ export function validateParamSchema(
   allowTemplates: boolean = false,
 ): Record<string, string> {
   const errors: Record<string, string> = {};
-  const properties = schema.properties || {};
-  const requiredFields = schema.required || [];
+  const properties = extractProperties(schema);
 
-  // Check required fields
-  requiredFields.forEach((key) => {
-    const value = values[key];
-    if (value === undefined || value === null || value === "") {
-      errors[key] = "This field is required";
+  // Check required fields (inline per-parameter)
+  Object.entries(properties).forEach(([key, param]) => {
+    if (param?.required) {
+      const value = values[key];
+      if (value === undefined || value === null || value === "") {
+        errors[key] = "This field is required";
+      }
     }
   });
 
@@ -524,7 +553,7 @@ export function validateParamSchema(
     // Skip if no value and not required
     if (
       (value === undefined || value === null || value === "") &&
-      !requiredFields.includes(key)
+      !param?.required
     ) {
       return;
     }

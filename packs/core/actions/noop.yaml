@@ -19,19 +19,17 @@ parameter_format: dotenv
 # Output format: text (no structured data parsing)
 output_format: text
 
-# Action parameters schema (standard JSON Schema format)
+# Action parameters schema (StackStorm-style inline format)
 parameters:
-  type: object
-  properties:
-    message:
-      type: string
-      description: "Optional message to log (for debugging)"
-    exit_code:
-      type: integer
-      description: "Exit code to return (default: 0 for success)"
-      default: 0
-      minimum: 0
-      maximum: 255
+  message:
+    type: string
+    description: "Optional message to log (for debugging)"
+  exit_code:
+    type: integer
+    description: "Exit code to return (default: 0 for success)"
+    default: 0
+    minimum: 0
+    maximum: 255
 
 # Output schema: not applicable for text output format
 # The action outputs plain text to stdout

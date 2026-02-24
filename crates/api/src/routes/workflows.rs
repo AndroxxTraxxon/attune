@@ -4,9 +4,10 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post, put},
     Json, Router,
 };
+use std::path::PathBuf;
 use std::sync::Arc;
 use validator::Validate;
 
@@ -23,8 +24,8 @@ use crate::{
     dto::{
         common::{PaginatedResponse, PaginationParams},
         workflow::{
-            CreateWorkflowRequest, UpdateWorkflowRequest, WorkflowResponse, WorkflowSearchParams,
-            WorkflowSummary,
+            CreateWorkflowRequest, SaveWorkflowFileRequest, UpdateWorkflowRequest,
+            WorkflowResponse, WorkflowSearchParams, WorkflowSummary,
         },
         ApiResponse, SuccessResponse,
     },
@@ -340,6 +341,202 @@ pub async fn delete_workflow(
     Ok((StatusCode::OK, Json(response)))
 }
 
+/// Save a workflow file to disk and sync it to the database
+///
+/// Writes a `{name}.workflow.yaml` file to `{packs_base_dir}/{pack_ref}/actions/workflows/`
+/// and creates or updates the corresponding workflow_definition record in the database.
+#[utoipa::path(
+    post,
+    path = "/api/v1/packs/{pack_ref}/workflow-files",
+    tag = "workflows",
+    params(
+        ("pack_ref" = String, Path, description = "Pack reference identifier")
+    ),
+    request_body = SaveWorkflowFileRequest,
+    responses(
+        (status = 201, description = "Workflow file saved and synced", body = inline(ApiResponse<WorkflowResponse>)),
+        (status = 400, description = "Validation error"),
+        (status = 404, description = "Pack not found"),
+        (status = 409, description = "Workflow with same ref already exists"),
+        (status = 500, description = "Failed to write workflow file")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn save_workflow_file(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(_user): RequireAuth,
+    Path(pack_ref): Path<String>,
+    Json(request): Json<SaveWorkflowFileRequest>,
+) -> ApiResult<impl IntoResponse> {
+    request.validate()?;
+
+    // Verify pack exists
+    let pack = PackRepository::find_by_ref(&state.db, &pack_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", pack_ref)))?;
+
+    let workflow_ref = format!("{}.{}", pack_ref, request.name);
+
+    // Check if workflow already exists
+    if WorkflowDefinitionRepository::find_by_ref(&state.db, &workflow_ref)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::Conflict(format!(
+            "Workflow with ref '{}' already exists",
+            workflow_ref
+        )));
+    }
+
+    // Write YAML file to disk
+    let packs_base_dir = PathBuf::from(&state.config.packs_base_dir);
+    write_workflow_yaml(&packs_base_dir, &pack_ref, &request).await?;
+
+    // Create workflow in database
+    let definition_json = serde_json::to_value(&request.definition).map_err(|e| {
+        ApiError::BadRequest(format!("Failed to serialize workflow definition: {}", e))
+    })?;
+
+    let workflow_input = CreateWorkflowDefinitionInput {
+        r#ref: workflow_ref,
+        pack: pack.id,
+        pack_ref: pack.r#ref.clone(),
+        label: request.label,
+        description: request.description,
+        version: request.version,
+        param_schema: request.param_schema,
+        out_schema: request.out_schema,
+        definition: definition_json,
+        tags: request.tags.unwrap_or_default(),
+        enabled: request.enabled.unwrap_or(true),
+    };
+
+    let workflow = WorkflowDefinitionRepository::create(&state.db, workflow_input).await?;
+
+    let response = ApiResponse::with_message(
+        WorkflowResponse::from(workflow),
+        "Workflow file saved and synced successfully",
+    );
+
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+/// Update a workflow file on disk and sync changes to the database
+#[utoipa::path(
+    put,
+    path = "/api/v1/workflows/{ref}/file",
+    tag = "workflows",
+    params(
+        ("ref" = String, Path, description = "Workflow reference identifier")
+    ),
+    request_body = SaveWorkflowFileRequest,
+    responses(
+        (status = 200, description = "Workflow file updated and synced", body = inline(ApiResponse<WorkflowResponse>)),
+        (status = 400, description = "Validation error"),
+        (status = 404, description = "Workflow not found"),
+        (status = 500, description = "Failed to write workflow file")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn update_workflow_file(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(_user): RequireAuth,
+    Path(workflow_ref): Path<String>,
+    Json(request): Json<SaveWorkflowFileRequest>,
+) -> ApiResult<impl IntoResponse> {
+    request.validate()?;
+
+    // Check if workflow exists
+    let existing_workflow = WorkflowDefinitionRepository::find_by_ref(&state.db, &workflow_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Workflow '{}' not found", workflow_ref)))?;
+
+    // Verify pack exists
+    let _pack = PackRepository::find_by_ref(&state.db, &request.pack_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", request.pack_ref)))?;
+
+    // Write updated YAML file to disk
+    let packs_base_dir = PathBuf::from(&state.config.packs_base_dir);
+    write_workflow_yaml(&packs_base_dir, &request.pack_ref, &request).await?;
+
+    // Update workflow in database
+    let definition_json = serde_json::to_value(&request.definition).map_err(|e| {
+        ApiError::BadRequest(format!("Failed to serialize workflow definition: {}", e))
+    })?;
+
+    let update_input = UpdateWorkflowDefinitionInput {
+        label: Some(request.label),
+        description: request.description,
+        version: Some(request.version),
+        param_schema: request.param_schema,
+        out_schema: request.out_schema,
+        definition: Some(definition_json),
+        tags: request.tags,
+        enabled: request.enabled,
+    };
+
+    let workflow =
+        WorkflowDefinitionRepository::update(&state.db, existing_workflow.id, update_input).await?;
+
+    let response = ApiResponse::with_message(
+        WorkflowResponse::from(workflow),
+        "Workflow file updated and synced successfully",
+    );
+
+    Ok((StatusCode::OK, Json(response)))
+}
+
+/// Write a workflow definition to disk as YAML
+async fn write_workflow_yaml(
+    packs_base_dir: &PathBuf,
+    pack_ref: &str,
+    request: &SaveWorkflowFileRequest,
+) -> Result<(), ApiError> {
+    let workflows_dir = packs_base_dir
+        .join(pack_ref)
+        .join("actions")
+        .join("workflows");
+
+    // Ensure the directory exists
+    tokio::fs::create_dir_all(&workflows_dir)
+        .await
+        .map_err(|e| {
+            ApiError::InternalServerError(format!(
+                "Failed to create workflows directory '{}': {}",
+                workflows_dir.display(),
+                e
+            ))
+        })?;
+
+    let filename = format!("{}.workflow.yaml", request.name);
+    let filepath = workflows_dir.join(&filename);
+
+    // Serialize definition to YAML
+    let yaml_content = serde_yaml_ng::to_string(&request.definition).map_err(|e| {
+        ApiError::BadRequest(format!("Failed to serialize workflow to YAML: {}", e))
+    })?;
+
+    // Write file
+    tokio::fs::write(&filepath, yaml_content)
+        .await
+        .map_err(|e| {
+            ApiError::InternalServerError(format!(
+                "Failed to write workflow file '{}': {}",
+                filepath.display(),
+                e
+            ))
+        })?;
+
+    tracing::info!(
+        "Wrote workflow file: {} ({} bytes)",
+        filepath.display(),
+        filepath.metadata().map(|m| m.len()).unwrap_or(0)
+    );
+
+    Ok(())
+}
+
 /// Create workflow routes
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -350,7 +547,9 @@ pub fn routes() -> Router<Arc<AppState>> {
                 .put(update_workflow)
                 .delete(delete_workflow),
         )
+        .route("/workflows/{ref}/file", put(update_workflow_file))
         .route("/packs/{pack_ref}/workflows", get(list_workflows_by_pack))
+        .route("/packs/{pack_ref}/workflow-files", post(save_workflow_file))
 }
 
 #[cfg(test)]
@@ -361,5 +560,44 @@ mod tests {
     fn test_workflow_routes_structure() {
         // Just verify the router can be constructed
         let _router = routes();
+    }
+
+    #[test]
+    fn test_save_request_validation() {
+        let req = SaveWorkflowFileRequest {
+            name: "test_workflow".to_string(),
+            label: "Test Workflow".to_string(),
+            description: Some("A test workflow".to_string()),
+            version: "1.0.0".to_string(),
+            pack_ref: "core".to_string(),
+            definition: serde_json::json!({
+                "ref": "core.test_workflow",
+                "label": "Test Workflow",
+                "version": "1.0.0",
+                "tasks": [{"name": "task1", "action": "core.echo"}]
+            }),
+            param_schema: None,
+            out_schema: None,
+            tags: None,
+            enabled: None,
+        };
+        assert!(req.validate().is_ok());
+    }
+
+    #[test]
+    fn test_save_request_validation_empty_name() {
+        let req = SaveWorkflowFileRequest {
+            name: "".to_string(), // Invalid: empty
+            label: "Test".to_string(),
+            description: None,
+            version: "1.0.0".to_string(),
+            pack_ref: "core".to_string(),
+            definition: serde_json::json!({}),
+            param_schema: None,
+            out_schema: None,
+            tags: None,
+            enabled: None,
+        };
+        assert!(req.validate().is_err());
     }
 }

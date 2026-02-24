@@ -254,24 +254,11 @@ impl WorkflowValidator {
         let mut graph = HashMap::new();
 
         for task in &workflow.tasks {
-            let mut transitions = Vec::new();
-
-            if let Some(ref next) = task.on_success {
-                transitions.push(next.clone());
-            }
-            if let Some(ref next) = task.on_failure {
-                transitions.push(next.clone());
-            }
-            if let Some(ref next) = task.on_complete {
-                transitions.push(next.clone());
-            }
-            if let Some(ref next) = task.on_timeout {
-                transitions.push(next.clone());
-            }
-
-            for branch in &task.decision {
-                transitions.push(branch.next.clone());
-            }
+            let transitions: Vec<String> = task
+                .all_transition_targets()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect();
 
             graph.insert(task.name.clone(), transitions);
         }
@@ -284,21 +271,8 @@ impl WorkflowValidator {
         let mut has_predecessor = HashSet::new();
 
         for task in &workflow.tasks {
-            if let Some(ref next) = task.on_success {
-                has_predecessor.insert(next.clone());
-            }
-            if let Some(ref next) = task.on_failure {
-                has_predecessor.insert(next.clone());
-            }
-            if let Some(ref next) = task.on_complete {
-                has_predecessor.insert(next.clone());
-            }
-            if let Some(ref next) = task.on_timeout {
-                has_predecessor.insert(next.clone());
-            }
-
-            for branch in &task.decision {
-                has_predecessor.insert(branch.next.clone());
+            for target in task.all_transition_targets() {
+                has_predecessor.insert(target.to_string());
             }
         }
 

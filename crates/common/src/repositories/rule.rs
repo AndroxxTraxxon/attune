@@ -8,6 +8,26 @@ use sqlx::{Executor, Postgres, QueryBuilder};
 
 use super::{Create, Delete, FindById, FindByRef, List, Repository, Update};
 
+/// Input for restoring an ad-hoc rule during pack reinstallation.
+/// Unlike `CreateRuleInput`, action and trigger IDs are optional because
+/// the referenced entities may not exist yet or may have been removed.
+#[derive(Debug, Clone)]
+pub struct RestoreRuleInput {
+    pub r#ref: String,
+    pub pack: Id,
+    pub pack_ref: String,
+    pub label: String,
+    pub description: String,
+    pub action: Option<Id>,
+    pub action_ref: String,
+    pub trigger: Option<Id>,
+    pub trigger_ref: String,
+    pub conditions: serde_json::Value,
+    pub action_params: serde_json::Value,
+    pub trigger_params: serde_json::Value,
+    pub enabled: bool,
+}
+
 /// Repository for Rule operations
 pub struct RuleRepository;
 
@@ -336,5 +356,122 @@ impl RuleRepository {
         .await?;
 
         Ok(rules)
+    }
+
+    /// Find ad-hoc (user-created) rules belonging to a specific pack.
+    /// Used to preserve custom rules during pack reinstallation.
+    pub async fn find_adhoc_by_pack<'e, E>(executor: E, pack_id: Id) -> Result<Vec<Rule>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let rules = sqlx::query_as::<_, Rule>(
+            r#"
+            SELECT id, ref, pack, pack_ref, label, description, action, action_ref,
+                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, created, updated
+            FROM rule
+            WHERE pack = $1 AND is_adhoc = true
+            ORDER BY ref ASC
+            "#,
+        )
+        .bind(pack_id)
+        .fetch_all(executor)
+        .await?;
+
+        Ok(rules)
+    }
+
+    /// Restore an ad-hoc rule after pack reinstallation.
+    /// Accepts `Option<Id>` for action and trigger so the rule is preserved
+    /// even if its referenced entities no longer exist.
+    pub async fn restore_rule<'e, E>(executor: E, input: RestoreRuleInput) -> Result<Rule>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let rule = sqlx::query_as::<_, Rule>(
+            r#"
+            INSERT INTO rule (ref, pack, pack_ref, label, description, action, action_ref,
+                              trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, true)
+            RETURNING id, ref, pack, pack_ref, label, description, action, action_ref,
+                      trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, created, updated
+            "#,
+        )
+        .bind(&input.r#ref)
+        .bind(input.pack)
+        .bind(&input.pack_ref)
+        .bind(&input.label)
+        .bind(&input.description)
+        .bind(input.action)
+        .bind(&input.action_ref)
+        .bind(input.trigger)
+        .bind(&input.trigger_ref)
+        .bind(&input.conditions)
+        .bind(&input.action_params)
+        .bind(&input.trigger_params)
+        .bind(input.enabled)
+        .fetch_one(executor)
+        .await
+        .map_err(|e| {
+            if let sqlx::Error::Database(ref db_err) = e {
+                if db_err.is_unique_violation() {
+                    return Error::already_exists("Rule", "ref", &input.r#ref);
+                }
+            }
+            e.into()
+        })?;
+
+        Ok(rule)
+    }
+
+    /// Re-link rules whose action FK is NULL back to a newly recreated action,
+    /// matched by `action_ref`. Used after pack reinstallation to fix rules
+    /// from other packs that referenced actions in the reinstalled pack.
+    pub async fn relink_action_by_ref<'e, E>(
+        executor: E,
+        action_ref: &str,
+        action_id: Id,
+    ) -> Result<u64>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = sqlx::query(
+            r#"
+            UPDATE rule
+            SET action = $1, updated = NOW()
+            WHERE action IS NULL AND action_ref = $2
+            "#,
+        )
+        .bind(action_id)
+        .bind(action_ref)
+        .execute(executor)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Re-link rules whose trigger FK is NULL back to a newly recreated trigger,
+    /// matched by `trigger_ref`. Used after pack reinstallation to fix rules
+    /// from other packs that referenced triggers in the reinstalled pack.
+    pub async fn relink_trigger_by_ref<'e, E>(
+        executor: E,
+        trigger_ref: &str,
+        trigger_id: Id,
+    ) -> Result<u64>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = sqlx::query(
+            r#"
+            UPDATE rule
+            SET trigger = $1, updated = NOW()
+            WHERE trigger IS NULL AND trigger_ref = $2
+            "#,
+        )
+        .bind(trigger_id)
+        .bind(trigger_ref)
+        .execute(executor)
+        .await?;
+
+        Ok(result.rows_affected())
     }
 }

@@ -2,6 +2,38 @@
 //!
 //! This module handles parsing workflow YAML files into structured Rust types
 //! that can be validated and stored in the database.
+//!
+//! Supports two task transition formats:
+//!
+//! **New format (Orquesta-style `next` array):**
+//! ```yaml
+//! tasks:
+//!   - name: task1
+//!     action: core.echo
+//!     next:
+//!       - when: "{{ succeeded() }}"
+//!         publish:
+//!           - result: "{{ result() }}"
+//!         do:
+//!           - task2
+//!           - log
+//!       - when: "{{ failed() }}"
+//!         do:
+//!           - error_handler
+//! ```
+//!
+//! **Legacy format (flat fields):**
+//! ```yaml
+//! tasks:
+//!   - name: task1
+//!     action: core.echo
+//!     on_success: task2
+//!     on_failure: error_handler
+//! ```
+//!
+//! When legacy fields are present, they are automatically converted to `next`
+//! transitions during parsing. The canonical internal representation always
+//! uses the `next` array.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -85,7 +117,40 @@ pub struct WorkflowDefinition {
     pub tags: Vec<String>,
 }
 
-/// Task definition - can be action, parallel, or workflow type
+// ---------------------------------------------------------------------------
+// Task transition types (Orquesta-style)
+// ---------------------------------------------------------------------------
+
+/// A single task transition evaluated after task completion.
+///
+/// Transitions are evaluated in order. When `when` is not defined,
+/// the transition is unconditional (fires on any completion).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskTransition {
+    /// Condition expression (e.g., "{{ succeeded() }}", "{{ failed() }}")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
+
+    /// Variables to publish into the workflow context on this transition
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub publish: Vec<PublishDirective>,
+
+    /// Next tasks to invoke when transition criteria is met
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#do: Option<Vec<String>>,
+}
+
+// ---------------------------------------------------------------------------
+// Task definition
+// ---------------------------------------------------------------------------
+
+/// Task definition - can be action, parallel, or workflow type.
+///
+/// Supports both the new `next` transition format and legacy flat fields
+/// (`on_success`, `on_failure`, etc.) for backward compatibility. During
+/// deserialization the legacy fields are captured; call
+/// [`Task::normalize_transitions`] (done automatically during parsing) to
+/// merge them into the canonical `next` array.
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct Task {
     /// Unique task name within the workflow
@@ -103,7 +168,7 @@ pub struct Task {
     #[serde(default)]
     pub input: HashMap<String, JsonValue>,
 
-    /// Conditional execution
+    /// Conditional execution (task-level — controls whether this task runs)
     pub when: Option<String>,
 
     /// With-items iteration
@@ -115,39 +180,193 @@ pub struct Task {
     /// Concurrency limit for with-items
     pub concurrency: Option<usize>,
 
-    /// Variable publishing
-    #[serde(default)]
-    pub publish: Vec<PublishDirective>,
-
     /// Retry configuration
     pub retry: Option<RetryConfig>,
 
     /// Timeout in seconds
     pub timeout: Option<u32>,
 
-    /// Transition on success
+    /// Orquesta-style transitions — the canonical representation.
+    /// Each entry can specify a `when` condition, `publish` directives,
+    /// and a list of next tasks (`do`).
+    #[serde(default)]
+    pub next: Vec<TaskTransition>,
+
+    // -- Legacy transition fields (read during deserialization) -------------
+    // These are kept for backward compatibility with older workflow YAML
+    // files. During [`normalize_transitions`] they are folded into `next`.
+    /// Legacy: transition on success
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_success: Option<String>,
 
-    /// Transition on failure
+    /// Legacy: transition on failure
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_failure: Option<String>,
 
-    /// Transition on complete (regardless of status)
+    /// Legacy: transition on complete (regardless of status)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_complete: Option<String>,
 
-    /// Transition on timeout
+    /// Legacy: transition on timeout
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_timeout: Option<String>,
 
-    /// Decision-based transitions
-    #[serde(default)]
+    /// Legacy: decision-based transitions
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decision: Vec<DecisionBranch>,
 
-    /// Join barrier - wait for N inbound tasks to complete before executing
-    /// If not specified, task executes immediately when any predecessor completes
-    /// Special value "all" can be represented as the count of inbound edges
+    /// Legacy: task-level variable publishing (moved to per-transition in new model)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub publish: Vec<PublishDirective>,
+
+    /// Join barrier - wait for N inbound tasks to complete before executing.
+    /// If not specified, task executes immediately when any predecessor completes.
+    /// Special value "all" can be represented as the count of inbound edges.
     pub join: Option<usize>,
 
     /// Parallel tasks (for parallel type)
     pub tasks: Option<Vec<Task>>,
+}
+
+impl Task {
+    /// Returns `true` if any legacy transition fields are populated.
+    fn has_legacy_transitions(&self) -> bool {
+        self.on_success.is_some()
+            || self.on_failure.is_some()
+            || self.on_complete.is_some()
+            || self.on_timeout.is_some()
+            || !self.decision.is_empty()
+    }
+
+    /// Convert legacy flat transition fields into the `next` array.
+    ///
+    /// If `next` is already populated, legacy fields are ignored (the new
+    /// format takes precedence). After normalization the legacy fields are
+    /// cleared so serialization only emits the canonical `next` form.
+    pub fn normalize_transitions(&mut self) {
+        // If `next` is already populated, the new format wins — clear legacy
+        if !self.next.is_empty() {
+            self.clear_legacy_fields();
+            return;
+        }
+
+        // Nothing to convert
+        if !self.has_legacy_transitions() && self.publish.is_empty() {
+            return;
+        }
+
+        let mut transitions: Vec<TaskTransition> = Vec::new();
+
+        if let Some(ref target) = self.on_success {
+            transitions.push(TaskTransition {
+                when: Some("{{ succeeded() }}".to_string()),
+                publish: Vec::new(),
+                r#do: Some(vec![target.clone()]),
+            });
+        }
+
+        if let Some(ref target) = self.on_failure {
+            transitions.push(TaskTransition {
+                when: Some("{{ failed() }}".to_string()),
+                publish: Vec::new(),
+                r#do: Some(vec![target.clone()]),
+            });
+        }
+
+        if let Some(ref target) = self.on_complete {
+            // on_complete = unconditional
+            transitions.push(TaskTransition {
+                when: None,
+                publish: Vec::new(),
+                r#do: Some(vec![target.clone()]),
+            });
+        }
+
+        if let Some(ref target) = self.on_timeout {
+            transitions.push(TaskTransition {
+                when: Some("{{ timed_out() }}".to_string()),
+                publish: Vec::new(),
+                r#do: Some(vec![target.clone()]),
+            });
+        }
+
+        // Convert legacy decision branches
+        for branch in &self.decision {
+            transitions.push(TaskTransition {
+                when: branch.when.clone(),
+                publish: Vec::new(),
+                r#do: Some(vec![branch.next.clone()]),
+            });
+        }
+
+        // Attach legacy task-level publish to the first succeeded transition,
+        // or create a publish-only transition if none exist
+        if !self.publish.is_empty() {
+            let succeeded_idx = transitions
+                .iter()
+                .position(|t| matches!(&t.when, Some(w) if w.contains("succeeded()")));
+
+            if let Some(idx) = succeeded_idx {
+                transitions[idx].publish = self.publish.clone();
+            } else if transitions.is_empty() {
+                transitions.push(TaskTransition {
+                    when: Some("{{ succeeded() }}".to_string()),
+                    publish: self.publish.clone(),
+                    r#do: None,
+                });
+            } else {
+                // Attach to the first transition
+                transitions[0].publish = self.publish.clone();
+            }
+        }
+
+        self.next = transitions;
+        self.clear_legacy_fields();
+    }
+
+    /// Clear legacy transition fields after normalization
+    fn clear_legacy_fields(&mut self) {
+        self.on_success = None;
+        self.on_failure = None;
+        self.on_complete = None;
+        self.on_timeout = None;
+        self.decision.clear();
+        self.publish.clear();
+    }
+
+    /// Collect all task names referenced by transitions (both `next` and legacy).
+    /// Used for validation.
+    pub fn all_transition_targets(&self) -> Vec<&str> {
+        let mut targets: Vec<&str> = Vec::new();
+
+        // From `next` array
+        for transition in &self.next {
+            if let Some(ref do_list) = transition.r#do {
+                for target in do_list {
+                    targets.push(target.as_str());
+                }
+            }
+        }
+
+        // From legacy fields (in case normalize hasn't been called yet)
+        if let Some(ref t) = self.on_success {
+            targets.push(t.as_str());
+        }
+        if let Some(ref t) = self.on_failure {
+            targets.push(t.as_str());
+        }
+        if let Some(ref t) = self.on_complete {
+            targets.push(t.as_str());
+        }
+        if let Some(ref t) = self.on_timeout {
+            targets.push(t.as_str());
+        }
+        for branch in &self.decision {
+            targets.push(branch.next.as_str());
+        }
+
+        targets
+    }
 }
 
 fn default_task_type() -> TaskType {
@@ -214,7 +433,7 @@ pub enum BackoffStrategy {
     Exponential,
 }
 
-/// Decision-based transition
+/// Legacy decision-based transition (kept for backward compatibility)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecisionBranch {
     /// Condition to evaluate (template string)
@@ -228,10 +447,17 @@ pub struct DecisionBranch {
     pub default: bool,
 }
 
+// ---------------------------------------------------------------------------
+// Parsing & validation
+// ---------------------------------------------------------------------------
+
 /// Parse workflow YAML string into WorkflowDefinition
 pub fn parse_workflow_yaml(yaml: &str) -> ParseResult<WorkflowDefinition> {
     // Parse YAML
-    let workflow: WorkflowDefinition = serde_yaml_ng::from_str(yaml)?;
+    let mut workflow: WorkflowDefinition = serde_yaml_ng::from_str(yaml)?;
+
+    // Normalize legacy transitions into `next` arrays
+    normalize_all_transitions(&mut workflow);
 
     // Validate structure
     workflow.validate()?;
@@ -247,6 +473,19 @@ pub fn parse_workflow_file(path: &std::path::Path) -> ParseResult<WorkflowDefini
     let contents = std::fs::read_to_string(path)
         .map_err(|e| ParseError::ValidationError(format!("Failed to read file: {}", e)))?;
     parse_workflow_yaml(&contents)
+}
+
+/// Normalize all tasks in a workflow definition, converting legacy fields to `next`.
+fn normalize_all_transitions(workflow: &mut WorkflowDefinition) {
+    for task in &mut workflow.tasks {
+        task.normalize_transitions();
+        // Recursively normalize sub-tasks (parallel)
+        if let Some(ref mut sub_tasks) = task.tasks {
+            for sub in sub_tasks {
+                sub.normalize_transitions();
+            }
+        }
+    }
 }
 
 /// Validate workflow structure and references
@@ -294,30 +533,12 @@ fn validate_task(task: &Task, task_names: &std::collections::HashSet<&str>) -> P
         }
     }
 
-    // Validate transitions reference existing tasks
-    for transition in [
-        &task.on_success,
-        &task.on_failure,
-        &task.on_complete,
-        &task.on_timeout,
-    ]
-    .iter()
-    .filter_map(|t| t.as_ref())
-    {
-        if !task_names.contains(transition.as_str()) {
+    // Validate all transition targets reference existing tasks
+    for target in task.all_transition_targets() {
+        if !task_names.contains(target) {
             return Err(ParseError::InvalidTaskReference(format!(
                 "Task '{}' references non-existent task '{}'",
-                task.name, transition
-            )));
-        }
-    }
-
-    // Validate decision branches
-    for branch in &task.decision {
-        if !task_names.contains(branch.next.as_str()) {
-            return Err(ParseError::InvalidTaskReference(format!(
-                "Task '{}' decision branch references non-existent task '{}'",
-                task.name, branch.next
+                task.name, target
             )));
         }
     }
@@ -352,8 +573,12 @@ pub fn workflow_to_json(workflow: &WorkflowDefinition) -> Result<JsonValue, serd
 mod tests {
     use super::*;
 
+    // -----------------------------------------------------------------------
+    // Legacy format tests (backward compatibility)
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn test_parse_simple_workflow() {
+    fn test_parse_simple_workflow_legacy() {
         let yaml = r#"
 ref: test.simple_workflow
 label: Simple Workflow
@@ -371,15 +596,26 @@ tasks:
 "#;
 
         let result = parse_workflow_yaml(yaml);
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
         let workflow = result.unwrap();
         assert_eq!(workflow.tasks.len(), 2);
         assert_eq!(workflow.tasks[0].name, "task1");
+
+        // Legacy on_success should have been normalized into `next`
+        assert!(workflow.tasks[0].on_success.is_none());
+        assert_eq!(workflow.tasks[0].next.len(), 1);
+        assert_eq!(
+            workflow.tasks[0].next[0].when.as_deref(),
+            Some("{{ succeeded() }}")
+        );
+        assert_eq!(
+            workflow.tasks[0].next[0].r#do,
+            Some(vec!["task2".to_string()])
+        );
     }
 
     #[test]
-    fn test_cycles_now_allowed() {
-        // After Orquesta-style refactoring, cycles are now supported
+    fn test_cycles_now_allowed_legacy() {
         let yaml = r#"
 ref: test.circular
 label: Circular Workflow (Now Allowed)
@@ -403,7 +639,7 @@ tasks:
     }
 
     #[test]
-    fn test_invalid_task_reference() {
+    fn test_invalid_task_reference_legacy() {
         let yaml = r#"
 ref: test.invalid_ref
 label: Invalid Reference
@@ -418,12 +654,12 @@ tasks:
         assert!(result.is_err());
         match result {
             Err(ParseError::InvalidTaskReference(_)) => (),
-            _ => panic!("Expected InvalidTaskReference error"),
+            other => panic!("Expected InvalidTaskReference error, got: {:?}", other),
         }
     }
 
     #[test]
-    fn test_parallel_task() {
+    fn test_parallel_task_legacy() {
         let yaml = r#"
 ref: test.parallel
 label: Parallel Workflow
@@ -442,11 +678,356 @@ tasks:
 "#;
 
         let result = parse_workflow_yaml(yaml);
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
         let workflow = result.unwrap();
         assert_eq!(workflow.tasks[0].r#type, TaskType::Parallel);
         assert_eq!(workflow.tasks[0].tasks.as_ref().unwrap().len(), 2);
+        // Legacy on_success converted to next
+        assert_eq!(workflow.tasks[0].next.len(), 1);
     }
+
+    // -----------------------------------------------------------------------
+    // New format tests (Orquesta-style `next`)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_next_format_simple() {
+        let yaml = r#"
+ref: test.next_simple
+label: Next Format Workflow
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    input:
+      message: "Hello"
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - task2
+  - name: task2
+    action: core.echo
+    input:
+      message: "World"
+"#;
+
+        let result = parse_workflow_yaml(yaml);
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+        let workflow = result.unwrap();
+        assert_eq!(workflow.tasks.len(), 2);
+        assert_eq!(workflow.tasks[0].next.len(), 1);
+        assert_eq!(
+            workflow.tasks[0].next[0].when.as_deref(),
+            Some("{{ succeeded() }}")
+        );
+        assert_eq!(
+            workflow.tasks[0].next[0].r#do,
+            Some(vec!["task2".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_parse_next_format_multiple_transitions() {
+        let yaml = r#"
+ref: test.next_multi
+label: Multi-Transition Workflow
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        publish:
+          - msg: "task1 done"
+          - result_val: "{{ result() }}"
+        do:
+          - log
+          - task3
+      - when: "{{ failed() }}"
+        publish:
+          - msg: "task1 failed"
+        do:
+          - log
+          - error_handler
+  - name: task3
+    action: core.complete
+  - name: log
+    action: core.log
+  - name: error_handler
+    action: core.handle_error
+"#;
+
+        let result = parse_workflow_yaml(yaml);
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+        let workflow = result.unwrap();
+
+        let task1 = &workflow.tasks[0];
+        assert_eq!(task1.next.len(), 2);
+
+        // First transition: succeeded
+        assert_eq!(task1.next[0].when.as_deref(), Some("{{ succeeded() }}"));
+        assert_eq!(task1.next[0].publish.len(), 2);
+        assert_eq!(
+            task1.next[0].r#do,
+            Some(vec!["log".to_string(), "task3".to_string()])
+        );
+
+        // Second transition: failed
+        assert_eq!(task1.next[1].when.as_deref(), Some("{{ failed() }}"));
+        assert_eq!(task1.next[1].publish.len(), 1);
+        assert_eq!(
+            task1.next[1].r#do,
+            Some(vec!["log".to_string(), "error_handler".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_parse_next_format_publish_only() {
+        let yaml = r#"
+ref: test.publish_only
+label: Publish Only Workflow
+version: 1.0.0
+tasks:
+  - name: compute
+    action: math.add
+    next:
+      - when: "{{ succeeded() }}"
+        publish:
+          - result: "{{ result() }}"
+"#;
+
+        let result = parse_workflow_yaml(yaml);
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+        let workflow = result.unwrap();
+        let task = &workflow.tasks[0];
+        assert_eq!(task.next.len(), 1);
+        assert!(task.next[0].r#do.is_none());
+        assert_eq!(task.next[0].publish.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_next_format_unconditional() {
+        let yaml = r#"
+ref: test.unconditional
+label: Unconditional Transition
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    next:
+      - do:
+          - task2
+  - name: task2
+    action: core.echo
+"#;
+
+        let result = parse_workflow_yaml(yaml);
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+        let workflow = result.unwrap();
+        assert_eq!(workflow.tasks[0].next.len(), 1);
+        assert!(workflow.tasks[0].next[0].when.is_none());
+        assert_eq!(
+            workflow.tasks[0].next[0].r#do,
+            Some(vec!["task2".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_next_takes_precedence_over_legacy() {
+        // When both `next` and legacy fields are present, `next` wins
+        let yaml = r#"
+ref: test.precedence
+label: Precedence Test
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    on_success: task2
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - task3
+  - name: task2
+    action: core.echo
+  - name: task3
+    action: core.echo
+"#;
+
+        let result = parse_workflow_yaml(yaml);
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+        let workflow = result.unwrap();
+        let task1 = &workflow.tasks[0];
+
+        // `next` should contain only the explicit next entry, not the legacy one
+        assert_eq!(task1.next.len(), 1);
+        assert_eq!(task1.next[0].r#do, Some(vec!["task3".to_string()]));
+        // Legacy field should have been cleared
+        assert!(task1.on_success.is_none());
+    }
+
+    #[test]
+    fn test_invalid_task_reference_in_next() {
+        let yaml = r#"
+ref: test.invalid_next_ref
+label: Invalid Next Ref
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - nonexistent_task
+"#;
+
+        let result = parse_workflow_yaml(yaml);
+        assert!(result.is_err());
+        match result {
+            Err(ParseError::InvalidTaskReference(msg)) => {
+                assert!(msg.contains("nonexistent_task"));
+            }
+            other => panic!("Expected InvalidTaskReference error, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_cycles_allowed_in_next_format() {
+        let yaml = r#"
+ref: test.cycle_next
+label: Cycle with Next
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - task2
+  - name: task2
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - task1
+"#;
+
+        let result = parse_workflow_yaml(yaml);
+        assert!(result.is_ok(), "Cycles should be allowed");
+    }
+
+    #[test]
+    fn test_legacy_all_transition_types() {
+        let yaml = r#"
+ref: test.all_legacy
+label: All Legacy Types
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    on_success: task_s
+    on_failure: task_f
+    on_complete: task_c
+    on_timeout: task_t
+  - name: task_s
+    action: core.echo
+  - name: task_f
+    action: core.echo
+  - name: task_c
+    action: core.echo
+  - name: task_t
+    action: core.echo
+"#;
+
+        let result = parse_workflow_yaml(yaml);
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+        let workflow = result.unwrap();
+        let task1 = &workflow.tasks[0];
+
+        // All legacy fields should be normalized into `next`
+        assert_eq!(task1.next.len(), 4);
+        assert!(task1.on_success.is_none());
+        assert!(task1.on_failure.is_none());
+        assert!(task1.on_complete.is_none());
+        assert!(task1.on_timeout.is_none());
+
+        // Check the order and conditions
+        assert_eq!(task1.next[0].when.as_deref(), Some("{{ succeeded() }}"));
+        assert_eq!(task1.next[0].r#do, Some(vec!["task_s".to_string()]));
+
+        assert_eq!(task1.next[1].when.as_deref(), Some("{{ failed() }}"));
+        assert_eq!(task1.next[1].r#do, Some(vec!["task_f".to_string()]));
+
+        // on_complete → unconditional
+        assert!(task1.next[2].when.is_none());
+        assert_eq!(task1.next[2].r#do, Some(vec!["task_c".to_string()]));
+
+        assert_eq!(task1.next[3].when.as_deref(), Some("{{ timed_out() }}"));
+        assert_eq!(task1.next[3].r#do, Some(vec!["task_t".to_string()]));
+    }
+
+    #[test]
+    fn test_legacy_publish_attached_to_succeeded_transition() {
+        let yaml = r#"
+ref: test.legacy_publish
+label: Legacy Publish
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    on_success: task2
+    publish:
+      - result: "done"
+  - name: task2
+    action: core.echo
+"#;
+
+        let result = parse_workflow_yaml(yaml);
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+        let workflow = result.unwrap();
+        let task1 = &workflow.tasks[0];
+
+        assert_eq!(task1.next.len(), 1);
+        assert_eq!(task1.next[0].publish.len(), 1);
+        assert!(task1.publish.is_empty()); // cleared after normalization
+    }
+
+    #[test]
+    fn test_legacy_decision_branches() {
+        let yaml = r#"
+ref: test.decision
+label: Decision Workflow
+version: 1.0.0
+tasks:
+  - name: check
+    action: core.check
+    decision:
+      - when: "{{ result().status == 'ok' }}"
+        next: success_task
+      - when: "{{ result().status == 'error' }}"
+        next: error_task
+  - name: success_task
+    action: core.echo
+  - name: error_task
+    action: core.echo
+"#;
+
+        let result = parse_workflow_yaml(yaml);
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+        let workflow = result.unwrap();
+        let task = &workflow.tasks[0];
+
+        assert_eq!(task.next.len(), 2);
+        assert!(task.decision.is_empty()); // cleared
+        assert_eq!(
+            task.next[0].when.as_deref(),
+            Some("{{ result().status == 'ok' }}")
+        );
+        assert_eq!(task.next[0].r#do, Some(vec!["success_task".to_string()]));
+    }
+
+    // -----------------------------------------------------------------------
+    // Existing tests
+    // -----------------------------------------------------------------------
 
     #[test]
     fn test_with_items() {
@@ -471,27 +1052,98 @@ tasks:
     }
 
     #[test]
-    fn test_retry_config() {
+    fn test_json_roundtrip() {
         let yaml = r#"
-ref: test.retry
-label: Retry Workflow
+ref: test.roundtrip
+label: Roundtrip Test
 version: 1.0.0
 tasks:
-  - name: flaky_task
-    action: core.flaky
-    retry:
-      count: 5
-      delay: 10
-      backoff: exponential
-      max_delay: 60
+  - name: task1
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        publish:
+          - msg: "done"
+        do:
+          - task2
+  - name: task2
+    action: core.echo
+"#;
+
+        let workflow = parse_workflow_yaml(yaml).unwrap();
+        let json = workflow_to_json(&workflow).unwrap();
+
+        // Verify the JSON has the `next` array
+        let tasks = json.get("tasks").unwrap().as_array().unwrap();
+        let task1_next = tasks[0].get("next").unwrap().as_array().unwrap();
+        assert_eq!(task1_next.len(), 1);
+        assert_eq!(
+            task1_next[0].get("when").unwrap().as_str().unwrap(),
+            "{{ succeeded() }}"
+        );
+
+        // Verify legacy fields are absent
+        assert!(tasks[0].get("on_success").is_none());
+    }
+
+    #[test]
+    fn test_workflow_with_join() {
+        let yaml = r#"
+ref: test.join
+label: Join Workflow
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - task3
+  - name: task2
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - task3
+  - name: task3
+    join: 2
+    action: core.echo
 "#;
 
         let result = parse_workflow_yaml(yaml);
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
         let workflow = result.unwrap();
-        let retry = workflow.tasks[0].retry.as_ref().unwrap();
-        assert_eq!(retry.count, 5);
-        assert_eq!(retry.delay, 10);
-        assert_eq!(retry.backoff, BackoffStrategy::Exponential);
+        assert_eq!(workflow.tasks[2].join, Some(2));
+    }
+
+    #[test]
+    fn test_multiple_do_targets() {
+        let yaml = r#"
+ref: test.multi_do
+label: Multiple Do Targets
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - task2
+          - task3
+  - name: task2
+    action: core.echo
+  - name: task3
+    action: core.echo
+"#;
+
+        let result = parse_workflow_yaml(yaml);
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+        let workflow = result.unwrap();
+        let task1 = &workflow.tasks[0];
+        assert_eq!(task1.next.len(), 1);
+        assert_eq!(
+            task1.next[0].r#do,
+            Some(vec!["task2".to_string(), "task3".to_string()])
+        );
     }
 }

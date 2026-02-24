@@ -19,21 +19,18 @@ parameter_format: dotenv
 # Output format: text (no structured data parsing)
 output_format: text
 
-# Action parameters schema (standard JSON Schema format)
+# Action parameters (StackStorm-style with inline required/secret)
 parameters:
-  type: object
-  properties:
-    seconds:
-      type: integer
-      description: "Number of seconds to sleep"
-      default: 1
-      minimum: 0
-      maximum: 3600
-    message:
-      type: string
-      description: "Optional message to display before sleeping"
-  required:
-    - seconds
+  seconds:
+    type: integer
+    description: "Number of seconds to sleep"
+    required: true
+    default: 1
+    minimum: 0
+    maximum: 3600
+  message:
+    type: string
+    description: "Optional message to display before sleeping"
 
 # Output schema: not applicable for text output format
 # The action outputs plain text to stdout

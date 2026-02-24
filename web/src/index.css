@@ -2,6 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+@keyframes flash-highlight {
+    0% {
+        background-color: rgb(191 219 254); /* blue-200 */
+        box-shadow: 0 0 12px 2px rgb(147 197 253 / 0.5); /* blue-300 glow */
+    }
+    40% {
+        background-color: rgb(219 234 254); /* blue-100 */
+        box-shadow: 0 0 6px 1px rgb(147 197 253 / 0.3);
+    }
+    100% {
+        background-color: transparent;
+        box-shadow: none;
+    }
+}
+
 @layer components {
     /* Input field with non-editable prefix */
     .input-with-prefix {

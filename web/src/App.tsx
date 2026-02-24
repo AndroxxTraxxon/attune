@@ -16,6 +16,9 @@ const PackRegisterPage = lazy(() => import("@/pages/packs/PackRegisterPage"));
 const PackInstallPage = lazy(() => import("@/pages/packs/PackInstallPage"));
 const PackEditPage = lazy(() => import("@/pages/packs/PackEditPage"));
 const ActionsPage = lazy(() => import("@/pages/actions/ActionsPage"));
+const WorkflowBuilderPage = lazy(
+  () => import("@/pages/actions/WorkflowBuilderPage"),
+);
 const RulesPage = lazy(() => import("@/pages/rules/RulesPage"));
 const RuleCreatePage = lazy(() => import("@/pages/rules/RuleCreatePage"));
 const RuleEditPage = lazy(() => import("@/pages/rules/RuleEditPage"));
@@ -78,6 +81,14 @@ function App() {
                   <Route path="packs/:ref" element={<PacksPage />} />
                   <Route path="packs/:ref/edit" element={<PackEditPage />} />
                   <Route path="actions" element={<ActionsPage />} />
+                  <Route
+                    path="actions/workflows/new"
+                    element={<WorkflowBuilderPage />}
+                  />
+                  <Route
+                    path="actions/workflows/:ref/edit"
+                    element={<WorkflowBuilderPage />}
+                  />
                   <Route path="actions/:ref" element={<ActionsPage />} />
                   <Route path="rules" element={<RulesPage />} />
                   <Route path="rules/new" element={<RuleCreatePage />} />

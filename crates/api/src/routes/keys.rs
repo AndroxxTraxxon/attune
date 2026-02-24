@@ -10,9 +10,13 @@ use axum::{
 use std::sync::Arc;
 use validator::Validate;
 
+use attune_common::models::OwnerType;
 use attune_common::repositories::{
+    action::ActionRepository,
     key::{CreateKeyInput, KeyRepository, UpdateKeyInput},
-    Create, Delete, List, Update,
+    pack::PackRepository,
+    trigger::SensorRepository,
+    Create, Delete, FindByRef, List, Update,
 };
 
 use crate::auth::RequireAuth;
@@ -157,6 +161,78 @@ pub async fn create_key(
         )));
     }
 
+    // Auto-resolve owner IDs from refs when only the ref is provided.
+    // This makes the API more ergonomic for sensors and other clients that
+    // know the owner ref but not the numeric database ID.
+    let mut owner_sensor = request.owner_sensor;
+    let mut owner_action = request.owner_action;
+    let mut owner_pack = request.owner_pack;
+
+    match request.owner_type {
+        OwnerType::Sensor => {
+            if owner_sensor.is_none() {
+                if let Some(ref sensor_ref) = request.owner_sensor_ref {
+                    if let Some(sensor) =
+                        SensorRepository::find_by_ref(&state.db, sensor_ref).await?
+                    {
+                        tracing::debug!(
+                            "Auto-resolved owner_sensor from ref '{}' to id {}",
+                            sensor_ref,
+                            sensor.id
+                        );
+                        owner_sensor = Some(sensor.id);
+                    } else {
+                        return Err(ApiError::BadRequest(format!(
+                            "Sensor with ref '{}' not found",
+                            sensor_ref
+                        )));
+                    }
+                }
+            }
+        }
+        OwnerType::Action => {
+            if owner_action.is_none() {
+                if let Some(ref action_ref) = request.owner_action_ref {
+                    if let Some(action) =
+                        ActionRepository::find_by_ref(&state.db, action_ref).await?
+                    {
+                        tracing::debug!(
+                            "Auto-resolved owner_action from ref '{}' to id {}",
+                            action_ref,
+                            action.id
+                        );
+                        owner_action = Some(action.id);
+                    } else {
+                        return Err(ApiError::BadRequest(format!(
+                            "Action with ref '{}' not found",
+                            action_ref
+                        )));
+                    }
+                }
+            }
+        }
+        OwnerType::Pack => {
+            if owner_pack.is_none() {
+                if let Some(ref pack_ref) = request.owner_pack_ref {
+                    if let Some(pack) = PackRepository::find_by_ref(&state.db, pack_ref).await? {
+                        tracing::debug!(
+                            "Auto-resolved owner_pack from ref '{}' to id {}",
+                            pack_ref,
+                            pack.id
+                        );
+                        owner_pack = Some(pack.id);
+                    } else {
+                        return Err(ApiError::BadRequest(format!(
+                            "Pack with ref '{}' not found",
+                            pack_ref
+                        )));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
     // Encrypt value if requested
     let (value, encryption_key_hash) = if request.encrypted {
         let encryption_key = state
@@ -190,11 +266,11 @@ pub async fn create_key(
         owner_type: request.owner_type,
         owner: request.owner,
         owner_identity: request.owner_identity,
-        owner_pack: request.owner_pack,
+        owner_pack,
         owner_pack_ref: request.owner_pack_ref,
-        owner_action: request.owner_action,
+        owner_action,
         owner_action_ref: request.owner_action_ref,
-        owner_sensor: request.owner_sensor,
+        owner_sensor,
         owner_sensor_ref: request.owner_sensor_ref,
         name: request.name,
         encrypted: request.encrypted,

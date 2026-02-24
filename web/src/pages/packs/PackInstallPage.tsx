@@ -20,7 +20,6 @@ export default function PackInstallPage() {
   const [formData, setFormData] = useState({
     source: "",
     refSpec: "",
-    force: false,
     skipTests: false,
     skipDeps: false,
   });
@@ -42,7 +41,6 @@ export default function PackInstallPage() {
       const result = await installPack.mutateAsync({
         source: formData.source,
         refSpec: formData.refSpec || undefined,
-        force: formData.force,
         skipTests: formData.skipTests,
         skipDeps: formData.skipDeps,
       });
@@ -357,33 +355,6 @@ export default function PackInstallPage() {
                   <p className="text-sm text-gray-500">
                     Skip running pack tests during installation. Useful when
                     tests are not available or trusted.
-                  </p>
-                </div>
-              </div>
-
-              {/* Force Installation */}
-              <div className="flex items-start">
-                <div className="flex items-center h-5">
-                  <input
-                    type="checkbox"
-                    id="force"
-                    name="force"
-                    checked={formData.force}
-                    onChange={handleChange}
-                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                  />
-                </div>
-                <div className="ml-3">
-                  <label
-                    htmlFor="force"
-                    className="text-sm font-medium text-gray-700"
-                  >
-                    Force Installation
-                  </label>
-                  <p className="text-sm text-gray-500">
-                    Proceed with installation even if pack exists, dependencies
-                    are missing, or tests fail. This will replace any existing
-                    pack.
                   </p>
                 </div>
               </div>

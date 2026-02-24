@@ -1,13 +1,15 @@
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useNavigate } from "react-router-dom";
 import { useActions, useAction, useDeleteAction } from "@/hooks/useActions";
 import { useExecutions } from "@/hooks/useExecutions";
 import { useState, useMemo } from "react";
-import { ChevronDown, ChevronRight, Search, X, Play } from "lucide-react";
+import { ChevronDown, ChevronRight, Search, X, Play, Plus } from "lucide-react";
 import ExecuteActionModal from "@/components/common/ExecuteActionModal";
 import ErrorDisplay from "@/components/common/ErrorDisplay";
+import { extractProperties } from "@/components/common/ParamSchemaForm";
 
 export default function ActionsPage() {
   const { ref } = useParams<{ ref?: string }>();
+  const navigate = useNavigate();
   const { data, isLoading, error } = useActions();
   const actions = data?.data || [];
   const [collapsedPacks, setCollapsedPacks] = useState<Set<string>>(new Set());
@@ -78,10 +80,22 @@ export default function ActionsPage() {
       {/* Left sidebar - Actions List */}
       <div className="w-96 border-r border-gray-200 overflow-y-auto bg-gray-50">
         <div className="p-4 border-b border-gray-200 bg-white sticky top-0 z-10">
-          <h1 className="text-2xl font-bold">Actions</h1>
-          <p className="text-sm text-gray-600 mt-1">
-            {filteredActions.length} of {actions.length} actions
-          </p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold">Actions</h1>
+              <p className="text-sm text-gray-600 mt-1">
+                {filteredActions.length} of {actions.length} actions
+              </p>
+            </div>
+            <button
+              onClick={() => navigate("/actions/workflows/new")}
+              className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+              title="Create a new workflow action"
+            >
+              <Plus className="w-4 h-4" />
+              Workflow
+            </button>
+          </div>
 
           {/* Search Bar */}
           <div className="mt-3 relative">
@@ -261,8 +275,7 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
 
   const executions = executionsData?.data || [];
   const paramSchema = action.data?.param_schema || {};
-  const properties = paramSchema.properties || {};
-  const requiredFields = paramSchema.required || [];
+  const properties = extractProperties(paramSchema);
   const paramEntries = Object.entries(properties);
 
   return (
@@ -420,9 +433,14 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
                             <span className="font-mono font-semibold text-sm">
                               {key}
                             </span>
-                            {requiredFields.includes(key) && (
+                            {param?.required && (
                               <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded">
                                 Required
+                              </span>
+                            )}
+                            {param?.secret && (
+                              <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded">
+                                Secret
                               </span>
                             )}
                             <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded">

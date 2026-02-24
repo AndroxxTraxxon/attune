@@ -19,36 +19,29 @@ parameter_format: json
 # Output format: jsonl (each line is a JSON object, collected into array)
 output_format: jsonl
 
-# Action parameters schema (standard JSON Schema format)
+# Action parameters schema (StackStorm-style with inline required/secret)
 parameters:
-  type: object
-  properties:
-    count:
-      type: integer
-      description: "Number of items to generate"
-      default: 5
-      minimum: 1
-      maximum: 100
+  count:
+    type: integer
+    description: "Number of items to generate"
+    default: 5
+    minimum: 1
+    maximum: 100
 
 # Output schema: array of objects (required for jsonl format)
 # Each line in stdout will be parsed as JSON and collected into this array
 output_schema:
-  type: array
-  items:
-    type: object
-    properties:
-      id:
-        type: integer
-        description: "Item identifier"
-      value:
-        type: string
-        description: "Item value"
-      timestamp:
-        type: string
-        description: "ISO 8601 timestamp"
-    required:
-      - id
-      - value
+  id:
+    type: integer
+    description: "Item identifier"
+    required: true
+  value:
+    type: string
+    description: "Item value"
+    required: true
+  timestamp:
+    type: string
+    description: "ISO 8601 timestamp"
 
 # Tags for categorization
 tags:

@@ -7,6 +7,7 @@ import {
   useDisableTrigger,
 } from "@/hooks/useTriggers";
 import { useState, useMemo } from "react";
+import { extractProperties } from "@/components/common/ParamSchemaForm";
 import {
   ChevronDown,
   ChevronRight,
@@ -328,13 +329,11 @@ function TriggerDetail({ triggerRef }: { triggerRef: string }) {
   }
 
   const paramSchema = trigger.data?.param_schema || {};
-  const properties = paramSchema.properties || {};
-  const requiredFields = paramSchema.required || [];
+  const properties = extractProperties(paramSchema);
   const paramEntries = Object.entries(properties);
 
   const outSchema = trigger.data?.out_schema || {};
-  const outProperties = outSchema.properties || {};
-  const outRequiredFields = outSchema.required || [];
+  const outProperties = extractProperties(outSchema);
   const outEntries = Object.entries(outProperties);
 
   return (
@@ -496,9 +495,14 @@ function TriggerDetail({ triggerRef }: { triggerRef: string }) {
                             <span className="font-mono font-semibold text-sm">
                               {key}
                             </span>
-                            {requiredFields.includes(key) && (
+                            {param?.required && (
                               <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded">
                                 Required
+                              </span>
+                            )}
+                            {param?.secret && (
+                              <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded">
+                                Secret
                               </span>
                             )}
                             <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded">
@@ -543,7 +547,7 @@ function TriggerDetail({ triggerRef }: { triggerRef: string }) {
                           <span className="font-mono font-semibold text-sm">
                             {key}
                           </span>
-                          {outRequiredFields.includes(key) && (
+                          {param?.required && (
                             <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded">
                               Required
                             </span>

@@ -188,7 +188,7 @@ Authorization: Bearer {sensor_token}
 Content-Type: application/json
 
 {
-  "trigger_type": "core.timer",
+  "trigger_ref": "core.timer",
   "payload": {
     "timestamp": "2025-01-27T12:34:56Z",
     "scheduled_time": "2025-01-27T12:34:56Z"
@@ -196,6 +196,8 @@ Content-Type: application/json
   "trigger_instance_id": "rule_123"
 }
 ```
+
+> **Note**: `trigger_type` is accepted as an alias for `trigger_ref` for backward compatibility, but `trigger_ref` is the canonical field name.
 
 **Important**: Sensors can only emit events for trigger types declared in their token's `metadata.trigger_types`. The API will reject event creation requests for unauthorized trigger types with a `403 Forbidden` error.
 

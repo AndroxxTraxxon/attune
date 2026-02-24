@@ -11,20 +11,18 @@ email: "core@attune.io"
 # Pack is a system pack (shipped with Attune)
 system: true
 
-# Pack configuration schema (minimal for core pack)
+# Pack configuration schema (StackStorm-style flat format)
 conf_schema:
-  type: object
-  properties:
-    max_action_timeout:
-      type: integer
-      description: "Maximum timeout for action execution in seconds"
-      default: 300
-      minimum: 1
-      maximum: 3600
-    enable_debug_logging:
-      type: boolean
-      description: "Enable debug logging for core pack actions"
-      default: false
+  max_action_timeout:
+    type: integer
+    description: "Maximum timeout for action execution in seconds"
+    default: 300
+    minimum: 1
+    maximum: 3600
+  enable_debug_logging:
+    type: boolean
+    description: "Enable debug logging for core pack actions"
+    default: false
 
 # Default pack configuration
 config:

@@ -1,15 +1,82 @@
 //! Parameter validation module
 //!
-//! Validates trigger and action parameters against their declared JSON schemas.
-//! Template-aware: values containing `{{ }}` template expressions are replaced
-//! with schema-appropriate placeholders before validation, so template expressions
-//! pass type checks while literal values are still validated normally.
+//! Validates trigger and action parameters against their declared schemas.
+//! Schemas use the flat StackStorm-style format:
+//!   { "param_name": { "type": "string", "required": true, "secret": true, ... }, ... }
+//!
+//! Before validation, flat schemas are converted to standard JSON Schema so we
+//! can reuse the `jsonschema` crate. Template-aware: values containing `{{ }}`
+//! template expressions are replaced with schema-appropriate placeholders before
+//! validation, so template expressions pass type checks while literal values are
+//! still validated normally.
 
 use attune_common::models::{action::Action, trigger::Trigger};
 use jsonschema::Validator;
 use serde_json::Value;
 
 use crate::middleware::ApiError;
+
+/// Convert a flat StackStorm-style parameter schema into a standard JSON Schema
+/// object suitable for `jsonschema::Validator`.
+///
+/// Input (flat):
+/// ```json
+/// { "url": { "type": "string", "required": true }, "timeout": { "type": "integer", "default": 30 } }
+/// ```
+///
+/// Output (JSON Schema):
+/// ```json
+/// { "type": "object", "properties": { "url": { "type": "string" }, "timeout": { "type": "integer", "default": 30 } }, "required": ["url"] }
+/// ```
+fn flat_to_json_schema(flat: &Value) -> Value {
+    let Some(map) = flat.as_object() else {
+        // Not an object — return a permissive schema
+        return serde_json::json!({});
+    };
+
+    // If it already looks like a JSON Schema (has "type": "object" + "properties"),
+    // pass it through unchanged for backward tolerance.
+    if map.get("type").and_then(|v| v.as_str()) == Some("object") && map.contains_key("properties")
+    {
+        return flat.clone();
+    }
+
+    let mut properties = serde_json::Map::new();
+    let mut required: Vec<Value> = Vec::new();
+
+    for (key, prop_def) in map {
+        let Some(prop_obj) = prop_def.as_object() else {
+            // Skip non-object entries (shouldn't happen in valid schemas)
+            continue;
+        };
+
+        // Clone the property definition, stripping `required` and `secret`
+        // (they are not valid JSON Schema keywords).
+        let mut clean = prop_obj.clone();
+        let is_required = clean
+            .remove("required")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        clean.remove("secret");
+        // `position` is also an Attune extension, not JSON Schema
+        clean.remove("position");
+
+        if is_required {
+            required.push(Value::String(key.clone()));
+        }
+
+        properties.insert(key.clone(), Value::Object(clean));
+    }
+
+    let mut schema = serde_json::Map::new();
+    schema.insert("type".to_string(), Value::String("object".to_string()));
+    schema.insert("properties".to_string(), Value::Object(properties));
+    if !required.is_empty() {
+        schema.insert("required".to_string(), Value::Array(required));
+    }
+
+    Value::Object(schema)
+}
 
 /// Check if a JSON value is (or contains) a template expression.
 fn is_template_expression(value: &Value) -> bool {
@@ -100,7 +167,8 @@ fn placeholder_for_schema(property_schema: &Value) -> Value {
 /// schema-appropriate placeholders. Only replaces leaf values that match
 /// `{{ ... }}`; non-template values are left untouched for normal validation.
 ///
-/// `schema` should be the full JSON Schema object (with `properties`, `type`, etc).
+/// `schema` must be a standard JSON Schema object (with `properties`, `type`, etc).
+/// Call `flat_to_json_schema` first if starting from flat format.
 fn replace_templates_with_placeholders(params: &Value, schema: &Value) -> Value {
     match params {
         Value::Object(map) => {
@@ -164,17 +232,23 @@ fn replace_templates_with_placeholders(params: &Value, schema: &Value) -> Value 
 
 /// Validate trigger parameters against the trigger's parameter schema.
 /// Template expressions (`{{ ... }}`) are accepted for any field type.
+///
+/// The schema is expected in flat StackStorm format and is converted to
+/// JSON Schema internally for validation.
 pub fn validate_trigger_params(trigger: &Trigger, params: &Value) -> Result<(), ApiError> {
     // If no schema is defined, accept any parameters
-    let Some(schema) = &trigger.param_schema else {
+    let Some(flat_schema) = &trigger.param_schema else {
         return Ok(());
     };
 
+    // Convert flat format to JSON Schema for validation
+    let schema = flat_to_json_schema(flat_schema);
+
     // Replace template expressions with schema-appropriate placeholders
-    let sanitized = replace_templates_with_placeholders(params, schema);
+    let sanitized = replace_templates_with_placeholders(params, &schema);
 
     // Compile the JSON schema
-    let compiled_schema = Validator::new(schema).map_err(|e| {
+    let compiled_schema = Validator::new(&schema).map_err(|e| {
         ApiError::InternalServerError(format!(
             "Invalid parameter schema for trigger '{}': {}",
             trigger.r#ref, e
@@ -207,17 +281,23 @@ pub fn validate_trigger_params(trigger: &Trigger, params: &Value) -> Result<(), 
 
 /// Validate action parameters against the action's parameter schema.
 /// Template expressions (`{{ ... }}`) are accepted for any field type.
+///
+/// The schema is expected in flat StackStorm format and is converted to
+/// JSON Schema internally for validation.
 pub fn validate_action_params(action: &Action, params: &Value) -> Result<(), ApiError> {
     // If no schema is defined, accept any parameters
-    let Some(schema) = &action.param_schema else {
+    let Some(flat_schema) = &action.param_schema else {
         return Ok(());
     };
 
+    // Convert flat format to JSON Schema for validation
+    let schema = flat_to_json_schema(flat_schema);
+
     // Replace template expressions with schema-appropriate placeholders
-    let sanitized = replace_templates_with_placeholders(params, schema);
+    let sanitized = replace_templates_with_placeholders(params, &schema);
 
     // Compile the JSON schema
-    let compiled_schema = Validator::new(schema).map_err(|e| {
+    let compiled_schema = Validator::new(&schema).map_err(|e| {
         ApiError::InternalServerError(format!(
             "Invalid parameter schema for action '{}': {}",
             action.r#ref, e
@@ -309,15 +389,65 @@ mod tests {
 
     // ── Basic trigger validation (no templates) ──────────────────────
 
+    // ── flat_to_json_schema unit tests ───────────────────────────────
+
+    #[test]
+    fn test_flat_to_json_schema_basic() {
+        let flat = json!({
+            "url": { "type": "string", "required": true },
+            "timeout": { "type": "integer", "default": 30 }
+        });
+        let result = flat_to_json_schema(&flat);
+        assert_eq!(result["type"], "object");
+        assert_eq!(result["properties"]["url"]["type"], "string");
+        // `required` should be stripped from individual properties
+        assert!(result["properties"]["url"].get("required").is_none());
+        assert_eq!(result["properties"]["timeout"]["default"], 30);
+        // Top-level required array should contain "url"
+        let req = result["required"].as_array().unwrap();
+        assert!(req.contains(&json!("url")));
+        assert!(!req.contains(&json!("timeout")));
+    }
+
+    #[test]
+    fn test_flat_to_json_schema_strips_secret_and_position() {
+        let flat = json!({
+            "token": { "type": "string", "secret": true, "position": 0, "required": true }
+        });
+        let result = flat_to_json_schema(&flat);
+        let token = &result["properties"]["token"];
+        assert!(token.get("secret").is_none());
+        assert!(token.get("position").is_none());
+        assert!(token.get("required").is_none());
+    }
+
+    #[test]
+    fn test_flat_to_json_schema_empty() {
+        let flat = json!({});
+        let result = flat_to_json_schema(&flat);
+        assert_eq!(result["type"], "object");
+        assert!(result.get("required").is_none());
+    }
+
+    #[test]
+    fn test_flat_to_json_schema_passthrough_json_schema() {
+        // If already JSON Schema format, pass through unchanged
+        let js = json!({
+            "type": "object",
+            "properties": { "x": { "type": "string" } },
+            "required": ["x"]
+        });
+        let result = flat_to_json_schema(&js);
+        assert_eq!(result, js);
+    }
+
+    // ── Basic trigger validation (flat format) ──────────────────────
+
     #[test]
     fn test_validate_trigger_params_with_valid_params() {
         let schema = json!({
-            "type": "object",
-            "properties": {
-                "unit": { "type": "string", "enum": ["seconds", "minutes", "hours"] },
-                "delta": { "type": "integer", "minimum": 1 }
-            },
-            "required": ["unit", "delta"]
+            "unit": { "type": "string", "enum": ["seconds", "minutes", "hours"], "required": true },
+            "delta": { "type": "integer", "minimum": 1, "required": true }
         });
 
         let trigger = make_trigger(Some(schema));
@@ -328,12 +458,8 @@ mod tests {
     #[test]
     fn test_validate_trigger_params_with_invalid_params() {
         let schema = json!({
-            "type": "object",
-            "properties": {
-                "unit": { "type": "string", "enum": ["seconds", "minutes", "hours"] },
-                "delta": { "type": "integer", "minimum": 1 }
-            },
-            "required": ["unit", "delta"]
+            "unit": { "type": "string", "enum": ["seconds", "minutes", "hours"], "required": true },
+            "delta": { "type": "integer", "minimum": 1, "required": true }
         });
 
         let trigger = make_trigger(Some(schema));
@@ -351,16 +477,12 @@ mod tests {
         assert!(validate_trigger_params(&trigger, &params).is_err());
     }
 
-    // ── Basic action validation (no templates) ───────────────────────
+    // ── Basic action validation (flat format) ───────────────────────
 
     #[test]
     fn test_validate_action_params_with_valid_params() {
         let schema = json!({
-            "type": "object",
-            "properties": {
-                "message": { "type": "string" }
-            },
-            "required": ["message"]
+            "message": { "type": "string", "required": true }
         });
 
         let action = make_action(Some(schema));
@@ -371,11 +493,7 @@ mod tests {
     #[test]
     fn test_validate_action_params_with_empty_params_but_required_fields() {
         let schema = json!({
-            "type": "object",
-            "properties": {
-                "message": { "type": "string" }
-            },
-            "required": ["message"]
+            "message": { "type": "string", "required": true }
         });
 
         let action = make_action(Some(schema));
@@ -383,16 +501,12 @@ mod tests {
         assert!(validate_action_params(&action, &params).is_err());
     }
 
-    // ── Template-aware validation ────────────────────────────────────
+    // ── Template-aware validation (flat format) ──────────────────────
 
     #[test]
     fn test_template_in_integer_field_passes() {
         let schema = json!({
-            "type": "object",
-            "properties": {
-                "counter": { "type": "integer" }
-            },
-            "required": ["counter"]
+            "counter": { "type": "integer", "required": true }
         });
 
         let action = make_action(Some(schema));
@@ -403,11 +517,7 @@ mod tests {
     #[test]
     fn test_template_in_boolean_field_passes() {
         let schema = json!({
-            "type": "object",
-            "properties": {
-                "verbose": { "type": "boolean" }
-            },
-            "required": ["verbose"]
+            "verbose": { "type": "boolean", "required": true }
         });
 
         let action = make_action(Some(schema));
@@ -418,11 +528,7 @@ mod tests {
     #[test]
     fn test_template_in_number_field_passes() {
         let schema = json!({
-            "type": "object",
-            "properties": {
-                "threshold": { "type": "number", "minimum": 0.0 }
-            },
-            "required": ["threshold"]
+            "threshold": { "type": "number", "minimum": 0.0, "required": true }
         });
 
         let action = make_action(Some(schema));
@@ -433,11 +539,7 @@ mod tests {
     #[test]
     fn test_template_in_enum_field_passes() {
         let schema = json!({
-            "type": "object",
-            "properties": {
-                "level": { "type": "string", "enum": ["info", "warn", "error"] }
-            },
-            "required": ["level"]
+            "level": { "type": "string", "enum": ["info", "warn", "error"], "required": true }
         });
 
         let action = make_action(Some(schema));
@@ -448,11 +550,7 @@ mod tests {
     #[test]
     fn test_template_in_array_field_passes() {
         let schema = json!({
-            "type": "object",
-            "properties": {
-                "recipients": { "type": "array", "items": { "type": "string" } }
-            },
-            "required": ["recipients"]
+            "recipients": { "type": "array", "items": { "type": "string" }, "required": true }
         });
 
         let action = make_action(Some(schema));
@@ -463,11 +561,7 @@ mod tests {
     #[test]
     fn test_template_in_object_field_passes() {
         let schema = json!({
-            "type": "object",
-            "properties": {
-                "metadata": { "type": "object" }
-            },
-            "required": ["metadata"]
+            "metadata": { "type": "object", "required": true }
         });
 
         let action = make_action(Some(schema));
@@ -478,13 +572,9 @@ mod tests {
     #[test]
     fn test_mixed_template_and_literal_values() {
         let schema = json!({
-            "type": "object",
-            "properties": {
-                "message": { "type": "string" },
-                "count": { "type": "integer" },
-                "verbose": { "type": "boolean" }
-            },
-            "required": ["message", "count", "verbose"]
+            "message": { "type": "string", "required": true },
+            "count": { "type": "integer", "required": true },
+            "verbose": { "type": "boolean", "required": true }
         });
 
         let action = make_action(Some(schema));
@@ -496,6 +586,26 @@ mod tests {
             "verbose": true
         });
         assert!(validate_action_params(&action, &params).is_ok());
+    }
+
+    // ── Secret fields are ignored during validation ──────────────────
+
+    #[test]
+    fn test_secret_field_validated_normally() {
+        let schema = json!({
+            "api_key": { "type": "string", "required": true, "secret": true },
+            "endpoint": { "type": "string" }
+        });
+
+        let action = make_action(Some(schema));
+
+        // Valid: secret field provided
+        let params = json!({ "api_key": "sk-1234", "endpoint": "https://api.example.com" });
+        assert!(validate_action_params(&action, &params).is_ok());
+
+        // Invalid: secret field missing but required
+        let params = json!({ "endpoint": "https://api.example.com" });
+        assert!(validate_action_params(&action, &params).is_err());
     }
 
     #[test]

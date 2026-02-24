@@ -53,7 +53,7 @@ pub use coordinator::{
     WorkflowCoordinator, WorkflowExecutionHandle, WorkflowExecutionResult, WorkflowExecutionState,
     WorkflowExecutionStatus,
 };
-pub use graph::{GraphError, GraphResult, TaskGraph, TaskNode, TaskTransitions};
+pub use graph::{GraphError, GraphResult, GraphTransition, TaskGraph, TaskNode};
 pub use task_executor::{
     TaskExecutionError, TaskExecutionResult, TaskExecutionStatus, TaskExecutor,
 };

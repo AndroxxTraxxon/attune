@@ -18,11 +18,7 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
   const isEditing = !!pack;
 
   // Store initial/database state for reset
-  const initialConfSchema = pack?.conf_schema || {
-    type: "object",
-    properties: {},
-    required: [],
-  };
+  const initialConfSchema = pack?.conf_schema || {};
   const initialConfig = pack?.config || {};
 
   // Form state
@@ -47,15 +43,17 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
   const createPack = useCreatePack();
   const updatePack = useUpdatePack();
 
-  // Check if schema has properties
+  // Check if schema has properties (flat format: each key is a parameter name)
   const hasSchemaProperties =
-    confSchema?.properties && Object.keys(confSchema.properties).length > 0;
+    confSchema &&
+    typeof confSchema === "object" &&
+    Object.keys(confSchema).length > 0;
 
   // Sync config values when schema changes (for ad-hoc packs only)
   useEffect(() => {
     if (!isStandard && hasSchemaProperties) {
-      // Get current schema property names
-      const schemaKeys = Object.keys(confSchema.properties || {});
+      // Get current schema property names (flat format: keys are parameter names)
+      const schemaKeys = Object.keys(confSchema);
 
       // Create new config with only keys that exist in schema
       const syncedConfig: Record<string, any> = {};
@@ -65,7 +63,7 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
           syncedConfig[key] = configValues[key];
         } else {
           // Use default from schema if available
-          const defaultValue = confSchema.properties[key]?.default;
+          const defaultValue = confSchema[key]?.default;
           if (defaultValue !== undefined) {
             syncedConfig[key] = defaultValue;
           }
@@ -99,10 +97,14 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
       newErrors.version = "Version is required";
     }
 
-    // Validate conf_schema
-    if (confSchema && confSchema.type !== "object") {
-      newErrors.confSchema =
-        'Config schema must have type "object" at root level';
+    // Validate conf_schema (flat format: each value should be an object defining a parameter)
+    if (confSchema && typeof confSchema === "object") {
+      for (const [key, val] of Object.entries(confSchema)) {
+        if (!val || typeof val !== "object" || Array.isArray(val)) {
+          newErrors.confSchema = `Invalid parameter definition for "${key}" — each parameter must be an object`;
+          break;
+        }
+      }
     }
 
     // Validate meta JSON
@@ -126,7 +128,7 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
     }
 
     const parsedConfSchema =
-      Object.keys(confSchema.properties || {}).length > 0 ? confSchema : {};
+      Object.keys(confSchema || {}).length > 0 ? confSchema : {};
     const parsedMeta = meta.trim() ? JSON.parse(meta) : {};
     const tagsList = tags
       .split(",")
@@ -201,78 +203,75 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
   };
 
   const insertSchemaExample = (type: "api" | "database" | "webhook") => {
-    let example;
+    let example: Record<string, any>;
     switch (type) {
       case "api":
         example = {
-          type: "object",
-          properties: {
-            api_key: {
-              type: "string",
-              description: "API authentication key",
-            },
-            endpoint: {
-              type: "string",
-              description: "API endpoint URL",
-              default: "https://api.example.com",
-            },
+          api_key: {
+            type: "string",
+            description: "API authentication key",
+            required: true,
+            secret: true,
           },
-          required: ["api_key"],
+          endpoint: {
+            type: "string",
+            description: "API endpoint URL",
+            default: "https://api.example.com",
+          },
         };
         break;
 
       case "database":
         example = {
-          type: "object",
-          properties: {
-            host: {
-              type: "string",
-              description: "Database host",
-              default: "localhost",
-            },
-            port: {
-              type: "integer",
-              description: "Database port",
-              default: 5432,
-            },
-            database: {
-              type: "string",
-              description: "Database name",
-            },
-            username: {
-              type: "string",
-              description: "Database username",
-            },
-            password: {
-              type: "string",
-              description: "Database password",
-            },
+          host: {
+            type: "string",
+            description: "Database host",
+            default: "localhost",
+            required: true,
           },
-          required: ["host", "database", "username", "password"],
+          port: {
+            type: "integer",
+            description: "Database port",
+            default: 5432,
+          },
+          database: {
+            type: "string",
+            description: "Database name",
+            required: true,
+          },
+          username: {
+            type: "string",
+            description: "Database username",
+            required: true,
+          },
+          password: {
+            type: "string",
+            description: "Database password",
+            required: true,
+            secret: true,
+          },
         };
         break;
 
       case "webhook":
         example = {
-          type: "object",
-          properties: {
-            webhook_url: {
-              type: "string",
-              description: "Webhook destination URL",
-            },
-            auth_token: {
-              type: "string",
-              description: "Authentication token",
-            },
-            timeout: {
-              type: "integer",
-              description: "Request timeout in seconds",
-              minimum: 1,
-              maximum: 300,
-              default: 30,
-            },
+          webhook_url: {
+            type: "string",
+            description: "Webhook destination URL",
+            required: true,
           },
-          required: ["webhook_url"],
+          auth_token: {
+            type: "string",
+            description: "Authentication token",
+            secret: true,
+          },
+          timeout: {
+            type: "integer",
+            description: "Request timeout in seconds",
+            minimum: 1,
+            maximum: 300,
+            default: 30,
+          },
         };
         break;
     }
@@ -282,15 +281,11 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
 
     // Immediately sync config values with schema defaults
     const syncedConfig: Record<string, any> = {};
-    if (example.properties) {
-      Object.entries(example.properties).forEach(
-        ([key, propDef]: [string, any]) => {
-          if (propDef.default !== undefined) {
-            syncedConfig[key] = propDef.default;
-          }
-        },
-      );
-    }
+    Object.entries(example).forEach(([key, propDef]: [string, any]) => {
+      if (propDef.default !== undefined) {
+        syncedConfig[key] = propDef.default;
+      }
+    });
     setConfigValues(syncedConfig);
   };
 
@@ -578,7 +573,7 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
               </p>
             </div>
             <ParamSchemaForm
-              schema={confSchema.properties}
+              schema={confSchema}
               values={configValues}
               onChange={setConfigValues}
               errors={errors}

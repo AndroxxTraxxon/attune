@@ -14,7 +14,10 @@ use validator::Validate;
 use attune_common::models::pack_test::PackTestResult;
 use attune_common::mq::{MessageEnvelope, MessageType, PackRegisteredPayload};
 use attune_common::repositories::{
+    action::ActionRepository,
     pack::{CreatePackInput, UpdatePackInput},
+    rule::{RestoreRuleInput, RuleRepository},
+    trigger::TriggerRepository,
     Create, Delete, FindById, FindByRef, PackRepository, PackTestRepository, Pagination, Update,
 };
 use attune_common::workflow::{PackWorkflowService, PackWorkflowServiceConfig};
@@ -545,6 +548,9 @@ async fn register_pack_internal(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    // Ad-hoc rules to restore after pack reinstallation
+    let mut saved_adhoc_rules: Vec<attune_common::models::rule::Rule> = Vec::new();
+
     // Check if pack already exists
     if !force {
         if PackRepository::exists_by_ref(&state.db, &pack_ref).await? {
@@ -554,8 +560,20 @@ async fn register_pack_internal(
             )));
         }
     } else {
-        // Delete existing pack if force is true
+        // Delete existing pack if force is true, preserving ad-hoc (user-created) rules
         if let Some(existing_pack) = PackRepository::find_by_ref(&state.db, &pack_ref).await? {
+            // Save ad-hoc rules before deletion — CASCADE on pack FK would destroy them
+            saved_adhoc_rules = RuleRepository::find_adhoc_by_pack(&state.db, existing_pack.id)
+                .await
+                .unwrap_or_default();
+            if !saved_adhoc_rules.is_empty() {
+                tracing::info!(
+                    "Preserving {} ad-hoc rule(s) during reinstall of pack '{}'",
+                    saved_adhoc_rules.len(),
+                    pack_ref
+                );
+            }
+
             PackRepository::delete(&state.db, existing_pack.id).await?;
             tracing::info!("Deleted existing pack '{}' for forced reinstall", pack_ref);
         }
@@ -667,6 +685,123 @@ async fn register_pack_internal(
                     pack.r#ref,
                     e
                 );
+            }
+        }
+    }
+
+    // Restore ad-hoc rules that were saved before pack deletion, and
+    // re-link any rules from other packs whose action/trigger FKs were
+    // set to NULL when the old pack's entities were cascade-deleted.
+    {
+        // Phase 1: Restore saved ad-hoc rules
+        if !saved_adhoc_rules.is_empty() {
+            let mut restored = 0u32;
+            for saved_rule in &saved_adhoc_rules {
+                // Resolve action and trigger IDs by ref (they may have been recreated)
+                let action_id = ActionRepository::find_by_ref(&state.db, &saved_rule.action_ref)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|a| a.id);
+                let trigger_id = TriggerRepository::find_by_ref(&state.db, &saved_rule.trigger_ref)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|t| t.id);
+
+                let input = RestoreRuleInput {
+                    r#ref: saved_rule.r#ref.clone(),
+                    pack: pack.id,
+                    pack_ref: pack.r#ref.clone(),
+                    label: saved_rule.label.clone(),
+                    description: saved_rule.description.clone(),
+                    action: action_id,
+                    action_ref: saved_rule.action_ref.clone(),
+                    trigger: trigger_id,
+                    trigger_ref: saved_rule.trigger_ref.clone(),
+                    conditions: saved_rule.conditions.clone(),
+                    action_params: saved_rule.action_params.clone(),
+                    trigger_params: saved_rule.trigger_params.clone(),
+                    enabled: saved_rule.enabled,
+                };
+
+                match RuleRepository::restore_rule(&state.db, input).await {
+                    Ok(rule) => {
+                        restored += 1;
+                        if rule.action.is_none() || rule.trigger.is_none() {
+                            tracing::warn!(
+                                "Restored ad-hoc rule '{}' with unresolved references \
+                                 (action: {}, trigger: {})",
+                                rule.r#ref,
+                                if rule.action.is_some() {
+                                    "linked"
+                                } else {
+                                    "NULL"
+                                },
+                                if rule.trigger.is_some() {
+                                    "linked"
+                                } else {
+                                    "NULL"
+                                },
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to restore ad-hoc rule '{}': {}",
+                            saved_rule.r#ref,
+                            e
+                        );
+                    }
+                }
+            }
+            tracing::info!(
+                "Restored {}/{} ad-hoc rule(s) for pack '{}'",
+                restored,
+                saved_adhoc_rules.len(),
+                pack.r#ref
+            );
+        }
+
+        // Phase 2: Re-link rules from other packs whose action/trigger FKs
+        // were set to NULL when the old pack's entities were cascade-deleted
+        let new_actions = ActionRepository::find_by_pack(&state.db, pack.id)
+            .await
+            .unwrap_or_default();
+        let new_triggers = TriggerRepository::find_by_pack(&state.db, pack.id)
+            .await
+            .unwrap_or_default();
+
+        for action in &new_actions {
+            match RuleRepository::relink_action_by_ref(&state.db, &action.r#ref, action.id).await {
+                Ok(count) if count > 0 => {
+                    tracing::info!("Re-linked {} rule(s) to action '{}'", count, action.r#ref);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to re-link rules to action '{}': {}",
+                        action.r#ref,
+                        e
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        for trigger in &new_triggers {
+            match RuleRepository::relink_trigger_by_ref(&state.db, &trigger.r#ref, trigger.id).await
+            {
+                Ok(count) if count > 0 => {
+                    tracing::info!("Re-linked {} rule(s) to trigger '{}'", count, trigger.r#ref);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to re-link rules to trigger '{}': {}",
+                        trigger.r#ref,
+                        e
+                    );
+                }
+                _ => {}
             }
         }
     }
@@ -964,7 +1099,6 @@ async fn register_pack_internal(
     responses(
         (status = 201, description = "Pack installed successfully", body = ApiResponse<PackInstallResponse>),
         (status = 400, description = "Invalid request or tests failed", body = ApiResponse<String>),
-        (status = 409, description = "Pack already exists", body = ApiResponse<String>),
         (status = 501, description = "Not implemented yet", body = ApiResponse<String>),
     ),
     security(("bearer_auth" = []))
@@ -1122,12 +1256,14 @@ pub async fn install_pack(
 
     tracing::info!("Pack moved to permanent storage: {:?}", final_path);
 
-    // Register the pack in database (from permanent storage location)
+    // Register the pack in database (from permanent storage location).
+    // Remote installs always force-overwrite: if you're pulling from a remote,
+    // the intent is to get that pack installed regardless of local state.
     let pack_id = register_pack_internal(
         state.clone(),
         user_sub,
         final_path.to_string_lossy().to_string(),
-        request.force,
+        true, // always force for remote installs
         request.skip_tests,
     )
     .await

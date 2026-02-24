@@ -137,8 +137,8 @@ pub struct CreateInquiryRequest {
     #[schema(example = "Approve deployment to production?")]
     pub prompt: String,
 
-    /// Optional JSON schema for the expected response format
-    #[schema(value_type = Object, example = json!({"type": "object", "properties": {"approved": {"type": "boolean"}}}))]
+    /// Optional schema for the expected response format (flat format with inline required/secret)
+    #[schema(value_type = Object, example = json!({"approved": {"type": "boolean", "description": "Whether the deployment is approved", "required": true}}))]
     pub response_schema: Option<JsonSchema>,
 
     /// Optional identity ID to assign this inquiry to

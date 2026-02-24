@@ -7,55 +7,52 @@ label: "Install Packs"
 description: "Install one or more packs from git repositories, HTTP archives, or pack registry with automatic dependency resolution"
 version: "1.0.0"
 
-# Input parameters
+# Input parameters (StackStorm-style with inline required/secret)
 parameters:
-  type: object
-  properties:
-    packs:
-      type: array
-      description: "List of packs to install (git URLs, HTTP URLs, or pack refs like 'slack@1.0.0')"
-      items:
-        type: string
-      minItems: 1
-    ref_spec:
+  packs:
+    type: array
+    description: "List of packs to install (git URLs, HTTP URLs, or pack refs like 'slack@1.0.0')"
+    items:
       type: string
-      description: "Git reference to checkout for git URLs (branch, tag, or commit)"
-    skip_dependencies:
-      type: boolean
-      description: "Skip installing pack dependencies"
-      default: false
-    skip_tests:
-      type: boolean
-      description: "Skip running pack tests before registration"
-      default: false
-    skip_env_build:
-      type: boolean
-      description: "Skip building runtime environments (Python/Node.js)"
-      default: false
-    force:
-      type: boolean
-      description: "Force installation even if packs already exist or tests fail"
-      default: false
-    registry_url:
-      type: string
-      description: "Pack registry URL for resolving pack refs"
-      default: "https://registry.attune.io/index.json"
-    packs_base_dir:
-      type: string
-      description: "Base directory for permanent pack storage"
-      default: "/opt/attune/packs"
-    api_url:
-      type: string
-      description: "Attune API URL"
-      default: "http://localhost:8080"
-    timeout:
-      type: integer
-      description: "Timeout in seconds for the entire workflow"
-      default: 1800
-      minimum: 300
-      maximum: 7200
-  required:
-    - packs
+    minItems: 1
+    required: true
+  ref_spec:
+    type: string
+    description: "Git reference to checkout for git URLs (branch, tag, or commit)"
+  skip_dependencies:
+    type: boolean
+    description: "Skip installing pack dependencies"
+    default: false
+  skip_tests:
+    type: boolean
+    description: "Skip running pack tests before registration"
+    default: false
+  skip_env_build:
+    type: boolean
+    description: "Skip building runtime environments (Python/Node.js)"
+    default: false
+  force:
+    type: boolean
+    description: "Force installation even if packs already exist or tests fail"
+    default: false
+  registry_url:
+    type: string
+    description: "Pack registry URL for resolving pack refs"
+    default: "https://registry.attune.io/index.json"
+  packs_base_dir:
+    type: string
+    description: "Base directory for permanent pack storage"
+    default: "/opt/attune/packs"
+  api_url:
+    type: string
+    description: "Attune API URL"
+    default: "http://localhost:8080"
+  timeout:
+    type: integer
+    description: "Timeout in seconds for the entire workflow"
+    default: 1800
+    minimum: 300
+    maximum: 7200
 
 # Workflow variables
 vars:
@@ -218,55 +215,53 @@ tasks:
 
 # Output schema
 output_schema:
-  type: object
-  properties:
-    registered_packs:
-      type: array
-      description: "Successfully registered packs"
-      items:
-        type: object
-        properties:
-          pack_ref:
-            type: string
-          pack_id:
-            type: integer
-          pack_version:
-            type: string
-          storage_path:
-            type: string
-          components_count:
-            type: integer
-    failed_packs:
-      type: array
-      description: "Packs that failed to install"
-      items:
-        type: object
-        properties:
-          source:
-            type: string
-          error:
-            type: string
-          stage:
-            type: string
-    installed_dependencies:
-      type: array
-      description: "Pack dependencies that were installed"
-      items:
-        type: string
-    summary:
+  registered_packs:
+    type: array
+    description: "Successfully registered packs"
+    items:
       type: object
-      description: "Installation summary"
       properties:
-        total_requested:
+        pack_ref:
+          type: string
+        pack_id:
           type: integer
-        success_count:
+        pack_version:
+          type: string
+        storage_path:
+          type: string
+        components_count:
           type: integer
-        failure_count:
-          type: integer
-        dependencies_installed:
-          type: integer
-        duration_seconds:
-          type: integer
+  failed_packs:
+    type: array
+    description: "Packs that failed to install"
+    items:
+      type: object
+      properties:
+        source:
+          type: string
+        error:
+          type: string
+        stage:
+          type: string
+  installed_dependencies:
+    type: array
+    description: "Pack dependencies that were installed"
+    items:
+      type: string
+  summary:
+    type: object
+    description: "Installation summary"
+    properties:
+      total_requested:
+        type: integer
+      success_count:
+        type: integer
+      failure_count:
+        type: integer
+      dependencies_installed:
+        type: integer
+      duration_seconds:
+        type: integer
 
 # Metadata
 metadata:

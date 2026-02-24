@@ -9,51 +9,45 @@ enabled: true
 # Trigger type
 type: interval
 
-# Parameter schema - configuration for the trigger instance (standard JSON Schema format)
+# Parameter schema - configuration for the trigger instance (StackStorm-style with inline required/secret)
 parameters:
-  type: object
-  properties:
-    unit:
-      type: string
-      enum:
-        - seconds
-        - minutes
-        - hours
-      description: "Time unit for the interval"
-      default: "seconds"
-    interval:
-      type: integer
-      description: "Number of time units between each trigger"
-      default: 60
-  required:
-    - unit
-    - interval
+  unit:
+    type: string
+    enum:
+      - seconds
+      - minutes
+      - hours
+    description: "Time unit for the interval"
+    default: "seconds"
+    required: true
+  interval:
+    type: integer
+    description: "Number of time units between each trigger"
+    default: 60
+    required: true
 
 # Payload schema - data emitted when trigger fires
 output:
-  type: object
-  properties:
-    type:
-      type: string
-      const: interval
-      description: "Trigger type identifier"
-    interval_seconds:
-      type: integer
-      description: "Total interval in seconds"
-    fired_at:
-      type: string
-      format: date-time
-      description: "Timestamp when the trigger fired"
-    execution_count:
-      type: integer
-      description: "Number of times this trigger has fired"
-    sensor_ref:
-      type: string
-      description: "Reference to the sensor that generated this event"
-  required:
-    - type
-    - interval_seconds
-    - fired_at
+  type:
+    type: string
+    const: interval
+    description: "Trigger type identifier"
+    required: true
+  interval_seconds:
+    type: integer
+    description: "Total interval in seconds"
+    required: true
+  fired_at:
+    type: string
+    format: date-time
+    description: "Timestamp when the trigger fired"
+    required: true
+  execution_count:
+    type: integer
+    description: "Number of times this trigger has fired"
+  sensor_ref:
+    type: string
+    description: "Reference to the sensor that generated this event"
 
 # Tags for categorization
 tags:

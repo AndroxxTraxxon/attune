@@ -15,145 +15,140 @@ parameter_format: dotenv
 # Output format: json (structured data parsing enabled)
 output_format: json
 
-# Action parameters schema
+# Action parameters schema (StackStorm-style with inline required/secret)
 parameters:
-  type: object
-  properties:
-    pack_paths:
-      type: array
-      description: "List of pack directory paths to build environments for"
-      items:
-        type: string
-      minItems: 1
-    packs_base_dir:
+  pack_paths:
+    type: array
+    description: "List of pack directory paths to build environments for"
+    required: true
+    items:
       type: string
-      description: "Base directory where packs are installed"
-      default: "/opt/attune/packs"
-    python_version:
-      type: string
-      description: "Python version to use for virtualenvs"
-      default: "3.11"
-    nodejs_version:
-      type: string
-      description: "Node.js version to use"
-      default: "20"
-    skip_python:
-      type: boolean
-      description: "Skip building Python environments"
-      default: false
-    skip_nodejs:
-      type: boolean
-      description: "Skip building Node.js environments"
-      default: false
-    force_rebuild:
-      type: boolean
-      description: "Force rebuild of existing environments"
-      default: false
-    timeout:
-      type: integer
-      description: "Timeout in seconds for building each environment"
-      default: 600
-      minimum: 60
-      maximum: 3600
-  required:
-    - pack_paths
+    minItems: 1
+  packs_base_dir:
+    type: string
+    description: "Base directory where packs are installed"
+    default: "/opt/attune/packs"
+  python_version:
+    type: string
+    description: "Python version to use for virtualenvs"
+    default: "3.11"
+  nodejs_version:
+    type: string
+    description: "Node.js version to use"
+    default: "20"
+  skip_python:
+    type: boolean
+    description: "Skip building Python environments"
+    default: false
+  skip_nodejs:
+    type: boolean
+    description: "Skip building Node.js environments"
+    default: false
+  force_rebuild:
+    type: boolean
+    description: "Force rebuild of existing environments"
+    default: false
+  timeout:
+    type: integer
+    description: "Timeout in seconds for building each environment"
+    default: 600
+    minimum: 60
+    maximum: 3600
 
 # Output schema: describes the JSON structure written to stdout
 # Note: stdout/stderr/exit_code are captured automatically by the execution system
 output_schema:
-  type: object
-  properties:
-    built_environments:
-      type: array
-      description: "List of successfully built environments"
-      items:
-        type: object
-        properties:
-          pack_ref:
-            type: string
-            description: "Pack reference"
-          pack_path:
-            type: string
-            description: "Pack directory path"
-          environments:
-            type: object
-            description: "Built environments for this pack"
-            properties:
-              python:
-                type: object
-                description: "Python environment details"
-                properties:
-                  virtualenv_path:
-                    type: string
-                    description: "Path to Python virtualenv"
-                  requirements_installed:
-                    type: boolean
-                    description: "Whether requirements.txt was installed"
-                  package_count:
-                    type: integer
-                    description: "Number of packages installed"
-                  python_version:
-                    type: string
-                    description: "Python version used"
-              nodejs:
-                type: object
-                description: "Node.js environment details"
-                properties:
-                  node_modules_path:
-                    type: string
-                    description: "Path to node_modules directory"
-                  dependencies_installed:
-                    type: boolean
-                    description: "Whether package.json was installed"
-                  package_count:
-                    type: integer
-                    description: "Number of packages installed"
-                  nodejs_version:
-                    type: string
-                    description: "Node.js version used"
-          duration_ms:
-            type: integer
-            description: "Time taken to build environments in milliseconds"
-    failed_environments:
-      type: array
-      description: "List of packs where environment build failed"
-      items:
-        type: object
-        properties:
-          pack_ref:
-            type: string
-            description: "Pack reference"
-          pack_path:
-            type: string
-            description: "Pack directory path"
-          runtime:
-            type: string
-            description: "Runtime that failed (python or nodejs)"
-          error:
-            type: string
-            description: "Error message"
-    summary:
+  built_environments:
+    type: array
+    description: "List of successfully built environments"
+    items:
       type: object
-      description: "Summary of environment build process"
       properties:
-        total_packs:
+        pack_ref:
+          type: string
+          description: "Pack reference"
+        pack_path:
+          type: string
+          description: "Pack directory path"
+        environments:
+          type: object
+          description: "Built environments for this pack"
+          properties:
+            python:
+              type: object
+              description: "Python environment details"
+              properties:
+                virtualenv_path:
+                  type: string
+                  description: "Path to Python virtualenv"
+                requirements_installed:
+                  type: boolean
+                  description: "Whether requirements.txt was installed"
+                package_count:
+                  type: integer
+                  description: "Number of packages installed"
+                python_version:
+                  type: string
+                  description: "Python version used"
+            nodejs:
+              type: object
+              description: "Node.js environment details"
+              properties:
+                node_modules_path:
+                  type: string
+                  description: "Path to node_modules directory"
+                dependencies_installed:
+                  type: boolean
+                  description: "Whether package.json was installed"
+                package_count:
+                  type: integer
+                  description: "Number of packages installed"
+                nodejs_version:
+                  type: string
+                  description: "Node.js version used"
+        duration_ms:
           type: integer
-          description: "Total number of packs processed"
-        success_count:
-          type: integer
-          description: "Number of packs with successful builds"
-        failure_count:
-          type: integer
-          description: "Number of packs with failed builds"
-        python_envs_built:
-          type: integer
-          description: "Number of Python environments built"
-        nodejs_envs_built:
-          type: integer
-          description: "Number of Node.js environments built"
-        total_duration_ms:
-          type: integer
-          description: "Total time taken for all builds in milliseconds"
+          description: "Time taken to build environments in milliseconds"
+  failed_environments:
+    type: array
+    description: "List of packs where environment build failed"
+    items:
+      type: object
+      properties:
+        pack_ref:
+          type: string
+          description: "Pack reference"
+        pack_path:
+          type: string
+          description: "Pack directory path"
+        runtime:
+          type: string
+          description: "Runtime that failed (python or nodejs)"
+        error:
+          type: string
+          description: "Error message"
+  summary:
+    type: object
+    description: "Summary of environment build process"
+    properties:
+      total_packs:
+        type: integer
+        description: "Total number of packs processed"
+      success_count:
+        type: integer
+        description: "Number of packs with successful builds"
+      failure_count:
+        type: integer
+        description: "Number of packs with failed builds"
+      python_envs_built:
+        type: integer
+        description: "Number of Python environments built"
+      nodejs_envs_built:
+        type: integer
+        description: "Number of Node.js environments built"
+      total_duration_ms:
+        type: integer
+        description: "Total time taken for all builds in milliseconds"
 
 # Tags for categorization
 tags:

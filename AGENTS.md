@@ -220,12 +220,47 @@ Enforcement created → Execution scheduled → Worker executes Action
   - Development packs in `./packs.dev/` are bind-mounted directly for instant updates
 - **Pack Binaries**: Native binaries (sensors) built separately with `./scripts/build-pack-binaries.sh`
 - **Action Script Resolution**: Worker constructs file paths as `{packs_base_dir}/{pack_ref}/actions/{entrypoint}`
+- **Workflow File Storage**: Visual workflow builder saves files to `{packs_base_dir}/{pack_ref}/actions/workflows/{name}.workflow.yaml` via `POST /api/v1/packs/{pack_ref}/workflow-files` and `PUT /api/v1/workflows/{ref}/file` endpoints
+- **Task Model (Orquesta-aligned)**: Tasks are purely action invocations — there is no task `type` field or task-level `when` condition in the UI model. Parallelism is implicit (multiple `do` targets in a transition fan out into parallel branches). Conditions belong exclusively on transitions (`next[].when`). Each task has: `name`, `action`, `input`, `next` (transitions), `delay`, `retry`, `timeout`, `with_items`, `batch_size`, `concurrency`, `join`.
+  - The backend `Task` struct (`crates/common/src/workflow/parser.rs`) still supports `type` and task-level `when` for backward compatibility, but the UI never sets them.
+- **Task Transition Model (Orquesta-style)**: Tasks use an ordered `next` array of transitions instead of flat `on_success`/`on_failure`/`on_complete`/`on_timeout` fields. Each transition has:
+  - `when` — condition expression (e.g., `{{ succeeded() }}`, `{{ failed() }}`, `{{ timed_out() }}`, or custom). Omit for unconditional.
+  - `publish` — key-value pairs to publish into the workflow context (e.g., `- result: "{{ result() }}"`)
+  - `do` — list of next task names to invoke when the condition is met
+  - `label` — optional custom display label (overrides auto-derived label from `when` expression)
+  - `color` — optional custom CSS color for the transition edge (e.g., `"#ff6600"`)
+  - **Example YAML**:
+    ```
+    next:
+      - when: "{{ succeeded() }}"
+        label: "main path"
+        color: "#22c55e"
+        publish:
+          - msg: "task done"
+        do:
+          - log
+          - next_task
+      - when: "{{ failed() }}"
+        do:
+          - error_handler
+    ```
+  - **Legacy format support**: The parser (`crates/common/src/workflow/parser.rs`) auto-converts legacy `on_success`/`on_failure`/`on_complete`/`on_timeout`/`decision` fields into `next` transitions during parsing. The canonical internal representation always uses `next`.
+  - **Frontend types**: `TaskTransition` in `web/src/types/workflow.ts`; `TransitionPreset` ("succeeded" | "failed" | "always") for quick-access drag handles
+  - **Backend types**: `TaskTransition` in `crates/common/src/workflow/parser.rs`; `GraphTransition` in `crates/executor/src/workflow/graph.rs`
+  - **NOT this** (legacy format): `on_success: task2` / `on_failure: error_handler` — still parsed for backward compat but normalized to `next`
 - **Runtime YAML Loading**: Pack registration reads `runtimes/*.yaml` files and inserts them into the `runtime` table. Runtime refs use format `{pack_ref}.{name}` (e.g., `core.python`, `core.shell`).
 - **Runtime Selection**: Determined by action's runtime field (e.g., "Shell", "Python") - compared case-insensitively; when an explicit `runtime_name` is set in execution context, it is authoritative (no fallback to extension matching)
 - **Worker Runtime Loading**: Worker loads all runtimes from DB that have a non-empty `execution_config` (i.e., runtimes with an interpreter configured). Native runtimes (e.g., `core.native` with empty config) are automatically skipped since they execute binaries directly.
 - **Native Runtime Detection**: Runtime detection is purely data-driven via `execution_config` in the runtime table. A runtime with empty `execution_config` (or empty `interpreter.binary`) is native — the entrypoint is executed directly without an interpreter. There is no special "builtin" runtime concept.
 - **Sensor Runtime Assignment**: Sensors declare their `runner_type` in YAML (e.g., `python`, `native`). The pack loader resolves this to the correct runtime from the database. Default is `native` (compiled binary, no interpreter). Legacy values `standalone` and `builtin` map to `core.native`.
 - **Runtime Environment Setup**: Worker creates isolated environments (virtualenvs, node_modules) on-demand at `{runtime_envs_dir}/{pack_ref}/{runtime_name}` before first execution; setup is idempotent
+- **Schema Format (Unified)**: ALL schemas (`param_schema`, `out_schema`, `conf_schema`) use the same flat format with `required` and `secret` inlined per-parameter (NOT standard JSON Schema). Stored as JSONB columns.
+  - **Example YAML**: `parameters:\n  url:\n    type: string\n    required: true\n  token:\n    type: string\n    secret: true`
+  - **Stored JSON**: `{"url": {"type": "string", "required": true}, "token": {"type": "string", "secret": true}}`
+  - **NOT this** (legacy JSON Schema): `{"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}`
+  - **Web UI**: `extractProperties()` in `ParamSchemaForm.tsx` is the single extraction function for all schema types. Only handles flat format.
+  - **SchemaBuilder**: Visual schema editor reads and writes flat format with `required` and `secret` checkboxes per parameter.
+  - **Backend Validation**: `flat_to_json_schema()` in `crates/api/src/validation/params.rs` converts flat format to JSON Schema internally for `jsonschema` crate validation. This conversion is an implementation detail — external interfaces always use flat format.
 - **Parameter Delivery**: Actions receive parameters via stdin as JSON (never environment variables)
 - **Output Format**: Actions declare output format (text/json/yaml) - json/yaml are parsed into execution.result JSONB
 - **Standard Environment Variables**: Worker provides execution context via `ATTUNE_*` environment variables:
@@ -275,6 +310,16 @@ Rule `action_params` support Jinja2-style `{{ source.path }}` templates resolved
 - **Styling**: Tailwind utility classes
 - **Dev Server**: `npm run dev` (typically :3000 or :5173)
 - **Build**: `npm run build`
+- **Workflow Builder**: Visual node-based workflow editor at `/actions/workflows/new` and `/actions/workflows/:ref/edit`
+  - Components in `web/src/components/workflows/` (ActionPalette, WorkflowCanvas, TaskNode, WorkflowEdges, TaskInspector)
+  - Types and conversion utilities in `web/src/types/workflow.ts`
+  - Hooks in `web/src/hooks/useWorkflows.ts`
+  - Saves workflow files to `{packs_base_dir}/{pack_ref}/actions/workflows/{name}.workflow.yaml` via dedicated API endpoints
+  - **Visual / Raw YAML toggle**: Toolbar has a segmented toggle to switch between the visual node-based builder and a full-width read-only YAML preview (generated via `js-yaml`). Raw YAML mode replaces the canvas, palette, and inspector with the effective workflow definition.
+  - **Drag-handle connections**: TaskNode has output handles (green=succeeded, red=failed, gray=always) and an input handle (top). Drag from an output handle to another node's input handle to create a transition.
+  - **Transition customization**: Users can rename transitions (custom `label`) and assign custom colors (CSS color string or preset swatches) via the TaskInspector. Custom colors/labels are persisted in the workflow YAML and rendered on the canvas edges.
+  - **Orquesta-style `next` transitions**: Tasks use a `next: TaskTransition[]` array instead of flat `on_success`/`on_failure` fields. Each transition has `when` (condition), `publish` (variables), `do` (target tasks), plus optional `label` and `color`. See "Task Transition Model" above.
+  - **No task type or task-level condition**: The UI does not expose task `type` or task-level `when` — all tasks are actions (workflows are also actions), and conditions belong on transitions. Parallelism is implicit via multiple `do` targets.
 
 ## Development Workflow
 
@@ -425,7 +470,7 @@ When reporting, ask: "Should I fix this first or continue with [original task]?"
 - **Web UI**: Static files served separately or via API service
 
 ## Current Development Status
-- ✅ **Complete**: Database migrations (17 tables), API service (most endpoints), common library, message queue infrastructure, repository layer, JWT auth, CLI tool, Web UI (basic), Executor service (core functionality), Worker service (shell/Python execution)
+- ✅ **Complete**: Database migrations (17 tables), API service (most endpoints), common library, message queue infrastructure, repository layer, JWT auth, CLI tool, Web UI (basic + workflow builder), Executor service (core functionality), Worker service (shell/Python execution)
 - 🔄 **In Progress**: Sensor service, advanced workflow features, Python runtime dependency management
 - 📋 **Planned**: Notifier service, execution policies, monitoring, pack registry system
 

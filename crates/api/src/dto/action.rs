@@ -38,14 +38,14 @@ pub struct CreateActionRequest {
     #[schema(example = 1)]
     pub runtime: Option<i64>,
 
-    /// Parameter schema (JSON Schema) defining expected inputs
+    /// Parameter schema (StackStorm-style) defining expected inputs with inline required/secret
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Object, nullable = true, example = json!({"type": "object", "properties": {"channel": {"type": "string"}, "message": {"type": "string"}}}))]
+    #[schema(value_type = Object, nullable = true, example = json!({"channel": {"type": "string", "description": "Slack channel", "required": true}, "message": {"type": "string", "description": "Message text", "required": true}}))]
     pub param_schema: Option<JsonValue>,
 
-    /// Output schema (JSON Schema) defining expected outputs
+    /// Output schema (flat format) defining expected outputs with inline required/secret
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Object, nullable = true, example = json!({"type": "object", "properties": {"message_id": {"type": "string"}}}))]
+    #[schema(value_type = Object, nullable = true, example = json!({"message_id": {"type": "string", "description": "ID of the sent message", "required": true}}))]
     pub out_schema: Option<JsonValue>,
 }
 
@@ -71,7 +71,7 @@ pub struct UpdateActionRequest {
     #[schema(example = 1)]
     pub runtime: Option<i64>,
 
-    /// Parameter schema
+    /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
     pub param_schema: Option<JsonValue>,
 
@@ -115,7 +115,7 @@ pub struct ActionResponse {
     #[schema(example = 1)]
     pub runtime: Option<i64>,
 
-    /// Parameter schema
+    /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
     pub param_schema: Option<JsonValue>,
 

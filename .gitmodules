@@ -1,0 +1,6 @@
+[submodule "packs.external/python_example"]
+	path = packs.external/python_example
+	url = https://git.rdrx.app/attune-packs/python_example.git
+[submodule "packs.external/nodejs_example"]
+	path = packs.external/nodejs_example
+	url = https://git.rdrx.app/attune-packs/nodejs_example.git

@@ -165,7 +165,17 @@ impl ActionExecutor {
             }
         }
 
-        // Otherwise, parse action_ref and query by pack.ref + action.ref
+        // Fallback: look up by the full qualified action ref directly
+        let action = sqlx::query_as::<_, Action>("SELECT * FROM action WHERE ref = $1")
+            .bind(&execution.action_ref)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        if let Some(action) = action {
+            return Ok(action);
+        }
+
+        // Final fallback: parse action_ref as "pack.action" and query by pack ref
         let parts: Vec<&str> = execution.action_ref.split('.').collect();
         if parts.len() != 2 {
             return Err(Error::validation(format!(
@@ -175,9 +185,8 @@ impl ActionExecutor {
         }
 
         let pack_ref = parts[0];
-        let action_ref = parts[1];
 
-        // Query action by pack ref and action ref
+        // Query action by pack ref and full action ref
         let action = sqlx::query_as::<_, Action>(
             r#"
             SELECT a.*
@@ -187,7 +196,7 @@ impl ActionExecutor {
             "#,
         )
         .bind(pack_ref)
-        .bind(action_ref)
+        .bind(&execution.action_ref)
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| Error::not_found("Action", "ref", execution.action_ref.clone()))?;
@@ -368,9 +377,40 @@ impl ActionExecutor {
             if action_file_path.exists() {
                 Some(action_file_path)
             } else {
+                // Detailed diagnostics to help track down missing action files
+                let pack_dir_exists = pack_dir.exists();
+                let actions_dir = pack_dir.join("actions");
+                let actions_dir_exists = actions_dir.exists();
+                let actions_dir_contents: Vec<String> = if actions_dir_exists {
+                    std::fs::read_dir(&actions_dir)
+                        .map(|entries| {
+                            entries
+                                .filter_map(|e| e.ok())
+                                .map(|e| e.file_name().to_string_lossy().to_string())
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    vec![]
+                };
+
                 warn!(
-                    "Action file not found at {:?} for action {}",
-                    action_file_path, action.r#ref
+                    "Action file not found for action '{}': \
+                     expected_path={}, \
+                     packs_base_dir={}, \
+                     pack_ref={}, \
+                     entrypoint={}, \
+                     pack_dir_exists={}, \
+                     actions_dir_exists={}, \
+                     actions_dir_contents={:?}",
+                    action.r#ref,
+                    action_file_path.display(),
+                    self.packs_base_dir.display(),
+                    action.pack_ref,
+                    entry_point,
+                    pack_dir_exists,
+                    actions_dir_exists,
+                    actions_dir_contents,
                 );
                 None
             }
@@ -567,9 +607,7 @@ impl ActionExecutor {
 
             warn!(
                 "Execution {} failed without ExecutionResult - {}: {}",
-                execution_id,
-                "early/catastrophic failure",
-                err_msg
+                execution_id, "early/catastrophic failure", err_msg
             );
 
             // Check if stderr log exists and is non-empty from artifact storage

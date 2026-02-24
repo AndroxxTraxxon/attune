@@ -28,9 +28,9 @@ pub struct CreatePackRequest {
     #[schema(example = "1.0.0")]
     pub version: String,
 
-    /// Configuration schema (JSON Schema)
+    /// Configuration schema (flat format with inline required/secret per parameter)
     #[serde(default = "default_empty_object")]
-    #[schema(value_type = Object, example = json!({"type": "object", "properties": {"api_token": {"type": "string"}}}))]
+    #[schema(value_type = Object, example = json!({"api_token": {"type": "string", "description": "API authentication key", "required": true, "secret": true}}))]
     pub conf_schema: JsonValue,
 
     /// Pack configuration values
@@ -94,11 +94,6 @@ pub struct InstallPackRequest {
     /// Git branch, tag, or commit reference
     #[schema(example = "main")]
     pub ref_spec: Option<String>,
-
-    /// Force reinstall if pack already exists
-    #[serde(default)]
-    #[schema(example = false)]
-    pub force: bool,
 
     /// Skip running pack tests during installation
     #[serde(default)]

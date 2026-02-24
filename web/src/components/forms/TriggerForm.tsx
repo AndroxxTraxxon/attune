@@ -30,16 +30,8 @@ export default function TriggerForm({
   const [description, setDescription] = useState("");
   const [webhookEnabled, setWebhookEnabled] = useState(false);
   const [enabled, setEnabled] = useState(true);
-  const [paramSchema, setParamSchema] = useState<Record<string, any>>({
-    type: "object",
-    properties: {},
-    required: [],
-  });
-  const [outSchema, setOutSchema] = useState<Record<string, any>>({
-    type: "object",
-    properties: {},
-    required: [],
-  });
+  const [paramSchema, setParamSchema] = useState<Record<string, any>>({});
+  const [outSchema, setOutSchema] = useState<Record<string, any>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   // Fetch packs
@@ -58,20 +50,8 @@ export default function TriggerForm({
       setDescription(initialData.description || "");
       setWebhookEnabled(initialData.webhook_enabled || false);
       setEnabled(initialData.enabled ?? true);
-      setParamSchema(
-        initialData.param_schema || {
-          type: "object",
-          properties: {},
-          required: [],
-        },
-      );
-      setOutSchema(
-        initialData.out_schema || {
-          type: "object",
-          properties: {},
-          required: [],
-        },
-      );
+      setParamSchema(initialData.param_schema || {});
+      setOutSchema(initialData.out_schema || {});
 
       if (isEditing) {
         // Find pack by pack_ref
@@ -129,13 +109,8 @@ export default function TriggerForm({
         description: description.trim() || undefined,
         enabled,
         param_schema:
-          Object.keys(paramSchema.properties || {}).length > 0
-            ? paramSchema
-            : undefined,
-        out_schema:
-          Object.keys(outSchema.properties || {}).length > 0
-            ? outSchema
-            : undefined,
+          Object.keys(paramSchema).length > 0 ? paramSchema : undefined,
+        out_schema: Object.keys(outSchema).length > 0 ? outSchema : undefined,
       };
 
       if (isEditing && initialData?.ref) {

@@ -9,52 +9,46 @@ enabled: true
 # Trigger type
 type: one_shot
 
-# Parameter schema - configuration for the trigger instance (standard JSON Schema format)
+# Parameter schema - configuration for the trigger instance (StackStorm-style with inline required/secret)
 parameters:
-  type: object
-  properties:
-    fire_at:
-      type: string
-      description: "ISO 8601 timestamp when the timer should fire (e.g., '2024-12-31T23:59:59Z')"
-    timezone:
-      type: string
-      description: "Timezone for the datetime (e.g., 'UTC', 'America/New_York')"
-      default: "UTC"
-    description:
-      type: string
-      description: "Human-readable description of when this timer fires"
-  required:
-    - fire_at
+  fire_at:
+    type: string
+    description: "ISO 8601 timestamp when the timer should fire (e.g., '2024-12-31T23:59:59Z')"
+    required: true
+  timezone:
+    type: string
+    description: "Timezone for the datetime (e.g., 'UTC', 'America/New_York')"
+    default: "UTC"
+  description:
+    type: string
+    description: "Human-readable description of when this timer fires"
 
 # Payload schema - data emitted when trigger fires
 output:
-  type: object
-  properties:
-    type:
-      type: string
-      const: one_shot
-      description: "Trigger type identifier"
-    fire_at:
-      type: string
-      format: date-time
-      description: "Scheduled fire time"
-    fired_at:
-      type: string
-      format: date-time
-      description: "Actual fire time"
-    timezone:
-      type: string
-      description: "Timezone used for scheduling"
-    delay_ms:
-      type: integer
-      description: "Delay in milliseconds between scheduled and actual fire time"
-    sensor_ref:
-      type: string
-      description: "Reference to the sensor that generated this event"
-  required:
-    - type
-    - fire_at
-    - fired_at
+  type:
+    type: string
+    const: one_shot
+    description: "Trigger type identifier"
+    required: true
+  fire_at:
+    type: string
+    format: date-time
+    description: "Scheduled fire time"
+    required: true
+  fired_at:
+    type: string
+    format: date-time
+    description: "Actual fire time"
+    required: true
+  timezone:
+    type: string
+    description: "Timezone used for scheduling"
+  delay_ms:
+    type: integer
+    description: "Delay in milliseconds between scheduled and actual fire time"
+  sensor_ref:
+    type: string
+    description: "Reference to the sensor that generated this event"
 
 # Tags for categorization
 tags:

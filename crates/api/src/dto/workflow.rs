@@ -6,6 +6,54 @@ use serde_json::Value as JsonValue;
 use utoipa::{IntoParams, ToSchema};
 use validator::Validate;
 
+/// Request DTO for saving a workflow file to disk and syncing to DB
+#[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
+pub struct SaveWorkflowFileRequest {
+    /// Workflow name (becomes filename: {name}.workflow.yaml)
+    #[validate(length(min = 1, max = 255))]
+    #[schema(example = "deploy_app")]
+    pub name: String,
+
+    /// Human-readable label
+    #[validate(length(min = 1, max = 255))]
+    #[schema(example = "Deploy Application")]
+    pub label: String,
+
+    /// Workflow description
+    #[schema(example = "Deploys an application to the target environment")]
+    pub description: Option<String>,
+
+    /// Workflow version (semantic versioning recommended)
+    #[validate(length(min = 1, max = 50))]
+    #[schema(example = "1.0.0")]
+    pub version: String,
+
+    /// Pack reference this workflow belongs to
+    #[validate(length(min = 1, max = 255))]
+    #[schema(example = "core")]
+    pub pack_ref: String,
+
+    /// The full workflow definition as JSON (will be serialized to YAML on disk)
+    #[schema(value_type = Object)]
+    pub definition: JsonValue,
+
+    /// Parameter schema (flat format with inline required/secret)
+    #[schema(value_type = Object, nullable = true)]
+    pub param_schema: Option<JsonValue>,
+
+    /// Output schema (flat format)
+    #[schema(value_type = Object, nullable = true)]
+    pub out_schema: Option<JsonValue>,
+
+    /// Tags for categorization
+    #[schema(example = json!(["deployment", "automation"]))]
+    pub tags: Option<Vec<String>>,
+
+    /// Whether the workflow is enabled
+    #[schema(example = true)]
+    pub enabled: Option<bool>,
+}
+
 /// Request DTO for creating a new workflow
 #[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
 pub struct CreateWorkflowRequest {
@@ -33,12 +81,12 @@ pub struct CreateWorkflowRequest {
     #[schema(example = "1.0.0")]
     pub version: String,
 
-    /// Parameter schema (JSON Schema) defining expected inputs
-    #[schema(value_type = Object, example = json!({"type": "object", "properties": {"severity": {"type": "string"}, "channel": {"type": "string"}}}))]
+    /// Parameter schema (StackStorm-style) defining expected inputs with inline required/secret
+    #[schema(value_type = Object, example = json!({"severity": {"type": "string", "description": "Incident severity", "required": true}, "channel": {"type": "string", "description": "Notification channel"}}))]
     pub param_schema: Option<JsonValue>,
 
-    /// Output schema (JSON Schema) defining expected outputs
-    #[schema(value_type = Object, example = json!({"type": "object", "properties": {"incident_id": {"type": "string"}}}))]
+    /// Output schema (flat format) defining expected outputs with inline required/secret
+    #[schema(value_type = Object, example = json!({"incident_id": {"type": "string", "description": "Unique incident identifier", "required": true}}))]
     pub out_schema: Option<JsonValue>,
 
     /// Workflow definition (complete workflow YAML structure as JSON)
@@ -71,7 +119,7 @@ pub struct UpdateWorkflowRequest {
     #[schema(example = "1.1.0")]
     pub version: Option<String>,
 
-    /// Parameter schema
+    /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
     pub param_schema: Option<JsonValue>,
 
@@ -123,7 +171,7 @@ pub struct WorkflowResponse {
     #[schema(example = "1.0.0")]
     pub version: String,
 
-    /// Parameter schema
+    /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
     pub param_schema: Option<JsonValue>,
 

@@ -28,14 +28,14 @@ pub struct CreateTriggerRequest {
     #[schema(example = "Triggers when a webhook is received")]
     pub description: Option<String>,
 
-    /// Parameter schema (JSON Schema) defining event payload structure
+    /// Parameter schema (StackStorm-style) defining trigger configuration with inline required/secret
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Object, nullable = true, example = json!({"type": "object", "properties": {"url": {"type": "string"}}}))]
+    #[schema(value_type = Object, nullable = true, example = json!({"url": {"type": "string", "description": "Webhook URL", "required": true}}))]
     pub param_schema: Option<JsonValue>,
 
-    /// Output schema (JSON Schema) defining event data structure
+    /// Output schema (flat format) defining event data structure with inline required/secret
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Object, nullable = true, example = json!({"type": "object", "properties": {"payload": {"type": "object"}}}))]
+    #[schema(value_type = Object, nullable = true, example = json!({"payload": {"type": "object", "description": "Event payload data", "required": true}}))]
     pub out_schema: Option<JsonValue>,
 
     /// Whether the trigger is enabled
@@ -56,7 +56,7 @@ pub struct UpdateTriggerRequest {
     #[schema(example = "Updated webhook trigger description")]
     pub description: Option<String>,
 
-    /// Parameter schema
+    /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
     pub param_schema: Option<JsonValue>,
 
@@ -100,7 +100,7 @@ pub struct TriggerResponse {
     #[schema(example = true)]
     pub enabled: bool,
 
-    /// Parameter schema
+    /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
     pub param_schema: Option<JsonValue>,
 
@@ -208,9 +208,9 @@ pub struct CreateSensorRequest {
     #[schema(example = "monitoring.cpu_threshold")]
     pub trigger_ref: String,
 
-    /// Parameter schema (JSON Schema) for sensor configuration
+    /// Parameter schema (flat format) for sensor configuration
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Object, nullable = true, example = json!({"type": "object", "properties": {"threshold": {"type": "number"}}}))]
+    #[schema(value_type = Object, nullable = true, example = json!({"threshold": {"type": "number", "description": "Alert threshold", "required": true}}))]
     pub param_schema: Option<JsonValue>,
 
     /// Configuration values for this sensor instance (conforms to param_schema)
@@ -242,7 +242,7 @@ pub struct UpdateSensorRequest {
     #[schema(example = "/sensors/monitoring/cpu_monitor_v2.py")]
     pub entrypoint: Option<String>,
 
-    /// Parameter schema
+    /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
     pub param_schema: Option<JsonValue>,
 
@@ -302,7 +302,7 @@ pub struct SensorResponse {
     #[schema(example = true)]
     pub enabled: bool,
 
-    /// Parameter schema
+    /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
     pub param_schema: Option<JsonValue>,
 

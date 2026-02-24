@@ -40,7 +40,9 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, Validate, ToSchema)]
 pub struct CreateEventRequest {
     /// Trigger reference (e.g., "core.timer", "core.webhook")
+    /// Also accepts "trigger_type" for compatibility with the sensor interface spec.
     #[validate(length(min = 1))]
+    #[serde(alias = "trigger_type")]
     #[schema(example = "core.timer")]
     pub trigger_ref: String,
 

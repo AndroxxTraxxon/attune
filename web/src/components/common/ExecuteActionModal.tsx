@@ -4,6 +4,7 @@ import { OpenAPI } from "@/api";
 import { Play, X } from "lucide-react";
 import ParamSchemaForm, {
   validateParamSchema,
+  extractProperties,
   type ParamSchema,
 } from "@/components/common/ParamSchemaForm";
 
@@ -28,11 +29,11 @@ export default function ExecuteActionModal({
   const queryClient = useQueryClient();
 
   const paramSchema: ParamSchema = (action.param_schema as ParamSchema) || {};
+  const paramProperties = extractProperties(paramSchema);
 
   // If initialParameters are provided, use them (stripping out any keys not in the schema)
   const buildInitialValues = (): Record<string, any> => {
     if (!initialParameters) return {};
-    const properties = paramSchema.properties || {};
     const values: Record<string, any> = {};
     // Include all initial parameters - even those not in the schema
     // so users can see exactly what was run before
@@ -42,7 +43,7 @@ export default function ExecuteActionModal({
       }
     }
     // Also fill in defaults for any schema properties not covered
-    for (const [key, param] of Object.entries(properties)) {
+    for (const [key, param] of Object.entries(paramProperties)) {
       if (values[key] === undefined && param?.default !== undefined) {
         values[key] = param.default;
       }
@@ -50,9 +51,8 @@ export default function ExecuteActionModal({
     return values;
   };
 
-  const [parameters, setParameters] = useState<Record<string, any>>(
-    buildInitialValues,
-  );
+  const [parameters, setParameters] =
+    useState<Record<string, any>>(buildInitialValues);
   const [paramErrors, setParamErrors] = useState<Record<string, string>>({});
   const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>(
     [{ key: "", value: "" }],

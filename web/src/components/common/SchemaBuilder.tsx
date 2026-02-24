@@ -6,6 +6,7 @@ interface SchemaProperty {
   type: string;
   description: string;
   required: boolean;
+  secret: boolean;
   default?: string;
   minimum?: number;
   maximum?: number;
@@ -52,32 +53,34 @@ export default function SchemaBuilder({
   );
 
   // Initialize properties from schema value
+  // Expects StackStorm-style flat format: { param_name: { type, required, secret, ... }, ... }
   useEffect(() => {
-    if (value && value.properties) {
-      const props: SchemaProperty[] = [];
-      const requiredFields = value.required || [];
+    if (!value || typeof value !== "object") return;
+    const props: SchemaProperty[] = [];
 
-      Object.entries(value.properties).forEach(
-        ([name, propDef]: [string, any]) => {
-          props.push({
-            name,
-            type: propDef.type || "string",
-            description: propDef.description || "",
-            required: requiredFields.includes(name),
-            default:
-              propDef.default !== undefined
-                ? JSON.stringify(propDef.default)
-                : undefined,
-            minimum: propDef.minimum,
-            maximum: propDef.maximum,
-            minLength: propDef.minLength,
-            maxLength: propDef.maxLength,
-            pattern: propDef.pattern,
-            enum: propDef.enum,
-          });
-        },
-      );
+    Object.entries(value).forEach(([name, propDef]: [string, any]) => {
+      if (propDef && typeof propDef === "object" && !Array.isArray(propDef)) {
+        props.push({
+          name,
+          type: propDef.type || "string",
+          description: propDef.description || "",
+          required: propDef.required === true,
+          secret: propDef.secret === true,
+          default:
+            propDef.default !== undefined
+              ? JSON.stringify(propDef.default)
+              : undefined,
+          minimum: propDef.minimum,
+          maximum: propDef.maximum,
+          minLength: propDef.minLength,
+          maxLength: propDef.maxLength,
+          pattern: propDef.pattern,
+          enum: propDef.enum,
+        });
+      }
+    });
 
+    if (props.length > 0) {
       setProperties(props);
     }
   }, []);
@@ -90,20 +93,13 @@ export default function SchemaBuilder({
     }
   }, [showRawJson]);
 
+  // Build StackStorm-style flat parameter schema
   const buildSchema = (): Record<string, any> => {
     if (properties.length === 0) {
-      return {
-        type: "object",
-        properties: {},
-        required: [],
-      };
+      return {};
     }
 
-    const schema: Record<string, any> = {
-      type: "object",
-      properties: {},
-      required: [] as string[],
-    };
+    const schema: Record<string, any> = {};
 
     properties.forEach((prop) => {
       const propSchema: Record<string, any> = {
@@ -112,6 +108,14 @@ export default function SchemaBuilder({
 
       if (prop.description) {
         propSchema.description = prop.description;
+      }
+
+      if (prop.required) {
+        propSchema.required = true;
+      }
+
+      if (prop.secret) {
+        propSchema.secret = true;
       }
 
       if (prop.default !== undefined && prop.default !== "") {
@@ -135,11 +139,7 @@ export default function SchemaBuilder({
         if (prop.maximum !== undefined) propSchema.maximum = prop.maximum;
       }
 
-      schema.properties[prop.name] = propSchema;
-
-      if (prop.required) {
-        schema.required.push(prop.name);
-      }
+      schema[prop.name] = propSchema;
     });
 
     return schema;
@@ -151,22 +151,15 @@ export default function SchemaBuilder({
     onChange(schema);
   };
 
+  // Build StackStorm-style flat parameter schema from properties array
   const buildSchemaFromProperties = (
     props: SchemaProperty[],
   ): Record<string, any> => {
     if (props.length === 0) {
-      return {
-        type: "object",
-        properties: {},
-        required: [],
-      };
+      return {};
     }
 
-    const schema: Record<string, any> = {
-      type: "object",
-      properties: {},
-      required: [] as string[],
-    };
+    const schema: Record<string, any> = {};
 
     props.forEach((prop) => {
       const propSchema: Record<string, any> = {
@@ -175,6 +168,14 @@ export default function SchemaBuilder({
 
       if (prop.description) {
         propSchema.description = prop.description;
+      }
+
+      if (prop.required) {
+        propSchema.required = true;
+      }
+
+      if (prop.secret) {
+        propSchema.secret = true;
       }
 
       if (prop.default !== undefined && prop.default !== "") {
@@ -197,11 +198,7 @@ export default function SchemaBuilder({
         if (prop.maximum !== undefined) propSchema.maximum = prop.maximum;
       }
 
-      schema.properties[prop.name] = propSchema;
-
-      if (prop.required) {
-        schema.required.push(prop.name);
-      }
+      schema[prop.name] = propSchema;
     });
 
     return schema;
@@ -209,10 +206,11 @@ export default function SchemaBuilder({
 
   const addProperty = () => {
     const newProp: SchemaProperty = {
-      name: `property_${properties.length + 1}`,
+      name: `param${properties.length + 1}`,
       type: "string",
       description: "",
       required: false,
+      secret: false,
     };
     const newIndex = properties.length;
     handlePropertiesChange([...properties, newProp]);
@@ -258,38 +256,37 @@ export default function SchemaBuilder({
 
     try {
       const parsed = JSON.parse(newJson);
-      if (parsed.type !== "object") {
-        setRawJsonError('Schema must have type "object" at root level');
+      if (typeof parsed !== "object" || Array.isArray(parsed)) {
+        setRawJsonError("Schema must be a JSON object");
         return;
       }
       onChange(parsed);
 
       // Update properties from parsed JSON
+      // Expects StackStorm-style flat format: { param_name: { type, required, secret, ... }, ... }
       const props: SchemaProperty[] = [];
-      const requiredFields = parsed.required || [];
 
-      if (parsed.properties) {
-        Object.entries(parsed.properties).forEach(
-          ([name, propDef]: [string, any]) => {
-            props.push({
-              name,
-              type: propDef.type || "string",
-              description: propDef.description || "",
-              required: requiredFields.includes(name),
-              default:
-                propDef.default !== undefined
-                  ? JSON.stringify(propDef.default)
-                  : undefined,
-              minimum: propDef.minimum,
-              maximum: propDef.maximum,
-              minLength: propDef.minLength,
-              maxLength: propDef.maxLength,
-              pattern: propDef.pattern,
-              enum: propDef.enum,
-            });
-          },
-        );
-      }
+      Object.entries(parsed).forEach(([name, propDef]: [string, any]) => {
+        if (propDef && typeof propDef === "object" && !Array.isArray(propDef)) {
+          props.push({
+            name,
+            type: propDef.type || "string",
+            description: propDef.description || "",
+            required: propDef.required === true,
+            secret: propDef.secret === true,
+            default:
+              propDef.default !== undefined
+                ? JSON.stringify(propDef.default)
+                : undefined,
+            minimum: propDef.minimum,
+            maximum: propDef.maximum,
+            minLength: propDef.minLength,
+            maxLength: propDef.maxLength,
+            pattern: propDef.pattern,
+            enum: propDef.enum,
+          });
+        }
+      });
 
       setProperties(props);
     } catch (e: any) {
@@ -467,28 +464,56 @@ export default function SchemaBuilder({
                             />
                           </div>
 
-                          {/* Required checkbox */}
-                          <div className="flex items-center">
-                            <input
-                              type="checkbox"
-                              id={`required-${index}`}
-                              checked={prop.required}
-                              onChange={(e) =>
-                                updateProperty(index, {
-                                  required: e.target.checked,
-                                })
-                              }
-                              disabled={disabled}
-                              className={`h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded ${
-                                disabled ? "cursor-not-allowed opacity-50" : ""
-                              }`}
-                            />
-                            <label
-                              htmlFor={`required-${index}`}
-                              className="ml-2 text-xs font-medium text-gray-700"
-                            >
-                              Required field
-                            </label>
+                          {/* Required and Secret checkboxes */}
+                          <div className="flex items-center gap-6">
+                            <div className="flex items-center">
+                              <input
+                                type="checkbox"
+                                id={`required-${index}`}
+                                checked={prop.required}
+                                onChange={(e) =>
+                                  updateProperty(index, {
+                                    required: e.target.checked,
+                                  })
+                                }
+                                disabled={disabled}
+                                className={`h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded ${
+                                  disabled
+                                    ? "cursor-not-allowed opacity-50"
+                                    : ""
+                                }`}
+                              />
+                              <label
+                                htmlFor={`required-${index}`}
+                                className="ml-2 text-xs font-medium text-gray-700"
+                              >
+                                Required
+                              </label>
+                            </div>
+                            <div className="flex items-center">
+                              <input
+                                type="checkbox"
+                                id={`secret-${index}`}
+                                checked={prop.secret}
+                                onChange={(e) =>
+                                  updateProperty(index, {
+                                    secret: e.target.checked,
+                                  })
+                                }
+                                disabled={disabled}
+                                className={`h-4 w-4 text-yellow-600 focus:ring-yellow-500 border-gray-300 rounded ${
+                                  disabled
+                                    ? "cursor-not-allowed opacity-50"
+                                    : ""
+                                }`}
+                              />
+                              <label
+                                htmlFor={`secret-${index}`}
+                                className="ml-2 text-xs font-medium text-gray-700"
+                              >
+                                Secret
+                              </label>
+                            </div>
                           </div>
 
                           {/* Default value */}

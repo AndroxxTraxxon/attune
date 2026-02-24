@@ -132,10 +132,22 @@ impl TaskExecutor {
         if let Some(ref output) = result.output {
             context.set_task_result(&task.name, output.clone());
 
-            // Publish variables
-            if !task.publish.is_empty() {
-                if let Err(e) = context.publish_from_result(output, &task.publish, None) {
-                    warn!("Failed to publish variables for task {}: {}", task.name, e);
+            // Publish variables from matching transitions
+            let success = matches!(result.status, TaskExecutionStatus::Success);
+            for transition in &task.transitions {
+                let should_fire = match transition.kind() {
+                    super::graph::TransitionKind::Succeeded => success,
+                    super::graph::TransitionKind::Failed => !success,
+                    super::graph::TransitionKind::TimedOut => !success,
+                    super::graph::TransitionKind::Always => true,
+                    super::graph::TransitionKind::Custom => true,
+                };
+                if should_fire && !transition.publish.is_empty() {
+                    let var_names: Vec<String> =
+                        transition.publish.iter().map(|p| p.name.clone()).collect();
+                    if let Err(e) = context.publish_from_result(output, &var_names, None) {
+                        warn!("Failed to publish variables for task {}: {}", task.name, e);
+                    }
                 }
             }
         }

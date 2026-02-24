@@ -96,13 +96,11 @@ export function useInstallPack() {
     mutationFn: async ({
       source,
       refSpec,
-      force = false,
       skipTests = false,
       skipDeps = false,
     }: {
       source: string;
       refSpec?: string;
-      force?: boolean;
       skipTests?: boolean;
       skipDeps?: boolean;
     }) => {
@@ -110,7 +108,6 @@ export function useInstallPack() {
         requestBody: {
           source,
           ref_spec: refSpec,
-          force,
           skip_tests: skipTests,
           skip_deps: skipDeps,
         },

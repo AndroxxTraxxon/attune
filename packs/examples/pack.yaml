@@ -14,12 +14,10 @@ enabled: true
 
 # Configuration schema
 conf_schema:
-  type: object
-  properties:
-    example_setting:
-      type: string
-      description: "Example configuration setting"
-      default: "default_value"
+  example_setting:
+    type: string
+    description: "Example configuration setting"
+    default: "default_value"
 
 # Default pack configuration
 config:
