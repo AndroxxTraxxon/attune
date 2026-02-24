@@ -138,6 +138,16 @@ pub struct TaskTransition {
     /// Next tasks to invoke when transition criteria is met
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub r#do: Option<Vec<String>>,
+
+    /// Frontend-only visual metadata (label, color, line style, waypoints).
+    /// Not consumed by the backend — preserved so the workflow builder can
+    /// restore its visual state after a round-trip through the parser.
+    #[serde(
+        default,
+        rename = "__chart_meta__",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub chart_meta: Option<JsonValue>,
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +236,16 @@ pub struct Task {
 
     /// Parallel tasks (for parallel type)
     pub tasks: Option<Vec<Task>>,
+
+    /// Frontend-only visual metadata (e.g. canvas position).
+    /// Not consumed by the backend — preserved so the workflow builder can
+    /// restore its visual state after a round-trip through the parser.
+    #[serde(
+        default,
+        rename = "__chart_meta__",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub chart_meta: Option<JsonValue>,
 }
 
 impl Task {
@@ -262,6 +282,7 @@ impl Task {
                 when: Some("{{ succeeded() }}".to_string()),
                 publish: Vec::new(),
                 r#do: Some(vec![target.clone()]),
+                chart_meta: None,
             });
         }
 
@@ -270,6 +291,7 @@ impl Task {
                 when: Some("{{ failed() }}".to_string()),
                 publish: Vec::new(),
                 r#do: Some(vec![target.clone()]),
+                chart_meta: None,
             });
         }
 
@@ -279,6 +301,7 @@ impl Task {
                 when: None,
                 publish: Vec::new(),
                 r#do: Some(vec![target.clone()]),
+                chart_meta: None,
             });
         }
 
@@ -287,6 +310,7 @@ impl Task {
                 when: Some("{{ timed_out() }}".to_string()),
                 publish: Vec::new(),
                 r#do: Some(vec![target.clone()]),
+                chart_meta: None,
             });
         }
 
@@ -296,6 +320,7 @@ impl Task {
                 when: branch.when.clone(),
                 publish: Vec::new(),
                 r#do: Some(vec![branch.next.clone()]),
+                chart_meta: None,
             });
         }
 
@@ -313,6 +338,7 @@ impl Task {
                     when: Some("{{ succeeded() }}".to_string()),
                     publish: self.publish.clone(),
                     r#do: None,
+                    chart_meta: None,
                 });
             } else {
                 // Attach to the first transition
@@ -1145,5 +1171,148 @@ tasks:
             task1.next[0].r#do,
             Some(vec!["task2".to_string(), "task3".to_string()])
         );
+    }
+
+    #[test]
+    fn test_chart_meta_roundtrip() {
+        // __chart_meta__ is frontend-only visual metadata that must survive
+        // a parse → serialize → parse round-trip so the workflow builder can
+        // restore node positions, edge colors, waypoints, etc.
+        let yaml = r##"
+ref: test.chart_meta
+label: Chart Meta Roundtrip
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    __chart_meta__:
+      position:
+        x: 300
+        y: 120
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - task2
+        __chart_meta__:
+          label: main path
+          color: "#22c55e"
+          line_style: dashed
+          edge_waypoints:
+            task2:
+              - x: 400
+                y: 200
+          label_positions:
+            task2: 0.35
+  - name: task2
+    action: core.echo
+    __chart_meta__:
+      position:
+        x: 300
+        y: 320
+"##;
+
+        let workflow = parse_workflow_yaml(yaml).unwrap();
+
+        // Verify task-level __chart_meta__ was parsed
+        let task1_meta = workflow.tasks[0].chart_meta.as_ref().unwrap();
+        assert_eq!(task1_meta["position"]["x"], 300);
+        assert_eq!(task1_meta["position"]["y"], 120);
+
+        let task2_meta = workflow.tasks[1].chart_meta.as_ref().unwrap();
+        assert_eq!(task2_meta["position"]["x"], 300);
+        assert_eq!(task2_meta["position"]["y"], 320);
+
+        // Verify transition-level __chart_meta__ was parsed
+        let trans_meta = workflow.tasks[0].next[0].chart_meta.as_ref().unwrap();
+        assert_eq!(trans_meta["label"], "main path");
+        assert_eq!(trans_meta["color"].as_str().unwrap(), "#22c55e");
+        assert_eq!(trans_meta["line_style"], "dashed");
+        assert_eq!(trans_meta["edge_waypoints"]["task2"][0]["x"], 400);
+        assert_eq!(trans_meta["label_positions"]["task2"], 0.35);
+
+        // Round-trip through JSON serialization (simulates DB storage path)
+        let json = workflow_to_json(&workflow).unwrap();
+        let tasks = json["tasks"].as_array().unwrap();
+
+        // Task __chart_meta__ survives
+        assert_eq!(tasks[0]["__chart_meta__"]["position"]["x"], 300);
+        assert_eq!(tasks[1]["__chart_meta__"]["position"]["y"], 320);
+
+        // Transition __chart_meta__ survives
+        let next0 = &tasks[0]["next"].as_array().unwrap()[0];
+        assert_eq!(next0["__chart_meta__"]["label"], "main path");
+        assert_eq!(
+            next0["__chart_meta__"]["color"].as_str().unwrap(),
+            "#22c55e"
+        );
+        assert_eq!(
+            next0["__chart_meta__"]["edge_waypoints"]["task2"][0]["x"],
+            400
+        );
+        assert_eq!(next0["__chart_meta__"]["label_positions"]["task2"], 0.35);
+
+        // Round-trip through YAML serialization (simulates file storage path)
+        let yaml_out = serde_yaml_ng::to_string(&workflow).unwrap();
+        let workflow2 = parse_workflow_yaml(&yaml_out).unwrap();
+
+        let task1_meta2 = workflow2.tasks[0].chart_meta.as_ref().unwrap();
+        assert_eq!(task1_meta2["position"]["x"], 300);
+
+        let trans_meta2 = workflow2.tasks[0].next[0].chart_meta.as_ref().unwrap();
+        assert_eq!(trans_meta2["label"], "main path");
+        assert_eq!(trans_meta2["color"].as_str().unwrap(), "#22c55e");
+        assert_eq!(trans_meta2["edge_waypoints"]["task2"][0]["x"], 400);
+    }
+
+    #[test]
+    fn test_chart_meta_absent_by_default() {
+        // Workflows without __chart_meta__ should parse fine with None values
+        let yaml = r#"
+ref: test.no_meta
+label: No Chart Meta
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - task2
+  - name: task2
+    action: core.echo
+"#;
+
+        let workflow = parse_workflow_yaml(yaml).unwrap();
+        assert!(workflow.tasks[0].chart_meta.is_none());
+        assert!(workflow.tasks[1].chart_meta.is_none());
+        assert!(workflow.tasks[0].next[0].chart_meta.is_none());
+
+        // Serialize to JSON and verify __chart_meta__ is omitted (not null)
+        let json = workflow_to_json(&workflow).unwrap();
+        let tasks = json["tasks"].as_array().unwrap();
+        assert!(tasks[0].get("__chart_meta__").is_none());
+        assert!(tasks[0]["next"][0].get("__chart_meta__").is_none());
+    }
+
+    #[test]
+    fn test_legacy_transitions_dont_gain_chart_meta() {
+        // Legacy format conversion should produce transitions without chart_meta
+        let yaml = r#"
+ref: test.legacy_no_meta
+label: Legacy No Meta
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    on_success: task2
+    on_failure: task2
+  - name: task2
+    action: core.echo
+"#;
+
+        let workflow = parse_workflow_yaml(yaml).unwrap();
+        assert_eq!(workflow.tasks[0].next.len(), 2);
+        assert!(workflow.tasks[0].next[0].chart_meta.is_none());
+        assert!(workflow.tasks[0].next[1].chart_meta.is_none());
     }
 }
