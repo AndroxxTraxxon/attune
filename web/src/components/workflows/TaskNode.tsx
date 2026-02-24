@@ -1,5 +1,5 @@
 import { memo, useCallback, useRef, useState } from "react";
-import { Trash2, GripVertical, Play, Octagon } from "lucide-react";
+import { Trash2, GripVertical, Play, Octagon, Info } from "lucide-react";
 import type { WorkflowTask, TransitionPreset } from "@/types/workflow";
 import {
   PRESET_LABELS,
@@ -75,7 +75,7 @@ function hasActiveTransition(
 }
 
 /**
- * Compute a short summary of outgoing transitions for the node body.
+ * Compute a short summary of outgoing transitions for the tooltip.
  */
 function transitionSummary(task: WorkflowTask): string | null {
   if (!task.next || task.next.length === 0) return null;
@@ -91,6 +91,68 @@ function transitionSummary(task: WorkflowTask): string | null {
   }
   if (totalTargets === 0) return null;
   return `${totalTargets} target${totalTargets !== 1 ? "s" : ""} via ${task.next.length} transition${task.next.length !== 1 ? "s" : ""}`;
+}
+
+/**
+ * Check if a value is "populated" (non-null, non-undefined, non-empty-string).
+ */
+function hasValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string" && value.trim() === "") return false;
+  return true;
+}
+
+/**
+ * Get entries from task.input that actually have values.
+ */
+function getPopulatedInputs(
+  input: Record<string, unknown>,
+): [string, unknown][] {
+  return Object.entries(input).filter(([, v]) => hasValue(v));
+}
+
+/**
+ * Format a value for inline display on the card — keep it short.
+ */
+function formatValueShort(value: unknown): string {
+  if (typeof value === "string") {
+    if (value.length > 28) return value.slice(0, 25) + "…";
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.length} items]`;
+  }
+  if (typeof value === "object" && value !== null) {
+    return `{${Object.keys(value).length} keys}`;
+  }
+  return String(value);
+}
+
+/**
+ * Format a value for the tooltip — can be slightly longer.
+ */
+function formatValueTooltip(value: unknown): string {
+  if (typeof value === "string") {
+    if (value.length > 40) return value.slice(0, 37) + "…";
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.length} items]`;
+  }
+  if (typeof value === "object" && value !== null) {
+    const keys = Object.keys(value);
+    if (keys.length <= 2) {
+      return `{${keys.join(", ")}}`;
+    }
+    return `{${keys.length} keys}`;
+  }
+  return String(value);
 }
 
 function TaskNodeInner({
@@ -109,6 +171,8 @@ function TaskNodeInner({
   const [hoveredHandle, setHoveredHandle] = useState<TransitionPreset | null>(
     null,
   );
+  const [showTooltip, setShowTooltip] = useState(false);
+  const tooltipTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragOffset = useRef({ x: 0, y: 0 });
 
   const handleMouseDown = useCallback(
@@ -119,6 +183,7 @@ function TaskNodeInner({
 
       e.stopPropagation();
       setIsDragging(true);
+      setShowTooltip(false);
       dragOffset.current = {
         x: e.clientX - task.position.x,
         y: e.clientY - task.position.y,
@@ -174,6 +239,19 @@ function TaskNodeInner({
     [task.id, onStartConnection],
   );
 
+  const handleBodyMouseEnter = useCallback(() => {
+    if (isDragging) return;
+    tooltipTimeout.current = setTimeout(() => setShowTooltip(true), 400);
+  }, [isDragging]);
+
+  const handleBodyMouseLeave = useCallback(() => {
+    if (tooltipTimeout.current) {
+      clearTimeout(tooltipTimeout.current);
+      tooltipTimeout.current = null;
+    }
+    setShowTooltip(false);
+  }, []);
+
   const isConnectionTarget = connectingFrom !== null;
 
   const borderColor = isSelected
@@ -196,6 +274,49 @@ function TaskNodeInner({
     const ct = classifyTransitionWhen(t.when);
     return ct === "custom";
   }).length;
+
+  // Inputs that actually have values
+  const populatedInputs = getPopulatedInputs(task.input);
+  const populatedCount = populatedInputs.length;
+
+  // Show inline if 1–2 populated inputs
+  const showInlineInputs = populatedCount > 0 && populatedCount <= 2;
+
+  // Build tooltip lines
+  const tooltipLines: string[] = [];
+  if (populatedCount > 0) {
+    tooltipLines.push(
+      `${populatedCount} input${populatedCount !== 1 ? "s" : ""} configured`,
+    );
+    // Show all input key-values in tooltip when > 2
+    if (populatedCount > 2) {
+      for (const [key, val] of populatedInputs) {
+        tooltipLines.push(`  ${key}: ${formatValueTooltip(val)}`);
+      }
+    }
+  }
+  if (summary) {
+    tooltipLines.push(summary);
+  }
+  if (customTransitionCount > 0) {
+    tooltipLines.push(
+      `${customTransitionCount} custom transition${customTransitionCount !== 1 ? "s" : ""}`,
+    );
+  }
+  if (task.delay) {
+    tooltipLines.push(`Delay: ${task.delay}s`);
+  }
+  if (task.with_items) {
+    tooltipLines.push("with_items iteration");
+  }
+  if (task.retry) {
+    tooltipLines.push(`Retry: ${task.retry.count}×`);
+  }
+  if (task.timeout) {
+    tooltipLines.push(`Timeout: ${task.timeout}s`);
+  }
+
+  const hasTooltipContent = tooltipLines.length > 0;
 
   return (
     <div
@@ -243,7 +364,11 @@ function TaskNodeInner({
         </div>
 
         {/* Body */}
-        <div className="px-2.5 py-2">
+        <div
+          className="px-2.5 py-2 relative"
+          onMouseEnter={handleBodyMouseEnter}
+          onMouseLeave={handleBodyMouseLeave}
+        >
           {hasAction ? (
             <div className="font-mono text-[11px] text-gray-600 truncate">
               {task.action}
@@ -254,17 +379,23 @@ function TaskNodeInner({
             </div>
           )}
 
-          {/* Input summary */}
-          {Object.keys(task.input).length > 0 && (
-            <div className="mt-1.5 text-[10px] text-gray-400">
-              {Object.keys(task.input).length} input
-              {Object.keys(task.input).length !== 1 ? "s" : ""}
+          {/* Inline inputs (1–2 populated) */}
+          {showInlineInputs && (
+            <div className="mt-1.5 space-y-0.5">
+              {populatedInputs.map(([key, val]) => (
+                <div
+                  key={key}
+                  className="flex items-baseline gap-1 text-[10px] leading-tight"
+                >
+                  <span className="text-gray-400 font-medium shrink-0">
+                    {key}:
+                  </span>
+                  <span className="text-gray-600 truncate font-mono">
+                    {formatValueShort(val)}
+                  </span>
+                </div>
+              ))}
             </div>
-          )}
-
-          {/* Transition summary */}
-          {summary && (
-            <div className="mt-1 text-[10px] text-gray-400">{summary}</div>
           )}
 
           {/* Delay badge */}
@@ -288,11 +419,36 @@ function TaskNodeInner({
             </div>
           )}
 
-          {/* Custom transitions badge */}
-          {customTransitionCount > 0 && (
-            <div className="mt-1 inline-block px-1.5 py-0.5 bg-violet-50 border border-violet-200 rounded text-[10px] text-violet-700 ml-1">
-              {customTransitionCount} custom transition
-              {customTransitionCount !== 1 ? "s" : ""}
+          {/* Info icon hint — shown when there's tooltip content */}
+          {hasTooltipContent && (
+            <div className="absolute top-1.5 right-1.5">
+              <Info className="w-3 h-3 text-gray-300" />
+            </div>
+          )}
+
+          {/* Tooltip */}
+          {showTooltip && hasTooltipContent && (
+            <div
+              className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 z-[100] pointer-events-none"
+              style={{ minWidth: 180, maxWidth: 260 }}
+            >
+              <div className="bg-gray-900 text-white text-[10px] leading-relaxed rounded-md shadow-xl px-2.5 py-2 whitespace-pre-wrap">
+                {tooltipLines.map((line, i) => (
+                  <div
+                    key={i}
+                    className={
+                      line.startsWith("  ")
+                        ? "pl-2 text-gray-300 font-mono"
+                        : i > 0
+                          ? "mt-1 border-t border-gray-700 pt-1"
+                          : ""
+                    }
+                  >
+                    {line}
+                  </div>
+                ))}
+              </div>
+              <div className="absolute left-1/2 -translate-x-1/2 -bottom-1 w-2 h-2 bg-gray-900 rotate-45" />
             </div>
           )}
         </div>

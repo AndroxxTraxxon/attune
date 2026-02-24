@@ -2,8 +2,12 @@ import { useState, useCallback, useRef, useMemo } from "react";
 import TaskNode from "./TaskNode";
 import type { TransitionPreset } from "./TaskNode";
 import WorkflowEdges from "./WorkflowEdges";
-import type { EdgeHoverInfo } from "./WorkflowEdges";
-import type { WorkflowTask, WorkflowEdge } from "@/types/workflow";
+import type { EdgeHoverInfo, SelectedEdgeInfo } from "./WorkflowEdges";
+import type {
+  WorkflowTask,
+  WorkflowEdge,
+  NodePosition,
+} from "@/types/workflow";
 import {
   deriveEdges,
   generateUniqueTaskName,
@@ -55,6 +59,10 @@ export default function WorkflowCanvas({
     y: number;
   } | null>(null);
 
+  const [selectedEdge, setSelectedEdge] = useState<SelectedEdgeInfo | null>(
+    null,
+  );
+
   const allTaskNames = useMemo(() => tasks.map((t) => t.name), [tasks]);
 
   const edges: WorkflowEdge[] = useMemo(() => deriveEdges(tasks), [tasks]);
@@ -73,10 +81,12 @@ export default function WorkflowCanvas({
           setMousePosition(null);
         } else {
           onSelectTask(null);
+          setSelectedEdge(null);
+          onEdgeClick?.(null);
         }
       }
     },
-    [onSelectTask, connectingFrom],
+    [onSelectTask, onEdgeClick, connectingFrom],
   );
 
   const handleCanvasMouseMove = useCallback(
@@ -113,8 +123,102 @@ export default function WorkflowCanvas({
   const handleStartConnection = useCallback(
     (taskId: string, preset: TransitionPreset) => {
       setConnectingFrom({ taskId, preset });
+      setSelectedEdge(null);
+      onEdgeClick?.(null);
     },
-    [],
+    [onEdgeClick],
+  );
+
+  /** Handle edge click: select the edge and propagate to parent */
+  const handleEdgeClick = useCallback(
+    (info: EdgeHoverInfo | null) => {
+      if (info) {
+        setSelectedEdge({
+          from: info.taskId,
+          to: info.targetTaskId,
+          transitionIndex: info.transitionIndex,
+        });
+      } else {
+        setSelectedEdge(null);
+      }
+      onEdgeClick?.(info);
+    },
+    [onEdgeClick],
+  );
+
+  /** Handle selecting a task (also clears edge selection) */
+  const handleSelectTask = useCallback(
+    (taskId: string | null) => {
+      onSelectTask(taskId);
+      if (taskId !== null) {
+        // Keep selected edge if the task being selected is part of it
+        // (i.e. user clicked the source task of the edge via edge click)
+        // Otherwise clear it
+        if (selectedEdge && selectedEdge.from !== taskId) {
+          setSelectedEdge(null);
+          onEdgeClick?.(null);
+        }
+      }
+    },
+    [onSelectTask, onEdgeClick, selectedEdge],
+  );
+
+  /** Update waypoints for a specific edge */
+  const handleWaypointUpdate = useCallback(
+    (
+      fromTaskId: string,
+      transitionIndex: number,
+      targetTaskName: string,
+      waypoints: NodePosition[],
+    ) => {
+      const task = tasks.find((t) => t.id === fromTaskId);
+      if (!task || !task.next || transitionIndex >= task.next.length) return;
+
+      const updatedNext = [...task.next];
+      const transition = { ...updatedNext[transitionIndex] };
+      const edgeWaypoints = { ...(transition.edge_waypoints || {}) };
+
+      if (waypoints.length > 0) {
+        edgeWaypoints[targetTaskName] = waypoints;
+      } else {
+        delete edgeWaypoints[targetTaskName];
+      }
+
+      transition.edge_waypoints =
+        Object.keys(edgeWaypoints).length > 0 ? edgeWaypoints : undefined;
+      updatedNext[transitionIndex] = transition;
+      onUpdateTask(fromTaskId, { next: updatedNext });
+    },
+    [tasks, onUpdateTask],
+  );
+
+  /** Update label position for a specific edge */
+  const handleLabelPositionUpdate = useCallback(
+    (
+      fromTaskId: string,
+      transitionIndex: number,
+      targetTaskName: string,
+      position: number | undefined,
+    ) => {
+      const task = tasks.find((t) => t.id === fromTaskId);
+      if (!task || !task.next || transitionIndex >= task.next.length) return;
+
+      const updatedNext = [...task.next];
+      const transition = { ...updatedNext[transitionIndex] };
+      const labelPositions = { ...(transition.label_positions || {}) };
+
+      if (position) {
+        labelPositions[targetTaskName] = position;
+      } else {
+        delete labelPositions[targetTaskName];
+      }
+
+      transition.label_positions =
+        Object.keys(labelPositions).length > 0 ? labelPositions : undefined;
+      updatedNext[transitionIndex] = transition;
+      onUpdateTask(fromTaskId, { next: updatedNext });
+    },
+    [tasks, onUpdateTask],
   );
 
   const handleCompleteConnection = useCallback(
@@ -211,7 +315,10 @@ export default function WorkflowCanvas({
         tasks={tasks}
         connectingFrom={connectingFrom}
         mousePosition={mousePosition}
-        onEdgeClick={onEdgeClick}
+        onEdgeClick={handleEdgeClick}
+        selectedEdge={selectedEdge}
+        onWaypointUpdate={handleWaypointUpdate}
+        onLabelPositionUpdate={handleLabelPositionUpdate}
       />
 
       {/* Task nodes */}
@@ -222,7 +329,7 @@ export default function WorkflowCanvas({
           isSelected={task.id === selectedTaskId}
           isStartNode={startingTaskIds.has(task.id)}
           allTaskNames={allTaskNames}
-          onSelect={onSelectTask}
+          onSelect={handleSelectTask}
           onDelete={onDeleteTask}
           onPositionChange={handlePositionChange}
           onStartConnection={handleStartConnection}

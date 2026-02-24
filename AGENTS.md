@@ -229,6 +229,8 @@ Enforcement created → Execution scheduled → Worker executes Action
   - `do` — list of next task names to invoke when the condition is met
   - `label` — optional custom display label (overrides auto-derived label from `when` expression)
   - `color` — optional custom CSS color for the transition edge (e.g., `"#ff6600"`)
+  - `edge_waypoints` — optional `Record<string, NodePosition[]>` of intermediate routing points per target task name (chart-only, stored in `__chart_meta__`)
+  - `label_positions` — optional `Record<string, NodePosition>` of custom label positions per target task name (chart-only, stored in `__chart_meta__`)
   - **Example YAML**:
     ```
     next:
@@ -245,7 +247,7 @@ Enforcement created → Execution scheduled → Worker executes Action
           - error_handler
     ```
   - **Legacy format support**: The parser (`crates/common/src/workflow/parser.rs`) auto-converts legacy `on_success`/`on_failure`/`on_complete`/`on_timeout`/`decision` fields into `next` transitions during parsing. The canonical internal representation always uses `next`.
-  - **Frontend types**: `TaskTransition` in `web/src/types/workflow.ts`; `TransitionPreset` ("succeeded" | "failed" | "always") for quick-access drag handles
+  - **Frontend types**: `TaskTransition` in `web/src/types/workflow.ts` (includes `edge_waypoints`, `label_positions` for visual routing); `TransitionPreset` ("succeeded" | "failed" | "always") for quick-access drag handles; `WorkflowEdge` includes per-edge `waypoints` and `labelPosition` derived from the transition; `SelectedEdgeInfo` and `EdgeHoverInfo` (includes `targetTaskId`) in `WorkflowEdges.tsx`
   - **Backend types**: `TaskTransition` in `crates/common/src/workflow/parser.rs`; `GraphTransition` in `crates/executor/src/workflow/graph.rs`
   - **NOT this** (legacy format): `on_success: task2` / `on_failure: error_handler` — still parsed for backward compat but normalized to `next`
 - **Runtime YAML Loading**: Pack registration reads `runtimes/*.yaml` files and inserts them into the `runtime` table. Runtime refs use format `{pack_ref}.{name}` (e.g., `core.python`, `core.shell`).
@@ -318,7 +320,15 @@ Rule `action_params` support Jinja2-style `{{ source.path }}` templates resolved
   - **Visual / Raw YAML toggle**: Toolbar has a segmented toggle to switch between the visual node-based builder and a full-width read-only YAML preview (generated via `js-yaml`). Raw YAML mode replaces the canvas, palette, and inspector with the effective workflow definition.
   - **Drag-handle connections**: TaskNode has output handles (green=succeeded, red=failed, gray=always) and an input handle (top). Drag from an output handle to another node's input handle to create a transition.
   - **Transition customization**: Users can rename transitions (custom `label`) and assign custom colors (CSS color string or preset swatches) via the TaskInspector. Custom colors/labels are persisted in the workflow YAML and rendered on the canvas edges.
-  - **Orquesta-style `next` transitions**: Tasks use a `next: TaskTransition[]` array instead of flat `on_success`/`on_failure` fields. Each transition has `when` (condition), `publish` (variables), `do` (target tasks), plus optional `label` and `color`. See "Task Transition Model" above.
+  - **Edge waypoints & label dragging**: Transition edges support intermediate waypoints for custom routing. Click an edge to select it, then:
+    - Drag existing waypoint handles (colored circles) to reposition the edge path
+    - Hover near the midpoint of any edge segment to reveal a "+" handle; click or drag it to insert a new waypoint
+    - Drag the transition label to reposition it independently of the edge path
+    - Double-click a waypoint to remove it; double-click a label to reset its position
+    - Waypoints and label positions are stored per-edge (keyed by target task name) in `TaskTransition.edge_waypoints` and `TaskTransition.label_positions`, serialized via `__chart_meta__` in the workflow YAML
+    - Edge selection state (`SelectedEdgeInfo`) is managed in `WorkflowCanvas`; only the selected edge shows interactive handles
+    - Multi-segment paths use Catmull-Rom → cubic Bezier conversion for smooth curves through waypoints (`buildSmoothPath` in `WorkflowEdges.tsx`)
+  - **Orquesta-style `next` transitions**: Tasks use a `next: TaskTransition[]` array instead of flat `on_success`/`on_failure` fields. Each transition has `when` (condition), `publish` (variables), `do` (target tasks), plus optional `label`, `color`, `edge_waypoints`, and `label_positions`. See "Task Transition Model" above.
   - **No task type or task-level condition**: The UI does not expose task `type` or task-level `when` — all tasks are actions (workflows are also actions), and conditions belong on transitions. Parallelism is implicit via multiple `do` targets.
 
 ## Development Workflow

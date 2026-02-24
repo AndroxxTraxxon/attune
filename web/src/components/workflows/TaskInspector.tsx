@@ -432,7 +432,9 @@ export default function TaskInspector({
                   className={`border rounded-lg bg-gray-50 overflow-hidden transition-all duration-300 ${
                     isFlashing
                       ? "border-blue-400 ring-2 ring-blue-300 shadow-md shadow-blue-100 animate-[flash-highlight_1.5s_ease-out]"
-                      : "border-gray-200"
+                      : highlightTransitionIndex === ti
+                        ? "border-blue-400 ring-1 ring-blue-200 bg-blue-50/40"
+                        : "border-gray-200"
                   }`}
                 >
                   {/* Transition header */}

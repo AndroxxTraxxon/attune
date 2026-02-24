@@ -34,6 +34,10 @@ export interface TaskTransition {
   label?: string;
   /** Custom color for the transition edge (CSS color string, e.g., "#ff6600") */
   color?: string;
+  /** Intermediate waypoints per target task (keyed by target task name) for edge routing */
+  edge_waypoints?: Record<string, NodePosition[]>;
+  /** Label position per target task as t-parameter (0–1) along the edge path */
+  label_positions?: Record<string, number>;
 }
 
 /** A task node in the workflow builder */
@@ -144,6 +148,8 @@ export interface WorkflowEdge {
   from: string;
   /** Target task ID */
   to: string;
+  /** Target task name (stable key for waypoints) */
+  toName: string;
   /** Visual type of transition (derived from `when`) */
   type: EdgeType;
   /** Label to display on the edge */
@@ -152,6 +158,10 @@ export interface WorkflowEdge {
   transitionIndex: number;
   /** Custom color override for the edge (CSS color string) */
   color?: string;
+  /** Intermediate waypoints for this specific edge */
+  waypoints?: NodePosition[];
+  /** Label position as t-parameter (0–1) along the edge path; default 0.5 */
+  labelPosition?: number;
 }
 
 /** Complete workflow builder state */
@@ -210,6 +220,10 @@ export interface TransitionChartMeta {
   label?: string;
   /** Custom color for the transition edge (CSS color string) */
   color?: string;
+  /** Intermediate waypoints per target task (keyed by target task name) */
+  edge_waypoints?: Record<string, NodePosition[]>;
+  /** Label position per target task as t-parameter (0–1) along the edge path */
+  label_positions?: Record<string, number>;
 }
 
 /** Transition as represented in YAML format */
@@ -383,11 +397,19 @@ export function builderStateToDefinition(
         if (t.when) yt.when = t.when;
         if (t.publish && t.publish.length > 0) yt.publish = t.publish;
         if (t.do && t.do.length > 0) yt.do = t.do;
-        // Store label/color in __chart_meta__ to avoid polluting the transition namespace
-        if (t.label || t.color) {
+        // Store label/color/waypoints in __chart_meta__ to avoid polluting the transition namespace
+        const hasChartMeta =
+          t.label || t.color || t.edge_waypoints || t.label_positions;
+        if (hasChartMeta) {
           yt.__chart_meta__ = {};
           if (t.label) yt.__chart_meta__.label = t.label;
           if (t.color) yt.__chart_meta__.color = t.color;
+          if (t.edge_waypoints && Object.keys(t.edge_waypoints).length > 0) {
+            yt.__chart_meta__.edge_waypoints = t.edge_waypoints;
+          }
+          if (t.label_positions && Object.keys(t.label_positions).length > 0) {
+            yt.__chart_meta__.label_positions = t.label_positions;
+          }
         }
         return yt;
       });
@@ -529,6 +551,8 @@ export function definitionToBuilderState(
           do: t.do,
           label: t.__chart_meta__?.label,
           color: t.__chart_meta__?.color,
+          edge_waypoints: t.__chart_meta__?.edge_waypoints,
+          label_positions: t.__chart_meta__?.label_positions,
         }));
       } else {
         const converted = legacyTransitionsToNext(task);
@@ -607,10 +631,13 @@ export function deriveEdges(tasks: WorkflowTask[]): WorkflowEdge[] {
             edges.push({
               from: task.id,
               to: targetId,
+              toName: targetName,
               type: edgeType,
               label,
               transitionIndex: ti,
               color: transition.color,
+              waypoints: transition.edge_waypoints?.[targetName],
+              labelPosition: transition.label_positions?.[targetName],
             });
           }
         }
@@ -698,7 +725,29 @@ export function removeTaskFromTransitions(
     .map((t) => {
       if (!t.do || !t.do.includes(taskName)) return t;
       const newDo = t.do.filter((name) => name !== taskName);
-      return { ...t, do: newDo.length > 0 ? newDo : undefined };
+      // Also clean up waypoint/label entries for the removed target
+      const updatedWaypoints = t.edge_waypoints
+        ? Object.fromEntries(
+            Object.entries(t.edge_waypoints).filter(([k]) => k !== taskName),
+          )
+        : undefined;
+      const updatedLabelPos = t.label_positions
+        ? Object.fromEntries(
+            Object.entries(t.label_positions).filter(([k]) => k !== taskName),
+          )
+        : undefined;
+      return {
+        ...t,
+        do: newDo.length > 0 ? newDo : undefined,
+        edge_waypoints:
+          updatedWaypoints && Object.keys(updatedWaypoints).length > 0
+            ? updatedWaypoints
+            : undefined,
+        label_positions:
+          updatedLabelPos && Object.keys(updatedLabelPos).length > 0
+            ? updatedLabelPos
+            : undefined,
+      };
     })
     // Keep transitions that still have `do` targets or `publish` directives
     .filter(
@@ -723,12 +772,36 @@ export function renameTaskInTransitions(
 
   let changed = false;
   const updated = next.map((t) => {
-    if (!t.do || !t.do.includes(oldName)) return t;
+    const hasDo = t.do && t.do.includes(oldName);
+    const hasWaypoint = t.edge_waypoints && oldName in t.edge_waypoints;
+    const hasLabelPos = t.label_positions && oldName in t.label_positions;
+
+    if (!hasDo && !hasWaypoint && !hasLabelPos) return t;
     changed = true;
-    return {
-      ...t,
-      do: t.do.map((name) => (name === oldName ? newName : name)),
-    };
+
+    const result = { ...t };
+
+    if (hasDo) {
+      result.do = t.do!.map((name) => (name === oldName ? newName : name));
+    }
+
+    if (hasWaypoint && t.edge_waypoints) {
+      const entries = Object.entries(t.edge_waypoints).map(([k, v]) => [
+        k === oldName ? newName : k,
+        v,
+      ]);
+      result.edge_waypoints = Object.fromEntries(entries);
+    }
+
+    if (hasLabelPos && t.label_positions) {
+      const entries = Object.entries(t.label_positions).map(([k, v]) => [
+        k === oldName ? newName : k,
+        v,
+      ]);
+      result.label_positions = Object.fromEntries(entries);
+    }
+
+    return result;
   });
 
   return changed ? updated : next;
