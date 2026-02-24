@@ -23,6 +23,9 @@ export interface NodePosition {
  * Transitions are evaluated in order. When `when` is not defined,
  * the transition is unconditional (fires on any completion).
  */
+/** Line style for transition edges */
+export type LineStyle = "solid" | "dashed" | "dotted" | "dash-dot";
+
 export interface TaskTransition {
   /** Condition expression (e.g., "{{ succeeded() }}", "{{ failed() }}") */
   when?: string;
@@ -34,6 +37,8 @@ export interface TaskTransition {
   label?: string;
   /** Custom color for the transition edge (CSS color string, e.g., "#ff6600") */
   color?: string;
+  /** Custom line style for the transition edge (overrides type-based default) */
+  line_style?: LineStyle;
   /** Intermediate waypoints per target task (keyed by target task name) for edge routing */
   edge_waypoints?: Record<string, NodePosition[]>;
   /** Label position per target task as t-parameter (0–1) along the edge path */
@@ -116,6 +121,12 @@ export const PRESET_COLORS: Record<TransitionPreset, string> = {
   always: "#6b7280", // gray-500
 };
 
+export const PRESET_STYLES: Record<TransitionPreset, LineStyle> = {
+  succeeded: "solid",
+  failed: "dashed",
+  always: "solid",
+};
+
 /**
  * Classify a `when` expression into an edge visual type.
  * Used for edge coloring and labeling.
@@ -158,6 +169,8 @@ export interface WorkflowEdge {
   transitionIndex: number;
   /** Custom color override for the edge (CSS color string) */
   color?: string;
+  /** Custom line style override for the edge */
+  lineStyle?: LineStyle;
   /** Intermediate waypoints for this specific edge */
   waypoints?: NodePosition[];
   /** Label position as t-parameter (0–1) along the edge path; default 0.5 */
@@ -220,6 +233,8 @@ export interface TransitionChartMeta {
   label?: string;
   /** Custom color for the transition edge (CSS color string) */
   color?: string;
+  /** Custom line style for the transition edge */
+  line_style?: LineStyle;
   /** Intermediate waypoints per target task (keyed by target task name) */
   edge_waypoints?: Record<string, NodePosition[]>;
   /** Label position per target task as t-parameter (0–1) along the edge path */
@@ -231,7 +246,7 @@ export interface WorkflowYamlTransition {
   when?: string;
   publish?: PublishDirective[];
   do?: string[];
-  /** Visual metadata (label, color) — ignored by backend */
+  /** Visual metadata (label, color, line style, waypoints) — ignored by backend */
   __chart_meta__?: TransitionChartMeta;
 }
 
@@ -397,13 +412,18 @@ export function builderStateToDefinition(
         if (t.when) yt.when = t.when;
         if (t.publish && t.publish.length > 0) yt.publish = t.publish;
         if (t.do && t.do.length > 0) yt.do = t.do;
-        // Store label/color/waypoints in __chart_meta__ to avoid polluting the transition namespace
+        // Store label/color/line_style/waypoints in __chart_meta__
         const hasChartMeta =
-          t.label || t.color || t.edge_waypoints || t.label_positions;
+          t.label ||
+          t.color ||
+          t.line_style ||
+          t.edge_waypoints ||
+          t.label_positions;
         if (hasChartMeta) {
           yt.__chart_meta__ = {};
           if (t.label) yt.__chart_meta__.label = t.label;
           if (t.color) yt.__chart_meta__.color = t.color;
+          if (t.line_style) yt.__chart_meta__.line_style = t.line_style;
           if (t.edge_waypoints && Object.keys(t.edge_waypoints).length > 0) {
             yt.__chart_meta__.edge_waypoints = t.edge_waypoints;
           }
@@ -551,6 +571,7 @@ export function definitionToBuilderState(
           do: t.do,
           label: t.__chart_meta__?.label,
           color: t.__chart_meta__?.color,
+          line_style: t.__chart_meta__?.line_style,
           edge_waypoints: t.__chart_meta__?.edge_waypoints,
           label_positions: t.__chart_meta__?.label_positions,
         }));
@@ -636,6 +657,7 @@ export function deriveEdges(tasks: WorkflowTask[]): WorkflowEdge[] {
               label,
               transitionIndex: ti,
               color: transition.color,
+              lineStyle: transition.line_style,
               waypoints: transition.edge_waypoints?.[targetName],
               labelPosition: transition.label_positions?.[targetName],
             });
@@ -678,10 +700,11 @@ export function findOrCreateTransition(
     return { next, index: existingIndex };
   }
 
-  // Create new transition with default label and color for the preset
+  // Create new transition with default label, color, and line style for the preset
   const newTransition: TaskTransition = {
     label: PRESET_LABELS[preset],
     color: PRESET_COLORS[preset],
+    line_style: PRESET_STYLES[preset],
   };
   if (whenExpr) newTransition.when = whenExpr;
   next.push(newTransition);

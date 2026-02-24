@@ -6,6 +6,7 @@ import {
   PRESET_WHEN,
   classifyTransitionWhen,
 } from "@/types/workflow";
+import type { ScreenToCanvas } from "./WorkflowCanvas";
 
 export type { TransitionPreset };
 
@@ -23,6 +24,8 @@ interface TaskNodeProps {
   onStartConnection: (taskId: string, preset: TransitionPreset) => void;
   connectingFrom: { taskId: string; preset: TransitionPreset } | null;
   onCompleteConnection: (targetTaskId: string) => void;
+  /** Convert screen (client) coordinates to canvas-space coordinates. */
+  screenToCanvas: ScreenToCanvas;
 }
 
 /** Handle visual configuration for each transition preset */
@@ -165,6 +168,7 @@ function TaskNodeInner({
   onStartConnection,
   connectingFrom,
   onCompleteConnection,
+  screenToCanvas,
 }: TaskNodeProps) {
   const nodeRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -184,17 +188,20 @@ function TaskNodeInner({
       e.stopPropagation();
       setIsDragging(true);
       setShowTooltip(false);
+
+      // Convert the initial click to canvas-space so dragging stays
+      // accurate regardless of the current zoom / pan.
+      const canvasPos = screenToCanvas(e.clientX, e.clientY);
       dragOffset.current = {
-        x: e.clientX - task.position.x,
-        y: e.clientY - task.position.y,
+        x: canvasPos.x - task.position.x,
+        y: canvasPos.y - task.position.y,
       };
 
       const handleMouseMove = (moveEvent: MouseEvent) => {
-        const newX = moveEvent.clientX - dragOffset.current.x;
-        const newY = moveEvent.clientY - dragOffset.current.y;
+        const cur = screenToCanvas(moveEvent.clientX, moveEvent.clientY);
         onPositionChange(task.id, {
-          x: Math.max(0, newX),
-          y: Math.max(0, newY),
+          x: Math.max(0, cur.x - dragOffset.current.x),
+          y: Math.max(0, cur.y - dragOffset.current.y),
         });
       };
 
@@ -207,7 +214,13 @@ function TaskNodeInner({
       document.addEventListener("mousemove", handleMouseMove);
       document.addEventListener("mouseup", handleMouseUp);
     },
-    [task.id, task.position.x, task.position.y, onPositionChange],
+    [
+      task.id,
+      task.position.x,
+      task.position.y,
+      onPositionChange,
+      screenToCanvas,
+    ],
   );
 
   const handleClick = useCallback(

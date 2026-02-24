@@ -16,6 +16,7 @@ import type {
   PaletteAction,
   TaskTransition,
   PublishDirective,
+  LineStyle,
 } from "@/types/workflow";
 import {
   PRESET_WHEN,
@@ -196,6 +197,9 @@ export default function TaskInspector({
         if (whenExpr) newTransition.when = whenExpr;
         newTransition.label = PRESET_LABELS[preset];
         newTransition.color = PRESET_COLORS[preset];
+        if (preset === "failed") {
+          newTransition.line_style = "dashed";
+        }
       }
       next.push(newTransition);
       update({ next });
@@ -508,28 +512,87 @@ export default function TaskInspector({
                             title={swatch.label}
                           />
                         ))}
-                        <div className="flex items-center gap-1 ml-1">
-                          <input
-                            type="color"
-                            value={transition.color || "#6b7280"}
-                            onChange={(e) =>
-                              updateTransition(ti, { color: e.target.value })
-                            }
-                            className="w-5 h-5 rounded cursor-pointer border border-gray-300"
-                            title="Custom color"
-                          />
-                          {transition.color && (
+                        <input
+                          type="color"
+                          value={transition.color || "#6b7280"}
+                          onChange={(e) =>
+                            updateTransition(ti, { color: e.target.value })
+                          }
+                          className="w-5 h-5 rounded cursor-pointer border border-gray-300 ml-1"
+                          title="Custom color"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Line style */}
+                    <div>
+                      <label className="block text-[10px] font-medium text-gray-500 mb-0.5">
+                        Line Style
+                      </label>
+                      <div className="flex items-center gap-1">
+                        {(
+                          [
+                            "solid",
+                            "dashed",
+                            "dotted",
+                            "dash-dot",
+                          ] as LineStyle[]
+                        ).map((style) => {
+                          const effectiveStyle =
+                            transition.line_style || "solid";
+                          const isActive = effectiveStyle === style;
+                          const dashArrays: Record<LineStyle, string> = {
+                            solid: "",
+                            dashed: "6,4",
+                            dotted: "2,3",
+                            "dash-dot": "8,4,2,4",
+                          };
+                          const labels: Record<LineStyle, string> = {
+                            solid: "Solid",
+                            dashed: "Dashed",
+                            dotted: "Dotted",
+                            "dash-dot": "Dash-dot",
+                          };
+                          return (
                             <button
+                              key={style}
                               onClick={() =>
-                                updateTransition(ti, { color: undefined })
+                                updateTransition(ti, {
+                                  line_style:
+                                    style === "solid" ? undefined : style,
+                                })
                               }
-                              className="text-[9px] text-gray-400 hover:text-gray-600"
-                              title="Reset to default"
+                              className={`flex items-center justify-center h-6 px-1.5 rounded border transition-all ${
+                                isActive
+                                  ? "border-gray-800 bg-gray-100"
+                                  : "border-gray-200 hover:border-gray-400"
+                              }`}
+                              title={labels[style]}
                             >
-                              reset
+                              <svg
+                                width="28"
+                                height="2"
+                                className="overflow-visible"
+                              >
+                                <line
+                                  x1="0"
+                                  y1="1"
+                                  x2="28"
+                                  y2="1"
+                                  stroke={
+                                    transition.color ||
+                                    PRESET_COLORS[
+                                      classifyTransitionWhen(transition.when)
+                                    ] ||
+                                    "#6b7280"
+                                  }
+                                  strokeWidth="2"
+                                  strokeDasharray={dashArrays[style]}
+                                />
+                              </svg>
                             </button>
-                          )}
-                        </div>
+                          );
+                        })}
                       </div>
                     </div>
 

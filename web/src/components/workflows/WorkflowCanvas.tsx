@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import TaskNode from "./TaskNode";
 import type { TransitionPreset } from "./TaskNode";
 import WorkflowEdges from "./WorkflowEdges";
@@ -15,7 +15,7 @@ import {
   findStartingTaskIds,
   PRESET_LABELS,
 } from "@/types/workflow";
-import { Plus } from "lucide-react";
+import { Plus, Maximize } from "lucide-react";
 
 interface WorkflowCanvasProps {
   tasks: WorkflowTask[];
@@ -39,6 +39,34 @@ const PRESET_BANNER_COLORS: Record<TransitionPreset, string> = {
   always: "text-gray-200 font-bold",
 };
 
+const MIN_ZOOM = 0.15;
+const MAX_ZOOM = 3;
+const ZOOM_SENSITIVITY = 0.0015;
+
+/**
+ * Build CSS background style for the infinite grid.
+ * Two layers: regular lines every 20 canvas-units, bold lines every 100 (5th).
+ */
+function gridBackground(pan: { x: number; y: number }, zoom: number) {
+  const small = 20 * zoom;
+  const large = 100 * zoom;
+  return {
+    backgroundImage: [
+      `linear-gradient(to right, rgba(0,0,0,0.07) 1px, transparent 1px)`,
+      `linear-gradient(to bottom, rgba(0,0,0,0.07) 1px, transparent 1px)`,
+      `linear-gradient(to right, rgba(0,0,0,0.03) 1px, transparent 1px)`,
+      `linear-gradient(to bottom, rgba(0,0,0,0.03) 1px, transparent 1px)`,
+    ].join(","),
+    backgroundSize: `${large}px ${large}px, ${large}px ${large}px, ${small}px ${small}px, ${small}px ${small}px`,
+    backgroundPosition: `${pan.x}px ${pan.y}px, ${pan.x}px ${pan.y}px, ${pan.x}px ${pan.y}px, ${pan.x}px ${pan.y}px`,
+  };
+}
+
+export type ScreenToCanvas = (
+  clientX: number,
+  clientY: number,
+) => { x: number; y: number };
+
 export default function WorkflowCanvas({
   tasks,
   selectedTaskId,
@@ -50,6 +78,17 @@ export default function WorkflowCanvas({
   onEdgeClick,
 }: WorkflowCanvasProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+
+  // ---- Camera state ----
+  // We keep refs for high-frequency updates (panning/zooming) and sync to
+  // state on mouseup / wheel-end so React can re-render once.
+  const panRef = useRef({ x: 0, y: 0 });
+  const zoomRef = useRef(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+
+  // ---- Connection state ----
   const [connectingFrom, setConnectingFrom] = useState<{
     taskId: string;
     preset: TransitionPreset;
@@ -59,22 +98,59 @@ export default function WorkflowCanvas({
     y: number;
   } | null>(null);
 
+  // ---- Panning state (right-click drag) ----
+  const isPanning = useRef(false);
+  const panDragStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
+  const [panningCursor, setPanningCursor] = useState(false);
+
   const [selectedEdge, setSelectedEdge] = useState<SelectedEdgeInfo | null>(
     null,
   );
 
   const allTaskNames = useMemo(() => tasks.map((t) => t.name), [tasks]);
-
   const edges: WorkflowEdge[] = useMemo(() => deriveEdges(tasks), [tasks]);
-
   const startingTaskIds = useMemo(() => findStartingTaskIds(tasks), [tasks]);
 
+  // ---- Coordinate conversion ----
+  /** Convert screen (client) coordinates to canvas-space coordinates. */
+  const screenToCanvas: ScreenToCanvas = useCallback(
+    (clientX: number, clientY: number) => {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return { x: clientX, y: clientY };
+      return {
+        x: (clientX - rect.left - panRef.current.x) / zoomRef.current,
+        y: (clientY - rect.top - panRef.current.y) / zoomRef.current,
+      };
+    },
+    [],
+  );
+
+  // ---- Flush camera refs to React state (triggers re-render) ----
+  const commitCamera = useCallback(() => {
+    setPan({ ...panRef.current });
+    setZoom(zoomRef.current);
+  }, []);
+
+  /** Apply current ref values directly to the DOM for smooth animation. */
+  const applyTransformToDOM = useCallback(() => {
+    if (innerRef.current) {
+      innerRef.current.style.transform = `translate(${panRef.current.x}px, ${panRef.current.y}px) scale(${zoomRef.current})`;
+    }
+    if (canvasRef.current) {
+      const bg = gridBackground(panRef.current, zoomRef.current);
+      canvasRef.current.style.backgroundSize = bg.backgroundSize;
+      canvasRef.current.style.backgroundPosition = bg.backgroundPosition;
+    }
+  }, []);
+
+  // ---- Canvas click (deselect / cancel connection) ----
   const handleCanvasClick = useCallback(
     (e: React.MouseEvent) => {
-      // Only deselect if clicking the canvas background
+      const target = e.target as HTMLElement;
       if (
-        e.target === canvasRef.current ||
-        (e.target as HTMLElement).dataset.canvasBg === "true"
+        target === canvasRef.current ||
+        target === innerRef.current ||
+        target.dataset.canvasBg === "true"
       ) {
         if (connectingFrom) {
           setConnectingFrom(null);
@@ -89,30 +165,122 @@ export default function WorkflowCanvas({
     [onSelectTask, onEdgeClick, connectingFrom],
   );
 
+  // ---- Mouse move: panning + connection preview ----
   const handleCanvasMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      if (connectingFrom && canvasRef.current) {
-        const rect = canvasRef.current.getBoundingClientRect();
-        const scrollLeft = canvasRef.current.scrollLeft;
-        const scrollTop = canvasRef.current.scrollTop;
-        setMousePosition({
-          x: e.clientX - rect.left + scrollLeft,
-          y: e.clientY - rect.top + scrollTop,
-        });
+      // Right-click panning (direct DOM, no React re-render)
+      if (isPanning.current) {
+        const dx = e.clientX - panDragStart.current.x;
+        const dy = e.clientY - panDragStart.current.y;
+        panRef.current = {
+          x: panDragStart.current.panX + dx,
+          y: panDragStart.current.panY + dy,
+        };
+        applyTransformToDOM();
+        return;
+      }
+
+      // Connection preview line
+      if (connectingFrom) {
+        const pos = screenToCanvas(e.clientX, e.clientY);
+        setMousePosition(pos);
       }
     },
-    [connectingFrom],
+    [connectingFrom, screenToCanvas, applyTransformToDOM],
   );
 
-  const handleCanvasMouseUp = useCallback(() => {
-    // If we're connecting and mouseup happens on the canvas (not on a node),
-    // cancel the connection
-    if (connectingFrom) {
-      setConnectingFrom(null);
-      setMousePosition(null);
+  // ---- Mouse down: start panning on right-click ----
+  const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button === 2) {
+      e.preventDefault();
+      isPanning.current = true;
+      panDragStart.current = {
+        x: e.clientX,
+        y: e.clientY,
+        panX: panRef.current.x,
+        panY: panRef.current.y,
+      };
+      setPanningCursor(true);
     }
-  }, [connectingFrom]);
+  }, []);
 
+  // ---- Mouse up: stop panning / cancel connection ----
+  const handleCanvasMouseUp = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button === 2 && isPanning.current) {
+        isPanning.current = false;
+        setPanningCursor(false);
+        commitCamera();
+        return;
+      }
+      if (connectingFrom) {
+        setConnectingFrom(null);
+        setMousePosition(null);
+      }
+    },
+    [connectingFrom, commitCamera],
+  );
+
+  // ---- Context menu suppression ----
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+  }, []);
+
+  // ---- Scroll wheel: zoom centred on cursor ----
+  // Must be a non-passive imperative listener so preventDefault() reliably
+  // stops the page from scrolling. React's onWheel is passive in some browsers.
+  const handleWheel = useCallback(
+    (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const mouseScreenX = e.clientX - rect.left;
+      const mouseScreenY = e.clientY - rect.top;
+
+      const oldZoom = zoomRef.current;
+      const delta = -e.deltaY * ZOOM_SENSITIVITY;
+      const newZoom = Math.min(
+        MAX_ZOOM,
+        Math.max(MIN_ZOOM, oldZoom * (1 + delta)),
+      );
+
+      // Adjust pan so the point under the cursor stays fixed
+      const scale = newZoom / oldZoom;
+      panRef.current = {
+        x: mouseScreenX - (mouseScreenX - panRef.current.x) * scale,
+        y: mouseScreenY - (mouseScreenY - panRef.current.y) * scale,
+      };
+      zoomRef.current = newZoom;
+
+      applyTransformToDOM();
+      commitCamera();
+    },
+    [applyTransformToDOM, commitCamera],
+  );
+
+  // Attach wheel listener imperatively with { passive: false }
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheel);
+  }, [handleWheel]);
+
+  // Safety: cancel panning if mouse leaves the window
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      if (isPanning.current) {
+        isPanning.current = false;
+        setPanningCursor(false);
+        commitCamera();
+      }
+    };
+    window.addEventListener("mouseup", handleGlobalMouseUp);
+    return () => window.removeEventListener("mouseup", handleGlobalMouseUp);
+  }, [commitCamera]);
+
+  // ---- Node interactions ----
   const handlePositionChange = useCallback(
     (taskId: string, position: { x: number; y: number }) => {
       onUpdateTask(taskId, { position });
@@ -129,7 +297,6 @@ export default function WorkflowCanvas({
     [onEdgeClick],
   );
 
-  /** Handle edge click: select the edge and propagate to parent */
   const handleEdgeClick = useCallback(
     (info: EdgeHoverInfo | null) => {
       if (info) {
@@ -146,14 +313,10 @@ export default function WorkflowCanvas({
     [onEdgeClick],
   );
 
-  /** Handle selecting a task (also clears edge selection) */
   const handleSelectTask = useCallback(
     (taskId: string | null) => {
       onSelectTask(taskId);
       if (taskId !== null) {
-        // Keep selected edge if the task being selected is part of it
-        // (i.e. user clicked the source task of the edge via edge click)
-        // Otherwise clear it
         if (selectedEdge && selectedEdge.from !== taskId) {
           setSelectedEdge(null);
           onEdgeClick?.(null);
@@ -163,7 +326,6 @@ export default function WorkflowCanvas({
     [onSelectTask, onEdgeClick, selectedEdge],
   );
 
-  /** Update waypoints for a specific edge */
   const handleWaypointUpdate = useCallback(
     (
       fromTaskId: string,
@@ -192,7 +354,6 @@ export default function WorkflowCanvas({
     [tasks, onUpdateTask],
   );
 
-  /** Update label position for a specific edge */
   const handleLabelPositionUpdate = useCallback(
     (
       fromTaskId: string,
@@ -224,7 +385,6 @@ export default function WorkflowCanvas({
   const handleCompleteConnection = useCallback(
     (targetTaskId: string) => {
       if (!connectingFrom) return;
-
       const targetTask = tasks.find((t) => t.id === targetTaskId);
       if (!targetTask) return;
 
@@ -241,12 +401,9 @@ export default function WorkflowCanvas({
 
   const handleAddEmptyTask = useCallback(() => {
     const name = generateUniqueTaskName(tasks);
-    // Position new tasks below existing ones
     let maxY = 0;
     for (const task of tasks) {
-      if (task.position.y > maxY) {
-        maxY = task.position.y;
-      }
+      if (task.position.y > maxY) maxY = task.position.y;
     }
     const newTask: WorkflowTask = {
       id: generateTaskId(),
@@ -262,43 +419,127 @@ export default function WorkflowCanvas({
     onSelectTask(newTask.id);
   }, [tasks, onAddTask, onSelectTask]);
 
-  // Calculate minimum canvas dimensions based on node positions
-  const canvasDimensions = useMemo(() => {
-    let maxX = 800;
-    let maxY = 600;
+  /** Reset pan/zoom to fit all tasks (or default viewport). */
+  const handleFitView = useCallback(() => {
+    if (tasks.length === 0) {
+      panRef.current = { x: 0, y: 0 };
+      zoomRef.current = 1;
+    } else {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      let minX = Infinity,
+        minY = Infinity,
+        maxX = -Infinity,
+        maxY = -Infinity;
+      for (const t of tasks) {
+        minX = Math.min(minX, t.position.x);
+        minY = Math.min(minY, t.position.y);
+        maxX = Math.max(maxX, t.position.x + 240);
+        maxY = Math.max(maxY, t.position.y + 140);
+      }
+
+      const contentW = maxX - minX;
+      const contentH = maxY - minY;
+      const pad = 80;
+      const scaleX = (rect.width - pad * 2) / contentW;
+      const scaleY = (rect.height - pad * 2) / contentH;
+      const newZoom = Math.min(
+        Math.max(Math.min(scaleX, scaleY), MIN_ZOOM),
+        MAX_ZOOM,
+      );
+
+      panRef.current = {
+        x: (rect.width - contentW * newZoom) / 2 - minX * newZoom,
+        y: (rect.height - contentH * newZoom) / 2 - minY * newZoom,
+      };
+      zoomRef.current = newZoom;
+    }
+    applyTransformToDOM();
+    commitCamera();
+  }, [tasks, applyTransformToDOM, commitCamera]);
+
+  // ---- Inner div dimensions (large enough to contain all content) ----
+  const innerSize = useMemo(() => {
+    let maxX = 4000;
+    let maxY = 4000;
     for (const task of tasks) {
-      maxX = Math.max(maxX, task.position.x + 340);
-      maxY = Math.max(maxY, task.position.y + 220);
+      maxX = Math.max(maxX, task.position.x + 500);
+      maxY = Math.max(maxY, task.position.y + 500);
     }
     return { width: maxX, height: maxY };
   }, [tasks]);
 
+  // ---- Grid background (recomputed from React state for the render) ----
+  const gridBg = useMemo(() => gridBackground(pan, zoom), [pan, zoom]);
+
+  // Zoom percentage for display
+  const zoomPercent = Math.round(zoom * 100);
+
   return (
     <div
-      className="flex-1 overflow-auto bg-gray-100 relative"
       ref={canvasRef}
+      className={`flex-1 overflow-hidden bg-gray-100 relative ${panningCursor ? "!cursor-grabbing" : ""}`}
+      style={{
+        backgroundImage: gridBg.backgroundImage,
+        backgroundSize: gridBg.backgroundSize,
+        backgroundPosition: gridBg.backgroundPosition,
+      }}
       onClick={handleCanvasClick}
+      onMouseDown={handleCanvasMouseDown}
       onMouseMove={handleCanvasMouseMove}
       onMouseUp={handleCanvasMouseUp}
+      onContextMenu={handleContextMenu}
     >
-      {/* Grid background */}
+      {/* Transformed canvas content */}
       <div
+        ref={innerRef}
         data-canvas-bg="true"
-        className="absolute inset-0"
         style={{
-          minWidth: canvasDimensions.width,
-          minHeight: canvasDimensions.height,
-          backgroundImage: `
-            linear-gradient(to right, rgba(0,0,0,0.03) 1px, transparent 1px),
-            linear-gradient(to bottom, rgba(0,0,0,0.03) 1px, transparent 1px)
-          `,
-          backgroundSize: "20px 20px",
+          position: "absolute",
+          transformOrigin: "0 0",
+          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          width: innerSize.width,
+          height: innerSize.height,
         }}
-      />
+      >
+        {/* Edge rendering layer */}
+        <WorkflowEdges
+          edges={edges}
+          tasks={tasks}
+          connectingFrom={connectingFrom}
+          mousePosition={mousePosition}
+          onEdgeClick={handleEdgeClick}
+          selectedEdge={selectedEdge}
+          onWaypointUpdate={handleWaypointUpdate}
+          onLabelPositionUpdate={handleLabelPositionUpdate}
+          screenToCanvas={screenToCanvas}
+        />
+
+        {/* Task nodes */}
+        {tasks.map((task) => (
+          <TaskNode
+            key={task.id}
+            task={task}
+            isSelected={task.id === selectedTaskId}
+            isStartNode={startingTaskIds.has(task.id)}
+            allTaskNames={allTaskNames}
+            onSelect={handleSelectTask}
+            onDelete={onDeleteTask}
+            onPositionChange={handlePositionChange}
+            onStartConnection={handleStartConnection}
+            connectingFrom={connectingFrom}
+            onCompleteConnection={handleCompleteConnection}
+            screenToCanvas={screenToCanvas}
+          />
+        ))}
+      </div>
+
+      {/* ---- UI chrome (not transformed) ---- */}
 
       {/* Connecting mode indicator */}
       {connectingFrom && (
-        <div className="sticky top-0 left-0 right-0 z-50 flex justify-center pointer-events-none">
+        <div className="absolute top-0 left-0 right-0 z-50 flex justify-center pointer-events-none">
           <div className="mt-3 px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-full shadow-lg pointer-events-auto">
             Drag to a task to connect as{" "}
             <span className={PRESET_BANNER_COLORS[connectingFrom.preset]}>
@@ -309,44 +550,23 @@ export default function WorkflowCanvas({
         </div>
       )}
 
-      {/* Edge rendering layer */}
-      <WorkflowEdges
-        edges={edges}
-        tasks={tasks}
-        connectingFrom={connectingFrom}
-        mousePosition={mousePosition}
-        onEdgeClick={handleEdgeClick}
-        selectedEdge={selectedEdge}
-        onWaypointUpdate={handleWaypointUpdate}
-        onLabelPositionUpdate={handleLabelPositionUpdate}
-      />
-
-      {/* Task nodes */}
-      {tasks.map((task) => (
-        <TaskNode
-          key={task.id}
-          task={task}
-          isSelected={task.id === selectedTaskId}
-          isStartNode={startingTaskIds.has(task.id)}
-          allTaskNames={allTaskNames}
-          onSelect={handleSelectTask}
-          onDelete={onDeleteTask}
-          onPositionChange={handlePositionChange}
-          onStartConnection={handleStartConnection}
-          connectingFrom={connectingFrom}
-          onCompleteConnection={handleCompleteConnection}
-        />
-      ))}
+      {/* Zoom indicator + fit-view button */}
+      <div className="absolute bottom-6 left-6 z-40 flex items-center gap-2">
+        <div className="px-2.5 py-1.5 bg-white/80 backdrop-blur-sm text-xs font-medium text-gray-500 rounded-lg shadow-sm border border-gray-200 select-none tabular-nums">
+          {zoomPercent}%
+        </div>
+        <button
+          onClick={handleFitView}
+          className="p-1.5 bg-white/80 backdrop-blur-sm text-gray-500 rounded-lg shadow-sm border border-gray-200 hover:bg-white hover:text-gray-700 transition-colors"
+          title="Fit view to content"
+        >
+          <Maximize className="w-3.5 h-3.5" />
+        </button>
+      </div>
 
       {/* Empty state / Add task button */}
       {tasks.length === 0 ? (
-        <div
-          className="absolute inset-0 flex items-center justify-center pointer-events-none"
-          style={{
-            minWidth: canvasDimensions.width,
-            minHeight: canvasDimensions.height,
-          }}
-        >
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="text-center pointer-events-auto">
             <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-200 flex items-center justify-center">
               <Plus className="w-8 h-8 text-gray-400" />
@@ -370,7 +590,7 @@ export default function WorkflowCanvas({
       ) : (
         <button
           onClick={handleAddEmptyTask}
-          className="fixed bottom-6 right-6 z-40 w-12 h-12 bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-700 transition-colors flex items-center justify-center"
+          className="absolute bottom-6 right-6 z-40 w-12 h-12 bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-700 transition-colors flex items-center justify-center"
           title="Add a new task"
         >
           <Plus className="w-6 h-6" />

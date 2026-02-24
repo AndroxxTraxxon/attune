@@ -7,6 +7,7 @@ import type {
 } from "@/types/workflow";
 import { PRESET_COLORS } from "@/types/workflow";
 import type { TransitionPreset } from "./TaskNode";
+import type { ScreenToCanvas } from "./WorkflowCanvas";
 
 export interface EdgeHoverInfo {
   taskId: string;
@@ -50,10 +51,12 @@ interface WorkflowEdgesProps {
     targetTaskName: string,
     position: number | undefined,
   ) => void;
+  /** Convert screen (client) coordinates to canvas-space coordinates. */
+  screenToCanvas?: ScreenToCanvas;
 }
 
 const NODE_WIDTH = 240;
-const NODE_HEIGHT = 120;
+const NODE_HEIGHT = 96;
 
 /** Color for each edge type */
 const EDGE_COLORS: Record<EdgeType, string> = {
@@ -63,11 +66,14 @@ const EDGE_COLORS: Record<EdgeType, string> = {
   custom: "#8b5cf6", // violet-500
 };
 
-const EDGE_DASH: Record<EdgeType, string> = {
-  success: "",
-  failure: "6,4",
-  complete: "4,4",
-  custom: "8,4,2,4",
+/** SVG stroke-dasharray values for each user-facing line style */
+import type { LineStyle } from "@/types/workflow";
+
+const LINE_STYLE_DASH: Record<LineStyle, string> = {
+  solid: "",
+  dashed: "6,4",
+  dotted: "2,3",
+  "dash-dot": "8,4,2,4",
 };
 
 /** Calculate the center-bottom of a task node */
@@ -111,21 +117,58 @@ function getNodeRightCenter(
 }
 
 /**
+ * Pick the closest of top / left / right edges on the destination card
+ * to an approach point. Bottom is excluded — it's reserved for outgoing
+ * transitions.
+ */
+function closestEntryEdge(
+  task: WorkflowTask,
+  approach: { x: number; y: number },
+  nodeWidth: number,
+  nodeHeight: number,
+): { x: number; y: number } {
+  const candidates = [
+    getNodeTopCenter(task, nodeWidth),
+    getNodeLeftCenter(task, nodeHeight),
+    getNodeRightCenter(task, nodeWidth, nodeHeight),
+  ];
+  let best = candidates[0];
+  let bestDist = Infinity;
+  for (const c of candidates) {
+    const d = (c.x - approach.x) ** 2 + (c.y - approach.y) ** 2;
+    if (d < bestDist) {
+      bestDist = d;
+      best = c;
+    }
+  }
+  return best;
+}
+
+/**
  * Determine the best connection points between two nodes.
+ *
+ * Rules:
+ *  - Origin always exits from the bottom edge (where the output handles are).
+ *  - Destination picks the closest of top / left / right (never bottom).
+ *  - When waypoints exist the last waypoint is used as the approach hint
+ *    for the destination edge, and the first waypoint is ignored for origin
+ *    (origin is always bottom).
  */
 function getBestConnectionPoints(
   fromTask: WorkflowTask,
   toTask: WorkflowTask,
   nodeWidth: number,
   nodeHeight: number,
+  waypoints?: { x: number; y: number }[],
 ): {
   start: { x: number; y: number };
   end: { x: number; y: number };
   selfLoop?: boolean;
 } {
+  // Self-loop: right side → top
   if (fromTask.id === toTask.id) {
     return {
-      start: getNodeRightCenter(fromTask, nodeWidth, nodeHeight),
+      start: getNodeBottomCenter(fromTask, nodeWidth, nodeHeight),
       end: {
         x: fromTask.position.x + nodeWidth * 0.75,
         y: fromTask.position.y,
@@ -134,47 +177,17 @@ function getBestConnectionPoints(
     };
   }
 
-  const fromCenter = {
-    x: fromTask.position.x + nodeWidth / 2,
-    y: fromTask.position.y + nodeHeight / 2,
-  };
-  const toCenter = {
-    x: toTask.position.x + nodeWidth / 2,
-    y: toTask.position.y + nodeHeight / 2,
-  };
+  // Origin always exits from bottom
+  const start = getNodeBottomCenter(fromTask, nodeWidth, nodeHeight);
 
-  const dx = toCenter.x - fromCenter.x;
-  const dy = toCenter.y - fromCenter.y;
+  // Use the last waypoint (if any) as the approach direction for the
+  // destination, otherwise use the start point.
+  const approach =
+    waypoints && waypoints.length > 0 ? waypoints[waypoints.length - 1] : start;
 
-  if (dy > 0 && Math.abs(dy) > Math.abs(dx) * 0.5) {
-    return {
-      start: getNodeBottomCenter(fromTask, nodeWidth, nodeHeight),
-      end: getNodeTopCenter(toTask, nodeWidth),
-    };
-  }
+  const end = closestEntryEdge(toTask, approach, nodeWidth, nodeHeight);
 
-  if (dy < 0 && Math.abs(dy) > Math.abs(dx) * 0.5) {
-    const start =
-      dx >= 0
-        ? getNodeRightCenter(fromTask, nodeWidth, nodeHeight)
-        : getNodeLeftCenter(fromTask, nodeHeight);
-    return {
-      start,
-      end: getNodeBottomCenter(toTask, nodeWidth, nodeHeight),
-    };
-  }
-
-  if (dx > 0) {
-    return {
-      start: getNodeRightCenter(fromTask, nodeWidth, nodeHeight),
-      end: getNodeLeftCenter(toTask, nodeHeight),
-    };
-  }
-
-  return {
-    start: getNodeLeftCenter(fromTask, nodeHeight),
-    end: getNodeRightCenter(toTask, nodeWidth, nodeHeight),
-  };
+  return { start, end };
 }
 
 /**
@@ -504,6 +517,7 @@ function WorkflowEdgesInner({
   selectedEdge,
   onWaypointUpdate,
   onLabelPositionUpdate,
+  screenToCanvas: screenToCanvasProp,
 }: WorkflowEdgesProps) {
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -554,9 +568,14 @@ function WorkflowEdgesInner({
     segmentIndex: number;
   } | null>(null);
 
-  /** Convert client coordinates to SVG coordinates */
+  /** Convert client coordinates to canvas (SVG) coordinates.
+   *  Uses the parent-provided screenToCanvas when available (handles zoom/pan),
+   *  otherwise falls back to a basic rect-offset calculation. */
   const clientToSvg = useCallback(
     (clientX: number, clientY: number): { x: number; y: number } => {
+      if (screenToCanvasProp) {
+        return screenToCanvasProp(clientX, clientY);
+      }
       const svg = svgRef.current;
       if (!svg) return { x: clientX, y: clientY };
       const rect = svg.getBoundingClientRect();
@@ -568,7 +587,7 @@ function WorkflowEdgesInner({
         y: clientY - rect.top + scrollTop,
       };
     },
-    [],
+    [screenToCanvasProp],
   );
 
   // Refs to hold latest callback values (updated via effects)
@@ -936,16 +955,8 @@ function WorkflowEdgesInner({
           const toTask = taskMap.get(edge.to);
           if (!fromTask || !toTask) return null;
 
-          const { start, end, selfLoop } = getBestConnectionPoints(
-            fromTask,
-            toTask,
-            nodeWidth,
-            nodeHeight,
-          );
-
-          const isSelected = edgeMatches(selectedEdge, edge);
-
-          // Build the current waypoints, applying drag override if active
+          // Build the current waypoints first so we can pass them into
+          // connection-point selection as an approach hint.
           let currentWaypoints: NodePosition[] = edge.waypoints
             ? [...edge.waypoints]
             : [];
@@ -957,7 +968,6 @@ function WorkflowEdgesInner({
             (activeDrag.type === "waypoint" ||
               activeDrag.type === "new-waypoint")
           ) {
-            // Use the snapshot from state with drag position applied
             currentWaypoints = [...activeDrag.waypointsSnapshot];
             if (dragPos) {
               currentWaypoints[activeDrag.waypointIndex] = {
@@ -966,6 +976,16 @@ function WorkflowEdgesInner({
               };
             }
           }
+
+          const { start, end, selfLoop } = getBestConnectionPoints(
+            fromTask,
+            toTask,
+            nodeWidth,
+            nodeHeight,
+            currentWaypoints.length > 0 ? currentWaypoints : undefined,
+          );
+
+          const isSelected = edgeMatches(selectedEdge, edge);
 
           // All points: start → waypoints → end
           const allPoints = [start, ...currentWaypoints, end];
@@ -979,7 +999,7 @@ function WorkflowEdgesInner({
 
           const color =
             edge.color || EDGE_COLORS[edge.type] || EDGE_COLORS.complete;
-          const dash = EDGE_DASH[edge.type] || "";
+          const dash = edge.lineStyle ? LINE_STYLE_DASH[edge.lineStyle] : "";
           const arrowId = edge.color
             ? `arrow-custom-${index}`
             : `arrow-${edge.type}`;
@@ -1180,7 +1200,7 @@ function WorkflowEdgesInner({
                           stroke="white"
                           strokeWidth={2}
                           opacity={1}
-                          className="transition-all"
+                          className="transition-[r]"
                         />
                         {/* Invisible larger hit area */}
                         <circle cx={wp.x} cy={wp.y} r={12} fill="transparent" />
@@ -1256,7 +1276,7 @@ function WorkflowEdgesInner({
                           strokeWidth={1.5}
                           strokeDasharray={isHovered ? "" : "2,2"}
                           opacity={isHovered ? 1 : 0.7}
-                          className="transition-all duration-150"
+                          className="transition-[r,opacity,stroke-dasharray] duration-150"
                         />
                         {/* Plus icon */}
                         <text
