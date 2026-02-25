@@ -9,10 +9,13 @@ import {
   Code,
   LayoutDashboard,
   X,
+  Zap,
+  Settings2,
 } from "lucide-react";
 import yaml from "js-yaml";
 import type { WorkflowYamlDefinition } from "@/types/workflow";
 import ActionPalette from "@/components/workflows/ActionPalette";
+import WorkflowInputsPanel from "@/components/workflows/WorkflowInputsPanel";
 import WorkflowCanvas from "@/components/workflows/WorkflowCanvas";
 import type { EdgeHoverInfo } from "@/components/workflows/WorkflowEdges";
 import TaskInspector from "@/components/workflows/TaskInspector";
@@ -83,6 +86,7 @@ export default function WorkflowBuilderPage() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [showYamlPreview, setShowYamlPreview] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<"actions" | "inputs">("actions");
   const [highlightedTransition, setHighlightedTransition] = useState<{
     taskId: string;
     transitionIndex: number;
@@ -747,12 +751,59 @@ export default function WorkflowBuilderPage() {
           </div>
         ) : (
           <>
-            {/* Left: Action Palette */}
-            <ActionPalette
-              actions={paletteActions}
-              isLoading={actionsLoading}
-              onAddTask={handleAddTaskFromPalette}
-            />
+            {/* Left sidebar: tabbed Actions / Inputs */}
+            <div className="w-64 border-r border-gray-200 bg-gray-50 flex flex-col h-full overflow-hidden">
+              {/* Tab header */}
+              <div className="flex border-b border-gray-200 bg-white flex-shrink-0">
+                <button
+                  onClick={() => setSidebarTab("actions")}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors ${
+                    sidebarTab === "actions"
+                      ? "text-blue-600 border-b-2 border-blue-600 bg-blue-50/50"
+                      : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  Actions
+                </button>
+                <button
+                  onClick={() => setSidebarTab("inputs")}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors ${
+                    sidebarTab === "inputs"
+                      ? "text-blue-600 border-b-2 border-blue-600 bg-blue-50/50"
+                      : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  <Settings2 className="w-3.5 h-3.5" />
+                  Inputs
+                  {Object.keys(state.parameters).length > 0 && (
+                    <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">
+                      {Object.keys(state.parameters).length}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {/* Tab content */}
+              {sidebarTab === "actions" ? (
+                <ActionPalette
+                  actions={paletteActions}
+                  isLoading={actionsLoading}
+                  onAddTask={handleAddTaskFromPalette}
+                />
+              ) : (
+                <WorkflowInputsPanel
+                  parameters={state.parameters}
+                  output={state.output}
+                  onParametersChange={(parameters) =>
+                    setState((prev) => ({ ...prev, parameters }))
+                  }
+                  onOutputChange={(output) =>
+                    setState((prev) => ({ ...prev, output }))
+                  }
+                />
+              )}
+            </div>
 
             {/* Center: Canvas */}
             <WorkflowCanvas

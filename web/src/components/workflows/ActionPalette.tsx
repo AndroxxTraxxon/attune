@@ -1,5 +1,11 @@
 import { useState, useMemo } from "react";
-import { Search, X, ChevronDown, ChevronRight, GripVertical } from "lucide-react";
+import {
+  Search,
+  X,
+  ChevronDown,
+  ChevronRight,
+  GripVertical,
+} from "lucide-react";
 import type { PaletteAction } from "@/types/workflow";
 
 interface ActionPaletteProps {
@@ -24,7 +30,7 @@ export default function ActionPalette({
         action.label?.toLowerCase().includes(query) ||
         action.ref?.toLowerCase().includes(query) ||
         action.description?.toLowerCase().includes(query) ||
-        action.pack_ref?.toLowerCase().includes(query)
+        action.pack_ref?.toLowerCase().includes(query),
     );
   }, [actions, searchQuery]);
 
@@ -38,7 +44,7 @@ export default function ActionPalette({
       grouped.get(packRef)!.push(action);
     });
     return new Map(
-      [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+      [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0])),
     );
   }, [filteredActions]);
 
@@ -55,7 +61,7 @@ export default function ActionPalette({
   };
 
   return (
-    <div className="w-64 border-r border-gray-200 bg-gray-50 flex flex-col h-full overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden">
       <div className="p-3 border-b border-gray-200 bg-white flex-shrink-0">
         <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-2">
           Action Palette
@@ -93,7 +99,9 @@ export default function ActionPalette({
           </div>
         ) : filteredActions.length === 0 ? (
           <div className="text-center py-8">
-            <p className="text-xs text-gray-500">No actions match your search</p>
+            <p className="text-xs text-gray-500">
+              No actions match your search
+            </p>
             <button
               onClick={() => setSearchQuery("")}
               className="mt-1 text-xs text-blue-600 hover:text-blue-800"
@@ -158,7 +166,7 @@ export default function ActionPalette({
                     )}
                   </div>
                 );
-              }
+              },
             )}
           </div>
         )}
