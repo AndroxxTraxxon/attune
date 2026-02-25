@@ -133,6 +133,14 @@ export const PRESET_STYLES: Record<TransitionPreset, LineStyle> = {
  */
 export type EdgeType = "success" | "failure" | "complete" | "custom";
 
+/** Default colors for each EdgeType (mirrors PRESET_COLORS but keyed by EdgeType). */
+export const EDGE_TYPE_COLORS: Record<EdgeType, string> = {
+  success: "#22c55e", // green-500
+  failure: "#ef4444", // red-500
+  complete: "#6b7280", // gray-500 (unconditional / always)
+  custom: "#8b5cf6", // violet-500
+};
+
 export function classifyTransitionWhen(when?: string): EdgeType {
   if (!when) return "complete"; // unconditional
   const lower = when.toLowerCase().replace(/\s+/g, "");

@@ -22,6 +22,7 @@ import {
   PRESET_WHEN,
   PRESET_LABELS,
   PRESET_COLORS,
+  EDGE_TYPE_COLORS,
   classifyTransitionWhen,
   transitionLabel,
 } from "@/types/workflow";
@@ -581,7 +582,7 @@ export default function TaskInspector({
                                   y2="1"
                                   stroke={
                                     transition.color ||
-                                    PRESET_COLORS[
+                                    EDGE_TYPE_COLORS[
                                       classifyTransitionWhen(transition.when)
                                     ] ||
                                     "#6b7280"

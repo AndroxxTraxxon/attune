@@ -2,10 +2,9 @@ import { memo, useMemo, useState, useCallback, useRef, useEffect } from "react";
 import type {
   WorkflowEdge,
   WorkflowTask,
-  EdgeType,
   NodePosition,
 } from "@/types/workflow";
-import { PRESET_COLORS } from "@/types/workflow";
+import { PRESET_COLORS, EDGE_TYPE_COLORS } from "@/types/workflow";
 import type { TransitionPreset } from "./TaskNode";
 import type { ScreenToCanvas } from "./WorkflowCanvas";
 
@@ -58,13 +57,8 @@ interface WorkflowEdgesProps {
 const NODE_WIDTH = 240;
 const NODE_HEIGHT = 96;
 
-/** Color for each edge type */
-const EDGE_COLORS: Record<EdgeType, string> = {
-  success: "#22c55e", // green-500
-  failure: "#ef4444", // red-500
-  complete: "#6b7280", // gray-500 (unconditional / always)
-  custom: "#8b5cf6", // violet-500
-};
+/** Color for each edge type (alias for shared constant) */
+const EDGE_COLORS = EDGE_TYPE_COLORS;
 
 /** SVG stroke-dasharray values for each user-facing line style */
 import type { LineStyle } from "@/types/workflow";

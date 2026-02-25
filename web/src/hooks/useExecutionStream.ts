@@ -17,8 +17,33 @@ interface UseExecutionStreamOptions {
 }
 
 /**
- * Check if an execution matches the given query parameters
- * Only checks fields that are reliably present in WebSocket payloads
+ * Notification metadata fields that come from the PostgreSQL trigger payload
+ * but are NOT part of the ExecutionSummary API model. These are stripped
+ * before storing execution data in the React Query cache.
+ */
+const NOTIFICATION_META_FIELDS = [
+  "entity_type",
+  "entity_id",
+  "old_status",
+  "action_id",
+] as const;
+
+/**
+ * Strip notification-only metadata fields from the payload so cached data
+ * matches the shape returned by the API (ExecutionSummary / ExecutionResponse).
+ */
+function stripNotificationMeta(payload: any): any {
+  if (!payload || typeof payload !== "object") return payload;
+  const cleaned = { ...payload };
+  for (const key of NOTIFICATION_META_FIELDS) {
+    delete cleaned[key];
+  }
+  return cleaned;
+}
+
+/**
+ * Check if an execution matches the given query parameters.
+ * Only checks fields that are reliably present in WebSocket payloads.
  */
 function executionMatchesParams(execution: any, params: any): boolean {
   if (!params) return true;
@@ -55,7 +80,7 @@ function executionMatchesParams(execution: any, params: any): boolean {
 }
 
 /**
- * Check if query params include filters not present in WebSocket payloads
+ * Check if query params include filters not present in WebSocket payloads.
  */
 function hasUnsupportedFilters(params: any): boolean {
   if (!params) return false;
@@ -88,8 +113,11 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
         return;
       }
 
-      // Extract execution data from notification payload (flat structure)
-      const executionData = notification.payload as any;
+      // Extract execution data from notification payload (flat structure).
+      // Keep raw payload for old_status inspection, but use cleaned data for cache.
+      const rawPayload = notification.payload as any;
+      const oldStatus: string | undefined = rawPayload?.old_status;
+      const executionData = stripNotificationMeta(rawPayload);
 
       // Update specific execution query if it exists
       queryClient.setQueryData(
@@ -106,8 +134,8 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
         },
       );
 
-      // Update execution list queries by modifying existing data
-      // We need to iterate manually to access query keys for filtering
+      // Update execution list queries by modifying existing data.
+      // We need to iterate manually to access query keys for filtering.
       const queries = queryClient
         .getQueriesData({ queryKey: ["executions"], exact: false })
         .filter(([, data]) => data && Array.isArray((data as any)?.data));
@@ -123,45 +151,96 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
           (exec: any) => exec.id === notification.entity_id,
         );
 
+        // Merge the updated fields to determine if the execution matches the query
+        const mergedExecution =
+          existingIndex >= 0
+            ? { ...old.data[existingIndex], ...executionData }
+            : executionData;
+        const matchesQuery = executionMatchesParams(
+          mergedExecution,
+          queryParams,
+        );
+
         let updatedData;
+        let totalItemsDelta = 0;
+
         if (existingIndex >= 0) {
-          // Always update existing execution in the list
-          updatedData = [...old.data];
-          updatedData[existingIndex] = {
-            ...updatedData[existingIndex],
-            ...executionData,
-          };
-
-          // Note: We don't remove executions from cache based on filters.
-          // The cache represents what the API query returned.
-          // Client-side filtering (in the page component) handles what's displayed.
-        } else {
-          // For new executions, be conservative with filters we can't verify
-          // If filters include rule_ref/trigger_ref, don't add new executions
-          // (these fields may not be in WebSocket payload)
-          if (hasUnsupportedFilters(queryParams)) {
-            // Don't add new execution when using filters we can't verify
-            return;
-          }
-
-          // Only add new execution if it matches the query parameters
-          // (not the display filters - those are handled client-side)
-          if (executionMatchesParams(executionData, queryParams)) {
-            // Add to beginning and cap at 50 items to prevent performance issues
-            updatedData = [executionData, ...old.data].slice(0, 50);
+          // ── Execution IS in the local data array ──
+          if (matchesQuery) {
+            // Still matches — update in place, no total_items change
+            updatedData = [...old.data];
+            updatedData[existingIndex] = mergedExecution;
           } else {
-            // Don't modify the list if the new execution doesn't match the query
-            return;
+            // No longer matches the query filter — remove it
+            updatedData = old.data.filter(
+              (_: any, i: number) => i !== existingIndex,
+            );
+            totalItemsDelta = -1;
+          }
+        } else {
+          // ── Execution is NOT in the local data array ──
+          // This happens when the execution is beyond the fetched page boundary
+          // (e.g., running count query with pageSize=1) or was pushed out by
+          // the 50-item cap after many new executions were prepended.
+
+          if (oldStatus) {
+            // This is a status-change notification (has old_status from the
+            // PostgreSQL trigger). Use old_status to detect whether the
+            // execution crossed a query filter boundary — even though it's
+            // not in our local data array, total_items must stay accurate.
+            const virtualOldExecution = {
+              ...mergedExecution,
+              status: oldStatus,
+            };
+            const oldMatchedQuery = executionMatchesParams(
+              virtualOldExecution,
+              queryParams,
+            );
+
+            if (oldMatchedQuery && !matchesQuery) {
+              // Execution LEFT this query's result set (e.g., was running,
+              // now completed). Decrement total_items but don't touch the
+              // data array — the item was never in it.
+              updatedData = old.data;
+              totalItemsDelta = -1;
+            } else if (!oldMatchedQuery && matchesQuery) {
+              // Execution ENTERED this query's result set.
+              if (hasUnsupportedFilters(queryParams)) {
+                return;
+              }
+              updatedData = [executionData, ...old.data].slice(0, 50);
+              totalItemsDelta = 1;
+            } else {
+              // No boundary crossing: either both match (execution was
+              // already counted in total_items — don't double-count) or
+              // neither matches (irrelevant to this query).
+              return;
+            }
+          } else {
+            // No old_status: this is likely an execution_created notification
+            // (INSERT trigger). Use the standard add-if-matches logic.
+            if (hasUnsupportedFilters(queryParams)) {
+              return;
+            }
+
+            if (matchesQuery) {
+              // Add to beginning and cap at 50 items to prevent unbounded growth
+              updatedData = [executionData, ...old.data].slice(0, 50);
+              totalItemsDelta = 1;
+            } else {
+              return;
+            }
           }
         }
 
         // Update the query with the new data
+        const newTotal = (old.pagination?.total_items || 0) + totalItemsDelta;
         queryClient.setQueryData(queryKey, {
           ...old,
           data: updatedData,
           pagination: {
             ...old.pagination,
-            total_items: (old.pagination?.total_items || 0) + 1,
+            total_items: Math.max(0, newTotal),
           },
         });
       });

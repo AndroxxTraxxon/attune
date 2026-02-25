@@ -22,6 +22,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
@@ -40,6 +41,8 @@ pub struct ExecutionScheduler {
     pool: PgPool,
     publisher: Arc<Publisher>,
     consumer: Arc<Consumer>,
+    /// Round-robin counter for distributing executions across workers
+    round_robin_counter: AtomicUsize,
 }
 
 /// Default heartbeat interval in seconds (should match worker config default)
@@ -56,6 +59,7 @@ impl ExecutionScheduler {
             pool,
             publisher,
             consumer,
+            round_robin_counter: AtomicUsize::new(0),
         }
     }
 
@@ -65,6 +69,12 @@ impl ExecutionScheduler {
 
         let pool = self.pool.clone();
         let publisher = self.publisher.clone();
+        // Share the counter with the handler closure via Arc.
+        // We wrap &self's AtomicUsize in a new Arc<AtomicUsize> by copying the
+        // current value so the closure is 'static.
+        let counter = Arc::new(AtomicUsize::new(
+            self.round_robin_counter.load(Ordering::Relaxed),
+        ));
 
         // Use the handler pattern to consume messages
         self.consumer
@@ -72,10 +82,13 @@ impl ExecutionScheduler {
                 move |envelope: MessageEnvelope<ExecutionRequestedPayload>| {
                     let pool = pool.clone();
                     let publisher = publisher.clone();
+                    let counter = counter.clone();
 
                     async move {
-                        if let Err(e) =
-                            Self::process_execution_requested(&pool, &publisher, &envelope).await
+                        if let Err(e) = Self::process_execution_requested(
+                            &pool, &publisher, &counter, &envelope,
+                        )
+                        .await
                         {
                             error!("Error scheduling execution: {}", e);
                             // Return error to trigger nack with requeue
@@ -94,6 +107,7 @@ impl ExecutionScheduler {
     async fn process_execution_requested(
         pool: &PgPool,
         publisher: &Publisher,
+        round_robin_counter: &AtomicUsize,
         envelope: &MessageEnvelope<ExecutionRequestedPayload>,
     ) -> Result<()> {
         debug!("Processing execution requested message: {:?}", envelope);
@@ -110,8 +124,8 @@ impl ExecutionScheduler {
         // Fetch action to determine runtime requirements
         let action = Self::get_action_for_execution(pool, &execution).await?;
 
-        // Select appropriate worker
-        let worker = Self::select_worker(pool, &action).await?;
+        // Select appropriate worker (round-robin among compatible workers)
+        let worker = Self::select_worker(pool, &action, round_robin_counter).await?;
 
         info!(
             "Selected worker {} for execution {}",
@@ -158,9 +172,13 @@ impl ExecutionScheduler {
     }
 
     /// Select an appropriate worker for the execution
+    ///
+    /// Uses round-robin selection among compatible, active, and healthy workers
+    /// to distribute load evenly across the worker pool.
     async fn select_worker(
         pool: &PgPool,
         action: &Action,
+        round_robin_counter: &AtomicUsize,
     ) -> Result<attune_common::models::Worker> {
         // Get runtime requirements for the action
         let runtime = if let Some(runtime_id) = action.runtime {
@@ -219,17 +237,21 @@ impl ExecutionScheduler {
             ));
         }
 
-        // TODO: Implement intelligent worker selection:
-        // - Consider worker load/capacity
-        // - Consider worker affinity (same pack, same runtime)
-        // - Consider geographic locality
-        // - Round-robin or least-connections strategy
-
-        // For now, just select the first available worker
-        Ok(fresh_workers
+        // Round-robin selection: distribute executions evenly across workers.
+        // Each call increments the counter and picks the next worker in the list.
+        let count = round_robin_counter.fetch_add(1, Ordering::Relaxed);
+        let index = count % fresh_workers.len();
+        let selected = fresh_workers
             .into_iter()
-            .next()
-            .expect("Worker list should not be empty"))
+            .nth(index)
+            .expect("Worker list should not be empty");
+
+        info!(
+            "Selected worker {} (id={}) via round-robin (index {} of available workers)",
+            selected.name, selected.id, index
+        );
+
+        Ok(selected)
     }
 
     /// Check if a worker supports a given runtime
@@ -291,7 +313,8 @@ impl ExecutionScheduler {
 
         let now = Utc::now();
         let age = now.signed_duration_since(last_heartbeat);
-        let max_age = Duration::from_secs(DEFAULT_HEARTBEAT_INTERVAL * HEARTBEAT_STALENESS_MULTIPLIER);
+        let max_age =
+            Duration::from_secs(DEFAULT_HEARTBEAT_INTERVAL * HEARTBEAT_STALENESS_MULTIPLIER);
 
         let is_fresh = age.to_std().unwrap_or(Duration::MAX) <= max_age;
 
