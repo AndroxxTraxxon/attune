@@ -11,15 +11,15 @@
 
 use anyhow::{bail, Result};
 use attune_common::{
-    models::{Enforcement, Event, Rule},
+    models::{Enforcement, EnforcementStatus, Event, Rule},
     mq::{
         Consumer, EnforcementCreatedPayload, ExecutionRequestedPayload, MessageEnvelope, Publisher,
     },
     repositories::{
-        event::{EnforcementRepository, EventRepository},
+        event::{EnforcementRepository, EventRepository, UpdateEnforcementInput},
         execution::{CreateExecutionInput, ExecutionRepository},
         rule::RuleRepository,
-        Create, FindById,
+        Create, FindById, Update,
     },
 };
 
@@ -144,9 +144,38 @@ impl EnforcementProcessor {
                 &rule,
             )
             .await?;
+
+            // Update enforcement status to Processed after successful execution creation
+            EnforcementRepository::update(
+                pool,
+                enforcement_id,
+                UpdateEnforcementInput {
+                    status: Some(EnforcementStatus::Processed),
+                    payload: None,
+                },
+            )
+            .await?;
+
+            debug!("Updated enforcement {} status to Processed", enforcement_id);
         } else {
             info!(
                 "Skipping execution creation for enforcement: {}",
+                enforcement_id
+            );
+
+            // Update enforcement status to Disabled since it was not actionable
+            EnforcementRepository::update(
+                pool,
+                enforcement_id,
+                UpdateEnforcementInput {
+                    status: Some(EnforcementStatus::Disabled),
+                    payload: None,
+                },
+            )
+            .await?;
+
+            debug!(
+                "Updated enforcement {} status to Disabled (skipped)",
                 enforcement_id
             );
         }
@@ -215,7 +244,8 @@ impl EnforcementProcessor {
                 );
                 bail!(
                     "Rule {} references a deleted action (action_ref: {})",
-                    rule.id, rule.action_ref
+                    rule.id,
+                    rule.action_ref
                 );
             }
         };

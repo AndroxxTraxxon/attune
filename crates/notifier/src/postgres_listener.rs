@@ -15,6 +15,7 @@ const NOTIFICATION_CHANNELS: &[&str] = &[
     "inquiry_created",
     "inquiry_responded",
     "enforcement_created",
+    "enforcement_status_changed",
     "event_created",
     "workflow_execution_status_changed",
 ];
@@ -167,6 +168,8 @@ mod tests {
     fn test_notification_channels_defined() {
         assert!(!NOTIFICATION_CHANNELS.is_empty());
         assert!(NOTIFICATION_CHANNELS.contains(&"execution_status_changed"));
+        assert!(NOTIFICATION_CHANNELS.contains(&"enforcement_created"));
+        assert!(NOTIFICATION_CHANNELS.contains(&"enforcement_status_changed"));
         assert!(NOTIFICATION_CHANNELS.contains(&"inquiry_created"));
     }
 

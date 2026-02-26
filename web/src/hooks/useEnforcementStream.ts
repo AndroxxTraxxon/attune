@@ -90,6 +90,12 @@ export function useEnforcementStream(
       // Extract enforcement data from notification payload (flat structure)
       const enforcementData = notification.payload as any;
 
+      // Invalidate history queries so the EntityHistoryPanel picks up new records
+      // (e.g. status changes recorded by the enforcement_history trigger)
+      queryClient.invalidateQueries({
+        queryKey: ["history", "enforcement", notification.entity_id],
+      });
+
       // Update specific enforcement query if it exists
       queryClient.setQueryData(
         ["enforcements", notification.entity_id],

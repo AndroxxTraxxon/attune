@@ -180,6 +180,47 @@ CREATE TRIGGER enforcement_created_notify
 
 COMMENT ON FUNCTION notify_enforcement_created() IS 'Sends enforcement creation notifications via PostgreSQL LISTEN/NOTIFY';
 
+-- Function to notify on enforcement status changes
+CREATE OR REPLACE FUNCTION notify_enforcement_status_changed()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    -- Only notify on updates when status actually changed
+    IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
+        payload := json_build_object(
+            'entity_type', 'enforcement',
+            'entity_id', NEW.id,
+            'id', NEW.id,
+            'rule', NEW.rule,
+            'rule_ref', NEW.rule_ref,
+            'trigger_ref', NEW.trigger_ref,
+            'event', NEW.event,
+            'status', NEW.status,
+            'old_status', OLD.status,
+            'condition', NEW.condition,
+            'conditions', NEW.conditions,
+            'config', NEW.config,
+            'payload', NEW.payload,
+            'created', NEW.created,
+            'updated', NEW.updated
+        );
+
+        PERFORM pg_notify('enforcement_status_changed', payload::text);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger on enforcement table for status changes
+CREATE TRIGGER enforcement_status_changed_notify
+    AFTER UPDATE ON enforcement
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_enforcement_status_changed();
+
+COMMENT ON FUNCTION notify_enforcement_status_changed() IS 'Sends enforcement status change notifications via PostgreSQL LISTEN/NOTIFY';
+
 -- ============================================================================
 -- INQUIRY NOTIFICATIONS
 -- ============================================================================
