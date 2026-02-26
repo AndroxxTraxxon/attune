@@ -1,10 +1,12 @@
 //! API route modules
 
 pub mod actions;
+pub mod analytics;
 pub mod auth;
 pub mod events;
 pub mod executions;
 pub mod health;
+pub mod history;
 pub mod inquiries;
 pub mod keys;
 pub mod packs;
@@ -14,10 +16,12 @@ pub mod webhooks;
 pub mod workflows;
 
 pub use actions::routes as action_routes;
+pub use analytics::routes as analytics_routes;
 pub use auth::routes as auth_routes;
 pub use events::routes as event_routes;
 pub use executions::routes as execution_routes;
 pub use health::routes as health_routes;
+pub use history::routes as history_routes;
 pub use inquiries::routes as inquiry_routes;
 pub use keys::routes as key_routes;
 pub use packs::routes as pack_routes;

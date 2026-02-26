@@ -1,6 +1,7 @@
 import { useParams, Link } from "react-router-dom";
 import { useEnforcement } from "@/hooks/useEvents";
 import { EnforcementStatus, EnforcementCondition } from "@/api";
+import EntityHistoryPanel from "@/components/common/EntityHistoryPanel";
 
 export default function EnforcementDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -375,6 +376,15 @@ export default function EnforcementDetailPage() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Change History */}
+      <div className="mt-6">
+        <EntityHistoryPanel
+          entityType="enforcement"
+          entityId={enforcement.id}
+          title="Enforcement History"
+        />
       </div>
     </div>
   );

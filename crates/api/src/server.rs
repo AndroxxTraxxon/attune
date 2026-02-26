@@ -55,6 +55,8 @@ impl Server {
             .merge(routes::key_routes())
             .merge(routes::workflow_routes())
             .merge(routes::webhook_routes())
+            .merge(routes::history_routes())
+            .merge(routes::analytics_routes())
             // TODO: Add more route modules here
             // etc.
             .with_state(self.state.clone());

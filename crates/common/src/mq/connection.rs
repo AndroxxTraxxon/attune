@@ -396,6 +396,11 @@ impl Connection {
             None
         };
 
+        // Declare executor-specific events queue (only receives event.created messages,
+        // unlike the sensor's catch-all events queue which is bound with `#`)
+        self.declare_queue_with_optional_dlx(&config.rabbitmq.queues.executor_events, dlx)
+            .await?;
+
         // Declare executor queues
         self.declare_queue_with_optional_dlx(&config.rabbitmq.queues.enforcements, dlx)
             .await?;
@@ -441,6 +446,15 @@ impl Connection {
             &config.rabbitmq.queues.inquiry_responses.name,
             &config.rabbitmq.exchanges.executions.name,
             "inquiry.responded",
+        )
+        .await?;
+
+        // Bind executor events queue to only event.created routing key
+        // (the sensor's attune.events.queue uses `#` and gets all message types)
+        self.bind_queue(
+            &config.rabbitmq.queues.executor_events.name,
+            &config.rabbitmq.exchanges.events.name,
+            "event.created",
         )
         .await?;
 

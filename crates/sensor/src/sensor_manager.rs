@@ -541,6 +541,7 @@ impl SensorManager {
                 entrypoint,
                 runtime,
                 runtime_ref,
+                runtime_version_constraint,
                 trigger,
                 trigger_ref,
                 enabled,

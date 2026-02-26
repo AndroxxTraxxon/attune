@@ -4,9 +4,12 @@ import { useActions } from "@/hooks/useActions";
 import { useRules } from "@/hooks/useRules";
 import { useExecutions } from "@/hooks/useExecutions";
 import { useExecutionStream } from "@/hooks/useExecutionStream";
+import { useDashboardAnalytics } from "@/hooks/useAnalytics";
 import { Link } from "react-router-dom";
 import { ExecutionStatus } from "@/api";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import AnalyticsDashboard from "@/components/common/AnalyticsWidgets";
+import type { TimeRangeHours } from "@/components/common/AnalyticsWidgets";
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -38,6 +41,14 @@ export default function DashboardPage() {
   // Subscribe to real-time execution updates
   // The hook automatically invalidates queries when updates arrive
   const { isConnected } = useExecutionStream();
+
+  // Analytics time range state and data
+  const [analyticsHours, setAnalyticsHours] = useState<TimeRangeHours>(24);
+  const {
+    data: analyticsData,
+    isLoading: analyticsLoading,
+    error: analyticsError,
+  } = useDashboardAnalytics({ hours: analyticsHours });
 
   // Calculate metrics
   const totalPacks = packsData?.pagination?.total_items || 0;
@@ -310,6 +321,17 @@ export default function DashboardPage() {
             <p className="text-gray-500 text-center py-8">No recent activity</p>
           )}
         </div>
+      </div>
+
+      {/* Analytics Section */}
+      <div className="mt-8">
+        <AnalyticsDashboard
+          data={analyticsData}
+          isLoading={analyticsLoading}
+          error={analyticsError as Error | null}
+          hours={analyticsHours}
+          onHoursChange={setAnalyticsHours}
+        />
       </div>
     </div>
   );

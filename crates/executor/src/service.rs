@@ -183,7 +183,14 @@ impl ExecutorService {
 
         // Start event processor with its own consumer
         info!("Starting event processor...");
-        let events_queue = self.inner.mq_config.rabbitmq.queues.events.name.clone();
+        let events_queue = self
+            .inner
+            .mq_config
+            .rabbitmq
+            .queues
+            .executor_events
+            .name
+            .clone();
         let event_consumer = Consumer::new(
             &self.inner.mq_connection,
             attune_common::mq::ConsumerConfig {

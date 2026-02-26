@@ -1,7 +1,7 @@
 # RabbitMQ Queue Bindings - Quick Reference
 
-**Last Updated:** 2026-02-03  
-**Related Fix:** Queue Separation for InquiryHandler, CompletionListener, and ExecutionManager
+**Last Updated:** 2026-02-26  
+**Related Fix:** Executor events queue separation (event.created only)
 
 ## Overview
 
@@ -21,7 +21,14 @@ Attune uses three main exchanges:
 
 | Queue | Routing Key | Message Type | Consumer |
 |-------|-------------|--------------|----------|
-| `attune.events.queue` | `#` (all) | `EventCreatedPayload` | EventProcessor (executor) |
+| `attune.events.queue` | `#` (all) | All event types | Sensor service (rule lifecycle) |
+| `attune.executor.events.queue` | `event.created` | `EventCreatedPayload` | EventProcessor (executor) |
+| `attune.rules.lifecycle.queue` | `rule.created`, `rule.enabled`, `rule.disabled` | `RuleCreated/Enabled/DisabledPayload` | RuleLifecycleListener (sensor) |
+| `worker.{id}.packs` | `pack.registered` | `PackRegisteredPayload` | Worker (per-instance) |
+
+> **Note:** The sensor's `attune.events.queue` is bound with `#` (all routing keys) for catch-all
+> event monitoring. The executor uses a dedicated `attune.executor.events.queue` bound only to
+> `event.created` to avoid deserializing unrelated message types (rule lifecycle, pack registration).
 
 ### Executions Exchange (`attune.executions`)
 

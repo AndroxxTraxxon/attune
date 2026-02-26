@@ -1,6 +1,23 @@
--- Migration: Event System
--- Description: Creates trigger, sensor, event, and enforcement tables (with webhook_config, is_adhoc from start)
--- Version: 20250101000003
+-- Migration: Event System and Actions
+-- Description: Creates trigger, sensor, event, enforcement, and action tables
+--              with runtime version constraint support. Includes webhook key
+--              generation function used by webhook management functions in 000007.
+-- Version: 20250101000004
+
+-- ============================================================================
+-- WEBHOOK KEY GENERATION
+-- ============================================================================
+
+-- Generates a unique webhook key in the format: wh_<32 random hex chars>
+-- Used by enable_trigger_webhook() and regenerate_trigger_webhook_key() in 000007.
+CREATE OR REPLACE FUNCTION generate_webhook_key()
+RETURNS VARCHAR(64) AS $$
+BEGIN
+    RETURN 'wh_' || encode(gen_random_bytes(16), 'hex');
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION generate_webhook_key() IS 'Generates a unique webhook key (format: wh_<32 hex chars>) for trigger webhook authentication';
 
 -- ============================================================================
 -- TRIGGER TABLE
@@ -74,6 +91,7 @@ CREATE TABLE sensor (
     is_adhoc BOOLEAN NOT NULL DEFAULT FALSE,
     param_schema JSONB,
     config JSONB,
+    runtime_version_constraint TEXT,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -106,6 +124,7 @@ COMMENT ON COLUMN sensor.runtime IS 'Runtime environment for execution';
 COMMENT ON COLUMN sensor.trigger IS 'Trigger type this sensor creates events for';
 COMMENT ON COLUMN sensor.enabled IS 'Whether this sensor is active';
 COMMENT ON COLUMN sensor.is_adhoc IS 'True if sensor was manually created (ad-hoc), false if installed from pack';
+COMMENT ON COLUMN sensor.runtime_version_constraint IS 'Semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0"). NULL means any version.';
 
 -- ============================================================================
 -- EVENT TABLE
@@ -155,7 +174,7 @@ COMMENT ON COLUMN event.source IS 'Sensor that generated this event';
 
 CREATE TABLE enforcement (
     id BIGSERIAL PRIMARY KEY,
-    rule BIGINT, -- Forward reference to rule table, will add constraint in next migration
+    rule BIGINT, -- Forward reference to rule table, will add constraint after rule is created
     rule_ref TEXT NOT NULL,
     trigger_ref TEXT NOT NULL,
     config JSONB,
@@ -200,5 +219,78 @@ COMMENT ON COLUMN enforcement.payload IS 'Event payload for rule evaluation';
 COMMENT ON COLUMN enforcement.condition IS 'Logical operator for conditions (any=OR, all=AND)';
 COMMENT ON COLUMN enforcement.conditions IS 'Condition expressions to evaluate';
 
--- Note: Rule table will be created in migration 20250101000006 after action table exists
--- Note: Foreign key constraints for enforcement.rule and event.rule will be added in that migration
+-- ============================================================================
+-- ACTION TABLE
+-- ============================================================================
+
+CREATE TABLE action (
+    id BIGSERIAL PRIMARY KEY,
+    ref TEXT NOT NULL UNIQUE,
+    pack BIGINT NOT NULL REFERENCES pack(id) ON DELETE CASCADE,
+    pack_ref TEXT NOT NULL,
+    label TEXT NOT NULL,
+    description TEXT NOT NULL,
+    entrypoint TEXT NOT NULL,
+    runtime BIGINT REFERENCES runtime(id),
+    param_schema JSONB,
+    out_schema JSONB,
+    parameter_delivery TEXT NOT NULL DEFAULT 'stdin' CHECK (parameter_delivery IN ('stdin', 'file')),
+    parameter_format TEXT NOT NULL DEFAULT 'json' CHECK (parameter_format IN ('dotenv', 'json', 'yaml')),
+    output_format TEXT NOT NULL DEFAULT 'text' CHECK (output_format IN ('text', 'json', 'yaml', 'jsonl')),
+    is_adhoc BOOLEAN NOT NULL DEFAULT FALSE,
+    timeout_seconds INTEGER,
+    max_retries INTEGER DEFAULT 0,
+    runtime_version_constraint TEXT,
+    created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    -- Constraints
+    CONSTRAINT action_ref_lowercase CHECK (ref = LOWER(ref)),
+    CONSTRAINT action_ref_format CHECK (ref ~ '^[^.]+\.[^.]+$')
+);
+
+-- Indexes
+CREATE INDEX idx_action_ref ON action(ref);
+CREATE INDEX idx_action_pack ON action(pack);
+CREATE INDEX idx_action_runtime ON action(runtime);
+CREATE INDEX idx_action_parameter_delivery ON action(parameter_delivery);
+CREATE INDEX idx_action_parameter_format ON action(parameter_format);
+CREATE INDEX idx_action_output_format ON action(output_format);
+CREATE INDEX idx_action_is_adhoc ON action(is_adhoc) WHERE is_adhoc = true;
+CREATE INDEX idx_action_created ON action(created DESC);
+
+-- Trigger
+CREATE TRIGGER update_action_updated
+    BEFORE UPDATE ON action
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_column();
+
+-- Comments
+COMMENT ON TABLE action IS 'Actions are executable tasks that can be triggered';
+COMMENT ON COLUMN action.ref IS 'Unique action reference (format: pack.name)';
+COMMENT ON COLUMN action.pack IS 'Pack this action belongs to';
+COMMENT ON COLUMN action.label IS 'Human-readable action name';
+COMMENT ON COLUMN action.entrypoint IS 'Script or command to execute';
+COMMENT ON COLUMN action.runtime IS 'Runtime environment for execution';
+COMMENT ON COLUMN action.param_schema IS 'JSON schema for action parameters';
+COMMENT ON COLUMN action.out_schema IS 'JSON schema for action output';
+COMMENT ON COLUMN action.parameter_delivery IS 'How parameters are delivered: stdin (standard input - secure), file (temporary file - secure for large payloads). Environment variables are set separately via execution.env_vars.';
+COMMENT ON COLUMN action.parameter_format IS 'Parameter serialization format: json (JSON object - default), dotenv (KEY=''VALUE''), yaml (YAML format)';
+COMMENT ON COLUMN action.output_format IS 'Output parsing format: text (no parsing - raw stdout), json (parse stdout as JSON), yaml (parse stdout as YAML), jsonl (parse each line as JSON, collect into array)';
+COMMENT ON COLUMN action.is_adhoc IS 'True if action was manually created (ad-hoc), false if installed from pack';
+COMMENT ON COLUMN action.timeout_seconds IS 'Worker queue TTL override in seconds. If NULL, uses global worker_queue_ttl_ms config. Allows per-action timeout tuning.';
+COMMENT ON COLUMN action.max_retries IS 'Maximum number of automatic retry attempts for failed executions. 0 = no retries (default).';
+COMMENT ON COLUMN action.runtime_version_constraint IS 'Semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0"). NULL means any version.';
+
+-- ============================================================================
+
+-- Add foreign key constraint for policy table
+ALTER TABLE policy
+    ADD CONSTRAINT policy_action_fkey
+    FOREIGN KEY (action) REFERENCES action(id) ON DELETE CASCADE;
+
+-- Note: Foreign key constraints for key table (key_owner_action_fkey, key_owner_sensor_fkey)
+-- will be added in migration 000007_supporting_systems.sql after the key table is created
+
+-- Note: Rule table will be created in migration 000005 after execution table exists
+-- Note: Foreign key constraints for enforcement.rule and event.rule will be added there

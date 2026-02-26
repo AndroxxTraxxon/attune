@@ -1,6 +1,7 @@
 -- Migration: Workflow System
--- Description: Creates workflow_definition and workflow_execution tables (workflow_task_execution consolidated into execution.workflow_task JSONB)
--- Version: 20250101000007
+-- Description: Creates workflow_definition and workflow_execution tables
+--              (workflow_task_execution consolidated into execution.workflow_task JSONB)
+-- Version: 20250101000006
 
 -- ============================================================================
 -- WORKFLOW DEFINITION TABLE

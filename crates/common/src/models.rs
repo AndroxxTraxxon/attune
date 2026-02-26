@@ -10,6 +10,7 @@ use sqlx::FromRow;
 
 // Re-export common types
 pub use action::*;
+pub use entity_history::*;
 pub use enums::*;
 pub use event::*;
 pub use execution::*;
@@ -1437,5 +1438,93 @@ pub mod pack_test {
         pub avg_duration_ms: Option<i64>,
         pub last_test_time: Option<DateTime<Utc>>,
         pub last_test_passed: Option<bool>,
+    }
+}
+
+/// Entity history tracking models (TimescaleDB hypertables)
+///
+/// These models represent rows in the `<entity>_history` append-only hypertables
+/// that track field-level changes to operational tables via PostgreSQL triggers.
+pub mod entity_history {
+    use super::*;
+
+    /// A single history record capturing a field-level change to an entity.
+    ///
+    /// History records are append-only and populated by PostgreSQL triggers —
+    /// they are never created or modified by application code.
+    #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+    pub struct EntityHistoryRecord {
+        /// When the change occurred (hypertable partitioning dimension)
+        pub time: DateTime<Utc>,
+
+        /// The operation that produced this record: `INSERT`, `UPDATE`, or `DELETE`
+        pub operation: String,
+
+        /// The primary key of the changed row in the source table
+        pub entity_id: Id,
+
+        /// Denormalized human-readable identifier (e.g., `action_ref`, `worker.name`, `rule_ref`, `trigger_ref`)
+        pub entity_ref: Option<String>,
+
+        /// Names of fields that changed in this operation (empty for INSERT/DELETE)
+        pub changed_fields: Vec<String>,
+
+        /// Previous values of the changed fields (NULL for INSERT)
+        pub old_values: Option<JsonValue>,
+
+        /// New values of the changed fields (NULL for DELETE)
+        pub new_values: Option<JsonValue>,
+    }
+
+    /// Supported entity types that have history tracking.
+    ///
+    /// Each variant maps to a `<name>_history` hypertable in the database.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum HistoryEntityType {
+        Execution,
+        Worker,
+        Enforcement,
+        Event,
+    }
+
+    impl HistoryEntityType {
+        /// Returns the history table name for this entity type.
+        pub fn table_name(&self) -> &'static str {
+            match self {
+                Self::Execution => "execution_history",
+                Self::Worker => "worker_history",
+                Self::Enforcement => "enforcement_history",
+                Self::Event => "event_history",
+            }
+        }
+    }
+
+    impl std::fmt::Display for HistoryEntityType {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Execution => write!(f, "execution"),
+                Self::Worker => write!(f, "worker"),
+                Self::Enforcement => write!(f, "enforcement"),
+                Self::Event => write!(f, "event"),
+            }
+        }
+    }
+
+    impl std::str::FromStr for HistoryEntityType {
+        type Err = String;
+
+        fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+            match s.to_lowercase().as_str() {
+                "execution" => Ok(Self::Execution),
+                "worker" => Ok(Self::Worker),
+                "enforcement" => Ok(Self::Enforcement),
+                "event" => Ok(Self::Event),
+                other => Err(format!(
+                    "unknown history entity type '{}'; expected one of: execution, worker, enforcement, event",
+                    other
+                )),
+            }
+        }
     }
 }

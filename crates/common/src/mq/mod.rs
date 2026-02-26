@@ -190,8 +190,10 @@ pub mod exchanges {
 
 /// Well-known queue names
 pub mod queues {
-    /// Event processing queue
+    /// Event processing queue (sensor catch-all, bound with `#`)
     pub const EVENTS: &str = "attune.events.queue";
+    /// Executor event processing queue (bound only to `event.created`)
+    pub const EXECUTOR_EVENTS: &str = "attune.executor.events.queue";
     /// Execution request queue
     pub const EXECUTIONS: &str = "attune.executions.queue";
     /// Notification delivery queue

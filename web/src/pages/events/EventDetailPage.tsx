@@ -1,5 +1,6 @@
 import { useParams, Link } from "react-router-dom";
 import { useEvent } from "@/hooks/useEvents";
+import EntityHistoryPanel from "@/components/common/EntityHistoryPanel";
 
 export default function EventDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -257,6 +258,15 @@ export default function EventDetailPage() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Change History */}
+      <div className="mt-6">
+        <EntityHistoryPanel
+          entityType="event"
+          entityId={event.id}
+          title="Event History"
+        />
       </div>
     </div>
   );

@@ -28,7 +28,9 @@
 use sqlx::{Executor, Postgres, Transaction};
 
 pub mod action;
+pub mod analytics;
 pub mod artifact;
+pub mod entity_history;
 pub mod event;
 pub mod execution;
 pub mod identity;
@@ -46,7 +48,9 @@ pub mod workflow;
 
 // Re-export repository types
 pub use action::{ActionRepository, PolicyRepository};
+pub use analytics::AnalyticsRepository;
 pub use artifact::ArtifactRepository;
+pub use entity_history::EntityHistoryRepository;
 pub use event::{EnforcementRepository, EventRepository};
 pub use execution::ExecutionRepository;
 pub use identity::{IdentityRepository, PermissionAssignmentRepository, PermissionSetRepository};

@@ -191,8 +191,12 @@ impl RabbitMqConfig {
 /// Queue configurations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueuesConfig {
-    /// Events queue configuration
+    /// Events queue configuration (sensor catch-all, bound with `#`)
     pub events: QueueConfig,
+
+    /// Executor events queue configuration (bound only to `event.created`)
+    #[serde(default = "default_executor_events_queue")]
+    pub executor_events: QueueConfig,
 
     /// Executions queue configuration (legacy - to be deprecated)
     pub executions: QueueConfig,
@@ -216,11 +220,26 @@ pub struct QueuesConfig {
     pub notifications: QueueConfig,
 }
 
+fn default_executor_events_queue() -> QueueConfig {
+    QueueConfig {
+        name: "attune.executor.events.queue".to_string(),
+        durable: true,
+        exclusive: false,
+        auto_delete: false,
+    }
+}
+
 impl Default for QueuesConfig {
     fn default() -> Self {
         Self {
             events: QueueConfig {
                 name: "attune.events.queue".to_string(),
+                durable: true,
+                exclusive: false,
+                auto_delete: false,
+            },
+            executor_events: QueueConfig {
+                name: "attune.executor.events.queue".to_string(),
                 durable: true,
                 exclusive: false,
                 auto_delete: false,
@@ -567,6 +586,7 @@ mod tests {
     fn test_default_queues() {
         let queues = QueuesConfig::default();
         assert_eq!(queues.events.name, "attune.events.queue");
+        assert_eq!(queues.executor_events.name, "attune.executor.events.queue");
         assert_eq!(queues.executions.name, "attune.executions.queue");
         assert_eq!(
             queues.execution_completed.name,

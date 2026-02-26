@@ -1,10 +1,12 @@
 //! Data Transfer Objects (DTOs) for API requests and responses
 
 pub mod action;
+pub mod analytics;
 pub mod auth;
 pub mod common;
 pub mod event;
 pub mod execution;
+pub mod history;
 pub mod inquiry;
 pub mod key;
 pub mod pack;
@@ -14,6 +16,11 @@ pub mod webhook;
 pub mod workflow;
 
 pub use action::{ActionResponse, ActionSummary, CreateActionRequest, UpdateActionRequest};
+pub use analytics::{
+    AnalyticsQueryParams, DashboardAnalyticsResponse, EventVolumeResponse,
+    ExecutionStatusTimeSeriesResponse, ExecutionThroughputResponse, FailureRateResponse,
+    TimeSeriesPoint,
+};
 pub use auth::{
     ChangePasswordRequest, CurrentUserResponse, LoginRequest, RefreshTokenRequest, RegisterRequest,
     TokenResponse,
@@ -25,7 +32,10 @@ pub use event::{
     EnforcementQueryParams, EnforcementResponse, EnforcementSummary, EventQueryParams,
     EventResponse, EventSummary,
 };
-pub use execution::{CreateExecutionRequest, ExecutionQueryParams, ExecutionResponse, ExecutionSummary};
+pub use execution::{
+    CreateExecutionRequest, ExecutionQueryParams, ExecutionResponse, ExecutionSummary,
+};
+pub use history::{HistoryEntityTypePath, HistoryQueryParams, HistoryRecordResponse};
 pub use inquiry::{
     CreateInquiryRequest, InquiryQueryParams, InquiryRespondRequest, InquiryResponse,
     InquirySummary, UpdateInquiryRequest,

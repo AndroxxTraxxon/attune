@@ -1,6 +1,6 @@
 -- Migration: LISTEN/NOTIFY Triggers
 -- Description: Consolidated PostgreSQL LISTEN/NOTIFY triggers for real-time event notifications
--- Version: 20250101000013
+-- Version: 20250101000008
 
 -- ============================================================================
 -- EXECUTION CHANGE NOTIFICATION
