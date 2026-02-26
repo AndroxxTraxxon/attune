@@ -19,7 +19,7 @@ When this project reaches v1.0 or gets its first production deployment, this sec
 
 ## Languages & Core Technologies
 - **Primary Language**: Rust 2021 edition
-- **Database**: PostgreSQL 14+ (primary data store + LISTEN/NOTIFY pub/sub)
+- **Database**: PostgreSQL 16+ with TimescaleDB 2.17+ (primary data store + LISTEN/NOTIFY pub/sub + time-series history)
 - **Message Queue**: RabbitMQ 3.12+ (via lapin)
 - **Cache**: Redis 7.0+ (optional)
 - **Web UI**: TypeScript + React 19 + Vite
@@ -70,7 +70,7 @@ attune/
 - **Default user**: `test@attune.local` / `TestPass123!` (auto-created)
 
 **Services**:
-- **Infrastructure**: postgres, rabbitmq, redis
+- **Infrastructure**: postgres (TimescaleDB), rabbitmq, redis
 - **Init** (run-once): migrations, init-user, init-packs
 - **Application**: api (8080), executor, worker-{shell,python,node,full}, sensor, notifier (8081), web (3000)
 
@@ -211,8 +211,9 @@ Enforcement created → Execution scheduled → Worker executes Action
 - **Enums**: PostgreSQL enum types mapped with `#[sqlx(type_name = "...")]`
 - **Workflow Tasks**: Stored as JSONB in `execution.workflow_task` (consolidated from separate table 2026-01-27)
 - **FK ON DELETE Policy**: Historical records (executions, events, enforcements) use `ON DELETE SET NULL` so they survive entity deletion while preserving text ref fields (`action_ref`, `trigger_ref`, etc.) for auditing. Pack-owned entities (actions, triggers, sensors, rules, runtimes) use `ON DELETE CASCADE` from pack. Workflow executions cascade-delete with their workflow definition.
+- **Entity History Tracking (TimescaleDB)**: Append-only `<table>_history` hypertables track field-level changes to `execution`, `worker`, `enforcement`, and `event` tables. Populated by PostgreSQL `AFTER INSERT OR UPDATE OR DELETE` triggers — no Rust code changes needed for recording. Uses JSONB diff format (`old_values`/`new_values`) with a `changed_fields TEXT[]` column for efficient filtering. Worker heartbeat-only updates are excluded. See `docs/plans/timescaledb-entity-history.md` for full design.
 - **Nullable FK Fields**: `rule.action` and `rule.trigger` are nullable (`Option<Id>` in Rust) — a rule with NULL action/trigger is non-functional but preserved for traceability. `execution.action`, `execution.parent`, `execution.enforcement`, and `event.source` are also nullable.
-**Table Count**: 18 tables total in the schema (including `runtime_version`)
+**Table Count**: 22 tables total in the schema (including `runtime_version` and 4 `*_history` hypertables)
 - **Pack Component Loading Order**: Runtimes → Triggers → Actions → Sensors (dependency order). Both `PackComponentLoader` (Rust) and `load_core_pack.py` (Python) follow this order.
 
 ### Pack File Loading & Action Execution
@@ -480,6 +481,7 @@ When reporting, ask: "Should I fix this first or continue with [original task]?"
 14. **REMEMBER** to regenerate SQLx metadata after schema-related changes: `cargo sqlx prepare`
 15. **REMEMBER** packs are volumes - update with restart, not rebuild
 16. **REMEMBER** to build pack binaries separately: `./scripts/build-pack-binaries.sh`
+17. **REMEMBER** when adding mutable columns to `execution`, `worker`, `enforcement`, or `event`, add a corresponding `IS DISTINCT FROM` check to the entity's history trigger function in the TimescaleDB migration
 
 ## Deployment
 - **Target**: Distributed deployment with separate service instances
@@ -490,9 +492,9 @@ When reporting, ask: "Should I fix this first or continue with [original task]?"
 - **Web UI**: Static files served separately or via API service
 
 ## Current Development Status
-- ✅ **Complete**: Database migrations (18 tables), API service (most endpoints), common library, message queue infrastructure, repository layer, JWT auth, CLI tool, Web UI (basic + workflow builder), Executor service (core functionality), Worker service (shell/Python execution), Runtime version data model, constraint matching, worker version selection pipeline, version verification at startup, per-version environment isolation
+- ✅ **Complete**: Database migrations (22 tables), API service (most endpoints), common library, message queue infrastructure, repository layer, JWT auth, CLI tool, Web UI (basic + workflow builder), Executor service (core functionality), Worker service (shell/Python execution), Runtime version data model, constraint matching, worker version selection pipeline, version verification at startup, per-version environment isolation, TimescaleDB entity history tracking (execution, worker, enforcement, event)
 - 🔄 **In Progress**: Sensor service, advanced workflow features, Python runtime dependency management, API/UI endpoints for runtime version management
-- 📋 **Planned**: Notifier service, execution policies, monitoring, pack registry system
+- 📋 **Planned**: Notifier service, execution policies, monitoring, pack registry system, history API endpoints & UI, continuous aggregates for dashboards
 
 ## Quick Reference
 
@@ -605,7 +607,7 @@ When updating, be surgical - modify only the affected sections rather than rewri
 |docs/migrations:{workflow-task-execution-consolidation.md}
 |docs/packs:{PACK_TESTING.md,QUICKREF-git-installation.md,core-pack-integration.md,pack-install-testing.md,pack-installation-git.md,pack-registry-cicd.md,pack-registry-spec.md,pack-structure.md,pack-testing-framework.md}
 |docs/performance:{QUICKREF-performance-optimization.md,log-size-limits.md,performance-analysis-workflow-lists.md,performance-before-after-results.md,performance-context-cloning-diagram.md}
-|docs/plans:{schema-per-test-refactor.md}
+|docs/plans:{schema-per-test-refactor.md,timescaledb-entity-history.md}
 |docs/sensors:{CHECKLIST-sensor-worker-registration.md,COMPLETION-sensor-worker-registration.md,SUMMARY-database-driven-detection.md,database-driven-runtime-detection.md,native-runtime.md,sensor-authentication-overview.md,sensor-interface.md,sensor-lifecycle-management.md,sensor-runtime.md,sensor-service-setup.md,sensor-worker-registration.md}
 |docs/testing:{e2e-test-plan.md,running-tests.md,schema-per-test.md,test-user-setup.md,testing-authentication.md,testing-dashboard-rules.md,testing-status.md}
 |docs/web-ui:{web-ui-pack-testing.md,websocket-usage.md}
