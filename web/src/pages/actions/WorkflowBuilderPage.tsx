@@ -12,6 +12,7 @@ import {
   Zap,
   Settings2,
 } from "lucide-react";
+import SearchableSelect from "@/components/common/SearchableSelect";
 import yaml from "js-yaml";
 import type { WorkflowYamlDefinition } from "@/types/workflow";
 import ActionPalette from "@/components/workflows/ActionPalette";
@@ -548,18 +549,16 @@ export default function WorkflowBuilderPage() {
 
             <div className="flex items-center gap-2 flex-1 min-w-0">
               {/* Pack selector */}
-              <select
+              <SearchableSelect
                 value={state.packRef}
-                onChange={(e) => updateMetadata({ packRef: e.target.value })}
-                className="px-2 py-1.5 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 max-w-[140px]"
-              >
-                <option value="">Pack...</option>
-                {packs.map((pack) => (
-                  <option key={pack.id} value={pack.ref}>
-                    {pack.ref}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => updateMetadata({ packRef: String(v) })}
+                options={packs.map((pack) => ({
+                  value: pack.ref,
+                  label: pack.ref,
+                }))}
+                placeholder="Pack..."
+                className="max-w-[140px]"
+              />
 
               <span className="text-gray-400 text-lg font-light">/</span>
 

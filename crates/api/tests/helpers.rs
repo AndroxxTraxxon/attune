@@ -452,6 +452,7 @@ pub async fn create_test_action(pool: &PgPool, pack_id: i64, ref_name: &str) -> 
         description: format!("Test action for {}", ref_name),
         entrypoint: "main.py".to_string(),
         runtime: None,
+        runtime_version_constraint: None,
         param_schema: None,
         out_schema: None,
         is_adhoc: false,

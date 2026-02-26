@@ -186,6 +186,7 @@ pub async fn create_action(
         description: request.description,
         entrypoint: request.entrypoint,
         runtime: request.runtime,
+        runtime_version_constraint: request.runtime_version_constraint,
         param_schema: request.param_schema,
         out_schema: request.out_schema,
         is_adhoc: true, // Actions created via API are ad-hoc (not from pack installation)
@@ -235,6 +236,7 @@ pub async fn update_action(
         description: request.description,
         entrypoint: request.entrypoint,
         runtime: request.runtime,
+        runtime_version_constraint: request.runtime_version_constraint,
         param_schema: request.param_schema,
         out_schema: request.out_schema,
     };

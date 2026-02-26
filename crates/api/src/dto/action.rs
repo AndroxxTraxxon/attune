@@ -38,6 +38,11 @@ pub struct CreateActionRequest {
     #[schema(example = 1)]
     pub runtime: Option<i64>,
 
+    /// Optional semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = ">=3.12", nullable = true)]
+    pub runtime_version_constraint: Option<String>,
+
     /// Parameter schema (StackStorm-style) defining expected inputs with inline required/secret
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Object, nullable = true, example = json!({"channel": {"type": "string", "description": "Slack channel", "required": true}, "message": {"type": "string", "description": "Message text", "required": true}}))]
@@ -70,6 +75,10 @@ pub struct UpdateActionRequest {
     /// Runtime ID
     #[schema(example = 1)]
     pub runtime: Option<i64>,
+
+    /// Optional semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0")
+    #[schema(example = ">=3.12", nullable = true)]
+    pub runtime_version_constraint: Option<Option<String>>,
 
     /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
@@ -114,6 +123,11 @@ pub struct ActionResponse {
     /// Runtime ID
     #[schema(example = 1)]
     pub runtime: Option<i64>,
+
+    /// Semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = ">=3.12", nullable = true)]
+    pub runtime_version_constraint: Option<String>,
 
     /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
@@ -167,6 +181,11 @@ pub struct ActionSummary {
     #[schema(example = 1)]
     pub runtime: Option<i64>,
 
+    /// Semver version constraint for the runtime
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = ">=3.12", nullable = true)]
+    pub runtime_version_constraint: Option<String>,
+
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
@@ -188,6 +207,7 @@ impl From<attune_common::models::action::Action> for ActionResponse {
             description: action.description,
             entrypoint: action.entrypoint,
             runtime: action.runtime,
+            runtime_version_constraint: action.runtime_version_constraint,
             param_schema: action.param_schema,
             out_schema: action.out_schema,
             is_adhoc: action.is_adhoc,
@@ -208,6 +228,7 @@ impl From<attune_common::models::action::Action> for ActionSummary {
             description: action.description,
             entrypoint: action.entrypoint,
             runtime: action.runtime,
+            runtime_version_constraint: action.runtime_version_constraint,
             created: action.created,
             updated: action.updated,
         }
@@ -284,6 +305,7 @@ mod tests {
             description: "Test description".to_string(),
             entrypoint: "/actions/test.py".to_string(),
             runtime: None,
+            runtime_version_constraint: None,
             param_schema: None,
             out_schema: None,
         };
@@ -300,6 +322,7 @@ mod tests {
             description: "Test description".to_string(),
             entrypoint: "/actions/test.py".to_string(),
             runtime: None,
+            runtime_version_constraint: None,
             param_schema: None,
             out_schema: None,
         };
@@ -314,6 +337,7 @@ mod tests {
             description: None,
             entrypoint: None,
             runtime: None,
+            runtime_version_constraint: None,
             param_schema: None,
             out_schema: None,
         };

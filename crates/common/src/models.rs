@@ -443,6 +443,16 @@ pub mod runtime {
         /// Optional dependency management configuration
         #[serde(default)]
         pub dependencies: Option<DependencyConfig>,
+
+        /// Optional environment variables to set during action execution.
+        ///
+        /// Values support the same template variables as other fields:
+        /// `{pack_dir}`, `{env_dir}`, `{interpreter}`, `{manifest_path}`.
+        ///
+        /// Example: `{"NODE_PATH": "{env_dir}/node_modules"}` ensures Node.js
+        /// can find packages installed in the isolated runtime environment.
+        #[serde(default)]
+        pub env_vars: HashMap<String, String>,
     }
 
     /// Describes the interpreter binary and how it invokes action scripts.
@@ -756,6 +766,51 @@ pub mod runtime {
         }
     }
 
+    /// A specific version of a runtime (e.g., Python 3.12.1, Node.js 20.11.0).
+    ///
+    /// Each version stores its own complete `execution_config` so the worker can
+    /// use a version-specific interpreter binary, environment commands, etc.
+    /// Actions and sensors declare an optional version constraint (semver range)
+    /// which is matched against available `RuntimeVersion` rows at execution time.
+    #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+    pub struct RuntimeVersion {
+        pub id: Id,
+        /// Parent runtime ID (FK → runtime.id)
+        pub runtime: Id,
+        /// Parent runtime ref for display/filtering (e.g., "core.python")
+        pub runtime_ref: String,
+        /// Semantic version string (e.g., "3.12.1", "20.11.0")
+        pub version: String,
+        /// Major version component (nullable for non-numeric schemes)
+        pub version_major: Option<i32>,
+        /// Minor version component
+        pub version_minor: Option<i32>,
+        /// Patch version component
+        pub version_patch: Option<i32>,
+        /// Complete execution configuration for this version
+        /// (same structure as `runtime.execution_config`)
+        pub execution_config: JsonDict,
+        /// Version-specific distribution/verification metadata
+        pub distributions: JsonDict,
+        /// Whether this is the default version for the parent runtime
+        pub is_default: bool,
+        /// Whether this version is verified as available on the system
+        pub available: bool,
+        /// When this version was last verified
+        pub verified_at: Option<DateTime<Utc>>,
+        /// Arbitrary version-specific metadata
+        pub meta: JsonDict,
+        pub created: DateTime<Utc>,
+        pub updated: DateTime<Utc>,
+    }
+
+    impl RuntimeVersion {
+        /// Parse the `execution_config` JSONB into a typed `RuntimeExecutionConfig`.
+        pub fn parsed_execution_config(&self) -> RuntimeExecutionConfig {
+            serde_json::from_value(self.execution_config.clone()).unwrap_or_default()
+        }
+    }
+
     #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
     pub struct Worker {
         pub id: Id,
@@ -808,6 +863,9 @@ pub mod trigger {
         pub entrypoint: String,
         pub runtime: Id,
         pub runtime_ref: String,
+        /// Optional semver version constraint for the runtime
+        /// (e.g., ">=3.12", ">=3.12,<4.0", "~18.0"). NULL means any version.
+        pub runtime_version_constraint: Option<String>,
         pub trigger: Id,
         pub trigger_ref: String,
         pub enabled: bool,
@@ -832,6 +890,9 @@ pub mod action {
         pub description: String,
         pub entrypoint: String,
         pub runtime: Option<Id>,
+        /// Optional semver version constraint for the runtime
+        /// (e.g., ">=3.12", ">=3.12,<4.0", "~18.0"). NULL means any version.
+        pub runtime_version_constraint: Option<String>,
         pub param_schema: Option<JsonSchema>,
         pub out_schema: Option<JsonSchema>,
         pub is_workflow: bool,

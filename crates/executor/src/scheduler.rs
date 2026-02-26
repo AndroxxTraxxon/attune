@@ -17,6 +17,7 @@ use attune_common::{
         runtime::{RuntimeRepository, WorkerRepository},
         FindById, FindByRef, Update,
     },
+    runtime_detection::runtime_matches_filter,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -263,13 +264,13 @@ impl ExecutionScheduler {
         if let Some(ref capabilities) = worker.capabilities {
             if let Some(runtimes) = capabilities.get("runtimes") {
                 if let Some(runtime_array) = runtimes.as_array() {
-                    // Check if any runtime in the array matches (case-insensitive)
+                    // Check if any runtime in the array matches (alias-aware)
                     for runtime_value in runtime_array {
                         if let Some(runtime_str) = runtime_value.as_str() {
-                            if runtime_str.eq_ignore_ascii_case(runtime_name) {
+                            if runtime_matches_filter(runtime_name, runtime_str) {
                                 debug!(
-                                    "Worker {} supports runtime '{}' via capabilities",
-                                    worker.name, runtime_name
+                                    "Worker {} supports runtime '{}' via capabilities (matched '{}')",
+                                    worker.name, runtime_name, runtime_str
                                 );
                                 return true;
                             }

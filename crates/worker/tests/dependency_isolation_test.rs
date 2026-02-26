@@ -48,6 +48,7 @@ fn make_python_config() -> RuntimeExecutionConfig {
                 "{manifest_path}".to_string(),
             ],
         }),
+        env_vars: std::collections::HashMap::new(),
     }
 }
 
@@ -60,6 +61,7 @@ fn make_shell_config() -> RuntimeExecutionConfig {
         },
         environment: None,
         dependencies: None,
+        env_vars: std::collections::HashMap::new(),
     }
 }
 
@@ -76,6 +78,9 @@ fn make_context(action_ref: &str, entry_point: &str, runtime_name: &str) -> Exec
         code: None,
         code_path: None,
         runtime_name: Some(runtime_name.to_string()),
+        runtime_config_override: None,
+        runtime_env_dir_suffix: None,
+        selected_runtime_version: None,
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
         parameter_delivery: ParameterDelivery::default(),
@@ -108,7 +113,10 @@ async fn test_python_venv_creation_via_process_runtime() {
         .expect("Failed to create venv environment");
 
     // Verify venv was created at the external runtime_envs location
-    assert!(env_dir.exists(), "Virtualenv directory should exist at external location");
+    assert!(
+        env_dir.exists(),
+        "Virtualenv directory should exist at external location"
+    );
 
     let venv_python = env_dir.join("bin").join("python3");
     assert!(
@@ -319,11 +327,20 @@ async fn test_multiple_pack_isolation() {
     // Each pack should have its own venv at the external location
     assert!(env_dir_a.exists(), "pack_a should have its own venv");
     assert!(env_dir_b.exists(), "pack_b should have its own venv");
-    assert_ne!(env_dir_a, env_dir_b, "Venvs should be in different directories");
+    assert_ne!(
+        env_dir_a, env_dir_b,
+        "Venvs should be in different directories"
+    );
 
     // Pack directories should remain clean
-    assert!(!pack_a_dir.join(".venv").exists(), "pack_a dir should not contain .venv");
-    assert!(!pack_b_dir.join(".venv").exists(), "pack_b dir should not contain .venv");
+    assert!(
+        !pack_a_dir.join(".venv").exists(),
+        "pack_a dir should not contain .venv"
+    );
+    assert!(
+        !pack_b_dir.join(".venv").exists(),
+        "pack_b dir should not contain .venv"
+    );
 }
 
 #[tokio::test]

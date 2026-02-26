@@ -9,6 +9,18 @@
 //! as separate Rust types. Instead, the `ProcessRuntime` handles all
 //! languages by using the interpreter, environment, and dependency
 //! configuration stored in the database.
+//!
+//! ## Runtime Version Selection
+//!
+//! When an action declares a `runtime_version_constraint` (e.g., `">=3.12"`),
+//! the executor resolves the best matching `RuntimeVersion` from the database
+//! and passes its `execution_config` through `ExecutionContext::runtime_config_override`.
+//! The `ProcessRuntime` uses this override instead of its built-in config,
+//! enabling version-specific interpreter binaries, environment commands, etc.
+//!
+//! The environment directory is also overridden to include the version suffix
+//! (e.g., `python-3.12` instead of `python`) so that different versions
+//! maintain isolated environments.
 
 pub mod dependency;
 pub mod local;
@@ -26,6 +38,7 @@ pub use process::ProcessRuntime;
 pub use shell::ShellRuntime;
 
 use async_trait::async_trait;
+use attune_common::models::runtime::RuntimeExecutionConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -112,6 +125,24 @@ pub struct ExecutionContext {
     /// Runtime name (python, shell, etc.) - used to select the correct runtime
     pub runtime_name: Option<String>,
 
+    /// Optional override of the runtime's execution config, set when a specific
+    /// runtime version has been selected (e.g., Python 3.12 vs the parent
+    /// "Python" runtime). When present, `ProcessRuntime` uses this config
+    /// instead of its built-in one for interpreter resolution, environment
+    /// setup, and dependency management.
+    #[serde(skip)]
+    pub runtime_config_override: Option<RuntimeExecutionConfig>,
+
+    /// Optional override of the environment directory suffix. When a specific
+    /// runtime version is selected, the env dir includes the version
+    /// (e.g., `python-3.12` instead of `python`) for per-version isolation.
+    /// Format: just the directory name, not the full path.
+    pub runtime_env_dir_suffix: Option<String>,
+
+    /// The selected runtime version string for logging/diagnostics
+    /// (e.g., "3.12.1"). `None` means the parent runtime config is used as-is.
+    pub selected_runtime_version: Option<String>,
+
     /// Maximum stdout size in bytes (for log truncation)
     #[serde(default = "default_max_log_bytes")]
     pub max_stdout_bytes: usize,
@@ -154,6 +185,9 @@ impl ExecutionContext {
             code,
             code_path: None,
             runtime_name: None,
+            runtime_config_override: None,
+            runtime_env_dir_suffix: None,
+            selected_runtime_version: None,
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
             parameter_delivery: ParameterDelivery::default(),

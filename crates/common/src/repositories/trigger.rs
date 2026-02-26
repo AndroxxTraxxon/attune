@@ -518,6 +518,7 @@ pub struct CreateSensorInput {
     pub entrypoint: String,
     pub runtime: Id,
     pub runtime_ref: String,
+    pub runtime_version_constraint: Option<String>,
     pub trigger: Id,
     pub trigger_ref: String,
     pub enabled: bool,
@@ -533,6 +534,7 @@ pub struct UpdateSensorInput {
     pub entrypoint: Option<String>,
     pub runtime: Option<Id>,
     pub runtime_ref: Option<String>,
+    pub runtime_version_constraint: Option<Option<String>>,
     pub trigger: Option<Id>,
     pub trigger_ref: Option<String>,
     pub enabled: Option<bool>,
@@ -549,7 +551,8 @@ impl FindById for SensorRepository {
         let sensor = sqlx::query_as::<_, Sensor>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_ref, trigger, trigger_ref, enabled,
+                   runtime, runtime_ref, runtime_version_constraint,
+                   trigger, trigger_ref, enabled,
                    param_schema, config, created, updated
             FROM sensor
             WHERE id = $1
@@ -572,7 +575,8 @@ impl FindByRef for SensorRepository {
         let sensor = sqlx::query_as::<_, Sensor>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_ref, trigger, trigger_ref, enabled,
+                   runtime, runtime_ref, runtime_version_constraint,
+                   trigger, trigger_ref, enabled,
                    param_schema, config, created, updated
             FROM sensor
             WHERE ref = $1
@@ -595,7 +599,8 @@ impl List for SensorRepository {
         let sensors = sqlx::query_as::<_, Sensor>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_ref, trigger, trigger_ref, enabled,
+                   runtime, runtime_ref, runtime_version_constraint,
+                   trigger, trigger_ref, enabled,
                    param_schema, config, created, updated
             FROM sensor
             ORDER BY ref ASC
@@ -619,11 +624,13 @@ impl Create for SensorRepository {
         let sensor = sqlx::query_as::<_, Sensor>(
             r#"
             INSERT INTO sensor (ref, pack, pack_ref, label, description, entrypoint,
-                                runtime, runtime_ref, trigger, trigger_ref, enabled,
+                                runtime, runtime_ref, runtime_version_constraint,
+                                trigger, trigger_ref, enabled,
                                 param_schema, config)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             RETURNING id, ref, pack, pack_ref, label, description, entrypoint,
-                      runtime, runtime_ref, trigger, trigger_ref, enabled,
+                      runtime, runtime_ref, runtime_version_constraint,
+                      trigger, trigger_ref, enabled,
                       param_schema, config, created, updated
             "#,
         )
@@ -635,6 +642,7 @@ impl Create for SensorRepository {
         .bind(&input.entrypoint)
         .bind(input.runtime)
         .bind(&input.runtime_ref)
+        .bind(&input.runtime_version_constraint)
         .bind(input.trigger)
         .bind(&input.trigger_ref)
         .bind(input.enabled)
@@ -711,6 +719,15 @@ impl Update for SensorRepository {
             has_updates = true;
         }
 
+        if let Some(runtime_version_constraint) = &input.runtime_version_constraint {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("runtime_version_constraint = ");
+            query.push_bind(runtime_version_constraint);
+            has_updates = true;
+        }
+
         if let Some(trigger) = input.trigger {
             if has_updates {
                 query.push(", ");
@@ -754,7 +771,7 @@ impl Update for SensorRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(" RETURNING id, ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_ref, trigger, trigger_ref, enabled, param_schema, config, created, updated");
+        query.push(" RETURNING id, ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_ref, runtime_version_constraint, trigger, trigger_ref, enabled, param_schema, config, created, updated");
 
         let sensor = query.build_query_as::<Sensor>().fetch_one(executor).await?;
 
@@ -786,7 +803,8 @@ impl SensorRepository {
         let sensors = sqlx::query_as::<_, Sensor>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_ref, trigger, trigger_ref, enabled,
+                   runtime, runtime_ref, runtime_version_constraint,
+                   trigger, trigger_ref, enabled,
                    param_schema, config, created, updated
             FROM sensor
             WHERE trigger = $1
@@ -808,7 +826,8 @@ impl SensorRepository {
         let sensors = sqlx::query_as::<_, Sensor>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_ref, trigger, trigger_ref, enabled,
+                   runtime, runtime_ref, runtime_version_constraint,
+                   trigger, trigger_ref, enabled,
                    param_schema, config, created, updated
             FROM sensor
             WHERE enabled = true
@@ -829,7 +848,8 @@ impl SensorRepository {
         let sensors = sqlx::query_as::<_, Sensor>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_ref, trigger, trigger_ref, enabled,
+                   runtime, runtime_ref, runtime_version_constraint,
+                   trigger, trigger_ref, enabled,
                    param_schema, config, created, updated
             FROM sensor
             WHERE pack = $1

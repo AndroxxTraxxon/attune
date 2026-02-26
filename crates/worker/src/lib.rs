@@ -11,6 +11,7 @@ pub mod registration;
 pub mod runtime;
 pub mod secrets;
 pub mod service;
+pub mod version_verify;
 
 // Re-export commonly used types
 pub use executor::ActionExecutor;

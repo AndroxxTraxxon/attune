@@ -36,6 +36,7 @@ impl LocalRuntime {
             },
             environment: None,
             dependencies: None,
+            env_vars: std::collections::HashMap::new(),
         };
 
         Self {
@@ -168,6 +169,9 @@ mod tests {
             code: Some("#!/bin/bash\necho 'hello from shell'".to_string()),
             code_path: None,
             runtime_name: Some("shell".to_string()),
+            runtime_config_override: None,
+            runtime_env_dir_suffix: None,
+            selected_runtime_version: None,
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
             parameter_delivery: ParameterDelivery::default(),
@@ -197,6 +201,9 @@ mod tests {
             code: Some("some code".to_string()),
             code_path: None,
             runtime_name: Some("unknown".to_string()),
+            runtime_config_override: None,
+            runtime_env_dir_suffix: None,
+            selected_runtime_version: None,
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
             parameter_delivery: ParameterDelivery::default(),

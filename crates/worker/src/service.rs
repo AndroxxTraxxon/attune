@@ -2,6 +2,16 @@
 //!
 //! Main service orchestration for the Attune Worker Service.
 //! Manages worker registration, heartbeat, message consumption, and action execution.
+//!
+//! ## Startup Sequence
+//!
+//! 1. Connect to database and message queue
+//! 2. Load runtimes from database → create `ProcessRuntime` instances
+//! 3. Register worker and set up MQ infrastructure
+//! 4. **Verify runtime versions** — run verification commands for each registered
+//!    `RuntimeVersion` to determine which are available on this host/container
+//! 5. **Set up runtime environments** — create per-version environments for packs
+//! 6. Start heartbeat, execution consumer, and pack registration consumer
 
 use attune_common::config::Config;
 use attune_common::db::Database;
@@ -13,6 +23,7 @@ use attune_common::mq::{
     PackRegisteredPayload, Publisher, PublisherConfig,
 };
 use attune_common::repositories::{execution::ExecutionRepository, FindById};
+use attune_common::runtime_detection::runtime_in_filter;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -34,6 +45,7 @@ use crate::runtime::process::ProcessRuntime;
 use crate::runtime::shell::ShellRuntime;
 use crate::runtime::RuntimeRegistry;
 use crate::secrets::SecretManager;
+use crate::version_verify;
 
 use attune_common::repositories::runtime::RuntimeRepository;
 use attune_common::repositories::List;
@@ -187,9 +199,11 @@ impl WorkerService {
                 for rt in executable_runtimes {
                     let rt_name = rt.name.to_lowercase();
 
-                    // Apply filter if ATTUNE_WORKER_RUNTIMES is set
+                    // Apply filter if ATTUNE_WORKER_RUNTIMES is set.
+                    // Uses alias-aware matching so that e.g. filter "node"
+                    // matches DB runtime name "Node.js" (lowercased to "node.js").
                     if let Some(ref filter) = runtime_filter {
-                        if !filter.contains(&rt_name) {
+                        if !runtime_in_filter(&rt_name, filter) {
                             debug!(
                                 "Skipping runtime '{}' (not in ATTUNE_WORKER_RUNTIMES filter)",
                                 rt_name
@@ -353,9 +367,15 @@ impl WorkerService {
             })?;
         info!("Worker-specific message queue infrastructure setup completed");
 
+        // Verify which runtime versions are available on this system.
+        // This updates the `available` flag in the database so that
+        // `select_best_version()` only considers genuinely present versions.
+        self.verify_runtime_versions().await;
+
         // Proactively set up runtime environments for all registered packs.
         // This runs before we start consuming execution messages so that
         // environments are ready by the time the first execution arrives.
+        // Now version-aware: creates per-version environments where needed.
         self.scan_and_setup_environments().await;
 
         // Start heartbeat
@@ -380,6 +400,33 @@ impl WorkerService {
     /// 3. Wait for in-flight tasks with timeout
     /// 4. Close MQ connection
     /// 5. Close DB connection
+    /// Verify which runtime versions are available on this host/container.
+    ///
+    /// Runs each version's verification commands (from `distributions` JSONB)
+    /// and updates the `available` flag in the database. This ensures that
+    /// `select_best_version()` only considers versions whose interpreters
+    /// are genuinely present.
+    async fn verify_runtime_versions(&self) {
+        let filter_refs: Option<Vec<String>> = self.runtime_filter.clone();
+        let filter_slice: Option<&[String]> = filter_refs.as_deref();
+
+        let result = version_verify::verify_all_runtime_versions(&self.db_pool, filter_slice).await;
+
+        if !result.errors.is_empty() {
+            warn!(
+                "Runtime version verification completed with {} error(s): {:?}",
+                result.errors.len(),
+                result.errors,
+            );
+        } else {
+            info!(
+                "Runtime version verification complete: {} checked, \
+                 {} available, {} unavailable",
+                result.total_checked, result.available, result.unavailable,
+            );
+        }
+    }
+
     /// Scan all registered packs and create missing runtime environments.
     async fn scan_and_setup_environments(&self) {
         let filter_refs: Option<Vec<String>> = self.runtime_filter.clone();

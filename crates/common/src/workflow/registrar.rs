@@ -2,9 +2,11 @@
 //!
 //! This module handles registering workflows as workflow definitions in the database.
 //! Workflows are stored in the `workflow_definition` table with their full YAML definition
-//! as JSON. Optionally, actions can be created that reference workflow definitions.
+//! as JSON. A companion action record is also created so that workflows appear in
+//! action lists and the workflow builder's action palette.
 
 use crate::error::{Error, Result};
+use crate::repositories::action::{ActionRepository, CreateActionInput, UpdateActionInput};
 use crate::repositories::workflow::{CreateWorkflowDefinitionInput, UpdateWorkflowDefinitionInput};
 use crate::repositories::{
     Create, Delete, FindByRef, PackRepository, Update, WorkflowDefinitionRepository,
@@ -102,12 +104,34 @@ impl WorkflowRegistrar {
             let workflow_def_id = self
                 .update_workflow(&existing.id, &loaded.workflow, &pack.r#ref)
                 .await?;
+
+            // Update or create the companion action record
+            self.ensure_companion_action(
+                workflow_def_id,
+                &loaded.workflow,
+                pack.id,
+                &pack.r#ref,
+                &loaded.file.name,
+            )
+            .await?;
+
             (workflow_def_id, false)
         } else {
             info!("Creating new workflow: {}", loaded.file.ref_name);
             let workflow_def_id = self
                 .create_workflow(&loaded.workflow, &loaded.file.pack, pack.id, &pack.r#ref)
                 .await?;
+
+            // Create a companion action record so the workflow appears in action lists
+            self.create_companion_action(
+                workflow_def_id,
+                &loaded.workflow,
+                pack.id,
+                &pack.r#ref,
+                &loaded.file.name,
+            )
+            .await?;
+
             (workflow_def_id, true)
         };
 
@@ -158,10 +182,101 @@ impl WorkflowRegistrar {
             .await?
             .ok_or_else(|| Error::not_found("workflow", "ref", ref_name))?;
 
-        // Delete workflow definition (cascades to workflow_execution and related executions)
+        // Delete workflow definition (cascades to workflow_execution, and the companion
+        // action is cascade-deleted via the FK on action.workflow_def)
         WorkflowDefinitionRepository::delete(&self.pool, workflow.id).await?;
 
         info!("Unregistered workflow: {}", ref_name);
+        Ok(())
+    }
+
+    /// Create a companion action record for a workflow definition.
+    ///
+    /// This ensures the workflow appears in action lists and the action palette
+    /// in the workflow builder. The action is linked to the workflow definition
+    /// via `is_workflow = true` and `workflow_def` FK.
+    async fn create_companion_action(
+        &self,
+        workflow_def_id: i64,
+        workflow: &WorkflowYaml,
+        pack_id: i64,
+        pack_ref: &str,
+        workflow_name: &str,
+    ) -> Result<()> {
+        let entrypoint = format!("workflows/{}.workflow.yaml", workflow_name);
+
+        let action_input = CreateActionInput {
+            r#ref: workflow.r#ref.clone(),
+            pack: pack_id,
+            pack_ref: pack_ref.to_string(),
+            label: workflow.label.clone(),
+            description: workflow.description.clone().unwrap_or_default(),
+            entrypoint,
+            runtime: None,
+            runtime_version_constraint: None,
+            param_schema: workflow.parameters.clone(),
+            out_schema: workflow.output.clone(),
+            is_adhoc: false,
+        };
+
+        let action = ActionRepository::create(&self.pool, action_input).await?;
+
+        // Link the action to the workflow definition (sets is_workflow = true and workflow_def)
+        ActionRepository::link_workflow_def(&self.pool, action.id, workflow_def_id).await?;
+
+        info!(
+            "Created companion action '{}' (ID: {}) for workflow definition (ID: {})",
+            workflow.r#ref, action.id, workflow_def_id
+        );
+
+        Ok(())
+    }
+
+    /// Ensure a companion action record exists for a workflow definition.
+    ///
+    /// If the action already exists, update it. If it doesn't exist (e.g., for
+    /// workflows registered before the companion-action fix), create it.
+    async fn ensure_companion_action(
+        &self,
+        workflow_def_id: i64,
+        workflow: &WorkflowYaml,
+        pack_id: i64,
+        pack_ref: &str,
+        workflow_name: &str,
+    ) -> Result<()> {
+        let existing_action =
+            ActionRepository::find_by_workflow_def(&self.pool, workflow_def_id).await?;
+
+        if let Some(action) = existing_action {
+            // Update the existing companion action to stay in sync
+            let update_input = UpdateActionInput {
+                label: Some(workflow.label.clone()),
+                description: workflow.description.clone(),
+                entrypoint: Some(format!("workflows/{}.workflow.yaml", workflow_name)),
+                runtime: None,
+                runtime_version_constraint: None,
+                param_schema: workflow.parameters.clone(),
+                out_schema: workflow.output.clone(),
+            };
+
+            ActionRepository::update(&self.pool, action.id, update_input).await?;
+
+            debug!(
+                "Updated companion action '{}' (ID: {}) for workflow definition (ID: {})",
+                action.r#ref, action.id, workflow_def_id
+            );
+        } else {
+            // Backfill: create companion action for pre-fix workflows
+            self.create_companion_action(
+                workflow_def_id,
+                workflow,
+                pack_id,
+                pack_ref,
+                workflow_name,
+            )
+            .await?;
+        }
+
         Ok(())
     }
 

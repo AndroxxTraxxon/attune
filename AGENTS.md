@@ -42,7 +42,7 @@ attune/
 │   ├── sensor/                   # Event monitoring service
 │   ├── notifier/                 # Real-time notification service
 │   └── cli/                      # Command-line interface
-├── migrations/                   # SQLx database migrations (18 tables)
+├── migrations/                   # SQLx database migrations (19 tables)
 ├── web/                          # React web UI (Vite + TypeScript)
 ├── packs/                        # Pack bundles
 │   └── core/                     # Core pack (timers, HTTP, etc.)
@@ -130,7 +130,8 @@ Enforcement created → Execution scheduled → Worker executes Action
 
 **Key Entities** (all in `public` schema, IDs are `i64`):
 - **Pack**: Bundle of automation components (actions, sensors, rules, triggers, runtimes)
-- **Runtime**: Unified execution environment definition (Python, Shell, Node.js, etc.) — used by both actions and sensors. Configured via `execution_config` JSONB (interpreter, environment setup, dependency management). No type distinction; whether a runtime is executable is determined by its `execution_config` content.
+- **Runtime**: Unified execution environment definition (Python, Shell, Node.js, etc.) — used by both actions and sensors. Configured via `execution_config` JSONB (interpreter, environment setup, dependency management, env_vars). No type distinction; whether a runtime is executable is determined by its `execution_config` content.
+- **RuntimeVersion**: A specific version of a runtime (e.g., Python 3.12.1, Node.js 20.11.0). Each version has its own `execution_config` and `distributions` for version-specific interpreter paths, verification commands, and environment setup. Actions and sensors can declare an optional `runtime_version_constraint` (semver range) to select a compatible version at execution time.
 - **Trigger**: Event type definition (e.g., "webhook_received")
 - **Sensor**: Monitors for trigger conditions, creates events
 - **Event**: Instance of a trigger firing with payload
@@ -150,6 +151,7 @@ Enforcement created → Execution scheduled → Worker executes Action
 - **Web**: axum, tower, tower-http
 - **Database**: sqlx (with postgres, json, chrono, uuid features)
 - **Serialization**: serde, serde_json, serde_yaml_ng
+- **Version Matching**: semver (with serde feature)
 - **Logging**: tracing, tracing-subscriber
 - **Error Handling**: anyhow, thiserror
 - **Config**: config crate (YAML + env vars)
@@ -210,7 +212,7 @@ Enforcement created → Execution scheduled → Worker executes Action
 - **Workflow Tasks**: Stored as JSONB in `execution.workflow_task` (consolidated from separate table 2026-01-27)
 - **FK ON DELETE Policy**: Historical records (executions, events, enforcements) use `ON DELETE SET NULL` so they survive entity deletion while preserving text ref fields (`action_ref`, `trigger_ref`, etc.) for auditing. Pack-owned entities (actions, triggers, sensors, rules, runtimes) use `ON DELETE CASCADE` from pack. Workflow executions cascade-delete with their workflow definition.
 - **Nullable FK Fields**: `rule.action` and `rule.trigger` are nullable (`Option<Id>` in Rust) — a rule with NULL action/trigger is non-functional but preserved for traceability. `execution.action`, `execution.parent`, `execution.enforcement`, and `event.source` are also nullable.
-**Table Count**: 17 tables total in the schema
+**Table Count**: 18 tables total in the schema (including `runtime_version`)
 - **Pack Component Loading Order**: Runtimes → Triggers → Actions → Sensors (dependency order). Both `PackComponentLoader` (Rust) and `load_core_pack.py` (Python) follow this order.
 
 ### Pack File Loading & Action Execution
@@ -250,12 +252,20 @@ Enforcement created → Execution scheduled → Worker executes Action
   - **Frontend types**: `TaskTransition` in `web/src/types/workflow.ts` (includes `edge_waypoints`, `label_positions` for visual routing); `TransitionPreset` ("succeeded" | "failed" | "always") for quick-access drag handles; `WorkflowEdge` includes per-edge `waypoints` and `labelPosition` derived from the transition; `SelectedEdgeInfo` and `EdgeHoverInfo` (includes `targetTaskId`) in `WorkflowEdges.tsx`
   - **Backend types**: `TaskTransition` in `crates/common/src/workflow/parser.rs`; `GraphTransition` in `crates/executor/src/workflow/graph.rs`
   - **NOT this** (legacy format): `on_success: task2` / `on_failure: error_handler` — still parsed for backward compat but normalized to `next`
-- **Runtime YAML Loading**: Pack registration reads `runtimes/*.yaml` files and inserts them into the `runtime` table. Runtime refs use format `{pack_ref}.{name}` (e.g., `core.python`, `core.shell`).
-- **Runtime Selection**: Determined by action's runtime field (e.g., "Shell", "Python") - compared case-insensitively; when an explicit `runtime_name` is set in execution context, it is authoritative (no fallback to extension matching)
+- **Runtime YAML Loading**: Pack registration reads `runtimes/*.yaml` files and inserts them into the `runtime` table. Runtime refs use format `{pack_ref}.{name}` (e.g., `core.python`, `core.shell`). If the YAML includes a `versions` array, each entry is inserted into the `runtime_version` table with its own `execution_config`, `distributions`, and optional `is_default` flag.
+- **Runtime Version Constraints**: Actions and sensors can declare `runtime_version: ">=3.12"` (or any semver constraint like `~3.12`, `^3.12`, `>=3.12,<4.0`) in their YAML. This is stored in the `runtime_version_constraint` column. At execution time the worker can select the highest available version satisfying the constraint. A bare version like `"3.12"` is treated as tilde (`~3.12` → >=3.12.0, <3.13.0).
+- **Version Matching Module**: `crates/common/src/version_matching.rs` provides `parse_version()` (lenient semver parsing), `parse_constraint()`, `matches_constraint()`, `select_best_version()`, and `extract_version_components()`. Uses the `semver` crate internally.
+- **Runtime Version Table**: `runtime_version` stores version-specific execution configs per runtime. Each row has: `runtime` (FK), `version` (string), `version_major/minor/patch` (ints for range queries), `execution_config` (complete, not a diff), `distributions` (verification metadata), `is_default`, `available`, `verified_at`, `meta`. Unique on `(runtime, version)`.
+- **Runtime Selection**: Determined by action's runtime field (e.g., "Shell", "Python") - compared case-insensitively; when an explicit `runtime_name` is set in execution context, it is authoritative (no fallback to extension matching). When the action also declares a `runtime_version_constraint`, the executor queries `runtime_version` rows, calls `select_best_version()`, and passes the selected version's `execution_config` as an override through `ExecutionContext.runtime_config_override`. The `ProcessRuntime` uses this override instead of its built-in config.
 - **Worker Runtime Loading**: Worker loads all runtimes from DB that have a non-empty `execution_config` (i.e., runtimes with an interpreter configured). Native runtimes (e.g., `core.native` with empty config) are automatically skipped since they execute binaries directly.
+- **Worker Startup Sequence**: (1) Connect to DB and MQ, (2) Load runtimes from DB → create `ProcessRuntime` instances, (3) Register worker and set up MQ infrastructure, (4) **Verify runtime versions** — run verification commands from `distributions` JSONB for each `RuntimeVersion` row and update `available` flag (`crates/worker/src/version_verify.rs`), (5) **Set up runtime environments** — create per-version environments for packs, (6) Start heartbeat, execution consumer, and pack registration consumer.
+- **Runtime Name Normalization**: The `ATTUNE_WORKER_RUNTIMES` filter (e.g., `shell,node`) uses alias-aware matching via `normalize_runtime_name()` in `crates/common/src/runtime_detection.rs`. This ensures that filter value `"node"` matches DB runtime name `"Node.js"` (lowercased to `"node.js"`). Alias groups: `node`/`nodejs`/`node.js` → `node`, `python`/`python3` → `python`, `shell`/`bash`/`sh` → `shell`, `native`/`builtin`/`standalone` → `native`. Used in worker service runtime loading and environment setup.
+- **Runtime Execution Environment Variables**: `RuntimeExecutionConfig.env_vars` (HashMap<String, String>) specifies template-based environment variables injected during action execution. Example: `{"NODE_PATH": "{env_dir}/node_modules"}` ensures Node.js finds packages in the isolated environment. Template variables (`{env_dir}`, `{pack_dir}`, `{interpreter}`, `{manifest_path}`) are resolved at execution time by `ProcessRuntime::execute`.
 - **Native Runtime Detection**: Runtime detection is purely data-driven via `execution_config` in the runtime table. A runtime with empty `execution_config` (or empty `interpreter.binary`) is native — the entrypoint is executed directly without an interpreter. There is no special "builtin" runtime concept.
 - **Sensor Runtime Assignment**: Sensors declare their `runner_type` in YAML (e.g., `python`, `native`). The pack loader resolves this to the correct runtime from the database. Default is `native` (compiled binary, no interpreter). Legacy values `standalone` and `builtin` map to `core.native`.
-- **Runtime Environment Setup**: Worker creates isolated environments (virtualenvs, node_modules) on-demand at `{runtime_envs_dir}/{pack_ref}/{runtime_name}` before first execution; setup is idempotent
+- **Runtime Environment Setup**: Worker creates isolated environments (virtualenvs, node_modules) proactively at startup and via `pack.registered` MQ events at `{runtime_envs_dir}/{pack_ref}/{runtime_name}`; setup is idempotent. Environment `create_command` and dependency `install_command` templates MUST use `{env_dir}` (not `{pack_dir}`) since pack directories are mounted read-only in Docker. For Node.js, `create_command` copies `package.json` to `{env_dir}` and `install_command` uses `npm install --prefix {env_dir}`.
+- **Per-Version Environment Isolation**: When runtime versions are registered, the worker creates per-version environments at `{runtime_envs_dir}/{pack_ref}/{runtime_name}-{version}` (e.g., `python-3.12`). This ensures different versions maintain isolated environments with their own interpreter binaries and installed dependencies. A base (unversioned) environment is also created for backward compatibility. The `ExecutionContext.runtime_env_dir_suffix` field controls which env dir the `ProcessRuntime` uses at execution time.
+- **Runtime Version Verification**: At worker startup, `version_verify::verify_all_runtime_versions()` runs each version's verification commands (from `distributions.verification.commands` JSONB) and updates the `available` and `verified_at` columns in the database. Only versions marked `available = true` are considered by `select_best_version()`. Verification respects the `ATTUNE_WORKER_RUNTIMES` filter.
 - **Schema Format (Unified)**: ALL schemas (`param_schema`, `out_schema`, `conf_schema`) use the same flat format with `required` and `secret` inlined per-parameter (NOT standard JSON Schema). Stored as JSONB columns.
   - **Example YAML**: `parameters:\n  url:\n    type: string\n    required: true\n  token:\n    type: string\n    secret: true`
   - **Stored JSON**: `{"url": {"type": "string", "required": true}, "token": {"type": "string", "secret": true}}`
@@ -282,7 +292,7 @@ Enforcement created → Execution scheduled → Worker executes Action
 - **Available at**: `http://localhost:8080` (dev), `/api-spec/openapi.json` for spec
 
 ### Common Library (`crates/common`)
-- **Modules**: `models`, `repositories`, `db`, `config`, `error`, `mq`, `crypto`, `utils`, `workflow`, `pack_registry`, `template_resolver`
+- **Modules**: `models`, `repositories`, `db`, `config`, `error`, `mq`, `crypto`, `utils`, `workflow`, `pack_registry`, `template_resolver`, `version_matching`, `runtime_detection`
 - **Exports**: Commonly used types re-exported from `lib.rs`
 - **Repository Layer**: All DB access goes through repositories in `repositories/`
 - **Message Queue**: Abstractions in `mq/` for RabbitMQ communication
@@ -480,8 +490,8 @@ When reporting, ask: "Should I fix this first or continue with [original task]?"
 - **Web UI**: Static files served separately or via API service
 
 ## Current Development Status
-- ✅ **Complete**: Database migrations (17 tables), API service (most endpoints), common library, message queue infrastructure, repository layer, JWT auth, CLI tool, Web UI (basic + workflow builder), Executor service (core functionality), Worker service (shell/Python execution)
-- 🔄 **In Progress**: Sensor service, advanced workflow features, Python runtime dependency management
+- ✅ **Complete**: Database migrations (18 tables), API service (most endpoints), common library, message queue infrastructure, repository layer, JWT auth, CLI tool, Web UI (basic + workflow builder), Executor service (core functionality), Worker service (shell/Python execution), Runtime version data model, constraint matching, worker version selection pipeline, version verification at startup, per-version environment isolation
+- 🔄 **In Progress**: Sensor service, advanced workflow features, Python runtime dependency management, API/UI endpoints for runtime version management
 - 📋 **Planned**: Notifier service, execution policies, monitoring, pack registry system
 
 ## Quick Reference

@@ -9,6 +9,7 @@ import {
   combinePackLocalRef,
 } from "@/lib/format-utils";
 import SchemaBuilder from "@/components/common/SchemaBuilder";
+import SearchableSelect from "@/components/common/SearchableSelect";
 import { WebhooksService } from "@/api";
 
 interface TriggerFormProps {
@@ -206,22 +207,18 @@ export default function TriggerForm({
           >
             Pack <span className="text-red-500">*</span>
           </label>
-          <select
+          <SearchableSelect
             id="pack"
             value={packId}
-            onChange={(e) => setPackId(Number(e.target.value))}
+            onChange={(v) => setPackId(Number(v))}
+            options={packs.map((pack: any) => ({
+              value: pack.id,
+              label: `${pack.label} (${pack.version})`,
+            }))}
+            placeholder="Select a pack..."
             disabled={isEditing}
-            className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-              errors.pack ? "border-red-500" : "border-gray-300"
-            } ${isEditing ? "bg-gray-100 cursor-not-allowed" : ""}`}
-          >
-            <option value={0}>Select a pack...</option>
-            {packs.map((pack: any) => (
-              <option key={pack.id} value={pack.id}>
-                {pack.label} ({pack.version})
-              </option>
-            ))}
-          </select>
+            error={!!errors.pack}
+          />
           {errors.pack && (
             <p className="mt-1 text-sm text-red-600">{errors.pack}</p>
           )}

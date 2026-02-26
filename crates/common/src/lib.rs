@@ -20,6 +20,7 @@ pub mod schema;
 pub mod template_resolver;
 pub mod test_executor;
 pub mod utils;
+pub mod version_matching;
 pub mod workflow;
 
 // Re-export commonly used types

@@ -31,9 +31,9 @@ execution_config:
     env_type: node_modules
     dir_name: node_modules
     create_command:
-      - npm
-      - init
-      - "-y"
+      - sh
+      - "-c"
+      - "mkdir -p {env_dir} && cp {manifest_path} {env_dir}/ 2>/dev/null || true"
     interpreter_path: null
   dependencies:
     manifest_file: package.json
@@ -41,4 +41,139 @@ execution_config:
       - npm
       - install
       - "--prefix"
-      - "{pack_dir}"
+      - "{env_dir}"
+  env_vars:
+    NODE_PATH: "{env_dir}/node_modules"
+
+# Version-specific execution configurations.
+# Each entry describes how to invoke a particular Node.js version.
+# The worker uses these when an action declares a runtime_version constraint
+# (e.g., runtime_version: ">=20"). The highest available version satisfying
+# the constraint is selected, and its execution_config replaces the parent's.
+versions:
+  - version: "18"
+    distributions:
+      verification:
+        commands:
+          - binary: node18
+            args:
+              - "--version"
+            exit_code: 0
+            pattern: "v18\\."
+            priority: 1
+          - binary: node
+            args:
+              - "--version"
+            exit_code: 0
+            pattern: "v18\\."
+            priority: 2
+    execution_config:
+      interpreter:
+        binary: node18
+        args: []
+        file_extension: ".js"
+      environment:
+        env_type: node_modules
+        dir_name: node_modules
+        create_command:
+          - sh
+          - "-c"
+          - "mkdir -p {env_dir} && cp {manifest_path} {env_dir}/ 2>/dev/null || true"
+        interpreter_path: null
+      dependencies:
+        manifest_file: package.json
+        install_command:
+          - npm
+          - install
+          - "--prefix"
+          - "{env_dir}"
+      env_vars:
+        NODE_PATH: "{env_dir}/node_modules"
+    meta:
+      lts_codename: "hydrogen"
+      eol: "2025-04-30"
+
+  - version: "20"
+    is_default: true
+    distributions:
+      verification:
+        commands:
+          - binary: node20
+            args:
+              - "--version"
+            exit_code: 0
+            pattern: "v20\\."
+            priority: 1
+          - binary: node
+            args:
+              - "--version"
+            exit_code: 0
+            pattern: "v20\\."
+            priority: 2
+    execution_config:
+      interpreter:
+        binary: node20
+        args: []
+        file_extension: ".js"
+      environment:
+        env_type: node_modules
+        dir_name: node_modules
+        create_command:
+          - sh
+          - "-c"
+          - "mkdir -p {env_dir} && cp {manifest_path} {env_dir}/ 2>/dev/null || true"
+        interpreter_path: null
+      dependencies:
+        manifest_file: package.json
+        install_command:
+          - npm
+          - install
+          - "--prefix"
+          - "{env_dir}"
+      env_vars:
+        NODE_PATH: "{env_dir}/node_modules"
+    meta:
+      lts_codename: "iron"
+      eol: "2026-04-30"
+
+  - version: "22"
+    distributions:
+      verification:
+        commands:
+          - binary: node22
+            args:
+              - "--version"
+            exit_code: 0
+            pattern: "v22\\."
+            priority: 1
+          - binary: node
+            args:
+              - "--version"
+            exit_code: 0
+            pattern: "v22\\."
+            priority: 2
+    execution_config:
+      interpreter:
+        binary: node22
+        args: []
+        file_extension: ".js"
+      environment:
+        env_type: node_modules
+        dir_name: node_modules
+        create_command:
+          - sh
+          - "-c"
+          - "mkdir -p {env_dir} && cp {manifest_path} {env_dir}/ 2>/dev/null || true"
+        interpreter_path: null
+      dependencies:
+        manifest_file: package.json
+        install_command:
+          - npm
+          - install
+          - "--prefix"
+          - "{env_dir}"
+      env_vars:
+        NODE_PATH: "{env_dir}/node_modules"
+    meta:
+      lts_codename: "jod"
+      eol: "2027-04-30"

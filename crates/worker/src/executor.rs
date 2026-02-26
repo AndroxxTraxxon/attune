@@ -2,11 +2,24 @@
 //!
 //! Coordinates the execution of actions by managing the runtime,
 //! loading action data, preparing execution context, and collecting results.
+//!
+//! ## Runtime Version Selection
+//!
+//! When an action declares a `runtime_version_constraint` (e.g., `">=3.12"`),
+//! the executor queries the `runtime_version` table for all versions of the
+//! action's runtime and uses [`select_best_version`] to pick the highest
+//! available version satisfying the constraint. The selected version's
+//! `execution_config` is passed through the `ExecutionContext` as an override
+//! so the `ProcessRuntime` uses version-specific interpreter binaries,
+//! environment commands, etc.
 
 use attune_common::error::{Error, Result};
+use attune_common::models::runtime::RuntimeExecutionConfig;
 use attune_common::models::{runtime::Runtime as RuntimeModel, Action, Execution, ExecutionStatus};
 use attune_common::repositories::execution::{ExecutionRepository, UpdateExecutionInput};
+use attune_common::repositories::runtime_version::RuntimeVersionRepository;
 use attune_common::repositories::{FindById, Update};
+use attune_common::version_matching::select_best_version;
 use std::path::PathBuf as StdPathBuf;
 
 use serde_json::Value as JsonValue;
@@ -365,6 +378,15 @@ impl ActionExecutor {
 
         let runtime_name = runtime_record.as_ref().map(|r| r.name.to_lowercase());
 
+        // --- Runtime Version Resolution ---
+        // If the action declares a runtime_version_constraint (e.g., ">=3.12"),
+        // query all registered versions for this runtime and select the best
+        // match. The selected version's execution_config overrides the parent
+        // runtime's config so the ProcessRuntime uses a version-specific
+        // interpreter binary, environment commands, etc.
+        let (runtime_config_override, runtime_env_dir_suffix, selected_runtime_version) =
+            self.resolve_runtime_version(&runtime_record, action).await;
+
         // Determine the pack directory for this action
         let pack_dir = self.packs_base_dir.join(&action.pack_ref);
 
@@ -446,6 +468,9 @@ impl ActionExecutor {
             code,
             code_path,
             runtime_name,
+            runtime_config_override,
+            runtime_env_dir_suffix,
+            selected_runtime_version,
             max_stdout_bytes: self.max_stdout_bytes,
             max_stderr_bytes: self.max_stderr_bytes,
             parameter_delivery: action.parameter_delivery,
@@ -454,6 +479,101 @@ impl ActionExecutor {
         };
 
         Ok(context)
+    }
+
+    /// Resolve the best runtime version for an action, if applicable.
+    ///
+    /// Returns a tuple of:
+    /// - Optional `RuntimeExecutionConfig` override (from the selected version)
+    /// - Optional env dir suffix (e.g., `"python-3.12"`) for per-version isolation
+    /// - Optional version string for logging (e.g., `"3.12"`)
+    ///
+    /// If the action has no `runtime_version_constraint`, or no versions are
+    /// registered for its runtime, all three are `None` and the parent runtime's
+    /// config is used as-is.
+    async fn resolve_runtime_version(
+        &self,
+        runtime_record: &Option<RuntimeModel>,
+        action: &Action,
+    ) -> (
+        Option<RuntimeExecutionConfig>,
+        Option<String>,
+        Option<String>,
+    ) {
+        let runtime = match runtime_record {
+            Some(r) => r,
+            None => return (None, None, None),
+        };
+
+        // Query all versions for this runtime
+        let versions = match RuntimeVersionRepository::find_by_runtime(&self.pool, runtime.id).await
+        {
+            Ok(v) if !v.is_empty() => v,
+            Ok(_) => {
+                // No versions registered — use parent runtime config as-is
+                if action.runtime_version_constraint.is_some() {
+                    warn!(
+                        "Action '{}' declares runtime_version_constraint '{}' but runtime '{}' \
+                         has no registered versions. Using parent runtime config.",
+                        action.r#ref,
+                        action.runtime_version_constraint.as_deref().unwrap_or(""),
+                        runtime.name,
+                    );
+                }
+                return (None, None, None);
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to load runtime versions for runtime '{}' (id {}): {}. \
+                     Using parent runtime config.",
+                    runtime.name, runtime.id, e,
+                );
+                return (None, None, None);
+            }
+        };
+
+        let constraint = action.runtime_version_constraint.as_deref();
+
+        match select_best_version(&versions, constraint) {
+            Some(selected) => {
+                let version_config = selected.parsed_execution_config();
+                let rt_name = runtime.name.to_lowercase();
+                let env_suffix = format!("{}-{}", rt_name, selected.version);
+
+                info!(
+                    "Selected runtime version '{}' (id {}) for action '{}' \
+                     (constraint: {}, runtime: '{}'). Env dir suffix: '{}'",
+                    selected.version,
+                    selected.id,
+                    action.r#ref,
+                    constraint.unwrap_or("none"),
+                    runtime.name,
+                    env_suffix,
+                );
+
+                (
+                    Some(version_config),
+                    Some(env_suffix),
+                    Some(selected.version.clone()),
+                )
+            }
+            None => {
+                if let Some(c) = constraint {
+                    warn!(
+                        "No available runtime version matches constraint '{}' for action '{}' \
+                         (runtime: '{}'). Using parent runtime config as fallback.",
+                        c, action.r#ref, runtime.name,
+                    );
+                } else {
+                    debug!(
+                        "No default or available version found for runtime '{}'. \
+                         Using parent runtime config.",
+                        runtime.name,
+                    );
+                }
+                (None, None, None)
+            }
+        }
     }
 
     /// Execute the action using the runtime registry

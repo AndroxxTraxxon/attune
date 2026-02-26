@@ -10,6 +10,7 @@ import {
   Palette,
   Loader2,
 } from "lucide-react";
+import SearchableSelect from "@/components/common/SearchableSelect";
 import type {
   WorkflowTask,
   RetryConfig,
@@ -354,18 +355,15 @@ export default function TaskInspector({
               <label className="block text-xs font-medium text-gray-700 mb-1">
                 Action Reference
               </label>
-              <select
+              <SearchableSelect
                 value={task.action || ""}
-                onChange={(e) => update({ action: e.target.value })}
-                className="w-full px-2.5 py-1.5 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              >
-                <option value="">-- Select an action --</option>
-                {availableActions.map((action) => (
-                  <option key={action.id} value={action.ref}>
-                    {action.ref} ({action.label})
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => update({ action: String(v) })}
+                options={availableActions.map((action) => ({
+                  value: action.ref,
+                  label: `${action.ref} (${action.label})`,
+                }))}
+                placeholder="-- Select an action --"
+              />
               {(fetchedAction?.description || selectedAction?.description) && (
                 <p className="text-[10px] text-gray-400 mt-1">
                   {fetchedAction?.description || selectedAction?.description}
@@ -657,27 +655,23 @@ export default function TaskInspector({
                         </div>
                       ))}
                       {otherTaskNames.length > 0 && (
-                        <select
+                        <SearchableSelect
                           value=""
-                          onChange={(e) => {
-                            if (e.target.value) {
-                              addDoTarget(ti, e.target.value);
-                              e.target.value = "";
+                          onChange={(v) => {
+                            if (v) {
+                              addDoTarget(ti, String(v));
                             }
                           }}
-                          className="w-full px-2 py-1 border border-gray-300 rounded text-xs text-gray-500 focus:ring-1 focus:ring-blue-500 mt-0.5"
-                        >
-                          <option value="">+ Add target task...</option>
-                          {otherTaskNames
+                          options={otherTaskNames
                             .filter(
                               (name) => !(transition.do || []).includes(name),
                             )
-                            .map((name) => (
-                              <option key={name} value={name}>
-                                {name}
-                              </option>
-                            ))}
-                        </select>
+                            .map((name) => ({
+                              value: name,
+                              label: name,
+                            }))}
+                          placeholder="+ Add target task..."
+                        />
                       )}
                     </div>
 

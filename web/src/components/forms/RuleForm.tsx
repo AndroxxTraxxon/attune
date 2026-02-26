@@ -8,6 +8,7 @@ import ParamSchemaForm, {
   validateParamSchema,
   type ParamSchema,
 } from "@/components/common/ParamSchemaForm";
+import SearchableSelect from "@/components/common/SearchableSelect";
 import type { RuleResponse } from "@/types/api";
 import { labelToRef, extractLocalRef, combineRefs } from "@/lib/format-utils";
 
@@ -262,22 +263,18 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
           >
             Pack <span className="text-red-500">*</span>
           </label>
-          <select
+          <SearchableSelect
             id="pack"
             value={packId}
-            onChange={(e) => setPackId(Number(e.target.value))}
+            onChange={(v) => setPackId(Number(v))}
+            options={packs.map((pack: any) => ({
+              value: pack.id,
+              label: `${pack.label} (${pack.version})`,
+            }))}
+            placeholder="Select a pack..."
             disabled={isEditing}
-            className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-              errors.pack ? "border-red-500" : "border-gray-300"
-            } ${isEditing ? "bg-gray-100 cursor-not-allowed" : ""}`}
-          >
-            <option value={0}>Select a pack...</option>
-            {packs.map((pack: any) => (
-              <option key={pack.id} value={pack.id}>
-                {pack.label} ({pack.version})
-              </option>
-            ))}
-          </select>
+            error={!!errors.pack}
+          />
           {errors.pack && (
             <p className="mt-1 text-sm text-red-600">{errors.pack}</p>
           )}
@@ -407,22 +404,18 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
               >
                 Trigger <span className="text-red-500">*</span>
               </label>
-              <select
+              <SearchableSelect
                 id="trigger"
                 value={triggerId}
-                onChange={(e) => setTriggerId(Number(e.target.value))}
+                onChange={(v) => setTriggerId(Number(v))}
+                options={triggers.map((trigger: any) => ({
+                  value: trigger.id,
+                  label: `${trigger.ref} - ${trigger.label}`,
+                }))}
+                placeholder="Select a trigger..."
                 disabled={isEditing}
-                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                  errors.trigger ? "border-red-500" : "border-gray-300"
-                } ${isEditing ? "bg-gray-100 cursor-not-allowed" : ""}`}
-              >
-                <option value={0}>Select a trigger...</option>
-                {triggers.map((trigger: any) => (
-                  <option key={trigger.id} value={trigger.id}>
-                    {trigger.ref} - {trigger.label}
-                  </option>
-                ))}
-              </select>
+                error={!!errors.trigger}
+              />
               {errors.trigger && (
                 <p className="mt-1 text-sm text-red-600">{errors.trigger}</p>
               )}
@@ -497,22 +490,18 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
               >
                 Action <span className="text-red-500">*</span>
               </label>
-              <select
+              <SearchableSelect
                 id="action"
                 value={actionId}
-                onChange={(e) => setActionId(Number(e.target.value))}
+                onChange={(v) => setActionId(Number(v))}
+                options={actions.map((action: any) => ({
+                  value: action.id,
+                  label: `${action.ref} - ${action.label}`,
+                }))}
+                placeholder="Select an action..."
                 disabled={isEditing}
-                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                  errors.action ? "border-red-500" : "border-gray-300"
-                } ${isEditing ? "bg-gray-100 cursor-not-allowed" : ""}`}
-              >
-                <option value={0}>Select an action...</option>
-                {actions.map((action: any) => (
-                  <option key={action.id} value={action.id}>
-                    {action.ref} - {action.label}
-                  </option>
-                ))}
-              </select>
+                error={!!errors.action}
+              />
               {errors.action && (
                 <p className="mt-1 text-sm text-red-600">{errors.action}</p>
               )}

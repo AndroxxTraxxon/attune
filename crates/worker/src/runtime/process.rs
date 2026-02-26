@@ -94,6 +94,7 @@ impl ProcessRuntime {
     }
 
     /// Get the interpreter path, checking for an external pack environment first.
+    #[cfg(test)]
     fn resolve_interpreter(&self, pack_dir: &Path, env_dir: Option<&Path>) -> PathBuf {
         self.config.resolve_interpreter_with_env(pack_dir, env_dir)
     }
@@ -472,24 +473,52 @@ impl Runtime for ProcessRuntime {
     }
 
     async fn execute(&self, context: ExecutionContext) -> RuntimeResult<ExecutionResult> {
-        info!(
-            "Executing action '{}' (execution_id: {}) with runtime '{}', \
-             parameter delivery: {:?}, format: {:?}, output format: {:?}",
-            context.action_ref,
-            context.execution_id,
-            self.runtime_name,
-            context.parameter_delivery,
-            context.parameter_format,
-            context.output_format,
-        );
+        // Determine the effective execution config: use the version-specific
+        // override if the executor resolved a specific runtime version for this
+        // action, otherwise fall back to this ProcessRuntime's built-in config.
+        let effective_config: &RuntimeExecutionConfig = context
+            .runtime_config_override
+            .as_ref()
+            .unwrap_or(&self.config);
+
+        if let Some(ref ver) = context.selected_runtime_version {
+            info!(
+                "Executing action '{}' (execution_id: {}) with runtime '{}' version {}, \
+                 parameter delivery: {:?}, format: {:?}, output format: {:?}",
+                context.action_ref,
+                context.execution_id,
+                self.runtime_name,
+                ver,
+                context.parameter_delivery,
+                context.parameter_format,
+                context.output_format,
+            );
+        } else {
+            info!(
+                "Executing action '{}' (execution_id: {}) with runtime '{}', \
+                 parameter delivery: {:?}, format: {:?}, output format: {:?}",
+                context.action_ref,
+                context.execution_id,
+                self.runtime_name,
+                context.parameter_delivery,
+                context.parameter_format,
+                context.output_format,
+            );
+        }
 
         let pack_ref = self.extract_pack_ref(&context.action_ref);
         let pack_dir = self.packs_base_dir.join(pack_ref);
 
         // Compute external env_dir for this pack/runtime combination.
-        // Pattern: {runtime_envs_dir}/{pack_ref}/{runtime_name}
-        let env_dir = self.env_dir_for_pack(pack_ref);
-        let env_dir_opt = if self.config.environment.is_some() {
+        // When a specific runtime version is selected, the env dir includes a
+        // version suffix (e.g., "python-3.12") for per-version isolation.
+        // Pattern: {runtime_envs_dir}/{pack_ref}/{runtime_name[-version]}
+        let env_dir = if let Some(ref suffix) = context.runtime_env_dir_suffix {
+            self.runtime_envs_dir.join(pack_ref).join(suffix)
+        } else {
+            self.env_dir_for_pack(pack_ref)
+        };
+        let env_dir_opt = if effective_config.environment.is_some() {
             Some(env_dir.as_path())
         } else {
             None
@@ -499,7 +528,7 @@ impl Runtime for ProcessRuntime {
         // (scanning all registered packs) or via pack.registered MQ events when a
         // new pack is installed. We only log a warning here if the expected
         // environment directory is missing so operators can investigate.
-        if self.config.environment.is_some() && pack_dir.exists() && !env_dir.exists() {
+        if effective_config.environment.is_some() && pack_dir.exists() && !env_dir.exists() {
             warn!(
                 "Runtime environment for pack '{}' not found at {}. \
                  The environment should have been created at startup or on pack registration. \
@@ -512,8 +541,8 @@ impl Runtime for ProcessRuntime {
         // If the environment directory exists but contains a broken interpreter
         // (e.g. broken symlinks from a venv created in a different container),
         // attempt to recreate it before resolving the interpreter.
-        if self.config.environment.is_some() && env_dir.exists() && pack_dir.exists() {
-            if let Some(ref env_cfg) = self.config.environment {
+        if effective_config.environment.is_some() && env_dir.exists() && pack_dir.exists() {
+            if let Some(ref env_cfg) = effective_config.environment {
                 if let Some(ref interp_template) = env_cfg.interpreter_path {
                     let mut vars = std::collections::HashMap::new();
                     vars.insert("env_dir", env_dir.to_string_lossy().to_string());
@@ -550,8 +579,18 @@ impl Runtime for ProcessRuntime {
                                 e,
                             );
                         } else {
-                            // Recreate the environment
-                            match self.setup_pack_environment(&pack_dir, &env_dir).await {
+                            // Recreate the environment using a temporary ProcessRuntime
+                            // with the effective (possibly version-specific) config.
+                            let setup_runtime = ProcessRuntime::new(
+                                self.runtime_name.clone(),
+                                effective_config.clone(),
+                                self.packs_base_dir.clone(),
+                                self.runtime_envs_dir.clone(),
+                            );
+                            match setup_runtime
+                                .setup_pack_environment(&pack_dir, &env_dir)
+                                .await
+                            {
                                 Ok(()) => {
                                     info!(
                                         "Successfully recreated environment for pack '{}' at {}",
@@ -575,18 +614,37 @@ impl Runtime for ProcessRuntime {
             }
         }
 
-        let interpreter = self.resolve_interpreter(&pack_dir, env_dir_opt);
+        let interpreter = effective_config.resolve_interpreter_with_env(&pack_dir, env_dir_opt);
 
         info!(
-            "Resolved interpreter: {} (env_dir: {}, env_exists: {}, pack_dir: {})",
+            "Resolved interpreter: {} (env_dir: {}, env_exists: {}, pack_dir: {}, version: {})",
             interpreter.display(),
             env_dir.display(),
             env_dir.exists(),
             pack_dir.display(),
+            context
+                .selected_runtime_version
+                .as_deref()
+                .unwrap_or("default"),
         );
 
         // Prepare environment and parameters according to delivery method
         let mut env = context.env.clone();
+
+        // Inject runtime-specific environment variables from execution_config.
+        // These are template-based (e.g., NODE_PATH={env_dir}/node_modules) and
+        // resolved against the current pack/env directories.
+        if !effective_config.env_vars.is_empty() {
+            let vars = effective_config.build_template_vars_with_env(&pack_dir, env_dir_opt);
+            for (key, value_template) in &effective_config.env_vars {
+                let resolved = RuntimeExecutionConfig::resolve_template(value_template, &vars);
+                debug!(
+                    "Setting runtime env var: {}={} (template: {})",
+                    key, resolved, value_template
+                );
+                env.insert(key.clone(), resolved);
+            }
+        }
         let param_config = ParameterDeliveryConfig {
             delivery: context.parameter_delivery,
             format: context.parameter_format,
@@ -614,7 +672,7 @@ impl Runtime for ProcessRuntime {
             debug!("Executing file: {}", code_path.display());
             process_executor::build_action_command(
                 &interpreter,
-                &self.config.interpreter.args,
+                &effective_config.interpreter.args,
                 code_path,
                 working_dir,
                 &env,
@@ -635,7 +693,7 @@ impl Runtime for ProcessRuntime {
                 debug!("Executing action file: {}", action_file.display());
                 process_executor::build_action_command(
                     &interpreter,
-                    &self.config.interpreter.args,
+                    &effective_config.interpreter.args,
                     &action_file,
                     working_dir,
                     &env,
@@ -781,6 +839,7 @@ mod tests {
             },
             environment: None,
             dependencies: None,
+            env_vars: HashMap::new(),
         }
     }
 
@@ -813,6 +872,7 @@ mod tests {
                     "{manifest_path}".to_string(),
                 ],
             }),
+            env_vars: HashMap::new(),
         }
     }
 
@@ -837,6 +897,9 @@ mod tests {
             code: None,
             code_path: None,
             runtime_name: Some("python".to_string()),
+            runtime_config_override: None,
+            runtime_env_dir_suffix: None,
+            selected_runtime_version: None,
             max_stdout_bytes: 1024,
             max_stderr_bytes: 1024,
             parameter_delivery: ParameterDelivery::default(),
@@ -868,6 +931,9 @@ mod tests {
             code: None,
             code_path: Some(PathBuf::from("/tmp/packs/mypack/actions/hello.py")),
             runtime_name: None,
+            runtime_config_override: None,
+            runtime_env_dir_suffix: None,
+            selected_runtime_version: None,
             max_stdout_bytes: 1024,
             max_stderr_bytes: 1024,
             parameter_delivery: ParameterDelivery::default(),
@@ -899,6 +965,9 @@ mod tests {
             code: None,
             code_path: Some(PathBuf::from("/tmp/packs/mypack/actions/hello.sh")),
             runtime_name: None,
+            runtime_config_override: None,
+            runtime_env_dir_suffix: None,
+            selected_runtime_version: None,
             max_stdout_bytes: 1024,
             max_stderr_bytes: 1024,
             parameter_delivery: ParameterDelivery::default(),
@@ -986,6 +1055,9 @@ mod tests {
             code: None,
             code_path: Some(script_path),
             runtime_name: Some("shell".to_string()),
+            runtime_config_override: None,
+            runtime_env_dir_suffix: None,
+            selected_runtime_version: None,
             max_stdout_bytes: 1024 * 1024,
             max_stderr_bytes: 1024 * 1024,
             parameter_delivery: ParameterDelivery::default(),
@@ -1018,6 +1090,7 @@ mod tests {
             },
             environment: None,
             dependencies: None,
+            env_vars: HashMap::new(),
         };
 
         let runtime = ProcessRuntime::new(
@@ -1039,6 +1112,9 @@ mod tests {
             code: None,
             code_path: Some(script_path),
             runtime_name: Some("python".to_string()),
+            runtime_config_override: None,
+            runtime_env_dir_suffix: None,
+            selected_runtime_version: None,
             max_stdout_bytes: 1024 * 1024,
             max_stderr_bytes: 1024 * 1024,
             parameter_delivery: ParameterDelivery::default(),
@@ -1074,6 +1150,9 @@ mod tests {
             code: Some("echo 'inline shell code'".to_string()),
             code_path: None,
             runtime_name: Some("shell".to_string()),
+            runtime_config_override: None,
+            runtime_env_dir_suffix: None,
+            selected_runtime_version: None,
             max_stdout_bytes: 1024 * 1024,
             max_stderr_bytes: 1024 * 1024,
             parameter_delivery: ParameterDelivery::default(),
@@ -1121,6 +1200,9 @@ mod tests {
             code: None,
             code_path: None,
             runtime_name: Some("shell".to_string()),
+            runtime_config_override: None,
+            runtime_env_dir_suffix: None,
+            selected_runtime_version: None,
             max_stdout_bytes: 1024 * 1024,
             max_stderr_bytes: 1024 * 1024,
             parameter_delivery: ParameterDelivery::default(),
@@ -1226,6 +1308,9 @@ mod tests {
             code: None,
             code_path: Some(script_path),
             runtime_name: Some("shell".to_string()),
+            runtime_config_override: None,
+            runtime_env_dir_suffix: None,
+            selected_runtime_version: None,
             max_stdout_bytes: 1024 * 1024,
             max_stderr_bytes: 1024 * 1024,
             parameter_delivery: ParameterDelivery::default(),

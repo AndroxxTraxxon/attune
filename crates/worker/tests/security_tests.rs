@@ -20,6 +20,7 @@ fn make_python_process_runtime(packs_base_dir: PathBuf) -> ProcessRuntime {
         },
         environment: None,
         dependencies: None,
+        env_vars: std::collections::HashMap::new(),
     };
     let runtime_envs_dir = packs_base_dir.parent().unwrap_or(&packs_base_dir).join("runtime_envs");
     ProcessRuntime::new("python".to_string(), config, packs_base_dir, runtime_envs_dir)
@@ -68,6 +69,9 @@ print(json.dumps(result))
         code: Some(code.to_string()),
         code_path: None,
         runtime_name: Some("python".to_string()),
+        runtime_config_override: None,
+        runtime_env_dir_suffix: None,
+        selected_runtime_version: None,
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
@@ -158,6 +162,9 @@ echo "SECURITY_PASS: Secrets not in environment but accessible via get_secret"
         ),
         code_path: None,
         runtime_name: Some("shell".to_string()),
+        runtime_config_override: None,
+        runtime_env_dir_suffix: None,
+        selected_runtime_version: None,
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
@@ -219,6 +226,9 @@ print(json.dumps({'secret_a': secrets.get('secret_a')}))
         code: Some(code1.to_string()),
         code_path: None,
         runtime_name: Some("python".to_string()),
+        runtime_config_override: None,
+        runtime_env_dir_suffix: None,
+        selected_runtime_version: None,
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
@@ -261,6 +271,9 @@ print(json.dumps({
         code: Some(code2.to_string()),
         code_path: None,
         runtime_name: Some("python".to_string()),
+        runtime_config_override: None,
+        runtime_env_dir_suffix: None,
+        selected_runtime_version: None,
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
@@ -312,6 +325,9 @@ print("ok")
         code: Some(code.to_string()),
         code_path: None,
         runtime_name: Some("python".to_string()),
+        runtime_config_override: None,
+        runtime_env_dir_suffix: None,
+        selected_runtime_version: None,
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
@@ -360,6 +376,9 @@ fi
         ),
         code_path: None,
         runtime_name: Some("shell".to_string()),
+        runtime_config_override: None,
+        runtime_env_dir_suffix: None,
+        selected_runtime_version: None,
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
@@ -409,6 +428,7 @@ echo "PASS: No secrets in environment"
         },
         environment: None,
         dependencies: None,
+        env_vars: std::collections::HashMap::new(),
     };
     let runtime = ProcessRuntime::new("shell".to_string(), config, tmp.path().to_path_buf(), tmp.path().join("runtime_envs"));
 
@@ -428,6 +448,9 @@ echo "PASS: No secrets in environment"
         code: None,
         code_path: Some(actions_dir.join("check_env.sh")),
         runtime_name: Some("shell".to_string()),
+        runtime_config_override: None,
+        runtime_env_dir_suffix: None,
+        selected_runtime_version: None,
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
@@ -476,6 +499,7 @@ print(json.dumps({"leaked": leaked}))
         },
         environment: None,
         dependencies: None,
+        env_vars: std::collections::HashMap::new(),
     };
     let runtime = ProcessRuntime::new("python".to_string(), config, tmp.path().to_path_buf(), tmp.path().join("runtime_envs"));
 
@@ -495,6 +519,9 @@ print(json.dumps({"leaked": leaked}))
         code: None,
         code_path: Some(actions_dir.join("check_env.py")),
         runtime_name: Some("python".to_string()),
+        runtime_config_override: None,
+        runtime_env_dir_suffix: None,
+        selected_runtime_version: None,
         max_stdout_bytes: 10 * 1024 * 1024,
         max_stderr_bytes: 10 * 1024 * 1024,
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),

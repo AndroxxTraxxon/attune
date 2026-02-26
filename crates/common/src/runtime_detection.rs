@@ -5,6 +5,9 @@
 //! 1. Environment variable override (highest priority)
 //! 2. Config file specification (medium priority)
 //! 3. Database-driven detection with verification (lowest priority)
+//!
+//! Also provides [`normalize_runtime_name`] for alias-aware runtime name
+//! comparison across the codebase (worker filters, env setup, etc.).
 
 use crate::config::Config;
 use crate::error::Result;
@@ -14,6 +17,49 @@ use sqlx::PgPool;
 use std::collections::HashMap;
 use std::process::Command;
 use tracing::{debug, info, warn};
+
+/// Normalize a runtime name to its canonical short form.
+///
+/// This ensures that different ways of referring to the same runtime
+/// (e.g., "node", "nodejs", "node.js") all resolve to a single canonical
+/// name. Used by worker runtime filters and environment setup to match
+/// database runtime names against short filter values.
+///
+/// The canonical names mirror the alias groups in
+/// `PackComponentLoader::resolve_runtime`.
+///
+/// # Examples
+/// ```
+/// use attune_common::runtime_detection::normalize_runtime_name;
+/// assert_eq!(normalize_runtime_name("node.js"), "node");
+/// assert_eq!(normalize_runtime_name("nodejs"), "node");
+/// assert_eq!(normalize_runtime_name("python3"), "python");
+/// assert_eq!(normalize_runtime_name("shell"), "shell");
+/// ```
+pub fn normalize_runtime_name(name: &str) -> &str {
+    match name {
+        "node" | "nodejs" | "node.js" => "node",
+        "python" | "python3" => "python",
+        "bash" | "sh" | "shell" => "shell",
+        "native" | "builtin" | "standalone" => "native",
+        other => other,
+    }
+}
+
+/// Check if a runtime name matches a filter entry, supporting common aliases.
+///
+/// Both sides are lowercased and then normalized before comparison so that,
+/// e.g., a filter value of `"node"` matches a database runtime name `"Node.js"`.
+pub fn runtime_matches_filter(rt_name: &str, filter_entry: &str) -> bool {
+    let rt_lower = rt_name.to_ascii_lowercase();
+    let filter_lower = filter_entry.to_ascii_lowercase();
+    normalize_runtime_name(&rt_lower) == normalize_runtime_name(&filter_lower)
+}
+
+/// Check if a runtime name matches any entry in a filter list.
+pub fn runtime_in_filter(rt_name: &str, filter: &[String]) -> bool {
+    filter.iter().any(|f| runtime_matches_filter(rt_name, f))
+}
 
 /// Runtime detection service
 pub struct RuntimeDetector {
@@ -289,6 +335,72 @@ impl RuntimeDetector {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_normalize_runtime_name_node_variants() {
+        assert_eq!(normalize_runtime_name("node"), "node");
+        assert_eq!(normalize_runtime_name("nodejs"), "node");
+        assert_eq!(normalize_runtime_name("node.js"), "node");
+    }
+
+    #[test]
+    fn test_normalize_runtime_name_python_variants() {
+        assert_eq!(normalize_runtime_name("python"), "python");
+        assert_eq!(normalize_runtime_name("python3"), "python");
+    }
+
+    #[test]
+    fn test_normalize_runtime_name_shell_variants() {
+        assert_eq!(normalize_runtime_name("shell"), "shell");
+        assert_eq!(normalize_runtime_name("bash"), "shell");
+        assert_eq!(normalize_runtime_name("sh"), "shell");
+    }
+
+    #[test]
+    fn test_normalize_runtime_name_native_variants() {
+        assert_eq!(normalize_runtime_name("native"), "native");
+        assert_eq!(normalize_runtime_name("builtin"), "native");
+        assert_eq!(normalize_runtime_name("standalone"), "native");
+    }
+
+    #[test]
+    fn test_normalize_runtime_name_passthrough() {
+        assert_eq!(normalize_runtime_name("custom_runtime"), "custom_runtime");
+    }
+
+    #[test]
+    fn test_runtime_matches_filter() {
+        // Node.js DB name lowercased vs worker filter "node"
+        assert!(runtime_matches_filter("node.js", "node"));
+        assert!(runtime_matches_filter("node", "nodejs"));
+        assert!(runtime_matches_filter("nodejs", "node.js"));
+        // Exact match
+        assert!(runtime_matches_filter("shell", "shell"));
+        // No match
+        assert!(!runtime_matches_filter("python", "node"));
+    }
+
+    #[test]
+    fn test_runtime_matches_filter_case_insensitive() {
+        // Database stores capitalized names (e.g., "Node.js", "Python")
+        // Worker capabilities store lowercase (e.g., "node", "python")
+        assert!(runtime_matches_filter("Node.js", "node"));
+        assert!(runtime_matches_filter("node", "Node.js"));
+        assert!(runtime_matches_filter("Python", "python"));
+        assert!(runtime_matches_filter("python", "Python"));
+        assert!(runtime_matches_filter("Shell", "shell"));
+        assert!(runtime_matches_filter("NODEJS", "node"));
+        assert!(!runtime_matches_filter("Python", "node"));
+    }
+
+    #[test]
+    fn test_runtime_in_filter() {
+        let filter = vec!["shell".to_string(), "node".to_string()];
+        assert!(runtime_in_filter("shell", &filter));
+        assert!(runtime_in_filter("node.js", &filter));
+        assert!(runtime_in_filter("nodejs", &filter));
+        assert!(!runtime_in_filter("python", &filter));
+    }
 
     #[test]
     fn test_verification_command_structure() {

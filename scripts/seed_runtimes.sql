@@ -152,12 +152,15 @@ INSERT INTO runtime (
         "environment": {
             "env_type": "node_modules",
             "dir_name": "node_modules",
-            "create_command": ["npm", "init", "-y"],
+            "create_command": ["sh", "-c", "mkdir -p {env_dir} && cp {manifest_path} {env_dir}/ 2>/dev/null || true"],
             "interpreter_path": null
         },
         "dependencies": {
             "manifest_file": "package.json",
-            "install_command": ["npm", "install", "--prefix", "{pack_dir}"]
+            "install_command": ["npm", "install", "--prefix", "{env_dir}"]
+        },
+        "env_vars": {
+            "NODE_PATH": "{env_dir}/node_modules"
         }
     }'::jsonb
 ) ON CONFLICT (ref) DO UPDATE SET

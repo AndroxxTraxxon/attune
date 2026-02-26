@@ -55,6 +55,7 @@ async fn setup_test_pack_and_action(pool: &PgPool) -> Result<(Pack, Action)> {
         description: "Test action for SSE tests".to_string(),
         entrypoint: "test.sh".to_string(),
         runtime: None,
+        runtime_version_constraint: None,
         param_schema: None,
         out_schema: None,
         is_adhoc: false,

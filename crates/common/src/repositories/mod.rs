@@ -40,6 +40,7 @@ pub mod pack_test;
 pub mod queue_stats;
 pub mod rule;
 pub mod runtime;
+pub mod runtime_version;
 pub mod trigger;
 pub mod workflow;
 
@@ -57,6 +58,7 @@ pub use pack_test::PackTestRepository;
 pub use queue_stats::QueueStatsRepository;
 pub use rule::RuleRepository;
 pub use runtime::{RuntimeRepository, WorkerRepository};
+pub use runtime_version::RuntimeVersionRepository;
 pub use trigger::{SensorRepository, TriggerRepository};
 pub use workflow::{WorkflowDefinitionRepository, WorkflowExecutionRepository};
 

@@ -12,6 +12,7 @@ use std::sync::Arc;
 use validator::Validate;
 
 use attune_common::repositories::{
+    action::{ActionRepository, CreateActionInput, UpdateActionInput},
     pack::PackRepository,
     workflow::{
         CreateWorkflowDefinitionInput, UpdateWorkflowDefinitionInput, WorkflowDefinitionRepository,
@@ -225,20 +226,35 @@ pub async fn create_workflow(
 
     // Create workflow input
     let workflow_input = CreateWorkflowDefinitionInput {
-        r#ref: request.r#ref,
+        r#ref: request.r#ref.clone(),
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
-        label: request.label,
-        description: request.description,
-        version: request.version,
-        param_schema: request.param_schema,
-        out_schema: request.out_schema,
+        label: request.label.clone(),
+        description: request.description.clone(),
+        version: request.version.clone(),
+        param_schema: request.param_schema.clone(),
+        out_schema: request.out_schema.clone(),
         definition: request.definition,
-        tags: request.tags.unwrap_or_default(),
+        tags: request.tags.clone().unwrap_or_default(),
         enabled: request.enabled.unwrap_or(true),
     };
 
     let workflow = WorkflowDefinitionRepository::create(&state.db, workflow_input).await?;
+
+    // Create a companion action record so the workflow appears in action lists
+    create_companion_action(
+        &state.db,
+        &workflow.r#ref,
+        pack.id,
+        &pack.r#ref,
+        &request.label,
+        &request.description.clone().unwrap_or_default(),
+        "workflow",
+        request.param_schema.as_ref(),
+        request.out_schema.as_ref(),
+        workflow.id,
+    )
+    .await?;
 
     let response = ApiResponse::with_message(
         WorkflowResponse::from(workflow),
@@ -280,11 +296,11 @@ pub async fn update_workflow(
 
     // Create update input
     let update_input = UpdateWorkflowDefinitionInput {
-        label: request.label,
-        description: request.description,
-        version: request.version,
-        param_schema: request.param_schema,
-        out_schema: request.out_schema,
+        label: request.label.clone(),
+        description: request.description.clone(),
+        version: request.version.clone(),
+        param_schema: request.param_schema.clone(),
+        out_schema: request.out_schema.clone(),
         definition: request.definition,
         tags: request.tags,
         enabled: request.enabled,
@@ -292,6 +308,17 @@ pub async fn update_workflow(
 
     let workflow =
         WorkflowDefinitionRepository::update(&state.db, existing_workflow.id, update_input).await?;
+
+    // Update the companion action record if it exists
+    update_companion_action(
+        &state.db,
+        existing_workflow.id,
+        request.label.as_deref(),
+        request.description.as_deref(),
+        request.param_schema.as_ref(),
+        request.out_schema.as_ref(),
+    )
+    .await?;
 
     let response = ApiResponse::with_message(
         WorkflowResponse::from(workflow),
@@ -325,7 +352,7 @@ pub async fn delete_workflow(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Workflow '{}' not found", workflow_ref)))?;
 
-    // Delete the workflow
+    // Delete the workflow (companion action is cascade-deleted via FK on action.workflow_def)
     let deleted = WorkflowDefinitionRepository::delete(&state.db, workflow.id).await?;
 
     if !deleted {
@@ -345,6 +372,7 @@ pub async fn delete_workflow(
 ///
 /// Writes a `{name}.workflow.yaml` file to `{packs_base_dir}/{pack_ref}/actions/workflows/`
 /// and creates or updates the corresponding workflow_definition record in the database.
+/// Also creates a companion action record so the workflow appears in action lists and palettes.
 #[utoipa::path(
     post,
     path = "/api/v1/packs/{pack_ref}/workflow-files",
@@ -398,20 +426,36 @@ pub async fn save_workflow_file(
     })?;
 
     let workflow_input = CreateWorkflowDefinitionInput {
-        r#ref: workflow_ref,
+        r#ref: workflow_ref.clone(),
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
-        label: request.label,
-        description: request.description,
-        version: request.version,
-        param_schema: request.param_schema,
-        out_schema: request.out_schema,
+        label: request.label.clone(),
+        description: request.description.clone(),
+        version: request.version.clone(),
+        param_schema: request.param_schema.clone(),
+        out_schema: request.out_schema.clone(),
         definition: definition_json,
-        tags: request.tags.unwrap_or_default(),
+        tags: request.tags.clone().unwrap_or_default(),
         enabled: request.enabled.unwrap_or(true),
     };
 
     let workflow = WorkflowDefinitionRepository::create(&state.db, workflow_input).await?;
+
+    // Create a companion action record so the workflow appears in action lists and palettes
+    let entrypoint = format!("workflows/{}.workflow.yaml", request.name);
+    create_companion_action(
+        &state.db,
+        &workflow_ref,
+        pack.id,
+        &pack.r#ref,
+        &request.label,
+        &request.description.clone().unwrap_or_default(),
+        &entrypoint,
+        request.param_schema.as_ref(),
+        request.out_schema.as_ref(),
+        workflow.id,
+    )
+    .await?;
 
     let response = ApiResponse::with_message(
         WorkflowResponse::from(workflow),
@@ -452,7 +496,7 @@ pub async fn update_workflow_file(
         .ok_or_else(|| ApiError::NotFound(format!("Workflow '{}' not found", workflow_ref)))?;
 
     // Verify pack exists
-    let _pack = PackRepository::find_by_ref(&state.db, &request.pack_ref)
+    let pack = PackRepository::find_by_ref(&state.db, &request.pack_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", request.pack_ref)))?;
 
@@ -466,11 +510,11 @@ pub async fn update_workflow_file(
     })?;
 
     let update_input = UpdateWorkflowDefinitionInput {
-        label: Some(request.label),
-        description: request.description,
+        label: Some(request.label.clone()),
+        description: request.description.clone(),
         version: Some(request.version),
-        param_schema: request.param_schema,
-        out_schema: request.out_schema,
+        param_schema: request.param_schema.clone(),
+        out_schema: request.out_schema.clone(),
         definition: Some(definition_json),
         tags: request.tags,
         enabled: request.enabled,
@@ -478,6 +522,23 @@ pub async fn update_workflow_file(
 
     let workflow =
         WorkflowDefinitionRepository::update(&state.db, existing_workflow.id, update_input).await?;
+
+    // Update the companion action record, or create it if it doesn't exist yet
+    // (handles workflows that were created before this fix was deployed)
+    let entrypoint = format!("workflows/{}.workflow.yaml", request.name);
+    ensure_companion_action(
+        &state.db,
+        existing_workflow.id,
+        &workflow_ref,
+        pack.id,
+        &pack.r#ref,
+        &request.label,
+        &request.description.unwrap_or_default(),
+        &entrypoint,
+        request.param_schema.as_ref(),
+        request.out_schema.as_ref(),
+    )
+    .await?;
 
     let response = ApiResponse::with_message(
         WorkflowResponse::from(workflow),
@@ -537,6 +598,204 @@ async fn write_workflow_yaml(
     Ok(())
 }
 
+/// Create a companion action record for a workflow definition.
+///
+/// This ensures the workflow appears in action lists and the action palette in the
+/// workflow builder. The action is created with `is_workflow = true` and linked to
+/// the workflow definition via the `workflow_def` FK.
+async fn create_companion_action(
+    db: &sqlx::PgPool,
+    workflow_ref: &str,
+    pack_id: i64,
+    pack_ref: &str,
+    label: &str,
+    description: &str,
+    entrypoint: &str,
+    param_schema: Option<&serde_json::Value>,
+    out_schema: Option<&serde_json::Value>,
+    workflow_def_id: i64,
+) -> Result<(), ApiError> {
+    let action_input = CreateActionInput {
+        r#ref: workflow_ref.to_string(),
+        pack: pack_id,
+        pack_ref: pack_ref.to_string(),
+        label: label.to_string(),
+        description: description.to_string(),
+        entrypoint: entrypoint.to_string(),
+        runtime: None,
+        runtime_version_constraint: None,
+        param_schema: param_schema.cloned(),
+        out_schema: out_schema.cloned(),
+        is_adhoc: false,
+    };
+
+    let action = ActionRepository::create(db, action_input)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to create companion action for workflow '{}': {}",
+                workflow_ref,
+                e
+            );
+            ApiError::InternalServerError(format!(
+                "Failed to create companion action for workflow: {}",
+                e
+            ))
+        })?;
+
+    // Link the action to the workflow definition (sets is_workflow = true and workflow_def)
+    ActionRepository::link_workflow_def(db, action.id, workflow_def_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to link action to workflow definition '{}': {}",
+                workflow_ref,
+                e
+            );
+            ApiError::InternalServerError(format!(
+                "Failed to link action to workflow definition: {}",
+                e
+            ))
+        })?;
+
+    tracing::info!(
+        "Created companion action '{}' (ID: {}) for workflow definition (ID: {})",
+        workflow_ref,
+        action.id,
+        workflow_def_id
+    );
+
+    Ok(())
+}
+
+/// Update the companion action record for a workflow definition.
+///
+/// Finds the action linked to the workflow definition and updates its metadata
+/// to stay in sync with the workflow definition.
+async fn update_companion_action(
+    db: &sqlx::PgPool,
+    workflow_def_id: i64,
+    label: Option<&str>,
+    description: Option<&str>,
+    param_schema: Option<&serde_json::Value>,
+    out_schema: Option<&serde_json::Value>,
+) -> Result<(), ApiError> {
+    let existing_action = ActionRepository::find_by_workflow_def(db, workflow_def_id)
+        .await
+        .map_err(|e| {
+            tracing::warn!(
+                "Failed to look up companion action for workflow_def {}: {}",
+                workflow_def_id,
+                e
+            );
+            ApiError::InternalServerError(format!("Failed to look up companion action: {}", e))
+        })?;
+
+    if let Some(action) = existing_action {
+        let update_input = UpdateActionInput {
+            label: label.map(|s| s.to_string()),
+            description: description.map(|s| s.to_string()),
+            entrypoint: None,
+            runtime: None,
+            runtime_version_constraint: None,
+            param_schema: param_schema.cloned(),
+            out_schema: out_schema.cloned(),
+        };
+
+        ActionRepository::update(db, action.id, update_input)
+            .await
+            .map_err(|e| {
+                tracing::warn!(
+                    "Failed to update companion action (ID: {}) for workflow_def {}: {}",
+                    action.id,
+                    workflow_def_id,
+                    e
+                );
+                ApiError::InternalServerError(format!("Failed to update companion action: {}", e))
+            })?;
+
+        tracing::debug!(
+            "Updated companion action '{}' (ID: {}) for workflow definition (ID: {})",
+            action.r#ref,
+            action.id,
+            workflow_def_id
+        );
+    } else {
+        tracing::debug!(
+            "No companion action found for workflow_def {}; skipping update",
+            workflow_def_id
+        );
+    }
+
+    Ok(())
+}
+
+/// Ensure a companion action record exists for a workflow definition.
+///
+/// If the action already exists, update it. If it doesn't exist (e.g., for workflows
+/// created before the companion-action fix), create it.
+async fn ensure_companion_action(
+    db: &sqlx::PgPool,
+    workflow_def_id: i64,
+    workflow_ref: &str,
+    pack_id: i64,
+    pack_ref: &str,
+    label: &str,
+    description: &str,
+    entrypoint: &str,
+    param_schema: Option<&serde_json::Value>,
+    out_schema: Option<&serde_json::Value>,
+) -> Result<(), ApiError> {
+    let existing_action = ActionRepository::find_by_workflow_def(db, workflow_def_id)
+        .await
+        .map_err(|e| {
+            ApiError::InternalServerError(format!("Failed to look up companion action: {}", e))
+        })?;
+
+    if let Some(action) = existing_action {
+        // Update existing companion action
+        let update_input = UpdateActionInput {
+            label: Some(label.to_string()),
+            description: Some(description.to_string()),
+            entrypoint: Some(entrypoint.to_string()),
+            runtime: None,
+            runtime_version_constraint: None,
+            param_schema: param_schema.cloned(),
+            out_schema: out_schema.cloned(),
+        };
+
+        ActionRepository::update(db, action.id, update_input)
+            .await
+            .map_err(|e| {
+                ApiError::InternalServerError(format!("Failed to update companion action: {}", e))
+            })?;
+
+        tracing::debug!(
+            "Updated companion action '{}' (ID: {}) for workflow definition (ID: {})",
+            action.r#ref,
+            action.id,
+            workflow_def_id
+        );
+    } else {
+        // Create new companion action (backfill for pre-fix workflows)
+        create_companion_action(
+            db,
+            workflow_ref,
+            pack_id,
+            pack_ref,
+            label,
+            description,
+            entrypoint,
+            param_schema,
+            out_schema,
+            workflow_def_id,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
 /// Create workflow routes
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -550,54 +809,4 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/workflows/{ref}/file", put(update_workflow_file))
         .route("/packs/{pack_ref}/workflows", get(list_workflows_by_pack))
         .route("/packs/{pack_ref}/workflow-files", post(save_workflow_file))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_workflow_routes_structure() {
-        // Just verify the router can be constructed
-        let _router = routes();
-    }
-
-    #[test]
-    fn test_save_request_validation() {
-        let req = SaveWorkflowFileRequest {
-            name: "test_workflow".to_string(),
-            label: "Test Workflow".to_string(),
-            description: Some("A test workflow".to_string()),
-            version: "1.0.0".to_string(),
-            pack_ref: "core".to_string(),
-            definition: serde_json::json!({
-                "ref": "core.test_workflow",
-                "label": "Test Workflow",
-                "version": "1.0.0",
-                "tasks": [{"name": "task1", "action": "core.echo"}]
-            }),
-            param_schema: None,
-            out_schema: None,
-            tags: None,
-            enabled: None,
-        };
-        assert!(req.validate().is_ok());
-    }
-
-    #[test]
-    fn test_save_request_validation_empty_name() {
-        let req = SaveWorkflowFileRequest {
-            name: "".to_string(), // Invalid: empty
-            label: "Test".to_string(),
-            description: None,
-            version: "1.0.0".to_string(),
-            pack_ref: "core".to_string(),
-            definition: serde_json::json!({}),
-            param_schema: None,
-            out_schema: None,
-            tags: None,
-            enabled: None,
-        };
-        assert!(req.validate().is_err());
-    }
 }

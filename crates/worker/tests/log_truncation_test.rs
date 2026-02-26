@@ -19,6 +19,7 @@ fn make_python_process_runtime(packs_base_dir: PathBuf) -> ProcessRuntime {
         },
         environment: None,
         dependencies: None,
+        env_vars: std::collections::HashMap::new(),
     };
     ProcessRuntime::new("python".to_string(), config, packs_base_dir.clone(), packs_base_dir.join("../runtime_envs"))
 }
@@ -42,6 +43,9 @@ fn make_python_context(
         code: Some(code.to_string()),
         code_path: None,
         runtime_name: Some("python".to_string()),
+        runtime_config_override: None,
+        runtime_env_dir_suffix: None,
+        selected_runtime_version: None,
         max_stdout_bytes,
         max_stderr_bytes,
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
@@ -121,6 +125,9 @@ done
         code: Some(code.to_string()),
         code_path: None,
         runtime_name: Some("shell".to_string()),
+        runtime_config_override: None,
+        runtime_env_dir_suffix: None,
+        selected_runtime_version: None,
         max_stdout_bytes: 400, // Small limit
         max_stderr_bytes: 1024,
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
@@ -258,6 +265,7 @@ async fn test_shell_process_runtime_truncation() {
         },
         environment: None,
         dependencies: None,
+        env_vars: std::collections::HashMap::new(),
     };
     let runtime = ProcessRuntime::new("shell".to_string(), config, tmp.path().to_path_buf(), tmp.path().join("runtime_envs"));
 
@@ -275,6 +283,9 @@ async fn test_shell_process_runtime_truncation() {
         ),
         code_path: None,
         runtime_name: Some("shell".to_string()),
+        runtime_config_override: None,
+        runtime_env_dir_suffix: None,
+        selected_runtime_version: None,
         max_stdout_bytes: 500,
         max_stderr_bytes: 1024,
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),

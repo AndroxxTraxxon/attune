@@ -29,6 +29,7 @@ pub struct CreateActionInput {
     pub description: String,
     pub entrypoint: String,
     pub runtime: Option<Id>,
+    pub runtime_version_constraint: Option<String>,
     pub param_schema: Option<JsonSchema>,
     pub out_schema: Option<JsonSchema>,
     pub is_adhoc: bool,
@@ -41,6 +42,7 @@ pub struct UpdateActionInput {
     pub description: Option<String>,
     pub entrypoint: Option<String>,
     pub runtime: Option<Id>,
+    pub runtime_version_constraint: Option<Option<String>>,
     pub param_schema: Option<JsonSchema>,
     pub out_schema: Option<JsonSchema>,
 }
@@ -54,7 +56,8 @@ impl FindById for ActionRepository {
         let action = sqlx::query_as::<_, Action>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   runtime, runtime_version_constraint,
+                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
             FROM action
             WHERE id = $1
             "#,
@@ -76,7 +79,8 @@ impl FindByRef for ActionRepository {
         let action = sqlx::query_as::<_, Action>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   runtime, runtime_version_constraint,
+                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
             FROM action
             WHERE ref = $1
             "#,
@@ -98,7 +102,8 @@ impl List for ActionRepository {
         let actions = sqlx::query_as::<_, Action>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   runtime, runtime_version_constraint,
+                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
             FROM action
             ORDER BY ref ASC
             "#,
@@ -133,10 +138,11 @@ impl Create for ActionRepository {
         let action = sqlx::query_as::<_, Action>(
             r#"
             INSERT INTO action (ref, pack, pack_ref, label, description, entrypoint,
-                                runtime, param_schema, out_schema, is_adhoc)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                                runtime, runtime_version_constraint, param_schema, out_schema, is_adhoc)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id, ref, pack, pack_ref, label, description, entrypoint,
-                      runtime, param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                      runtime, runtime_version_constraint,
+                      param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
             "#,
         )
         .bind(&input.r#ref)
@@ -146,6 +152,7 @@ impl Create for ActionRepository {
         .bind(&input.description)
         .bind(&input.entrypoint)
         .bind(input.runtime)
+        .bind(&input.runtime_version_constraint)
         .bind(&input.param_schema)
         .bind(&input.out_schema)
         .bind(input.is_adhoc)
@@ -213,6 +220,15 @@ impl Update for ActionRepository {
             has_updates = true;
         }
 
+        if let Some(runtime_version_constraint) = &input.runtime_version_constraint {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("runtime_version_constraint = ");
+            query.push_bind(runtime_version_constraint);
+            has_updates = true;
+        }
+
         if let Some(param_schema) = &input.param_schema {
             if has_updates {
                 query.push(", ");
@@ -240,7 +256,7 @@ impl Update for ActionRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(" RETURNING id, ref, pack, pack_ref, label, description, entrypoint, runtime, param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated");
+        query.push(" RETURNING id, ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_version_constraint, param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated");
 
         let action = query
             .build_query_as::<Action>()
@@ -279,7 +295,8 @@ impl ActionRepository {
         let actions = sqlx::query_as::<_, Action>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   runtime, runtime_version_constraint,
+                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
             FROM action
             WHERE pack = $1
             ORDER BY ref ASC
@@ -300,7 +317,8 @@ impl ActionRepository {
         let actions = sqlx::query_as::<_, Action>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   runtime, runtime_version_constraint,
+                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
             FROM action
             WHERE runtime = $1
             ORDER BY ref ASC
@@ -322,7 +340,8 @@ impl ActionRepository {
         let actions = sqlx::query_as::<_, Action>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   runtime, runtime_version_constraint,
+                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
             FROM action
             WHERE LOWER(ref) LIKE $1 OR LOWER(label) LIKE $1 OR LOWER(description) LIKE $1
             ORDER BY ref ASC
@@ -343,7 +362,8 @@ impl ActionRepository {
         let actions = sqlx::query_as::<_, Action>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   runtime, runtime_version_constraint,
+                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
             FROM action
             WHERE is_workflow = true
             ORDER BY ref ASC
@@ -366,7 +386,8 @@ impl ActionRepository {
         let action = sqlx::query_as::<_, Action>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   runtime, runtime_version_constraint,
+                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
             FROM action
             WHERE workflow_def = $1
             "#,
@@ -393,7 +414,8 @@ impl ActionRepository {
             SET is_workflow = true, workflow_def = $2, updated = NOW()
             WHERE id = $1
             RETURNING id, ref, pack, pack_ref, label, description, entrypoint,
-                      runtime, param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                      runtime, runtime_version_constraint,
+                      param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
             "#,
         )
         .bind(action_id)

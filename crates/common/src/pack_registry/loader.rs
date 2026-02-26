@@ -20,10 +20,12 @@ use crate::error::{Error, Result};
 use crate::models::Id;
 use crate::repositories::action::ActionRepository;
 use crate::repositories::runtime::{CreateRuntimeInput, RuntimeRepository};
+use crate::repositories::runtime_version::{CreateRuntimeVersionInput, RuntimeVersionRepository};
 use crate::repositories::trigger::{
     CreateSensorInput, CreateTriggerInput, SensorRepository, TriggerRepository,
 };
 use crate::repositories::{Create, FindById, FindByRef, Update};
+use crate::version_matching::extract_version_components;
 
 /// Result of loading pack components into the database.
 #[derive(Debug, Default)]
@@ -201,6 +203,10 @@ impl<'a> PackComponentLoader<'a> {
                 Ok(rt) => {
                     info!("Created runtime '{}' (ID: {})", runtime_ref, rt.id);
                     result.runtimes_loaded += 1;
+
+                    // Load version entries from the optional `versions` array
+                    self.load_runtime_versions(&data, rt.id, &runtime_ref, result)
+                        .await;
                 }
                 Err(e) => {
                     // Check for unique constraint violation (race condition)
@@ -224,6 +230,141 @@ impl<'a> PackComponentLoader<'a> {
         }
 
         Ok(())
+    }
+
+    /// Load version entries from the `versions` array in a runtime YAML.
+    ///
+    /// Each entry in the array describes a specific version of the runtime
+    /// with its own `execution_config` and `distributions`. Example:
+    ///
+    /// ```yaml
+    /// versions:
+    ///   - version: "3.12"
+    ///     is_default: true
+    ///     execution_config:
+    ///       interpreter:
+    ///         binary: python3.12
+    ///         ...
+    ///     distributions:
+    ///       verification:
+    ///         commands:
+    ///           - binary: python3.12
+    ///             args: ["--version"]
+    ///             ...
+    /// ```
+    async fn load_runtime_versions(
+        &self,
+        data: &serde_yaml_ng::Value,
+        runtime_id: Id,
+        runtime_ref: &str,
+        result: &mut PackLoadResult,
+    ) {
+        let versions = match data.get("versions").and_then(|v| v.as_sequence()) {
+            Some(seq) => seq,
+            None => return, // No versions defined — that's fine
+        };
+
+        info!(
+            "Loading {} version(s) for runtime '{}'",
+            versions.len(),
+            runtime_ref
+        );
+
+        for entry in versions {
+            let version_str = match entry.get("version").and_then(|v| v.as_str()) {
+                Some(v) => v.to_string(),
+                None => {
+                    let msg = format!(
+                        "Runtime '{}' has a version entry without a 'version' field, skipping",
+                        runtime_ref
+                    );
+                    warn!("{}", msg);
+                    result.warnings.push(msg);
+                    continue;
+                }
+            };
+
+            // Check if this version already exists
+            if let Ok(Some(_existing)) = RuntimeVersionRepository::find_by_runtime_and_version(
+                self.pool,
+                runtime_id,
+                &version_str,
+            )
+            .await
+            {
+                info!(
+                    "Version '{}' for runtime '{}' already exists, skipping",
+                    version_str, runtime_ref
+                );
+                continue;
+            }
+
+            let (version_major, version_minor, version_patch) =
+                extract_version_components(&version_str);
+
+            let execution_config = entry
+                .get("execution_config")
+                .and_then(|v| serde_json::to_value(v).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+
+            let distributions = entry
+                .get("distributions")
+                .and_then(|v| serde_json::to_value(v).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+
+            let is_default = entry
+                .get("is_default")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let meta = entry
+                .get("meta")
+                .and_then(|v| serde_json::to_value(v).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+
+            let input = CreateRuntimeVersionInput {
+                runtime: runtime_id,
+                runtime_ref: runtime_ref.to_string(),
+                version: version_str.clone(),
+                version_major,
+                version_minor,
+                version_patch,
+                execution_config,
+                distributions,
+                is_default,
+                available: true, // Assume available until verification runs
+                meta,
+            };
+
+            match RuntimeVersionRepository::create(self.pool, input).await {
+                Ok(rv) => {
+                    info!(
+                        "Created version '{}' for runtime '{}' (ID: {})",
+                        version_str, runtime_ref, rv.id
+                    );
+                }
+                Err(e) => {
+                    // Check for unique constraint violation (race condition)
+                    if let Error::Database(ref db_err) = e {
+                        if let sqlx::Error::Database(ref inner) = db_err {
+                            if inner.is_unique_violation() {
+                                info!(
+                                    "Version '{}' for runtime '{}' already exists (concurrent), skipping",
+                                    version_str, runtime_ref
+                                );
+                                continue;
+                            }
+                        }
+                    }
+                    let msg = format!(
+                        "Failed to create version '{}' for runtime '{}': {}",
+                        version_str, runtime_ref, e
+                    );
+                    warn!("{}", msg);
+                    result.warnings.push(msg);
+                }
+            }
+        }
     }
 
     async fn load_triggers(
@@ -424,16 +565,22 @@ impl<'a> PackComponentLoader<'a> {
                 .unwrap_or("text")
                 .to_lowercase();
 
+            // Optional runtime version constraint (e.g., ">=3.12", "~18.0")
+            let runtime_version_constraint = data
+                .get("runtime_version")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
             // Use raw SQL to include parameter_delivery, parameter_format,
             // output_format which are not in CreateActionInput
             let create_result = sqlx::query_scalar::<_, i64>(
                 r#"
                 INSERT INTO action (
                     ref, pack, pack_ref, label, description, entrypoint,
-                    runtime, param_schema, out_schema, is_adhoc,
+                    runtime, runtime_version_constraint, param_schema, out_schema, is_adhoc,
                     parameter_delivery, parameter_format, output_format
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                 RETURNING id
                 "#,
             )
@@ -444,6 +591,7 @@ impl<'a> PackComponentLoader<'a> {
             .bind(&description)
             .bind(&entrypoint)
             .bind(runtime_id)
+            .bind(&runtime_version_constraint)
             .bind(&param_schema)
             .bind(&out_schema)
             .bind(false) // is_adhoc
@@ -601,6 +749,12 @@ impl<'a> PackComponentLoader<'a> {
                 .and_then(|v| serde_json::to_value(v).ok())
                 .unwrap_or_else(|| serde_json::json!({}));
 
+            // Optional runtime version constraint (e.g., ">=3.12", "~18.0")
+            let runtime_version_constraint = data
+                .get("runtime_version")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
             // Upsert: update existing sensors so re-registration corrects
             // stale metadata (especially runtime assignments).
             if let Some(existing) = SensorRepository::find_by_ref(self.pool, &sensor_ref).await? {
@@ -612,6 +766,7 @@ impl<'a> PackComponentLoader<'a> {
                     entrypoint: Some(entrypoint),
                     runtime: Some(sensor_runtime_id),
                     runtime_ref: Some(sensor_runtime_ref.clone()),
+                    runtime_version_constraint: Some(runtime_version_constraint.clone()),
                     trigger: Some(trigger_id.unwrap_or(existing.trigger)),
                     trigger_ref: Some(trigger_ref.unwrap_or(existing.trigger_ref.clone())),
                     enabled: Some(enabled),
@@ -645,6 +800,7 @@ impl<'a> PackComponentLoader<'a> {
                 entrypoint,
                 runtime: sensor_runtime_id,
                 runtime_ref: sensor_runtime_ref.clone(),
+                runtime_version_constraint,
                 trigger: trigger_id.unwrap_or(0),
                 trigger_ref: trigger_ref.unwrap_or_default(),
                 enabled,

@@ -198,6 +198,7 @@ async fn test_update_action() {
         description: Some("Updated description".to_string()),
         entrypoint: None,
         runtime: None,
+        runtime_version_constraint: None,
         param_schema: None,
         out_schema: None,
     };
@@ -329,6 +330,7 @@ async fn test_action_foreign_key_constraint() {
         description: "Test".to_string(),
         entrypoint: "main.py".to_string(),
         runtime: None,
+        runtime_version_constraint: None,
         param_schema: None,
         out_schema: None,
         is_adhoc: false,

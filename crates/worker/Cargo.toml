@@ -26,6 +26,7 @@ clap = { workspace = true }
 lapin = { workspace = true }
 reqwest = { workspace = true }
 hostname = "0.4"
+regex = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 aes-gcm = { workspace = true }
