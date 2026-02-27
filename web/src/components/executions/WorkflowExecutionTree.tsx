@@ -138,7 +138,7 @@ const ChildExecutionRow = memo(function ChildExecutionRow({
         {/* Task name / expand toggle */}
         <td className="py-3 pr-2" style={{ paddingLeft: indent }}>
           <div className="flex items-center gap-1.5 min-w-0">
-            {isWorkflow && (
+            {isWorkflow ? (
               <button
                 onClick={(e) => {
                   e.preventDefault();
@@ -160,6 +160,8 @@ const ChildExecutionRow = memo(function ChildExecutionRow({
                   <ChevronRight className="h-3.5 w-3.5 text-gray-400" />
                 )}
               </button>
+            ) : (
+              <span className="flex-shrink-0 w-[18px]" />
             )}
 
             {getStatusIcon(execution.status)}
@@ -321,7 +323,7 @@ const WorkflowExecutionRow = memo(function WorkflowExecutionRow({
       >
         <td className="px-6 py-4">
           <div className="flex items-center gap-2">
-            {isWorkflow && (
+            {isWorkflow ? (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -340,6 +342,8 @@ const WorkflowExecutionRow = memo(function WorkflowExecutionRow({
                   <ChevronRight className="h-4 w-4 text-gray-500" />
                 )}
               </button>
+            ) : (
+              <span className="flex-shrink-0 w-[20px]" />
             )}
             <Link
               to={`/executions/${execution.id}`}
