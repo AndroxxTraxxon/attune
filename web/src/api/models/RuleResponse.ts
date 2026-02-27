@@ -7,9 +7,9 @@
  */
 export type RuleResponse = {
     /**
-     * Action ID
+     * Action ID (null if the referenced action has been deleted)
      */
-    action: number;
+    action?: number | null;
     /**
      * Parameters to pass to the action when rule is triggered
      */
@@ -59,9 +59,9 @@ export type RuleResponse = {
      */
     ref: string;
     /**
-     * Trigger ID
+     * Trigger ID (null if the referenced trigger has been deleted)
      */
-    trigger: number;
+    trigger?: number | null;
     /**
      * Parameters for trigger configuration and event filtering
      */

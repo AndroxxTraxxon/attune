@@ -19,7 +19,7 @@ export type CreateTriggerRequest = {
      */
     label: string;
     /**
-     * Output schema (JSON Schema) defining event data structure
+     * Output schema (flat format) defining event data structure with inline required/secret
      */
     out_schema?: any | null;
     /**
@@ -27,7 +27,7 @@ export type CreateTriggerRequest = {
      */
     pack_ref?: string | null;
     /**
-     * Parameter schema (JSON Schema) defining event payload structure
+     * Parameter schema (StackStorm-style) defining trigger configuration with inline required/secret
      */
     param_schema?: any | null;
     /**

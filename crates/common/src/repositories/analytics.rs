@@ -80,6 +80,19 @@ pub struct EnforcementVolumeBucket {
     pub enforcement_count: i64,
 }
 
+/// A single hourly bucket of execution volume (from execution hypertable directly).
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct ExecutionVolumeBucket {
+    /// Start of the 1-hour bucket
+    pub bucket: DateTime<Utc>,
+    /// Action ref; NULL when grouped across all actions
+    pub action_ref: Option<String>,
+    /// The initial status at creation time
+    pub initial_status: Option<String>,
+    /// Number of executions created in this bucket
+    pub execution_count: i64,
+}
+
 /// Aggregated failure rate over a time range.
 #[derive(Debug, Clone, Serialize)]
 pub struct FailureRateSummary {
@@ -452,6 +465,69 @@ impl AnalyticsRepository {
         .await?;
 
         Ok(rows)
+    }
+
+    // =======================================================================
+    // Execution volume (from execution hypertable directly)
+    // =======================================================================
+
+    /// Query the `execution_volume_hourly` continuous aggregate for execution
+    /// creation volume across all actions.
+    pub async fn execution_volume_hourly<'e, E>(
+        executor: E,
+        range: &AnalyticsTimeRange,
+    ) -> Result<Vec<ExecutionVolumeBucket>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, ExecutionVolumeBucket>(
+            r#"
+            SELECT
+                bucket,
+                NULL::text AS action_ref,
+                initial_status::text AS initial_status,
+                SUM(execution_count)::bigint AS execution_count
+            FROM execution_volume_hourly
+            WHERE bucket >= $1 AND bucket <= $2
+            GROUP BY bucket, initial_status
+            ORDER BY bucket ASC, initial_status
+            "#,
+        )
+        .bind(range.since)
+        .bind(range.until)
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+
+    /// Query the `execution_volume_hourly` continuous aggregate filtered by
+    /// a specific action ref.
+    pub async fn execution_volume_hourly_by_action<'e, E>(
+        executor: E,
+        range: &AnalyticsTimeRange,
+        action_ref: &str,
+    ) -> Result<Vec<ExecutionVolumeBucket>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, ExecutionVolumeBucket>(
+            r#"
+            SELECT
+                bucket,
+                action_ref,
+                initial_status::text AS initial_status,
+                execution_count
+            FROM execution_volume_hourly
+            WHERE bucket >= $1 AND bucket <= $2 AND action_ref = $3
+            ORDER BY bucket ASC, initial_status
+            "#,
+        )
+        .bind(range.since)
+        .bind(range.until)
+        .bind(action_ref)
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
     }
 
     // =======================================================================

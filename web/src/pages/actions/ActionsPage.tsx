@@ -2,7 +2,16 @@ import { Link, useParams, useNavigate } from "react-router-dom";
 import { useActions, useAction, useDeleteAction } from "@/hooks/useActions";
 import { useExecutions } from "@/hooks/useExecutions";
 import { useState, useMemo } from "react";
-import { ChevronDown, ChevronRight, Search, X, Play, Plus } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Search,
+  X,
+  Play,
+  Plus,
+  GitBranch,
+  Pencil,
+} from "lucide-react";
 import ExecuteActionModal from "@/components/common/ExecuteActionModal";
 import ErrorDisplay from "@/components/common/ErrorDisplay";
 import { extractProperties } from "@/components/common/ParamSchemaForm";
@@ -177,7 +186,12 @@ export default function ActionsPage() {
                                   : "border-2 border-transparent hover:bg-gray-50"
                               }`}
                             >
-                              <div className="font-medium text-sm text-gray-900 truncate">
+                              <div className="font-medium text-sm text-gray-900 truncate flex items-center gap-1.5">
+                                {action.workflow_def && (
+                                  <span title="Workflow">
+                                    <GitBranch className="w-3.5 h-3.5 text-purple-500 flex-shrink-0" />
+                                  </span>
+                                )}
                                 {action.label}
                               </div>
                               <div className="font-mono text-xs text-gray-500 mt-1 truncate">
@@ -236,6 +250,7 @@ export default function ActionsPage() {
 }
 
 function ActionDetail({ actionRef }: { actionRef: string }) {
+  const navigate = useNavigate();
   const { data: action, isLoading, error } = useAction(actionRef);
   const { data: executionsData } = useExecutions({
     actionRef: actionRef,
@@ -290,6 +305,17 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
             </h1>
           </div>
           <div className="flex gap-2">
+            {action.data?.workflow_def && (
+              <button
+                onClick={() =>
+                  navigate(`/actions/workflows/${action.data!.ref}/edit`)
+                }
+                className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 flex items-center gap-2"
+              >
+                <Pencil className="h-4 w-4" />
+                Edit Workflow
+              </button>
+            )}
             <button
               onClick={() => setShowExecuteModal(true)}
               className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 flex items-center gap-2"

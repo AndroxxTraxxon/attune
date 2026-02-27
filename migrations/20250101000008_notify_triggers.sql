@@ -163,7 +163,7 @@ BEGIN
         'config', NEW.config,
         'payload', NEW.payload,
         'created', NEW.created,
-        'updated', NEW.updated
+        'resolved_at', NEW.resolved_at
     );
 
     PERFORM pg_notify('enforcement_created', payload::text);
@@ -203,7 +203,7 @@ BEGIN
             'config', NEW.config,
             'payload', NEW.payload,
             'created', NEW.created,
-            'updated', NEW.updated
+            'resolved_at', NEW.resolved_at
         );
 
         PERFORM pg_notify('enforcement_status_changed', payload::text);

@@ -19,6 +19,10 @@ export type PackResponse = {
      */
     created: string;
     /**
+     * Pack dependencies (refs of required packs)
+     */
+    dependencies: Array<string>;
+    /**
      * Pack description
      */
     description?: string | null;
@@ -43,7 +47,7 @@ export type PackResponse = {
      */
     ref: string;
     /**
-     * Runtime dependencies
+     * Runtime dependencies (e.g., shell, python, nodejs)
      */
     runtime_deps: Array<string>;
     /**

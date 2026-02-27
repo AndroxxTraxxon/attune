@@ -2,6 +2,22 @@
 //!
 //! This module manages workflow execution context, including variables,
 //! template rendering, and data flow between tasks.
+//!
+//! ## Function-call expressions
+//!
+//! Templates support Orquesta-style function calls:
+//! - `{{ result() }}` — the last completed task's result
+//! - `{{ result().field }}` — nested access into the result
+//! - `{{ succeeded() }}` — `true` if the last task succeeded
+//! - `{{ failed() }}` — `true` if the last task failed
+//! - `{{ timed_out() }}` — `true` if the last task timed out
+//!
+//! ## Type-preserving rendering
+//!
+//! When a JSON string value is a *pure* template expression (the entire value
+//! is `{{ expr }}`), `render_json` returns the raw `JsonValue` from the
+//! expression instead of stringifying it. This means `"{{ item }}"` resolving
+//! to integer `5` stays as `5`, not the string `"5"`.
 
 use dashmap::DashMap;
 use serde_json::{json, Value as JsonValue};
@@ -31,6 +47,15 @@ pub enum ContextError {
     JsonError(#[from] serde_json::Error),
 }
 
+/// The status of the last completed task, used by `succeeded()` / `failed()` /
+/// `timed_out()` function expressions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskOutcome {
+    Succeeded,
+    Failed,
+    TimedOut,
+}
+
 /// Workflow execution context
 ///
 /// Uses Arc for shared immutable data to enable efficient cloning.
@@ -55,6 +80,12 @@ pub struct WorkflowContext {
 
     /// Current item index (for with-items iteration) - per-item data
     current_index: Option<usize>,
+
+    /// The result of the last completed task (for `result()` expressions)
+    last_task_result: Option<JsonValue>,
+
+    /// The outcome of the last completed task (for `succeeded()` / `failed()`)
+    last_task_outcome: Option<TaskOutcome>,
 }
 
 impl WorkflowContext {
@@ -75,6 +106,46 @@ impl WorkflowContext {
             system: Arc::new(system),
             current_item: None,
             current_index: None,
+            last_task_result: None,
+            last_task_outcome: None,
+        }
+    }
+
+    /// Rebuild a workflow context from persisted workflow execution state.
+    ///
+    /// This is used when advancing a workflow after a child task completes —
+    /// the scheduler reconstructs the context from the `workflow_execution`
+    /// record's stored `variables` plus the results of all completed child
+    /// executions.
+    pub fn rebuild(
+        parameters: JsonValue,
+        stored_variables: &JsonValue,
+        task_results: HashMap<String, JsonValue>,
+    ) -> Self {
+        let variables = DashMap::new();
+        if let Some(obj) = stored_variables.as_object() {
+            for (k, v) in obj {
+                variables.insert(k.clone(), v.clone());
+            }
+        }
+
+        let results = DashMap::new();
+        for (k, v) in task_results {
+            results.insert(k, v);
+        }
+
+        let system = DashMap::new();
+        system.insert("workflow_start".to_string(), json!(chrono::Utc::now()));
+
+        Self {
+            variables: Arc::new(variables),
+            parameters: Arc::new(parameters),
+            task_results: Arc::new(results),
+            system: Arc::new(system),
+            current_item: None,
+            current_index: None,
+            last_task_result: None,
+            last_task_outcome: None,
         }
     }
 
@@ -112,7 +183,28 @@ impl WorkflowContext {
         self.current_index = None;
     }
 
-    /// Render a template string
+    /// Record the outcome of the last completed task so that `result()`,
+    /// `succeeded()`, `failed()`, and `timed_out()` expressions resolve
+    /// correctly.
+    pub fn set_last_task_outcome(&mut self, result: JsonValue, outcome: TaskOutcome) {
+        self.last_task_result = Some(result);
+        self.last_task_outcome = Some(outcome);
+    }
+
+    /// Export workflow variables as a JSON object suitable for persisting
+    /// back to the `workflow_execution.variables` column.
+    pub fn export_variables(&self) -> JsonValue {
+        let map: HashMap<String, JsonValue> = self
+            .variables
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+        json!(map)
+    }
+
+    /// Render a template string, always returning a `String`.
+    ///
+    /// For type-preserving rendering of JSON values use [`render_json`].
     pub fn render_template(&self, template: &str) -> ContextResult<String> {
         // Simple template rendering (Jinja2-like syntax)
         // Supports: {{ variable }}, {{ task.result }}, {{ parameters.key }}
@@ -143,10 +235,49 @@ impl WorkflowContext {
         Ok(result)
     }
 
-    /// Render a JSON value (recursively render templates in strings)
+    /// Try to evaluate a string as a single pure template expression.
+    ///
+    /// Returns `Some(JsonValue)` when the **entire** string is exactly
+    /// `{{ expr }}` (with optional whitespace), preserving the original
+    /// JSON type of the evaluated expression.  Returns `None` if the
+    /// string contains literal text around the template or multiple
+    /// template expressions — in that case the caller should fall back
+    /// to `render_template` which always stringifies.
+    fn try_evaluate_pure_expression(&self, s: &str) -> Option<ContextResult<JsonValue>> {
+        let trimmed = s.trim();
+        if !trimmed.starts_with("{{") || !trimmed.ends_with("}}") {
+            return None;
+        }
+
+        // Make sure there is only ONE template expression in the string.
+        // Count `{{` occurrences — if more than one, it's not a pure expr.
+        if trimmed.matches("{{").count() != 1 {
+            return None;
+        }
+
+        let expr = trimmed[2..trimmed.len() - 2].trim();
+        if expr.is_empty() {
+            return None;
+        }
+
+        Some(self.evaluate_expression(expr))
+    }
+
+    /// Render a JSON value, recursively resolving `{{ }}` templates in
+    /// strings.
+    ///
+    /// **Type-preserving**: when a string value is a *pure* template
+    /// expression (the entire string is `{{ expr }}`), the raw `JsonValue`
+    /// from the expression is returned.  For example, if `item` is `5`
+    /// (a JSON number), then `"{{ item }}"` resolves to `5` not `"5"`.
     pub fn render_json(&self, value: &JsonValue) -> ContextResult<JsonValue> {
         match value {
             JsonValue::String(s) => {
+                // Fast path: try as a pure expression to preserve type
+                if let Some(result) = self.try_evaluate_pure_expression(s) {
+                    return result;
+                }
+                // Fallback: render as string (interpolation with surrounding text)
                 let rendered = self.render_template(s)?;
                 Ok(JsonValue::String(rendered))
             }
@@ -170,6 +301,28 @@ impl WorkflowContext {
 
     /// Evaluate a template expression
     fn evaluate_expression(&self, expr: &str) -> ContextResult<JsonValue> {
+        // ---------------------------------------------------------------
+        // Function-call expressions: result(), succeeded(), failed(), timed_out()
+        // ---------------------------------------------------------------
+        // We handle these *before* splitting on `.` because the function
+        // name contains parentheses which would confuse the dot-split.
+        //
+        // Supported patterns:
+        //   result()              → last task result
+        //   result().foo.bar      → nested access into result
+        //   result().data.items   → nested access into result
+        //   succeeded()           → boolean
+        //   failed()              → boolean
+        //   timed_out()           → boolean
+        // ---------------------------------------------------------------
+
+        if let Some(result_val) = self.try_evaluate_function_call(expr)? {
+            return Ok(result_val);
+        }
+
+        // ---------------------------------------------------------------
+        // Dot-path expressions
+        // ---------------------------------------------------------------
         let parts: Vec<&str> = expr.split('.').collect();
 
         if parts.is_empty() {
@@ -244,7 +397,8 @@ impl WorkflowContext {
                     Err(ContextError::VariableNotFound(format!("system.{}", key)))
                 }
             }
-            // Direct variable reference
+            // Direct variable reference (e.g., `number_list` published by a
+            // previous task's transition)
             var_name => {
                 if let Some(entry) = self.variables.get(var_name) {
                     let value = entry.value().clone();
@@ -259,6 +413,56 @@ impl WorkflowContext {
                 }
             }
         }
+    }
+
+    /// Try to evaluate `expr` as a function-call expression.
+    ///
+    /// Returns `Ok(Some(value))` if the expression starts with a recognised
+    /// function call, `Ok(None)` if it does not match, or `Err` on failure.
+    fn try_evaluate_function_call(&self, expr: &str) -> ContextResult<Option<JsonValue>> {
+        // succeeded()
+        if expr == "succeeded()" {
+            let val = self
+                .last_task_outcome
+                .map(|o| o == TaskOutcome::Succeeded)
+                .unwrap_or(false);
+            return Ok(Some(json!(val)));
+        }
+
+        // failed()
+        if expr == "failed()" {
+            let val = self
+                .last_task_outcome
+                .map(|o| o == TaskOutcome::Failed)
+                .unwrap_or(false);
+            return Ok(Some(json!(val)));
+        }
+
+        // timed_out()
+        if expr == "timed_out()" {
+            let val = self
+                .last_task_outcome
+                .map(|o| o == TaskOutcome::TimedOut)
+                .unwrap_or(false);
+            return Ok(Some(json!(val)));
+        }
+
+        // result()  or  result().path.to.field
+        if expr == "result()" || expr.starts_with("result().") {
+            let base = self.last_task_result.clone().unwrap_or(JsonValue::Null);
+
+            if expr == "result()" {
+                return Ok(Some(base));
+            }
+
+            // Strip "result()." prefix and navigate the remaining path
+            let rest = &expr["result().".len()..];
+            let path_parts: Vec<&str> = rest.split('.').collect();
+            let val = self.get_nested_value(&base, &path_parts)?;
+            return Ok(Some(val));
+        }
+
+        Ok(None)
     }
 
     /// Get nested value from JSON
@@ -313,7 +517,12 @@ impl WorkflowContext {
         }
     }
 
-    /// Publish variables from a task result
+    /// Publish variables from a task result.
+    ///
+    /// Each publish directive is a `(name, expression)` pair where the
+    /// expression is a template string like `"{{ result().data.items }}"`.
+    /// The expression is rendered with `render_json`-style type preservation
+    /// so that non-string values (arrays, numbers, booleans) keep their type.
     pub fn publish_from_result(
         &mut self,
         result: &JsonValue,
@@ -323,16 +532,11 @@ impl WorkflowContext {
         // If publish map is provided, use it
         if let Some(map) = publish_map {
             for (var_name, template) in map {
-                // Create temporary context with result
-                let mut temp_ctx = self.clone();
-                temp_ctx.set_var("result", result.clone());
-
-                let value_str = temp_ctx.render_template(template)?;
-
-                // Try to parse as JSON, otherwise store as string
-                let value = serde_json::from_str(&value_str)
-                    .unwrap_or_else(|_| JsonValue::String(value_str));
-
+                // Use type-preserving rendering: if the entire template is a
+                // single expression like `{{ result().data.items }}`, preserve
+                // the underlying JsonValue type (e.g. an array stays an array).
+                let json_value = JsonValue::String(template.clone());
+                let value = self.render_json(&json_value)?;
                 self.set_var(var_name, value);
             }
         } else {
@@ -405,6 +609,8 @@ impl WorkflowContext {
             system: Arc::new(system),
             current_item: None,
             current_index: None,
+            last_task_result: None,
+            last_task_outcome: None,
         })
     }
 }
@@ -514,6 +720,122 @@ mod tests {
     }
 
     #[test]
+    fn test_render_json_type_preserving_number() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_current_item(json!(5), 0);
+
+        // Pure expression — should preserve the integer type
+        let input = json!({"seconds": "{{ item }}"});
+        let result = ctx.render_json(&input).unwrap();
+        assert_eq!(result["seconds"], json!(5));
+        assert!(result["seconds"].is_number());
+    }
+
+    #[test]
+    fn test_render_json_type_preserving_array() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_last_task_outcome(
+            json!({"data": {"items": [0, 1, 2, 3, 4]}}),
+            TaskOutcome::Succeeded,
+        );
+
+        // Pure expression into result() — should preserve the array type
+        let input = json!({"list": "{{ result().data.items }}"});
+        let result = ctx.render_json(&input).unwrap();
+        assert_eq!(result["list"], json!([0, 1, 2, 3, 4]));
+        assert!(result["list"].is_array());
+    }
+
+    #[test]
+    fn test_render_json_mixed_template_stays_string() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_current_item(json!(5), 0);
+
+        // Mixed text + template — must remain a string
+        let input = json!({"msg": "Sleeping for {{ item }} seconds"});
+        let result = ctx.render_json(&input).unwrap();
+        assert_eq!(result["msg"], json!("Sleeping for 5 seconds"));
+        assert!(result["msg"].is_string());
+    }
+
+    #[test]
+    fn test_render_json_type_preserving_bool() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_last_task_outcome(json!({}), TaskOutcome::Succeeded);
+
+        let input = json!({"ok": "{{ succeeded() }}"});
+        let result = ctx.render_json(&input).unwrap();
+        assert_eq!(result["ok"], json!(true));
+        assert!(result["ok"].is_boolean());
+    }
+
+    #[test]
+    fn test_result_function() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_last_task_outcome(
+            json!({"data": {"items": [10, 20]}, "stdout": "hello"}),
+            TaskOutcome::Succeeded,
+        );
+
+        // result() returns the full last task result
+        let val = ctx.evaluate_expression("result()").unwrap();
+        assert_eq!(val["data"]["items"], json!([10, 20]));
+
+        // result().stdout returns nested field
+        let val = ctx.evaluate_expression("result().stdout").unwrap();
+        assert_eq!(val, json!("hello"));
+
+        // result().data.items returns deeper nested field
+        let val = ctx.evaluate_expression("result().data.items").unwrap();
+        assert_eq!(val, json!([10, 20]));
+    }
+
+    #[test]
+    fn test_succeeded_failed_functions() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_last_task_outcome(json!({}), TaskOutcome::Succeeded);
+
+        assert_eq!(ctx.evaluate_expression("succeeded()").unwrap(), json!(true));
+        assert_eq!(ctx.evaluate_expression("failed()").unwrap(), json!(false));
+        assert_eq!(
+            ctx.evaluate_expression("timed_out()").unwrap(),
+            json!(false)
+        );
+
+        ctx.set_last_task_outcome(json!({}), TaskOutcome::Failed);
+        assert_eq!(
+            ctx.evaluate_expression("succeeded()").unwrap(),
+            json!(false)
+        );
+        assert_eq!(ctx.evaluate_expression("failed()").unwrap(), json!(true));
+
+        ctx.set_last_task_outcome(json!({}), TaskOutcome::TimedOut);
+        assert_eq!(ctx.evaluate_expression("timed_out()").unwrap(), json!(true));
+    }
+
+    #[test]
+    fn test_publish_with_result_function() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_last_task_outcome(
+            json!({"data": {"items": [0, 1, 2]}}),
+            TaskOutcome::Succeeded,
+        );
+
+        let mut publish_map = HashMap::new();
+        publish_map.insert(
+            "number_list".to_string(),
+            "{{ result().data.items }}".to_string(),
+        );
+
+        ctx.publish_from_result(&json!({}), &[], Some(&publish_map))
+            .unwrap();
+
+        let val = ctx.get_var("number_list").unwrap();
+        assert_eq!(val, json!([0, 1, 2]));
+        assert!(val.is_array());
+    }
+
+    #[test]
     fn test_publish_variables() {
         let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
         let result = json!({"output": "success"});
@@ -522,6 +844,23 @@ mod tests {
             .unwrap();
 
         assert_eq!(ctx.get_var("my_var").unwrap(), result);
+    }
+
+    #[test]
+    fn test_rebuild_context() {
+        let stored_vars = json!({"number_list": [0, 1, 2]});
+        let mut task_results = HashMap::new();
+        task_results.insert("task1".to_string(), json!({"data": {"items": [0, 1, 2]}}));
+
+        let ctx = WorkflowContext::rebuild(json!({"count": 5}), &stored_vars, task_results);
+
+        assert_eq!(ctx.get_var("number_list").unwrap(), json!([0, 1, 2]));
+        assert_eq!(
+            ctx.get_task_result("task1").unwrap(),
+            json!({"data": {"items": [0, 1, 2]}})
+        );
+        let rendered = ctx.render_template("{{ parameters.count }}").unwrap();
+        assert_eq!(rendered, "5");
     }
 
     #[test]
@@ -538,5 +877,29 @@ mod tests {
             ctx.get_task_result("task1").unwrap(),
             json!({"result": "ok"})
         );
+    }
+
+    #[test]
+    fn test_with_items_integer_type_preservation() {
+        // Simulates the sleep_2 task from the hello_workflow:
+        // input: { seconds: "{{ item }}" }
+        // with_items: [0, 1, 2, 3, 4]
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_current_item(json!(3), 3);
+
+        let input = json!({
+            "message": "Sleeping for {{ item }} seconds ",
+            "seconds": "{{item}}"
+        });
+
+        let rendered = ctx.render_json(&input).unwrap();
+
+        // seconds should be integer 3, not string "3"
+        assert_eq!(rendered["seconds"], json!(3));
+        assert!(rendered["seconds"].is_number());
+
+        // message should be a string with the value interpolated
+        assert_eq!(rendered["message"], json!("Sleeping for 3 seconds "));
+        assert!(rendered["message"].is_string());
     }
 }

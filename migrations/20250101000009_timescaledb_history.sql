@@ -1,10 +1,15 @@
 -- Migration: TimescaleDB Entity History and Analytics
--- Description: Creates append-only history hypertables for execution, worker, enforcement,
---              and event tables. Uses JSONB diff format to track field-level changes via
---              PostgreSQL triggers. Includes continuous aggregates for dashboard analytics.
---              Consolidates former migrations: 20260226100000 (entity_history_timescaledb),
---              20260226200000 (continuous_aggregates), and 20260226300000 (fix + result digest).
+-- Description: Creates append-only history hypertables for execution and worker tables.
+--              Uses JSONB diff format to track field-level changes via PostgreSQL triggers.
+--              Converts the event, enforcement, and execution tables into TimescaleDB
+--              hypertables (events are immutable; enforcements are updated exactly once;
+--              executions are updated ~4 times during their lifecycle).
+--              Includes continuous aggregates for dashboard analytics.
 --              See docs/plans/timescaledb-entity-history.md for full design.
+--
+--              NOTE: FK constraints that would reference hypertable targets were never
+--              created in earlier migrations (000004, 000005, 000006), so no DROP
+--              CONSTRAINT statements are needed here.
 -- Version: 20250101000009
 
 -- ============================================================================
@@ -114,67 +119,76 @@ CREATE INDEX idx_worker_history_changed_fields
 COMMENT ON TABLE worker_history IS 'Append-only history of field-level changes to the worker table (TimescaleDB hypertable)';
 COMMENT ON COLUMN worker_history.entity_ref IS 'Denormalized worker name for JOIN-free queries';
 
--- ----------------------------------------------------------------------------
--- enforcement_history
--- ----------------------------------------------------------------------------
-
-CREATE TABLE enforcement_history (
-    time             TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-    operation        TEXT           NOT NULL,
-    entity_id        BIGINT         NOT NULL,
-    entity_ref       TEXT,
-    changed_fields   TEXT[]         NOT NULL DEFAULT '{}',
-    old_values       JSONB,
-    new_values       JSONB
-);
-
-SELECT create_hypertable('enforcement_history', 'time',
-    chunk_time_interval => INTERVAL '1 day');
-
-CREATE INDEX idx_enforcement_history_entity
-    ON enforcement_history (entity_id, time DESC);
-
-CREATE INDEX idx_enforcement_history_entity_ref
-    ON enforcement_history (entity_ref, time DESC);
-
-CREATE INDEX idx_enforcement_history_status_changes
-    ON enforcement_history (time DESC)
-    WHERE 'status' = ANY(changed_fields);
-
-CREATE INDEX idx_enforcement_history_changed_fields
-    ON enforcement_history USING GIN (changed_fields);
-
-COMMENT ON TABLE enforcement_history IS 'Append-only history of field-level changes to the enforcement table (TimescaleDB hypertable)';
-COMMENT ON COLUMN enforcement_history.entity_ref IS 'Denormalized rule_ref for JOIN-free queries';
-
--- ----------------------------------------------------------------------------
--- event_history
+-- ============================================================================
+-- CONVERT EVENT TABLE TO HYPERTABLE
+-- ============================================================================
+-- Events are immutable after insert — they are never updated. Instead of
+-- maintaining a separate event_history table to track changes that never
+-- happen, we convert the event table itself into a TimescaleDB hypertable
+-- partitioned on `created`. This gives us automatic time-based partitioning,
+-- compression, and retention for free.
+--
+-- No FK constraints reference event(id) — enforcement.event was created as a
+-- plain BIGINT in migration 000004 (hypertables cannot be FK targets).
 -- ----------------------------------------------------------------------------
 
-CREATE TABLE event_history (
-    time             TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-    operation        TEXT           NOT NULL,
-    entity_id        BIGINT         NOT NULL,
-    entity_ref       TEXT,
-    changed_fields   TEXT[]         NOT NULL DEFAULT '{}',
-    old_values       JSONB,
-    new_values       JSONB
-);
+-- Replace the single-column PK with a composite PK that includes the
+-- partitioning column (required by TimescaleDB).
+ALTER TABLE event DROP CONSTRAINT event_pkey;
+ALTER TABLE event ADD PRIMARY KEY (id, created);
 
-SELECT create_hypertable('event_history', 'time',
-    chunk_time_interval => INTERVAL '1 day');
+SELECT create_hypertable('event', 'created',
+    chunk_time_interval => INTERVAL '1 day',
+    migrate_data        => true);
 
-CREATE INDEX idx_event_history_entity
-    ON event_history (entity_id, time DESC);
+COMMENT ON TABLE event IS 'Events are instances of triggers firing (TimescaleDB hypertable partitioned on created)';
 
-CREATE INDEX idx_event_history_entity_ref
-    ON event_history (entity_ref, time DESC);
+-- ============================================================================
+-- CONVERT ENFORCEMENT TABLE TO HYPERTABLE
+-- ============================================================================
+-- Enforcements are created and then updated exactly once (status changes from
+-- `created` to `processed` or `disabled` within ~1 second). This single update
+-- happens well before the 7-day compression window, so UPDATE on uncompressed
+-- chunks works without issues.
+--
+-- No FK constraints reference enforcement(id) — execution.enforcement was
+-- created as a plain BIGINT in migration 000005.
+-- ----------------------------------------------------------------------------
 
-CREATE INDEX idx_event_history_changed_fields
-    ON event_history USING GIN (changed_fields);
+ALTER TABLE enforcement DROP CONSTRAINT enforcement_pkey;
+ALTER TABLE enforcement ADD PRIMARY KEY (id, created);
 
-COMMENT ON TABLE event_history IS 'Append-only history of field-level changes to the event table (TimescaleDB hypertable)';
-COMMENT ON COLUMN event_history.entity_ref IS 'Denormalized trigger_ref for JOIN-free queries';
+SELECT create_hypertable('enforcement', 'created',
+    chunk_time_interval => INTERVAL '1 day',
+    migrate_data        => true);
+
+COMMENT ON TABLE enforcement IS 'Enforcements represent rule triggering by events (TimescaleDB hypertable partitioned on created)';
+
+-- ============================================================================
+-- CONVERT EXECUTION TABLE TO HYPERTABLE
+-- ============================================================================
+-- Executions are updated ~4 times during their lifecycle (requested → scheduled
+-- → running → completed/failed), completing within at most ~1 day — well before
+-- the 7-day compression window. The `updated` column and its BEFORE UPDATE
+-- trigger are preserved (used by timeout monitor and UI).
+--
+-- No FK constraints reference execution(id) — inquiry.execution,
+-- workflow_execution.execution, execution.parent, and execution.original_execution
+-- were all created as plain BIGINT columns in migrations 000005 and 000006.
+--
+-- The existing execution_history hypertable and its trigger are preserved —
+-- they track field-level diffs of each update, which remains valuable for
+-- a mutable table.
+-- ----------------------------------------------------------------------------
+
+ALTER TABLE execution DROP CONSTRAINT execution_pkey;
+ALTER TABLE execution ADD PRIMARY KEY (id, created);
+
+SELECT create_hypertable('execution', 'created',
+    chunk_time_interval => INTERVAL '1 day',
+    migrate_data        => true);
+
+COMMENT ON TABLE execution IS 'Executions represent action runs with workflow support (TimescaleDB hypertable partitioned on created). Updated ~4 times during lifecycle, completing within ~1 day (well before 7-day compression window).';
 
 -- ============================================================================
 -- TRIGGER FUNCTIONS
@@ -341,118 +355,6 @@ $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION record_worker_history() IS 'Records field-level changes to worker table in worker_history hypertable. Excludes heartbeat-only updates.';
 
--- ----------------------------------------------------------------------------
--- enforcement history trigger
--- Tracked fields: status, payload
--- ----------------------------------------------------------------------------
-
-CREATE OR REPLACE FUNCTION record_enforcement_history()
-RETURNS TRIGGER AS $$
-DECLARE
-    changed TEXT[] := '{}';
-    old_vals JSONB := '{}';
-    new_vals JSONB := '{}';
-BEGIN
-    IF TG_OP = 'INSERT' THEN
-        INSERT INTO enforcement_history (time, operation, entity_id, entity_ref, changed_fields, old_values, new_values)
-        VALUES (NOW(), 'INSERT', NEW.id, NEW.rule_ref, '{}', NULL,
-                jsonb_build_object(
-                    'rule_ref', NEW.rule_ref,
-                    'trigger_ref', NEW.trigger_ref,
-                    'status', NEW.status,
-                    'condition', NEW.condition,
-                    'event', NEW.event
-                ));
-        RETURN NEW;
-    END IF;
-
-    IF TG_OP = 'DELETE' THEN
-        INSERT INTO enforcement_history (time, operation, entity_id, entity_ref, changed_fields, old_values, new_values)
-        VALUES (NOW(), 'DELETE', OLD.id, OLD.rule_ref, '{}', NULL, NULL);
-        RETURN OLD;
-    END IF;
-
-    -- UPDATE: detect which fields changed
-    IF OLD.status IS DISTINCT FROM NEW.status THEN
-        changed := array_append(changed, 'status');
-        old_vals := old_vals || jsonb_build_object('status', OLD.status);
-        new_vals := new_vals || jsonb_build_object('status', NEW.status);
-    END IF;
-
-    IF OLD.payload IS DISTINCT FROM NEW.payload THEN
-        changed := array_append(changed, 'payload');
-        old_vals := old_vals || jsonb_build_object('payload', OLD.payload);
-        new_vals := new_vals || jsonb_build_object('payload', NEW.payload);
-    END IF;
-
-    -- Only record if something actually changed
-    IF array_length(changed, 1) > 0 THEN
-        INSERT INTO enforcement_history (time, operation, entity_id, entity_ref, changed_fields, old_values, new_values)
-        VALUES (NOW(), 'UPDATE', NEW.id, NEW.rule_ref, changed, old_vals, new_vals);
-    END IF;
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-COMMENT ON FUNCTION record_enforcement_history() IS 'Records field-level changes to enforcement table in enforcement_history hypertable';
-
--- ----------------------------------------------------------------------------
--- event history trigger
--- Tracked fields: config, payload
--- ----------------------------------------------------------------------------
-
-CREATE OR REPLACE FUNCTION record_event_history()
-RETURNS TRIGGER AS $$
-DECLARE
-    changed TEXT[] := '{}';
-    old_vals JSONB := '{}';
-    new_vals JSONB := '{}';
-BEGIN
-    IF TG_OP = 'INSERT' THEN
-        INSERT INTO event_history (time, operation, entity_id, entity_ref, changed_fields, old_values, new_values)
-        VALUES (NOW(), 'INSERT', NEW.id, NEW.trigger_ref, '{}', NULL,
-                jsonb_build_object(
-                    'trigger_ref', NEW.trigger_ref,
-                    'source', NEW.source,
-                    'source_ref', NEW.source_ref,
-                    'rule', NEW.rule,
-                    'rule_ref', NEW.rule_ref
-                ));
-        RETURN NEW;
-    END IF;
-
-    IF TG_OP = 'DELETE' THEN
-        INSERT INTO event_history (time, operation, entity_id, entity_ref, changed_fields, old_values, new_values)
-        VALUES (NOW(), 'DELETE', OLD.id, OLD.trigger_ref, '{}', NULL, NULL);
-        RETURN OLD;
-    END IF;
-
-    -- UPDATE: detect which fields changed
-    IF OLD.config IS DISTINCT FROM NEW.config THEN
-        changed := array_append(changed, 'config');
-        old_vals := old_vals || jsonb_build_object('config', OLD.config);
-        new_vals := new_vals || jsonb_build_object('config', NEW.config);
-    END IF;
-
-    IF OLD.payload IS DISTINCT FROM NEW.payload THEN
-        changed := array_append(changed, 'payload');
-        old_vals := old_vals || jsonb_build_object('payload', OLD.payload);
-        new_vals := new_vals || jsonb_build_object('payload', NEW.payload);
-    END IF;
-
-    -- Only record if something actually changed
-    IF array_length(changed, 1) > 0 THEN
-        INSERT INTO event_history (time, operation, entity_id, entity_ref, changed_fields, old_values, new_values)
-        VALUES (NOW(), 'UPDATE', NEW.id, NEW.trigger_ref, changed, old_vals, new_vals);
-    END IF;
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-COMMENT ON FUNCTION record_event_history() IS 'Records field-level changes to event table in event_history hypertable';
-
 -- ============================================================================
 -- ATTACH TRIGGERS TO OPERATIONAL TABLES
 -- ============================================================================
@@ -467,20 +369,11 @@ CREATE TRIGGER worker_history_trigger
     FOR EACH ROW
     EXECUTE FUNCTION record_worker_history();
 
-CREATE TRIGGER enforcement_history_trigger
-    AFTER INSERT OR UPDATE OR DELETE ON enforcement
-    FOR EACH ROW
-    EXECUTE FUNCTION record_enforcement_history();
-
-CREATE TRIGGER event_history_trigger
-    AFTER INSERT OR UPDATE OR DELETE ON event
-    FOR EACH ROW
-    EXECUTE FUNCTION record_event_history();
-
 -- ============================================================================
 -- COMPRESSION POLICIES
 -- ============================================================================
 
+-- History tables
 ALTER TABLE execution_history SET (
     timescaledb.compress,
     timescaledb.compress_segmentby = 'entity_id',
@@ -495,28 +388,39 @@ ALTER TABLE worker_history SET (
 );
 SELECT add_compression_policy('worker_history', INTERVAL '7 days');
 
-ALTER TABLE enforcement_history SET (
+-- Event table (hypertable)
+ALTER TABLE event SET (
     timescaledb.compress,
-    timescaledb.compress_segmentby = 'entity_id',
-    timescaledb.compress_orderby = 'time DESC'
+    timescaledb.compress_segmentby = 'trigger_ref',
+    timescaledb.compress_orderby = 'created DESC'
 );
-SELECT add_compression_policy('enforcement_history', INTERVAL '7 days');
+SELECT add_compression_policy('event', INTERVAL '7 days');
 
-ALTER TABLE event_history SET (
+-- Enforcement table (hypertable)
+ALTER TABLE enforcement SET (
     timescaledb.compress,
-    timescaledb.compress_segmentby = 'entity_id',
-    timescaledb.compress_orderby = 'time DESC'
+    timescaledb.compress_segmentby = 'rule_ref',
+    timescaledb.compress_orderby = 'created DESC'
 );
-SELECT add_compression_policy('event_history', INTERVAL '7 days');
+SELECT add_compression_policy('enforcement', INTERVAL '7 days');
+
+-- Execution table (hypertable)
+ALTER TABLE execution SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'action_ref',
+    timescaledb.compress_orderby = 'created DESC'
+);
+SELECT add_compression_policy('execution', INTERVAL '7 days');
 
 -- ============================================================================
 -- RETENTION POLICIES
 -- ============================================================================
 
 SELECT add_retention_policy('execution_history', INTERVAL '90 days');
-SELECT add_retention_policy('enforcement_history', INTERVAL '90 days');
-SELECT add_retention_policy('event_history', INTERVAL '30 days');
 SELECT add_retention_policy('worker_history', INTERVAL '180 days');
+SELECT add_retention_policy('event', INTERVAL '90 days');
+SELECT add_retention_policy('enforcement', INTERVAL '90 days');
+SELECT add_retention_policy('execution', INTERVAL '90 days');
 
 -- ============================================================================
 -- CONTINUOUS AGGREGATES
@@ -530,6 +434,7 @@ DROP MATERIALIZED VIEW IF EXISTS execution_throughput_hourly CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS event_volume_hourly CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS worker_status_hourly CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS enforcement_volume_hourly CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS execution_volume_hourly CASCADE;
 
 -- ----------------------------------------------------------------------------
 -- execution_status_hourly
@@ -582,17 +487,18 @@ SELECT add_continuous_aggregate_policy('execution_throughput_hourly',
 -- event_volume_hourly
 -- Tracks event creation volume per hour by trigger ref.
 -- Powers: event throughput monitoring widget.
+-- NOTE: Queries the event table directly (it is now a hypertable) instead of
+--       a separate event_history table.
 -- ----------------------------------------------------------------------------
 
 CREATE MATERIALIZED VIEW event_volume_hourly
 WITH (timescaledb.continuous) AS
 SELECT
-    time_bucket('1 hour', time) AS bucket,
-    entity_ref AS trigger_ref,
+    time_bucket('1 hour', created) AS bucket,
+    trigger_ref,
     COUNT(*) AS event_count
-FROM event_history
-WHERE operation = 'INSERT'
-GROUP BY bucket, entity_ref
+FROM event
+GROUP BY bucket, trigger_ref
 WITH NO DATA;
 
 SELECT add_continuous_aggregate_policy('event_volume_hourly',
@@ -629,20 +535,49 @@ SELECT add_continuous_aggregate_policy('worker_status_hourly',
 -- enforcement_volume_hourly
 -- Tracks enforcement creation volume per hour by rule ref.
 -- Powers: rule activation rate monitoring.
+-- NOTE: Queries the enforcement table directly (it is now a hypertable)
+--       instead of a separate enforcement_history table.
 -- ----------------------------------------------------------------------------
 
 CREATE MATERIALIZED VIEW enforcement_volume_hourly
 WITH (timescaledb.continuous) AS
 SELECT
-    time_bucket('1 hour', time) AS bucket,
-    entity_ref AS rule_ref,
+    time_bucket('1 hour', created) AS bucket,
+    rule_ref,
     COUNT(*) AS enforcement_count
-FROM enforcement_history
-WHERE operation = 'INSERT'
-GROUP BY bucket, entity_ref
+FROM enforcement
+GROUP BY bucket, rule_ref
 WITH NO DATA;
 
 SELECT add_continuous_aggregate_policy('enforcement_volume_hourly',
+    start_offset    => INTERVAL '7 days',
+    end_offset      => INTERVAL '1 hour',
+    schedule_interval => INTERVAL '30 minutes'
+);
+
+-- ----------------------------------------------------------------------------
+-- execution_volume_hourly
+-- Tracks execution creation volume per hour by action_ref and status.
+-- This queries the execution hypertable directly (like event_volume_hourly
+-- queries the event table). Complements the existing execution_status_hourly
+-- and execution_throughput_hourly aggregates which query execution_history.
+--
+-- Use case: direct execution volume monitoring without relying on the history
+-- trigger (belt-and-suspenders, plus captures the initial status at creation).
+-- ----------------------------------------------------------------------------
+
+CREATE MATERIALIZED VIEW execution_volume_hourly
+WITH (timescaledb.continuous) AS
+SELECT
+    time_bucket('1 hour', created) AS bucket,
+    action_ref,
+    status AS initial_status,
+    COUNT(*) AS execution_count
+FROM execution
+GROUP BY bucket, action_ref, status
+WITH NO DATA;
+
+SELECT add_continuous_aggregate_policy('execution_volume_hourly',
     start_offset    => INTERVAL '7 days',
     end_offset      => INTERVAL '1 hour',
     schedule_interval => INTERVAL '30 minutes'
@@ -664,3 +599,4 @@ SELECT add_continuous_aggregate_policy('enforcement_volume_hourly',
 --   CALL refresh_continuous_aggregate('event_volume_hourly', NULL, NOW());
 --   CALL refresh_continuous_aggregate('worker_status_hourly', NULL, NOW());
 --   CALL refresh_continuous_aggregate('enforcement_volume_hourly', NULL, NOW());
+--   CALL refresh_continuous_aggregate('execution_volume_hourly', NULL, NOW());

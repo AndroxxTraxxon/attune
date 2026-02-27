@@ -48,6 +48,22 @@ function stripNotificationMeta(payload: any): any {
 function executionMatchesParams(execution: any, params: any): boolean {
   if (!params) return true;
 
+  // Check topLevelOnly filter — child executions (with a parent) must not
+  // appear in top-level list queries.
+  if (params.topLevelOnly && execution.parent != null) {
+    return false;
+  }
+
+  // Check parent filter — child execution queries (keyed by { parent: id })
+  // should only receive notifications for executions belonging to that parent.
+  // Without this, every execution notification would match child queries since
+  // they have no other filter fields.
+  if (params.parent !== undefined) {
+    if (execution.parent !== params.parent) {
+      return false;
+    }
+  }
+
   // Check status filter (from API query parameters)
   if (params.status && execution.status !== params.status) {
     return false;

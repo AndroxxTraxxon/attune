@@ -457,7 +457,7 @@ export default function WorkflowBuilderPage() {
           },
         });
       } else {
-        await saveWorkflowFile.mutateAsync({
+        const fileData = {
           name: state.name,
           label: state.label,
           description: state.description || undefined,
@@ -472,7 +472,30 @@ export default function WorkflowBuilderPage() {
             Object.keys(state.output).length > 0 ? state.output : undefined,
           tags: state.tags.length > 0 ? state.tags : undefined,
           enabled: state.enabled,
-        });
+        };
+        try {
+          await saveWorkflowFile.mutateAsync(fileData);
+        } catch (createErr: unknown) {
+          const apiErr = createErr as { status?: number };
+          if (apiErr?.status === 409) {
+            // Workflow already exists — fall back to update
+            const workflowRef = `${state.packRef}.${state.name}`;
+            await updateWorkflowFile.mutateAsync({
+              workflowRef,
+              data: fileData,
+            });
+          } else {
+            throw createErr;
+          }
+        }
+      }
+
+      // After a successful first save, navigate to the edit URL so the
+      // page transitions into edit mode (locks ref, uses update on next save).
+      if (!isEditing) {
+        const newRef = `${state.packRef}.${state.name}`;
+        navigate(`/actions/workflows/${newRef}/edit`, { replace: true });
+        return;
       }
 
       setSaveSuccess(true);
@@ -490,6 +513,7 @@ export default function WorkflowBuilderPage() {
     saveWorkflowFile,
     updateWorkflowFile,
     actionSchemaMap,
+    navigate,
   ]);
 
   const handleSave = useCallback(() => {
@@ -540,9 +564,11 @@ export default function WorkflowBuilderPage() {
           {/* Left section: Back + metadata */}
           <div className="flex items-center gap-3 flex-1 min-w-0">
             <button
-              onClick={() => navigate("/actions")}
+              onClick={() =>
+                navigate(isEditing ? `/actions/${editRef}` : "/actions")
+              }
               className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors flex-shrink-0"
-              title="Back to Actions"
+              title={isEditing ? "Back to Workflow" : "Back to Actions"}
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
@@ -558,6 +584,7 @@ export default function WorkflowBuilderPage() {
                 }))}
                 placeholder="Pack..."
                 className="max-w-[140px]"
+                disabled={isEditing}
               />
 
               <span className="text-gray-400 text-lg font-light">/</span>
@@ -571,8 +598,9 @@ export default function WorkflowBuilderPage() {
                     name: e.target.value.replace(/[^a-zA-Z0-9_-]/g, "_"),
                   })
                 }
-                className="px-2 py-1.5 border border-gray-300 rounded text-sm font-mono focus:ring-2 focus:ring-blue-500 focus:border-blue-500 w-48"
+                className={`px-2 py-1.5 border border-gray-300 rounded text-sm font-mono w-48 ${isEditing ? "bg-gray-100 cursor-not-allowed text-gray-500" : "focus:ring-2 focus:ring-blue-500 focus:border-blue-500"}`}
                 placeholder="workflow_name"
+                disabled={isEditing}
               />
 
               <span className="text-gray-400 text-lg font-light">—</span>

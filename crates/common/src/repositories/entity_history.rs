@@ -263,11 +263,6 @@ mod tests {
             "execution_history"
         );
         assert_eq!(HistoryEntityType::Worker.table_name(), "worker_history");
-        assert_eq!(
-            HistoryEntityType::Enforcement.table_name(),
-            "enforcement_history"
-        );
-        assert_eq!(HistoryEntityType::Event.table_name(), "event_history");
     }
 
     #[test]
@@ -280,14 +275,8 @@ mod tests {
             "Worker".parse::<HistoryEntityType>().unwrap(),
             HistoryEntityType::Worker
         );
-        assert_eq!(
-            "ENFORCEMENT".parse::<HistoryEntityType>().unwrap(),
-            HistoryEntityType::Enforcement
-        );
-        assert_eq!(
-            "event".parse::<HistoryEntityType>().unwrap(),
-            HistoryEntityType::Event
-        );
+        assert!("enforcement".parse::<HistoryEntityType>().is_err());
+        assert!("event".parse::<HistoryEntityType>().is_err());
         assert!("unknown".parse::<HistoryEntityType>().is_err());
     }
 
@@ -295,7 +284,5 @@ mod tests {
     fn test_history_entity_type_display() {
         assert_eq!(HistoryEntityType::Execution.to_string(), "execution");
         assert_eq!(HistoryEntityType::Worker.to_string(), "worker");
-        assert_eq!(HistoryEntityType::Enforcement.to_string(), "enforcement");
-        assert_eq!(HistoryEntityType::Event.to_string(), "event");
     }
 }

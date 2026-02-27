@@ -1,6 +1,9 @@
 //! Event and Enforcement repository for database operations
 //!
 //! This module provides CRUD operations and queries for Event and Enforcement entities.
+//! Note: Events are immutable time-series data — there is no Update impl for EventRepository.
+
+use chrono::{DateTime, Utc};
 
 use crate::models::{
     enums::{EnforcementCondition, EnforcementStatus},
@@ -36,13 +39,6 @@ pub struct CreateEventInput {
     pub rule_ref: Option<String>,
 }
 
-/// Input for updating an event
-#[derive(Debug, Clone, Default)]
-pub struct UpdateEventInput {
-    pub config: Option<JsonDict>,
-    pub payload: Option<JsonDict>,
-}
-
 #[async_trait::async_trait]
 impl FindById for EventRepository {
     async fn find_by_id<'e, E>(executor: E, id: i64) -> Result<Option<Self::Entity>>
@@ -52,7 +48,7 @@ impl FindById for EventRepository {
         let event = sqlx::query_as::<_, Event>(
             r#"
             SELECT id, trigger, trigger_ref, config, payload, source, source_ref,
-                   rule, rule_ref, created, updated
+                   rule, rule_ref, created
             FROM event
             WHERE id = $1
             "#,
@@ -74,7 +70,7 @@ impl List for EventRepository {
         let events = sqlx::query_as::<_, Event>(
             r#"
             SELECT id, trigger, trigger_ref, config, payload, source, source_ref,
-                   rule, rule_ref, created, updated
+                   rule, rule_ref, created
             FROM event
             ORDER BY created DESC
             LIMIT 1000
@@ -100,7 +96,7 @@ impl Create for EventRepository {
             INSERT INTO event (trigger, trigger_ref, config, payload, source, source_ref, rule, rule_ref)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING id, trigger, trigger_ref, config, payload, source, source_ref,
-                      rule, rule_ref, created, updated
+                      rule, rule_ref, created
             "#,
         )
         .bind(input.trigger)
@@ -113,49 +109,6 @@ impl Create for EventRepository {
         .bind(&input.rule_ref)
         .fetch_one(executor)
         .await?;
-
-        Ok(event)
-    }
-}
-
-#[async_trait::async_trait]
-impl Update for EventRepository {
-    type UpdateInput = UpdateEventInput;
-
-    async fn update<'e, E>(executor: E, id: i64, input: Self::UpdateInput) -> Result<Self::Entity>
-    where
-        E: Executor<'e, Database = Postgres> + 'e,
-    {
-        // Build update query
-
-        let mut query = QueryBuilder::new("UPDATE event SET ");
-        let mut has_updates = false;
-
-        if let Some(config) = &input.config {
-            query.push("config = ");
-            query.push_bind(config);
-            has_updates = true;
-        }
-
-        if let Some(payload) = &input.payload {
-            if has_updates {
-                query.push(", ");
-            }
-            query.push("payload = ");
-            query.push_bind(payload);
-            has_updates = true;
-        }
-
-        if !has_updates {
-            // No updates requested, fetch and return existing entity
-            return Self::get_by_id(executor, id).await;
-        }
-
-        query.push(", updated = NOW() WHERE id = ");
-        query.push_bind(id);
-        query.push(" RETURNING id, trigger, trigger_ref, config, payload, source, source_ref, rule, rule_ref, created, updated");
-
-        let event = query.build_query_as::<Event>().fetch_one(executor).await?;
 
         Ok(event)
     }
@@ -185,7 +138,7 @@ impl EventRepository {
         let events = sqlx::query_as::<_, Event>(
             r#"
             SELECT id, trigger, trigger_ref, config, payload, source, source_ref,
-                   rule, rule_ref, created, updated
+                   rule, rule_ref, created
             FROM event
             WHERE trigger = $1
             ORDER BY created DESC
@@ -207,7 +160,7 @@ impl EventRepository {
         let events = sqlx::query_as::<_, Event>(
             r#"
             SELECT id, trigger, trigger_ref, config, payload, source, source_ref,
-                   rule, rule_ref, created, updated
+                   rule, rule_ref, created
             FROM event
             WHERE trigger_ref = $1
             ORDER BY created DESC
@@ -256,6 +209,7 @@ pub struct CreateEnforcementInput {
 pub struct UpdateEnforcementInput {
     pub status: Option<EnforcementStatus>,
     pub payload: Option<JsonDict>,
+    pub resolved_at: Option<DateTime<Utc>>,
 }
 
 #[async_trait::async_trait]
@@ -267,7 +221,7 @@ impl FindById for EnforcementRepository {
         let enforcement = sqlx::query_as::<_, Enforcement>(
             r#"
             SELECT id, rule, rule_ref, trigger_ref, config, event, status, payload,
-                   condition, conditions, created, updated
+                   condition, conditions, created, resolved_at
             FROM enforcement
             WHERE id = $1
             "#,
@@ -289,7 +243,7 @@ impl List for EnforcementRepository {
         let enforcements = sqlx::query_as::<_, Enforcement>(
             r#"
             SELECT id, rule, rule_ref, trigger_ref, config, event, status, payload,
-                   condition, conditions, created, updated
+                   condition, conditions, created, resolved_at
             FROM enforcement
             ORDER BY created DESC
             LIMIT 1000
@@ -316,7 +270,7 @@ impl Create for EnforcementRepository {
                                      payload, condition, conditions)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING id, rule, rule_ref, trigger_ref, config, event, status, payload,
-                      condition, conditions, created, updated
+                      condition, conditions, created, resolved_at
             "#,
         )
         .bind(input.rule)
@@ -363,14 +317,23 @@ impl Update for EnforcementRepository {
             has_updates = true;
         }
 
+        if let Some(resolved_at) = input.resolved_at {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("resolved_at = ");
+            query.push_bind(resolved_at);
+            has_updates = true;
+        }
+
         if !has_updates {
             // No updates requested, fetch and return existing entity
             return Self::get_by_id(executor, id).await;
         }
 
-        query.push(", updated = NOW() WHERE id = ");
+        query.push(" WHERE id = ");
         query.push_bind(id);
-        query.push(" RETURNING id, rule, rule_ref, trigger_ref, config, event, status, payload, condition, conditions, created, updated");
+        query.push(" RETURNING id, rule, rule_ref, trigger_ref, config, event, status, payload, condition, conditions, created, resolved_at");
 
         let enforcement = query
             .build_query_as::<Enforcement>()
@@ -405,7 +368,7 @@ impl EnforcementRepository {
         let enforcements = sqlx::query_as::<_, Enforcement>(
             r#"
             SELECT id, rule, rule_ref, trigger_ref, config, event, status, payload,
-                   condition, conditions, created, updated
+                   condition, conditions, created, resolved_at
             FROM enforcement
             WHERE rule = $1
             ORDER BY created DESC
@@ -429,7 +392,7 @@ impl EnforcementRepository {
         let enforcements = sqlx::query_as::<_, Enforcement>(
             r#"
             SELECT id, rule, rule_ref, trigger_ref, config, event, status, payload,
-                   condition, conditions, created, updated
+                   condition, conditions, created, resolved_at
             FROM enforcement
             WHERE status = $1
             ORDER BY created DESC
@@ -450,7 +413,7 @@ impl EnforcementRepository {
         let enforcements = sqlx::query_as::<_, Enforcement>(
             r#"
             SELECT id, rule, rule_ref, trigger_ref, config, event, status, payload,
-                   condition, conditions, created, updated
+                   condition, conditions, created, resolved_at
             FROM enforcement
             WHERE event = $1
             ORDER BY created DESC

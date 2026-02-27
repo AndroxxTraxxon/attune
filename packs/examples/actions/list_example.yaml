@@ -12,9 +12,9 @@ runner_type: shell
 # Entry point is the shell script to execute
 entry_point: list_example.sh
 
-# Parameter delivery: stdin for secure parameter passing
+# Parameter delivery: stdin for secure parameter passing (no env vars)
 parameter_delivery: stdin
-parameter_format: json
+parameter_format: dotenv
 
 # Output format: jsonl (each line is a JSON object, collected into array)
 output_format: jsonl

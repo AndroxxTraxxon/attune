@@ -54,8 +54,8 @@ async fn test_create_enforcement_minimal() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -89,7 +89,7 @@ async fn test_create_enforcement_minimal() {
     assert_eq!(enforcement.condition, EnforcementCondition::All);
     assert_eq!(enforcement.conditions, json!([]));
     assert!(enforcement.created.timestamp() > 0);
-    assert!(enforcement.updated.timestamp() > 0);
+    assert_eq!(enforcement.resolved_at, None); // Not yet resolved
 }
 
 #[tokio::test]
@@ -125,8 +125,8 @@ async fn test_create_enforcement_with_event() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -192,8 +192,8 @@ async fn test_create_enforcement_with_conditions() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -257,8 +257,8 @@ async fn test_create_enforcement_with_any_condition() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -333,10 +333,12 @@ async fn test_create_enforcement_with_invalid_rule_fails() {
 }
 
 #[tokio::test]
-async fn test_create_enforcement_with_invalid_event_fails() {
+async fn test_create_enforcement_with_nonexistent_event_succeeds() {
     let pool = create_test_pool().await.unwrap();
 
-    // Try to create enforcement with non-existent event ID
+    // The enforcement.event column has no FK constraint (event is a hypertable
+    // and hypertables cannot be FK targets). A non-existent event ID is accepted
+    // as a dangling reference.
     let input = CreateEnforcementInput {
         rule: None,
         rule_ref: "some.rule".to_string(),
@@ -351,8 +353,9 @@ async fn test_create_enforcement_with_invalid_event_fails() {
 
     let result = EnforcementRepository::create(&pool, input).await;
 
-    assert!(result.is_err());
-    // Foreign key constraint violation
+    assert!(result.is_ok());
+    let enforcement = result.unwrap();
+    assert_eq!(enforcement.event, Some(99999));
 }
 
 // ============================================================================
@@ -392,8 +395,8 @@ async fn test_find_enforcement_by_id() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -464,8 +467,8 @@ async fn test_get_enforcement_by_id() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -542,8 +545,8 @@ async fn test_list_enforcements() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -613,8 +616,8 @@ async fn test_update_enforcement_status() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -628,9 +631,11 @@ async fn test_update_enforcement_status() {
         .await
         .unwrap();
 
+    let now = chrono::Utc::now();
     let input = UpdateEnforcementInput {
         status: Some(EnforcementStatus::Processed),
         payload: None,
+        resolved_at: Some(now),
     };
 
     let updated = EnforcementRepository::update(&pool, enforcement.id, input)
@@ -639,7 +644,8 @@ async fn test_update_enforcement_status() {
 
     assert_eq!(updated.id, enforcement.id);
     assert_eq!(updated.status, EnforcementStatus::Processed);
-    assert!(updated.updated > enforcement.updated);
+    assert!(updated.resolved_at.is_some());
+    assert!(updated.resolved_at.unwrap() >= enforcement.created);
 }
 
 #[tokio::test]
@@ -675,8 +681,8 @@ async fn test_update_enforcement_status_transitions() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -689,26 +695,30 @@ async fn test_update_enforcement_status_transitions() {
         .await
         .unwrap();
 
-    // Test status transitions: Created -> Succeeded
+    // Test status transitions: Created -> Processed
+    let now = chrono::Utc::now();
     let updated = EnforcementRepository::update(
         &pool,
         enforcement.id,
         UpdateEnforcementInput {
             status: Some(EnforcementStatus::Processed),
             payload: None,
+            resolved_at: Some(now),
         },
     )
     .await
     .unwrap();
     assert_eq!(updated.status, EnforcementStatus::Processed);
+    assert!(updated.resolved_at.is_some());
 
-    // Test status transition: Succeeded -> Failed (although unusual)
+    // Test status transition: Processed -> Disabled (although unusual)
     let updated = EnforcementRepository::update(
         &pool,
         enforcement.id,
         UpdateEnforcementInput {
             status: Some(EnforcementStatus::Disabled),
             payload: None,
+            resolved_at: None,
         },
     )
     .await
@@ -749,8 +759,8 @@ async fn test_update_enforcement_payload() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -768,6 +778,7 @@ async fn test_update_enforcement_payload() {
     let input = UpdateEnforcementInput {
         status: None,
         payload: Some(new_payload.clone()),
+        resolved_at: None,
     };
 
     let updated = EnforcementRepository::update(&pool, enforcement.id, input)
@@ -810,8 +821,8 @@ async fn test_update_enforcement_both_fields() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -824,10 +835,12 @@ async fn test_update_enforcement_both_fields() {
         .await
         .unwrap();
 
+    let now = chrono::Utc::now();
     let new_payload = json!({"result": "success"});
     let input = UpdateEnforcementInput {
         status: Some(EnforcementStatus::Processed),
         payload: Some(new_payload.clone()),
+        resolved_at: Some(now),
     };
 
     let updated = EnforcementRepository::update(&pool, enforcement.id, input)
@@ -871,8 +884,8 @@ async fn test_update_enforcement_no_changes() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -889,6 +902,7 @@ async fn test_update_enforcement_no_changes() {
     let input = UpdateEnforcementInput {
         status: None,
         payload: None,
+        resolved_at: None,
     };
 
     let result = EnforcementRepository::update(&pool, enforcement.id, input)
@@ -907,6 +921,7 @@ async fn test_update_enforcement_not_found() {
     let input = UpdateEnforcementInput {
         status: Some(EnforcementStatus::Processed),
         payload: None,
+        resolved_at: Some(chrono::Utc::now()),
     };
 
     let result = EnforcementRepository::update(&pool, 99999, input).await;
@@ -952,8 +967,8 @@ async fn test_delete_enforcement() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -1025,8 +1040,8 @@ async fn test_find_enforcements_by_rule() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -1047,8 +1062,8 @@ async fn test_find_enforcements_by_rule() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -1117,8 +1132,8 @@ async fn test_find_enforcements_by_status() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -1206,8 +1221,8 @@ async fn test_find_enforcements_by_event() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -1290,8 +1305,8 @@ async fn test_delete_rule_sets_enforcement_rule_to_null() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -1323,7 +1338,7 @@ async fn test_delete_rule_sets_enforcement_rule_to_null() {
 // ============================================================================
 
 #[tokio::test]
-async fn test_enforcement_timestamps_auto_managed() {
+async fn test_enforcement_resolved_at_lifecycle() {
     let pool = create_test_pool().await.unwrap();
 
     let pack = PackFixture::new_unique("timestamp_pack")
@@ -1355,8 +1370,8 @@ async fn test_enforcement_timestamps_auto_managed() {
             trigger: trigger.id,
             trigger_ref: trigger.r#ref.clone(),
             conditions: json!({}),
-        action_params: json!({}),
-        trigger_params: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
         },
@@ -1369,24 +1384,23 @@ async fn test_enforcement_timestamps_auto_managed() {
         .await
         .unwrap();
 
-    let created_time = enforcement.created;
-    let updated_time = enforcement.updated;
+    // Initially, resolved_at is NULL
+    assert!(enforcement.created.timestamp() > 0);
+    assert_eq!(enforcement.resolved_at, None);
 
-    assert!(created_time.timestamp() > 0);
-    assert_eq!(created_time, updated_time);
-
-    // Update and verify timestamp changed
-    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-
+    // Resolve the enforcement and verify resolved_at is set
+    let resolved_time = chrono::Utc::now();
     let input = UpdateEnforcementInput {
         status: Some(EnforcementStatus::Processed),
         payload: None,
+        resolved_at: Some(resolved_time),
     };
 
     let updated = EnforcementRepository::update(&pool, enforcement.id, input)
         .await
         .unwrap();
 
-    assert_eq!(updated.created, created_time); // created unchanged
-    assert!(updated.updated > updated_time); // updated changed
+    assert_eq!(updated.created, enforcement.created); // created unchanged
+    assert!(updated.resolved_at.is_some());
+    assert!(updated.resolved_at.unwrap() >= enforcement.created);
 }

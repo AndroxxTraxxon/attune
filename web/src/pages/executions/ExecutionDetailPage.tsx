@@ -22,6 +22,7 @@ import { useState, useMemo } from "react";
 import { RotateCcw, Loader2 } from "lucide-react";
 import ExecuteActionModal from "@/components/common/ExecuteActionModal";
 import EntityHistoryPanel from "@/components/common/EntityHistoryPanel";
+import WorkflowTasksPanel from "@/components/common/WorkflowTasksPanel";
 
 const getStatusColor = (status: string) => {
   switch (status) {
@@ -116,6 +117,9 @@ export default function ExecutionDetailPage() {
   // Fetch the action so we can get param_schema for the re-run modal
   const { data: actionData } = useAction(execution?.action_ref || "");
 
+  // Determine if this execution is a workflow (action has workflow_def)
+  const isWorkflow = !!actionData?.data?.workflow_def;
+
   const [showRerunModal, setShowRerunModal] = useState(false);
 
   // Fetch status history for the timeline
@@ -207,6 +211,11 @@ export default function ExecutionDetailPage() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <h1 className="text-3xl font-bold">Execution #{execution.id}</h1>
+            {isWorkflow && (
+              <span className="px-3 py-1 text-sm rounded-full bg-indigo-100 text-indigo-800">
+                Workflow
+              </span>
+            )}
             <span
               className={`px-3 py-1 text-sm rounded-full ${getStatusColor(execution.status)}`}
             >
@@ -247,6 +256,25 @@ export default function ExecutionDetailPage() {
             {execution.action_ref}
           </Link>
         </p>
+        {execution.workflow_task && (
+          <p className="text-sm text-indigo-600 mt-1 flex items-center gap-1.5">
+            <span className="text-gray-500">Task</span>{" "}
+            <span className="font-medium">
+              {execution.workflow_task.task_name}
+            </span>
+            {execution.parent && (
+              <>
+                <span className="text-gray-500">in workflow</span>
+                <Link
+                  to={`/executions/${execution.parent}`}
+                  className="text-indigo-600 hover:text-indigo-800 font-medium"
+                >
+                  Execution #{execution.parent}
+                </Link>
+              </>
+            )}
+          </p>
+        )}
       </div>
 
       {/* Re-Run Modal */}
@@ -503,6 +531,13 @@ export default function ExecutionDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Workflow Tasks (shown only for workflow executions) */}
+      {isWorkflow && (
+        <div className="mt-6">
+          <WorkflowTasksPanel parentExecutionId={execution.id} />
+        </div>
+      )}
 
       {/* Change History */}
       <div className="mt-6">

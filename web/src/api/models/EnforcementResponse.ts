@@ -34,6 +34,10 @@ export type EnforcementResponse = {
      * Enforcement payload
      */
     payload: Record<string, any>;
+    /**
+     * Timestamp when the enforcement was resolved (status changed from created to processed/disabled)
+     */
+    resolved_at?: string | null;
     rule?: (null | i64);
     /**
      * Rule reference
@@ -47,9 +51,5 @@ export type EnforcementResponse = {
      * Trigger reference
      */
     trigger_ref: string;
-    /**
-     * Last update timestamp
-     */
-    updated: string;
 };
 

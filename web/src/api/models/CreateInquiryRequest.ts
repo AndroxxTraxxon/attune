@@ -17,7 +17,7 @@ export type CreateInquiryRequest = {
      */
     prompt: string;
     /**
-     * Optional JSON schema for the expected response format
+     * Optional schema for the expected response format (flat format with inline required/secret)
      */
     response_schema: Record<string, any>;
     /**

@@ -1,6 +1,13 @@
 -- Migration: Workflow System
 -- Description: Creates workflow_definition and workflow_execution tables
 --              (workflow_task_execution consolidated into execution.workflow_task JSONB)
+--
+--              NOTE: The execution table is converted to a TimescaleDB hypertable in
+--              migration 000009. Hypertables cannot be the target of FK constraints,
+--              so workflow_execution.execution is a plain BIGINT with no FK.
+--              execution.workflow_def also has no FK (added as plain BIGINT in 000005)
+--              since execution is a hypertable and FKs from hypertables are only
+--              supported for simple cases — we omit it for consistency.
 -- Version: 20250101000006
 
 -- ============================================================================
@@ -49,7 +56,7 @@ COMMENT ON COLUMN workflow_definition.out_schema IS 'JSON schema for workflow ou
 
 CREATE TABLE workflow_execution (
     id BIGSERIAL PRIMARY KEY,
-    execution BIGINT NOT NULL REFERENCES execution(id) ON DELETE CASCADE,
+    execution BIGINT NOT NULL, -- references execution(id); no FK because execution is a hypertable
     workflow_def BIGINT NOT NULL REFERENCES workflow_definition(id) ON DELETE CASCADE,
     current_tasks TEXT[] DEFAULT '{}',
     completed_tasks TEXT[] DEFAULT '{}',
@@ -78,7 +85,7 @@ CREATE TRIGGER update_workflow_execution_updated
     EXECUTE FUNCTION update_updated_column();
 
 -- Comments
-COMMENT ON TABLE workflow_execution IS 'Runtime state tracking for workflow executions';
+COMMENT ON TABLE workflow_execution IS 'Runtime state tracking for workflow executions. execution column has no FK — execution is a hypertable.';
 COMMENT ON COLUMN workflow_execution.variables IS 'Workflow-scoped variables, updated via publish directives';
 COMMENT ON COLUMN workflow_execution.task_graph IS 'Execution graph with dependencies and transitions';
 COMMENT ON COLUMN workflow_execution.current_tasks IS 'Array of task names currently executing';
@@ -89,22 +96,15 @@ COMMENT ON COLUMN workflow_execution.paused IS 'True if workflow execution is pa
 -- ============================================================================
 
 ALTER TABLE action
-    ADD COLUMN is_workflow BOOLEAN DEFAULT false NOT NULL,
     ADD COLUMN workflow_def BIGINT REFERENCES workflow_definition(id) ON DELETE CASCADE;
 
-CREATE INDEX idx_action_is_workflow ON action(is_workflow) WHERE is_workflow = true;
 CREATE INDEX idx_action_workflow_def ON action(workflow_def);
 
-COMMENT ON COLUMN action.is_workflow IS 'True if this action is a workflow (composable action graph)';
-COMMENT ON COLUMN action.workflow_def IS 'Reference to workflow definition if is_workflow=true';
+COMMENT ON COLUMN action.workflow_def IS 'Reference to workflow definition (non-null means this action is a workflow)';
 
--- ============================================================================
--- ADD FOREIGN KEY CONSTRAINT FOR EXECUTION.WORKFLOW_DEF
--- ============================================================================
-
-ALTER TABLE execution
-    ADD CONSTRAINT execution_workflow_def_fkey
-    FOREIGN KEY (workflow_def) REFERENCES workflow_definition(id) ON DELETE CASCADE;
+-- NOTE: execution.workflow_def has no FK constraint because execution is a
+-- TimescaleDB hypertable (converted in migration 000009). The column was
+-- created as a plain BIGINT in migration 000005.
 
 -- ============================================================================
 -- WORKFLOW VIEWS
@@ -143,6 +143,6 @@ SELECT
     a.pack as pack_id,
     a.pack_ref
 FROM workflow_definition wd
-LEFT JOIN action a ON a.workflow_def = wd.id AND a.is_workflow = true;
+LEFT JOIN action a ON a.workflow_def = wd.id;
 
 COMMENT ON VIEW workflow_action_link IS 'Links workflow definitions to their corresponding action records';

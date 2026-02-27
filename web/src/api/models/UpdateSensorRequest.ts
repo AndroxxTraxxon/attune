@@ -23,7 +23,7 @@ export type UpdateSensorRequest = {
      */
     label?: string | null;
     /**
-     * Parameter schema
+     * Parameter schema (StackStorm-style with inline required/secret)
      */
     param_schema: any | null;
 };

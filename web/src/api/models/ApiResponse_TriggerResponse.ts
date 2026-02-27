@@ -47,7 +47,7 @@ export type ApiResponse_TriggerResponse = {
          */
         pack_ref?: string | null;
         /**
-         * Parameter schema
+         * Parameter schema (StackStorm-style with inline required/secret)
          */
         param_schema: any | null;
         /**

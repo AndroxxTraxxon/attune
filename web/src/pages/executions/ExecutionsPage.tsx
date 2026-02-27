@@ -3,13 +3,19 @@ import { useExecutions } from "@/hooks/useExecutions";
 import { useExecutionStream } from "@/hooks/useExecutionStream";
 import { ExecutionStatus } from "@/api";
 import { useState, useMemo, memo, useCallback, useEffect } from "react";
-import { Search, X } from "lucide-react";
+import { Search, X, List, GitBranch } from "lucide-react";
 import MultiSelect from "@/components/common/MultiSelect";
 import AutocompleteInput from "@/components/common/AutocompleteInput";
 import {
   useFilterSuggestions,
   useMergedSuggestions,
 } from "@/hooks/useFilterSuggestions";
+import WorkflowExecutionTree from "@/components/executions/WorkflowExecutionTree";
+import ExecutionPreviewPanel from "@/components/executions/ExecutionPreviewPanel";
+
+type ViewMode = "all" | "workflow";
+
+const VIEW_MODE_STORAGE_KEY = "attune:executions:viewMode";
 
 // Memoized filter input component for non-ref fields (e.g. Executor ID)
 const FilterInput = memo(
@@ -87,6 +93,8 @@ const ExecutionsResultsTable = memo(
     setPage,
     pageSize,
     total,
+    selectedExecutionId,
+    onSelectExecution,
   }: {
     executions: any[];
     isLoading: boolean;
@@ -98,6 +106,8 @@ const ExecutionsResultsTable = memo(
     setPage: (page: number) => void;
     pageSize: number;
     total: number;
+    selectedExecutionId: number | null;
+    onSelectExecution: (id: number) => void;
   }) => {
     const totalPages = Math.ceil(total / pageSize);
 
@@ -182,11 +192,20 @@ const ExecutionsResultsTable = memo(
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {executions.map((exec: any) => (
-                <tr key={exec.id} className="hover:bg-gray-50">
+                <tr
+                  key={exec.id}
+                  className={`hover:bg-gray-50 cursor-pointer ${
+                    selectedExecutionId === exec.id
+                      ? "bg-blue-50 hover:bg-blue-50"
+                      : ""
+                  }`}
+                  onClick={() => onSelectExecution(exec.id)}
+                >
                   <td className="px-6 py-4 font-mono text-sm">
                     <Link
                       to={`/executions/${exec.id}`}
                       className="text-blue-600 hover:text-blue-800"
+                      onClick={(e) => e.stopPropagation()}
                     >
                       #{exec.id}
                     </Link>
@@ -294,6 +313,15 @@ ExecutionsResultsTable.displayName = "ExecutionsResultsTable";
 export default function ExecutionsPage() {
   const [searchParams] = useSearchParams();
 
+  // --- View mode toggle ---
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    const stored = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
+    if (stored === "all" || stored === "workflow") return stored;
+    const param = searchParams.get("view");
+    if (param === "all" || param === "workflow") return param;
+    return "all";
+  });
+
   // --- Filter input state (updates immediately on keystroke) ---
   const [page, setPage] = useState(1);
   const pageSize = 50;
@@ -342,8 +370,11 @@ export default function ExecutionsPage() {
     if (debouncedStatuses.length === 1) {
       params.status = debouncedStatuses[0] as ExecutionStatus;
     }
+    if (viewMode === "workflow") {
+      params.topLevelOnly = true;
+    }
     return params;
-  }, [page, pageSize, debouncedFilters, debouncedStatuses]);
+  }, [page, pageSize, debouncedFilters, debouncedStatuses, viewMode]);
 
   const { data, isLoading, isFetching, error } = useExecutions(queryParams);
   const { isConnected } = useExecutionStream({ enabled: true });
@@ -423,103 +454,181 @@ export default function ExecutionsPage() {
     Object.values(searchFilters).some((v) => v !== "") ||
     selectedStatuses.length > 0;
 
+  const [selectedExecutionId, setSelectedExecutionId] = useState<number | null>(
+    null,
+  );
+
+  const handleSelectExecution = useCallback((id: number) => {
+    setSelectedExecutionId((prev) => (prev === id ? null : id));
+  }, []);
+
+  const handleClosePreview = useCallback(() => {
+    setSelectedExecutionId(null);
+  }, []);
+
+  const handleViewModeChange = useCallback((mode: ViewMode) => {
+    setViewMode(mode);
+    localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
+    setPage(1);
+  }, []);
+
   return (
-    <div className="p-6">
-      {/* Header - always visible */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-3xl font-bold">Executions</h1>
-          {isFetching && hasActiveFilters && (
-            <p className="text-sm text-gray-500 mt-1">
-              Searching executions...
-            </p>
-          )}
-        </div>
-        {isConnected && (
-          <div className="flex items-center gap-2 text-sm text-green-600">
-            <div className="h-2 w-2 rounded-full bg-green-600 animate-pulse" />
-            <span>Live Updates</span>
+    <div className="flex h-[calc(100vh-4rem)]">
+      {/* Main content area */}
+      <div
+        className={`flex-1 min-w-0 overflow-y-auto p-6 ${selectedExecutionId ? "mr-0" : ""}`}
+      >
+        {/* Header - always visible */}
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold">Executions</h1>
+            {isConnected && (
+              <div className="flex items-center gap-1.5 text-xs text-green-600 bg-green-50 border border-green-200 rounded-full px-2.5 py-1">
+                <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
+                <span>Live</span>
+              </div>
+            )}
+            {isFetching && hasActiveFilters && (
+              <p className="text-sm text-gray-500">Searching executions...</p>
+            )}
           </div>
+          <div className="flex items-center gap-4">
+            {/* View mode toggle */}
+            <div className="inline-flex rounded-lg border border-gray-300 bg-white shadow-sm">
+              <button
+                onClick={() => handleViewModeChange("all")}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-l-lg transition-colors ${
+                  viewMode === "all"
+                    ? "bg-blue-600 text-white"
+                    : "text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                <List className="h-4 w-4" />
+                All
+              </button>
+              <button
+                onClick={() => handleViewModeChange("workflow")}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-r-lg transition-colors ${
+                  viewMode === "workflow"
+                    ? "bg-blue-600 text-white"
+                    : "text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                <GitBranch className="h-4 w-4" />
+                By Workflow
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Filter section - always mounted, never unmounts during loading */}
+        <div className="bg-white shadow rounded-lg p-4 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Search className="h-5 w-5 text-gray-400" />
+              <h2 className="text-lg font-semibold">Filter Executions</h2>
+            </div>
+            {hasActiveFilters && (
+              <button
+                onClick={clearFilters}
+                className="flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900"
+              >
+                <X className="h-4 w-4" />
+                Clear Filters
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+            <AutocompleteInput
+              label="Pack"
+              value={searchFilters.pack}
+              onChange={(value) => handleFilterChange("pack", value)}
+              suggestions={packSuggestions}
+              placeholder="e.g., core"
+            />
+            <AutocompleteInput
+              label="Rule"
+              value={searchFilters.rule}
+              onChange={(value) => handleFilterChange("rule", value)}
+              suggestions={ruleSuggestions}
+              placeholder="e.g., core.on_timer"
+            />
+            <AutocompleteInput
+              label="Action"
+              value={searchFilters.action}
+              onChange={(value) => handleFilterChange("action", value)}
+              suggestions={actionSuggestions}
+              placeholder="e.g., core.echo"
+            />
+            <AutocompleteInput
+              label="Trigger"
+              value={searchFilters.trigger}
+              onChange={(value) => handleFilterChange("trigger", value)}
+              suggestions={triggerSuggestions}
+              placeholder="e.g., core.timer"
+            />
+            <FilterInput
+              label="Executor ID"
+              value={searchFilters.executor}
+              onChange={(value) => handleFilterChange("executor", value)}
+              placeholder="e.g., 1"
+            />
+            <div>
+              <MultiSelect
+                label="Status"
+                options={STATUS_OPTIONS}
+                value={selectedStatuses}
+                onChange={setSelectedStatuses}
+                placeholder="All Statuses"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Results section - isolated from filter state, only depends on query results */}
+        {viewMode === "all" ? (
+          <ExecutionsResultsTable
+            executions={filteredExecutions}
+            isLoading={isLoading}
+            isFetching={isFetching}
+            error={error as Error | null}
+            hasActiveFilters={hasActiveFilters}
+            clearFilters={clearFilters}
+            page={page}
+            setPage={setPage}
+            pageSize={pageSize}
+            total={total}
+            selectedExecutionId={selectedExecutionId}
+            onSelectExecution={handleSelectExecution}
+          />
+        ) : (
+          <WorkflowExecutionTree
+            executions={filteredExecutions}
+            isLoading={isLoading}
+            isFetching={isFetching}
+            error={error as Error | null}
+            hasActiveFilters={hasActiveFilters}
+            clearFilters={clearFilters}
+            page={page}
+            setPage={setPage}
+            pageSize={pageSize}
+            total={total}
+            workflowActionRefs={baseSuggestions.workflowActionRefs}
+            selectedExecutionId={selectedExecutionId}
+            onSelectExecution={handleSelectExecution}
+          />
         )}
       </div>
 
-      {/* Filter section - always mounted, never unmounts during loading */}
-      <div className="bg-white shadow rounded-lg p-4 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Search className="h-5 w-5 text-gray-400" />
-            <h2 className="text-lg font-semibold">Filter Executions</h2>
-          </div>
-          {hasActiveFilters && (
-            <button
-              onClick={clearFilters}
-              className="flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900"
-            >
-              <X className="h-4 w-4" />
-              Clear Filters
-            </button>
-          )}
+      {/* Right-side preview panel */}
+      {selectedExecutionId && (
+        <div className="w-[400px] flex-shrink-0 h-full">
+          <ExecutionPreviewPanel
+            executionId={selectedExecutionId}
+            onClose={handleClosePreview}
+          />
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
-          <AutocompleteInput
-            label="Pack"
-            value={searchFilters.pack}
-            onChange={(value) => handleFilterChange("pack", value)}
-            suggestions={packSuggestions}
-            placeholder="e.g., core"
-          />
-          <AutocompleteInput
-            label="Rule"
-            value={searchFilters.rule}
-            onChange={(value) => handleFilterChange("rule", value)}
-            suggestions={ruleSuggestions}
-            placeholder="e.g., core.on_timer"
-          />
-          <AutocompleteInput
-            label="Action"
-            value={searchFilters.action}
-            onChange={(value) => handleFilterChange("action", value)}
-            suggestions={actionSuggestions}
-            placeholder="e.g., core.echo"
-          />
-          <AutocompleteInput
-            label="Trigger"
-            value={searchFilters.trigger}
-            onChange={(value) => handleFilterChange("trigger", value)}
-            suggestions={triggerSuggestions}
-            placeholder="e.g., core.timer"
-          />
-          <FilterInput
-            label="Executor ID"
-            value={searchFilters.executor}
-            onChange={(value) => handleFilterChange("executor", value)}
-            placeholder="e.g., 1"
-          />
-          <div>
-            <MultiSelect
-              label="Status"
-              options={STATUS_OPTIONS}
-              value={selectedStatuses}
-              onChange={setSelectedStatuses}
-              placeholder="All Statuses"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Results section - isolated from filter state, only depends on query results */}
-      <ExecutionsResultsTable
-        executions={filteredExecutions}
-        isLoading={isLoading}
-        isFetching={isFetching}
-        error={error as Error | null}
-        hasActiveFilters={hasActiveFilters}
-        clearFilters={clearFilters}
-        page={page}
-        setPage={setPage}
-        pageSize={pageSize}
-        total={total}
-      />
+      )}
     </div>
   );
 }

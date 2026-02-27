@@ -27,14 +27,14 @@ use crate::{
 
 /// List history records for a given entity type.
 ///
-/// Supported entity types: `execution`, `worker`, `enforcement`, `event`.
+/// Supported entity types: `execution`, `worker`.
 /// Returns a paginated list of change records ordered by time descending.
 #[utoipa::path(
     get,
     path = "/api/v1/history/{entity_type}",
     tag = "history",
     params(
-        ("entity_type" = String, Path, description = "Entity type: execution, worker, enforcement, or event"),
+        ("entity_type" = String, Path, description = "Entity type: execution or worker"),
         HistoryQueryParams,
     ),
     responses(
@@ -127,56 +127,6 @@ pub async fn get_worker_history(
     get_entity_history_by_id(&state, HistoryEntityType::Worker, id, query).await
 }
 
-/// Get history for a specific enforcement by ID.
-///
-/// Returns all change records for the given enforcement, ordered by time descending.
-#[utoipa::path(
-    get,
-    path = "/api/v1/enforcements/{id}/history",
-    tag = "history",
-    params(
-        ("id" = i64, Path, description = "Enforcement ID"),
-        HistoryQueryParams,
-    ),
-    responses(
-        (status = 200, description = "History records for the enforcement", body = PaginatedResponse<HistoryRecordResponse>),
-    ),
-    security(("bearer_auth" = []))
-)]
-pub async fn get_enforcement_history(
-    State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
-    Path(id): Path<i64>,
-    Query(query): Query<HistoryQueryParams>,
-) -> ApiResult<impl IntoResponse> {
-    get_entity_history_by_id(&state, HistoryEntityType::Enforcement, id, query).await
-}
-
-/// Get history for a specific event by ID.
-///
-/// Returns all change records for the given event, ordered by time descending.
-#[utoipa::path(
-    get,
-    path = "/api/v1/events/{id}/history",
-    tag = "history",
-    params(
-        ("id" = i64, Path, description = "Event ID"),
-        HistoryQueryParams,
-    ),
-    responses(
-        (status = 200, description = "History records for the event", body = PaginatedResponse<HistoryRecordResponse>),
-    ),
-    security(("bearer_auth" = []))
-)]
-pub async fn get_event_history(
-    State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
-    Path(id): Path<i64>,
-    Query(query): Query<HistoryQueryParams>,
-) -> ApiResult<impl IntoResponse> {
-    get_entity_history_by_id(&state, HistoryEntityType::Event, id, query).await
-}
-
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -231,8 +181,6 @@ async fn get_entity_history_by_id(
 /// - `GET /history/:entity_type`          — generic history query
 /// - `GET /executions/:id/history`        — execution-specific history
 /// - `GET /workers/:id/history`           — worker-specific history (note: currently no /workers base route exists)
-/// - `GET /enforcements/:id/history`      — enforcement-specific history
-/// - `GET /events/:id/history`            — event-specific history
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         // Generic history endpoint
@@ -240,6 +188,4 @@ pub fn routes() -> Router<Arc<AppState>> {
         // Entity-specific convenience endpoints
         .route("/executions/{id}/history", get(get_execution_history))
         .route("/workers/{id}/history", get(get_worker_history))
-        .route("/enforcements/{id}/history", get(get_enforcement_history))
-        .route("/events/{id}/history", get(get_event_history))
 }

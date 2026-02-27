@@ -152,6 +152,7 @@ impl EnforcementProcessor {
                 UpdateEnforcementInput {
                     status: Some(EnforcementStatus::Processed),
                     payload: None,
+                    resolved_at: Some(chrono::Utc::now()),
                 },
             )
             .await?;
@@ -170,6 +171,7 @@ impl EnforcementProcessor {
                 UpdateEnforcementInput {
                     status: Some(EnforcementStatus::Disabled),
                     payload: None,
+                    resolved_at: Some(chrono::Utc::now()),
                 },
             )
             .await?;
@@ -356,7 +358,7 @@ mod tests {
             condition: attune_common::models::enums::EnforcementCondition::Any,
             conditions: json!({}),
             created: chrono::Utc::now(),
-            updated: chrono::Utc::now(),
+            resolved_at: Some(chrono::Utc::now()),
         };
 
         let mut rule = Rule {

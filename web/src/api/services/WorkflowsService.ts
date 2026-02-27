@@ -150,7 +150,7 @@ export class WorkflowsService {
              */
             pack_ref: string;
             /**
-             * Parameter schema
+             * Parameter schema (StackStorm-style with inline required/secret)
              */
             param_schema: any | null;
             /**
@@ -241,7 +241,7 @@ export class WorkflowsService {
              */
             pack_ref: string;
             /**
-             * Parameter schema
+             * Parameter schema (StackStorm-style with inline required/secret)
              */
             param_schema: any | null;
             /**
@@ -333,7 +333,7 @@ export class WorkflowsService {
              */
             pack_ref: string;
             /**
-             * Parameter schema
+             * Parameter schema (StackStorm-style with inline required/secret)
              */
             param_schema: any | null;
             /**

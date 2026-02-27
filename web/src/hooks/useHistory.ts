@@ -5,11 +5,7 @@ import { apiClient } from "@/lib/api-client";
  * Supported entity types for history queries.
  * Maps to the TimescaleDB history hypertables.
  */
-export type HistoryEntityType =
-  | "execution"
-  | "worker"
-  | "enforcement"
-  | "event";
+export type HistoryEntityType = "execution" | "worker";
 
 /**
  * A single history record from the API.
@@ -68,8 +64,6 @@ export interface HistoryQueryParams {
  * Uses the entity-specific endpoints:
  * - GET /api/v1/executions/:id/history
  * - GET /api/v1/workers/:id/history
- * - GET /api/v1/enforcements/:id/history
- * - GET /api/v1/events/:id/history
  */
 async function fetchEntityHistory(
   entityType: HistoryEntityType,
@@ -79,8 +73,6 @@ async function fetchEntityHistory(
   const pluralMap: Record<HistoryEntityType, string> = {
     execution: "executions",
     worker: "workers",
-    enforcement: "enforcements",
-    event: "events",
   };
 
   const queryParams: Record<string, string | number> = {};
@@ -142,24 +134,4 @@ export function useWorkerHistory(
   params: HistoryQueryParams = {},
 ) {
   return useEntityHistory("worker", workerId, params);
-}
-
-/**
- * Convenience hook for enforcement history.
- */
-export function useEnforcementHistory(
-  enforcementId: number,
-  params: HistoryQueryParams = {},
-) {
-  return useEntityHistory("enforcement", enforcementId, params);
-}
-
-/**
- * Convenience hook for event history.
- */
-export function useEventHistory(
-  eventId: number,
-  params: HistoryQueryParams = {},
-) {
-  return useEntityHistory("event", eventId, params);
 }

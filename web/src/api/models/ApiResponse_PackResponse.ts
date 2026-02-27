@@ -23,6 +23,10 @@ export type ApiResponse_PackResponse = {
          */
         created: string;
         /**
+         * Pack dependencies (refs of required packs)
+         */
+        dependencies: Array<string>;
+        /**
          * Pack description
          */
         description?: string | null;
@@ -47,7 +51,7 @@ export type ApiResponse_PackResponse = {
          */
         ref: string;
         /**
-         * Runtime dependencies
+         * Runtime dependencies (e.g., shell, python, nodejs)
          */
         runtime_deps: Array<string>;
         /**

@@ -7,13 +7,17 @@
  */
 export type CreatePackRequest = {
     /**
-     * Configuration schema (JSON Schema)
+     * Configuration schema (flat format with inline required/secret per parameter)
      */
     conf_schema?: Record<string, any>;
     /**
      * Pack configuration values
      */
     config?: Record<string, any>;
+    /**
+     * Pack dependencies (refs of required packs)
+     */
+    dependencies?: Array<string>;
     /**
      * Pack description
      */
@@ -35,7 +39,7 @@ export type CreatePackRequest = {
      */
     ref: string;
     /**
-     * Runtime dependencies (refs of required packs)
+     * Runtime dependencies (e.g., shell, python, nodejs)
      */
     runtime_deps?: Array<string>;
     /**

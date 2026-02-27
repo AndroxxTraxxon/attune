@@ -601,8 +601,8 @@ async fn write_workflow_yaml(
 /// Create a companion action record for a workflow definition.
 ///
 /// This ensures the workflow appears in action lists and the action palette in the
-/// workflow builder. The action is created with `is_workflow = true` and linked to
-/// the workflow definition via the `workflow_def` FK.
+/// workflow builder. The action is linked to the workflow definition via the
+/// `workflow_def` FK.
 async fn create_companion_action(
     db: &sqlx::PgPool,
     workflow_ref: &str,
@@ -643,7 +643,7 @@ async fn create_companion_action(
             ))
         })?;
 
-    // Link the action to the workflow definition (sets is_workflow = true and workflow_def)
+    // Link the action to the workflow definition (sets workflow_def FK)
     ActionRepository::link_workflow_def(db, action.id, workflow_def_id)
         .await
         .map_err(|e| {

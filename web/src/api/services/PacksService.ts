@@ -72,6 +72,10 @@ export class PacksService {
              */
             created: string;
             /**
+             * Pack dependencies (refs of required packs)
+             */
+            dependencies: Array<string>;
+            /**
              * Pack description
              */
             description?: string | null;
@@ -96,7 +100,7 @@ export class PacksService {
              */
             ref: string;
             /**
-             * Runtime dependencies
+             * Runtime dependencies (e.g., shell, python, nodejs)
              */
             runtime_deps: Array<string>;
             /**
@@ -145,7 +149,6 @@ export class PacksService {
             mediaType: 'application/json',
             errors: {
                 400: `Invalid request or tests failed`,
-                409: `Pack already exists`,
                 501: `Not implemented yet`,
             },
         });
@@ -201,6 +204,10 @@ export class PacksService {
              */
             created: string;
             /**
+             * Pack dependencies (refs of required packs)
+             */
+            dependencies: Array<string>;
+            /**
              * Pack description
              */
             description?: string | null;
@@ -225,7 +232,7 @@ export class PacksService {
              */
             ref: string;
             /**
-             * Runtime dependencies
+             * Runtime dependencies (e.g., shell, python, nodejs)
              */
             runtime_deps: Array<string>;
             /**
@@ -289,6 +296,10 @@ export class PacksService {
              */
             created: string;
             /**
+             * Pack dependencies (refs of required packs)
+             */
+            dependencies: Array<string>;
+            /**
              * Pack description
              */
             description?: string | null;
@@ -313,7 +324,7 @@ export class PacksService {
              */
             ref: string;
             /**
-             * Runtime dependencies
+             * Runtime dependencies (e.g., shell, python, nodejs)
              */
             runtime_deps: Array<string>;
             /**

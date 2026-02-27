@@ -126,7 +126,7 @@ impl HistoryQueryParams {
 /// Path parameter for the entity type segment.
 #[derive(Debug, Clone, Deserialize, IntoParams)]
 pub struct HistoryEntityTypePath {
-    /// Entity type: `execution`, `worker`, `enforcement`, or `event`
+    /// Entity type: `execution` or `worker`
     pub entity_type: String,
 }
 

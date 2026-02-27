@@ -7,6 +7,7 @@
 //! - Detecting inquiry requests in execution results
 //! - Creating inquiries for human-in-the-loop workflows
 //! - Enabling FIFO execution ordering by notifying waiting executions
+//! - Advancing workflow orchestration when child task executions complete
 
 use anyhow::Result;
 use attune_common::{
@@ -14,10 +15,14 @@ use attune_common::{
     repositories::{execution::ExecutionRepository, FindById},
 };
 use sqlx::PgPool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-use crate::{inquiry_handler::InquiryHandler, queue_manager::ExecutionQueueManager};
+use crate::{
+    inquiry_handler::InquiryHandler, queue_manager::ExecutionQueueManager,
+    scheduler::ExecutionScheduler,
+};
 
 /// Completion listener that handles execution completion messages
 pub struct CompletionListener {
@@ -25,6 +30,9 @@ pub struct CompletionListener {
     consumer: Arc<Consumer>,
     publisher: Arc<Publisher>,
     queue_manager: Arc<ExecutionQueueManager>,
+    /// Round-robin counter shared with the scheduler for dispatching workflow
+    /// successor tasks to workers.
+    round_robin_counter: Arc<AtomicUsize>,
 }
 
 impl CompletionListener {
@@ -40,6 +48,7 @@ impl CompletionListener {
             consumer,
             publisher,
             queue_manager,
+            round_robin_counter: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -50,6 +59,7 @@ impl CompletionListener {
         let pool = self.pool.clone();
         let publisher = self.publisher.clone();
         let queue_manager = self.queue_manager.clone();
+        let round_robin_counter = self.round_robin_counter.clone();
 
         // Use the handler pattern to consume messages
         self.consumer
@@ -58,12 +68,14 @@ impl CompletionListener {
                     let pool = pool.clone();
                     let publisher = publisher.clone();
                     let queue_manager = queue_manager.clone();
+                    let round_robin_counter = round_robin_counter.clone();
 
                     async move {
                         if let Err(e) = Self::process_execution_completed(
                             &pool,
                             &publisher,
                             &queue_manager,
+                            &round_robin_counter,
                             &envelope,
                         )
                         .await
@@ -88,6 +100,7 @@ impl CompletionListener {
         pool: &PgPool,
         publisher: &Publisher,
         queue_manager: &ExecutionQueueManager,
+        round_robin_counter: &AtomicUsize,
         envelope: &MessageEnvelope<ExecutionCompletedPayload>,
     ) -> Result<()> {
         debug!("Processing execution completed message: {:?}", envelope);
@@ -114,6 +127,26 @@ impl CompletionListener {
                 "Execution {} found with status: {:?}",
                 execution_id, exec.status
             );
+
+            // Check if this execution is a workflow child task and advance the
+            // workflow orchestration (schedule successor tasks or complete the
+            // workflow).
+            if exec.workflow_task.is_some() {
+                info!(
+                    "Execution {} is a workflow task, advancing workflow",
+                    execution_id
+                );
+                if let Err(e) =
+                    ExecutionScheduler::advance_workflow(pool, publisher, round_robin_counter, exec)
+                        .await
+                {
+                    error!(
+                        "Failed to advance workflow for execution {}: {}",
+                        execution_id, e
+                    );
+                    // Continue processing — don't fail the entire completion
+                }
+            }
 
             // Check if execution result contains an inquiry request
             if let Some(result) = &exec.result {

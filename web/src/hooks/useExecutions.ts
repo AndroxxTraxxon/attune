@@ -11,6 +11,7 @@ interface ExecutionsQueryParams {
   ruleRef?: string;
   triggerRef?: string;
   executor?: number;
+  topLevelOnly?: boolean;
 }
 
 export function useExecutions(params?: ExecutionsQueryParams) {
@@ -21,7 +22,8 @@ export function useExecutions(params?: ExecutionsQueryParams) {
     params?.packName ||
     params?.ruleRef ||
     params?.triggerRef ||
-    params?.executor;
+    params?.executor ||
+    params?.topLevelOnly;
 
   return useQuery({
     queryKey: ["executions", params],
@@ -35,6 +37,7 @@ export function useExecutions(params?: ExecutionsQueryParams) {
         ruleRef: params?.ruleRef,
         triggerRef: params?.triggerRef,
         executor: params?.executor,
+        topLevelOnly: params?.topLevelOnly,
       });
       return response;
     },
@@ -57,5 +60,39 @@ export function useExecution(id: number) {
     },
     enabled: !!id,
     staleTime: 30000, // 30 seconds - SSE handles real-time updates
+  });
+}
+
+/**
+ * Fetch child executions (workflow tasks) for a given parent execution ID.
+ *
+ * Enabled only when `parentId` is provided. Polls every 5 seconds while any
+ * child execution is still in a running/pending state so the UI stays current.
+ */
+export function useChildExecutions(parentId: number | undefined) {
+  return useQuery({
+    queryKey: ["executions", { parent: parentId }],
+    queryFn: async () => {
+      const response = await ExecutionsService.listExecutions({
+        parent: parentId,
+        perPage: 100,
+      });
+      return response;
+    },
+    enabled: !!parentId,
+    staleTime: 5000,
+    // Re-fetch periodically so in-progress tasks update
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return false;
+      const hasActive = data.data.some(
+        (e) =>
+          e.status === "requested" ||
+          e.status === "scheduling" ||
+          e.status === "scheduled" ||
+          e.status === "running",
+      );
+      return hasActive ? 5000 : false;
+    },
   });
 }

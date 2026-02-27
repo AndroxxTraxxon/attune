@@ -12,6 +12,7 @@ use anyhow::Result;
 use attune_common::{
     models::{enums::ExecutionStatus, Execution},
     mq::{MessageEnvelope, MessageType, Publisher},
+    repositories::execution::SELECT_COLUMNS as EXECUTION_COLUMNS,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -105,17 +106,16 @@ impl ExecutionTimeoutMonitor {
         );
 
         // Find executions stuck in SCHEDULED status
-        let stale_executions = sqlx::query_as::<_, Execution>(
-            "SELECT * FROM execution
-             WHERE status = $1
-             AND updated < $2
-             ORDER BY updated ASC
-             LIMIT 100", // Process in batches to avoid overwhelming system
-        )
-        .bind(ExecutionStatus::Scheduled)
-        .bind(cutoff)
-        .fetch_all(&self.pool)
-        .await?;
+        let sql = format!(
+            "SELECT {EXECUTION_COLUMNS} FROM execution \
+             WHERE status = $1 AND updated < $2 \
+             ORDER BY updated ASC LIMIT 100"
+        );
+        let stale_executions = sqlx::query_as::<_, Execution>(&sql)
+            .bind(ExecutionStatus::Scheduled)
+            .bind(cutoff)
+            .fetch_all(&self.pool)
+            .await?;
 
         if stale_executions.is_empty() {
             debug!("No stale scheduled executions found");

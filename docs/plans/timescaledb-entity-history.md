@@ -67,8 +67,19 @@ History rows are written by `AFTER INSERT OR UPDATE OR DELETE` triggers on the o
 |--------|--------------|---------------------|-----------------|
 | `execution` | `execution_history` | `action_ref` | *(none)* |
 | `worker` | `worker_history` | `name` | `last_heartbeat` (when sole change) |
-| `enforcement` | `enforcement_history` | `rule_ref` | *(none)* |
-| `event` | `event_history` | `trigger_ref` | *(none)* |
+
+> **Note:** The `event` and `enforcement` tables do **not** have separate `_history`
+> tables. Both are TimescaleDB hypertables partitioned on `created`:
+>
+> - **Events** are immutable after insert (never updated). Compression and retention
+>   policies are applied directly. The `event_volume_hourly` continuous aggregate
+>   queries the `event` table directly.
+> - **Enforcements** are updated exactly once (status transitions from `created` to
+>   `processed` or `disabled` within ~1 second of creation, well before the 7-day
+>   compression window). The `resolved_at` column records when this transition
+>   occurred. A separate history table added little value for a single deterministic
+>   status change. The `enforcement_volume_hourly` continuous aggregate queries the
+>   `enforcement` table directly.
 
 ## Table Schema
 
@@ -100,11 +111,11 @@ Column details:
 
 ## Hypertable Configuration
 
-| History Table | Chunk Interval | Rationale |
-|---------------|---------------|-----------|
+| Table | Chunk Interval | Rationale |
+|-------|---------------|-----------|
 | `execution_history` | 1 day | Highest expected volume |
-| `enforcement_history` | 1 day | Correlated with execution volume |
-| `event_history` | 1 day | Can be high volume from active sensors |
+| `event` (hypertable) | 1 day | Can be high volume from active sensors |
+| `enforcement` (hypertable) | 1 day | Correlated with execution volume |
 | `worker_history` | 7 days | Low volume (status changes are infrequent) |
 
 ## Indexes
@@ -138,22 +149,22 @@ Each tracked table gets a dedicated trigger function that:
 
 Applied after data leaves the "hot" query window:
 
-| History Table | Compress After | `segmentby` | `orderby` |
-|---------------|---------------|-------------|-----------|
+| Table | Compress After | `segmentby` | `orderby` |
+|-------|---------------|-------------|-----------|
 | `execution_history` | 7 days | `entity_id` | `time DESC` |
 | `worker_history` | 7 days | `entity_id` | `time DESC` |
-| `enforcement_history` | 7 days | `entity_id` | `time DESC` |
-| `event_history` | 7 days | `entity_id` | `time DESC` |
+| `event` (hypertable) | 7 days | `trigger_ref` | `created DESC` |
+| `enforcement` (hypertable) | 7 days | `rule_ref` | `created DESC` |
 
 `segmentby = entity_id` ensures that "show me history for entity X" queries are fast even on compressed chunks.
 
 ## Retention Policies
 
-| History Table | Retain For | Rationale |
-|---------------|-----------|-----------|
+| Table | Retain For | Rationale |
+|-------|-----------|-----------|
 | `execution_history` | 90 days | Primary operational data |
-| `enforcement_history` | 90 days | Tied to execution lifecycle |
-| `event_history` | 30 days | High volume, less long-term value |
+| `event` (hypertable) | 90 days | High volume time-series data |
+| `enforcement` (hypertable) | 90 days | Tied to execution lifecycle |
 | `worker_history` | 180 days | Low volume, useful for capacity trends |
 
 ## Continuous Aggregates (Future)
@@ -181,9 +192,8 @@ SELECT
     time_bucket('1 hour', time) AS bucket,
     entity_ref AS trigger_ref,
     COUNT(*) AS event_count
-FROM event_history
-WHERE operation = 'INSERT'
-GROUP BY bucket, entity_ref
+FROM event
+GROUP BY bucket, trigger_ref
 WITH NO DATA;
 ```
 

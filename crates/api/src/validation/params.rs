@@ -368,7 +368,6 @@ mod tests {
             runtime_version_constraint: None,
             param_schema: schema,
             out_schema: None,
-            is_workflow: false,
             workflow_def: None,
             is_adhoc: false,
             parameter_delivery: attune_common::models::ParameterDelivery::default(),

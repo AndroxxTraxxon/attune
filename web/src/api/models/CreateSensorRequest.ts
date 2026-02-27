@@ -31,7 +31,7 @@ export type CreateSensorRequest = {
      */
     pack_ref: string;
     /**
-     * Parameter schema (JSON Schema) for sensor configuration
+     * Parameter schema (flat format) for sensor configuration
      */
     param_schema?: any | null;
     /**

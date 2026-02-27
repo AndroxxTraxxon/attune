@@ -38,9 +38,5 @@ export type EventResponse = {
      * Trigger reference
      */
     trigger_ref: string;
-    /**
-     * Last update timestamp
-     */
-    updated: string;
 };
 

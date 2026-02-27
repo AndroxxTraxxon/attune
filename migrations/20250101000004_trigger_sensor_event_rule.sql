@@ -2,6 +2,12 @@
 -- Description: Creates trigger, sensor, event, enforcement, and action tables
 --              with runtime version constraint support. Includes webhook key
 --              generation function used by webhook management functions in 000007.
+--
+--              NOTE: The event and enforcement tables are converted to TimescaleDB
+--              hypertables in migration 000009. Hypertables cannot be the target of
+--              FK constraints, so enforcement.event is a plain BIGINT with no FK.
+--              FKs *from* hypertables to regular tables (e.g., event.trigger → trigger,
+--              enforcement.rule → rule) are supported by TimescaleDB 2.x and are kept.
 -- Version: 20250101000004
 
 -- ============================================================================
@@ -140,8 +146,7 @@ CREATE TABLE event (
     source_ref TEXT,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     rule BIGINT,
-    rule_ref TEXT,
-    updated TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    rule_ref TEXT
 );
 
 -- Indexes
@@ -153,12 +158,6 @@ CREATE INDEX idx_event_trigger_created ON event(trigger, created DESC);
 CREATE INDEX idx_event_trigger_ref_created ON event(trigger_ref, created DESC);
 CREATE INDEX idx_event_source_created ON event(source, created DESC);
 CREATE INDEX idx_event_payload_gin ON event USING GIN (payload);
-
--- Trigger
-CREATE TRIGGER update_event_updated
-    BEFORE UPDATE ON event
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_column();
 
 -- Comments
 COMMENT ON TABLE event IS 'Events are instances of triggers firing';
@@ -178,13 +177,13 @@ CREATE TABLE enforcement (
     rule_ref TEXT NOT NULL,
     trigger_ref TEXT NOT NULL,
     config JSONB,
-    event BIGINT REFERENCES event(id) ON DELETE SET NULL,
+    event BIGINT,           -- references event(id); no FK because event becomes a hypertable
     status enforcement_status_enum NOT NULL DEFAULT 'created',
     payload JSONB NOT NULL,
     condition enforcement_condition_enum NOT NULL DEFAULT 'all',
     conditions JSONB NOT NULL DEFAULT '[]'::jsonb,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at TIMESTAMPTZ,
 
     -- Constraints
     CONSTRAINT enforcement_condition_check CHECK (condition IN ('any', 'all'))
@@ -203,18 +202,13 @@ CREATE INDEX idx_enforcement_event_status ON enforcement(event, status);
 CREATE INDEX idx_enforcement_payload_gin ON enforcement USING GIN (payload);
 CREATE INDEX idx_enforcement_conditions_gin ON enforcement USING GIN (conditions);
 
--- Trigger
-CREATE TRIGGER update_enforcement_updated
-    BEFORE UPDATE ON enforcement
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_column();
-
 -- Comments
 COMMENT ON TABLE enforcement IS 'Enforcements represent rule triggering by events';
 COMMENT ON COLUMN enforcement.rule IS 'Rule being enforced (may be null if rule deleted)';
 COMMENT ON COLUMN enforcement.rule_ref IS 'Rule reference (preserved even if rule deleted)';
-COMMENT ON COLUMN enforcement.event IS 'Event that triggered this enforcement';
-COMMENT ON COLUMN enforcement.status IS 'Processing status';
+COMMENT ON COLUMN enforcement.event IS 'Event that triggered this enforcement (no FK — event is a hypertable)';
+COMMENT ON COLUMN enforcement.status IS 'Processing status (created → processed or disabled)';
+COMMENT ON COLUMN enforcement.resolved_at IS 'Timestamp when the enforcement was resolved (status changed from created to processed/disabled). NULL while status is created.';
 COMMENT ON COLUMN enforcement.payload IS 'Event payload for rule evaluation';
 COMMENT ON COLUMN enforcement.condition IS 'Logical operator for conditions (any=OR, all=AND)';
 COMMENT ON COLUMN enforcement.conditions IS 'Condition expressions to evaluate';

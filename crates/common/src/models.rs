@@ -896,7 +896,6 @@ pub mod action {
         pub runtime_version_constraint: Option<String>,
         pub param_schema: Option<JsonSchema>,
         pub out_schema: Option<JsonSchema>,
-        pub is_workflow: bool,
         pub workflow_def: Option<Id>,
         pub is_adhoc: bool,
         #[sqlx(default)]
@@ -988,7 +987,6 @@ pub mod event {
         pub source: Option<Id>,
         pub source_ref: Option<String>,
         pub created: DateTime<Utc>,
-        pub updated: DateTime<Utc>,
         pub rule: Option<Id>,
         pub rule_ref: Option<String>,
     }
@@ -1006,7 +1004,7 @@ pub mod event {
         pub condition: EnforcementCondition,
         pub conditions: JsonValue,
         pub created: DateTime<Utc>,
-        pub updated: DateTime<Utc>,
+        pub resolved_at: Option<DateTime<Utc>>,
     }
 }
 
@@ -1484,8 +1482,6 @@ pub mod entity_history {
     pub enum HistoryEntityType {
         Execution,
         Worker,
-        Enforcement,
-        Event,
     }
 
     impl HistoryEntityType {
@@ -1494,8 +1490,6 @@ pub mod entity_history {
             match self {
                 Self::Execution => "execution_history",
                 Self::Worker => "worker_history",
-                Self::Enforcement => "enforcement_history",
-                Self::Event => "event_history",
             }
         }
     }
@@ -1505,8 +1499,6 @@ pub mod entity_history {
             match self {
                 Self::Execution => write!(f, "execution"),
                 Self::Worker => write!(f, "worker"),
-                Self::Enforcement => write!(f, "enforcement"),
-                Self::Event => write!(f, "event"),
             }
         }
     }
@@ -1518,10 +1510,8 @@ pub mod entity_history {
             match s.to_lowercase().as_str() {
                 "execution" => Ok(Self::Execution),
                 "worker" => Ok(Self::Worker),
-                "enforcement" => Ok(Self::Enforcement),
-                "event" => Ok(Self::Event),
                 other => Err(format!(
-                    "unknown history entity type '{}'; expected one of: execution, worker, enforcement, event",
+                    "unknown history entity type '{}'; expected one of: execution, worker",
                     other
                 )),
             }

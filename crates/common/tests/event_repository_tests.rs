@@ -2,13 +2,14 @@
 //!
 //! These tests verify CRUD operations, queries, and constraints
 //! for the Event repository.
+//! Note: Events are immutable time-series data — there are no update tests.
 
 mod helpers;
 
 use attune_common::{
     repositories::{
-        event::{CreateEventInput, EventRepository, UpdateEventInput},
-        Create, Delete, FindById, List, Update,
+        event::{CreateEventInput, EventRepository},
+        Create, Delete, FindById, List,
     },
     Error,
 };
@@ -56,7 +57,6 @@ async fn test_create_event_minimal() {
     assert_eq!(event.source, None);
     assert_eq!(event.source_ref, None);
     assert!(event.created.timestamp() > 0);
-    assert!(event.updated.timestamp() > 0);
 }
 
 #[tokio::test]
@@ -364,162 +364,6 @@ async fn test_list_events_respects_limit() {
 }
 
 // ============================================================================
-// UPDATE Tests
-// ============================================================================
-
-#[tokio::test]
-async fn test_update_event_config() {
-    let pool = create_test_pool().await.unwrap();
-
-    let pack = PackFixture::new_unique("update_pack")
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "webhook")
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let event = EventFixture::new_unique(Some(trigger.id), &trigger.r#ref)
-        .with_config(json!({"old": "config"}))
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let new_config = json!({"new": "config", "updated": true});
-    let input = UpdateEventInput {
-        config: Some(new_config.clone()),
-        payload: None,
-    };
-
-    let updated = EventRepository::update(&pool, event.id, input)
-        .await
-        .unwrap();
-
-    assert_eq!(updated.id, event.id);
-    assert_eq!(updated.config, Some(new_config));
-    assert!(updated.updated > event.updated);
-}
-
-#[tokio::test]
-async fn test_update_event_payload() {
-    let pool = create_test_pool().await.unwrap();
-
-    let pack = PackFixture::new_unique("payload_update_pack")
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "webhook")
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let event = EventFixture::new_unique(Some(trigger.id), &trigger.r#ref)
-        .with_payload(json!({"initial": "payload"}))
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let new_payload = json!({"updated": "payload", "version": 2});
-    let input = UpdateEventInput {
-        config: None,
-        payload: Some(new_payload.clone()),
-    };
-
-    let updated = EventRepository::update(&pool, event.id, input)
-        .await
-        .unwrap();
-
-    assert_eq!(updated.payload, Some(new_payload));
-    assert!(updated.updated > event.updated);
-}
-
-#[tokio::test]
-async fn test_update_event_both_fields() {
-    let pool = create_test_pool().await.unwrap();
-
-    let pack = PackFixture::new_unique("both_update_pack")
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "webhook")
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let event = EventFixture::new_unique(Some(trigger.id), &trigger.r#ref)
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let new_config = json!({"setting": "value"});
-    let new_payload = json!({"data": "value"});
-    let input = UpdateEventInput {
-        config: Some(new_config.clone()),
-        payload: Some(new_payload.clone()),
-    };
-
-    let updated = EventRepository::update(&pool, event.id, input)
-        .await
-        .unwrap();
-
-    assert_eq!(updated.config, Some(new_config));
-    assert_eq!(updated.payload, Some(new_payload));
-}
-
-#[tokio::test]
-async fn test_update_event_no_changes() {
-    let pool = create_test_pool().await.unwrap();
-
-    let pack = PackFixture::new_unique("nochange_pack")
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "webhook")
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let event = EventFixture::new_unique(Some(trigger.id), &trigger.r#ref)
-        .with_payload(json!({"test": "data"}))
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let input = UpdateEventInput {
-        config: None,
-        payload: None,
-    };
-
-    let result = EventRepository::update(&pool, event.id, input)
-        .await
-        .unwrap();
-
-    // Should return existing event without updating
-    assert_eq!(result.id, event.id);
-    assert_eq!(result.payload, event.payload);
-}
-
-#[tokio::test]
-async fn test_update_event_not_found() {
-    let pool = create_test_pool().await.unwrap();
-
-    let input = UpdateEventInput {
-        config: Some(json!({"test": "config"})),
-        payload: None,
-    };
-
-    let result = EventRepository::update(&pool, 99999, input).await;
-
-    // When updating non-existent entity with changes, SQLx returns RowNotFound error
-    assert!(result.is_err());
-}
-
-// ============================================================================
 // DELETE Tests
 // ============================================================================
 
@@ -561,7 +405,7 @@ async fn test_delete_event_not_found() {
 }
 
 #[tokio::test]
-async fn test_delete_event_sets_enforcement_event_to_null() {
+async fn test_delete_event_enforcement_retains_event_id() {
     let pool = create_test_pool().await.unwrap();
 
     // Create pack, trigger, action, rule, and event
@@ -616,17 +460,19 @@ async fn test_delete_event_sets_enforcement_event_to_null() {
         .await
         .unwrap();
 
-    // Delete the event - enforcement.event should be set to NULL (ON DELETE SET NULL)
+    // Delete the event — since the event table is a TimescaleDB hypertable, the FK
+    // constraint from enforcement.event was dropped (hypertables cannot be FK targets).
+    // The enforcement.event column retains the old ID as a dangling reference.
     EventRepository::delete(&pool, event.id).await.unwrap();
 
-    // Enforcement should still exist but with NULL event
+    // Enforcement still exists with the original event ID (now a dangling reference)
     use attune_common::repositories::event::EnforcementRepository;
     let found_enforcement = EnforcementRepository::find_by_id(&pool, enforcement.id)
         .await
         .unwrap()
         .unwrap();
 
-    assert_eq!(found_enforcement.event, None);
+    assert_eq!(found_enforcement.event, Some(event.id));
 }
 
 // ============================================================================
@@ -756,7 +602,7 @@ async fn test_find_events_by_trigger_ref_preserves_after_trigger_deletion() {
 // ============================================================================
 
 #[tokio::test]
-async fn test_event_timestamps_auto_managed() {
+async fn test_event_created_timestamp_auto_set() {
     let pool = create_test_pool().await.unwrap();
 
     let pack = PackFixture::new_unique("timestamp_pack")
@@ -774,24 +620,5 @@ async fn test_event_timestamps_auto_managed() {
         .await
         .unwrap();
 
-    let created_time = event.created;
-    let updated_time = event.updated;
-
-    assert!(created_time.timestamp() > 0);
-    assert_eq!(created_time, updated_time);
-
-    // Update and verify timestamp changed
-    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-
-    let input = UpdateEventInput {
-        config: Some(json!({"updated": true})),
-        payload: None,
-    };
-
-    let updated = EventRepository::update(&pool, event.id, input)
-        .await
-        .unwrap();
-
-    assert_eq!(updated.created, created_time); // created unchanged
-    assert!(updated.updated > updated_time); // updated changed
+    assert!(event.created.timestamp() > 0);
 }

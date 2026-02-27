@@ -23,7 +23,7 @@ export type CreateWorkflowRequest = {
      */
     label: string;
     /**
-     * Output schema (JSON Schema) defining expected outputs
+     * Output schema (flat format) defining expected outputs with inline required/secret
      */
     out_schema: Record<string, any>;
     /**
@@ -31,7 +31,7 @@ export type CreateWorkflowRequest = {
      */
     pack_ref: string;
     /**
-     * Parameter schema (JSON Schema) defining expected inputs
+     * Parameter schema (StackStorm-style) defining expected inputs with inline required/secret
      */
     param_schema: Record<string, any>;
     /**

@@ -21,6 +21,7 @@ mod scheduler;
 mod service;
 mod timeout_monitor;
 mod worker_health;
+mod workflow;
 
 use anyhow::Result;
 use attune_common::config::Config;

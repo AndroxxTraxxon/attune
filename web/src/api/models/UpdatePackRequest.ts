@@ -15,6 +15,10 @@ export type UpdatePackRequest = {
      */
     config: any | null;
     /**
+     * Pack dependencies (refs of required packs)
+     */
+    dependencies?: any[] | null;
+    /**
      * Pack description
      */
     description?: string | null;
@@ -31,7 +35,7 @@ export type UpdatePackRequest = {
      */
     meta: any | null;
     /**
-     * Runtime dependencies
+     * Runtime dependencies (e.g., shell, python, nodejs)
      */
     runtime_deps?: any[] | null;
     /**

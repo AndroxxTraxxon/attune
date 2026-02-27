@@ -137,6 +137,11 @@ pub struct ActionResponse {
     #[schema(value_type = Object, nullable = true)]
     pub out_schema: Option<JsonValue>,
 
+    /// Workflow definition ID (non-null if this action is a workflow)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 42, nullable = true)]
+    pub workflow_def: Option<i64>,
+
     /// Whether this is an ad-hoc action (not from pack installation)
     #[schema(example = false)]
     pub is_adhoc: bool,
@@ -186,6 +191,11 @@ pub struct ActionSummary {
     #[schema(example = ">=3.12", nullable = true)]
     pub runtime_version_constraint: Option<String>,
 
+    /// Workflow definition ID (non-null if this action is a workflow)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 42, nullable = true)]
+    pub workflow_def: Option<i64>,
+
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
@@ -210,6 +220,7 @@ impl From<attune_common::models::action::Action> for ActionResponse {
             runtime_version_constraint: action.runtime_version_constraint,
             param_schema: action.param_schema,
             out_schema: action.out_schema,
+            workflow_def: action.workflow_def,
             is_adhoc: action.is_adhoc,
             created: action.created,
             updated: action.updated,
@@ -229,6 +240,7 @@ impl From<attune_common::models::action::Action> for ActionSummary {
             entrypoint: action.entrypoint,
             runtime: action.runtime,
             runtime_version_constraint: action.runtime_version_constraint,
+            workflow_def: action.workflow_def,
             created: action.created,
             updated: action.updated,
         }

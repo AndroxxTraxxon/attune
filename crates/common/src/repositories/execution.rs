@@ -6,6 +6,15 @@ use sqlx::{Executor, Postgres, QueryBuilder};
 
 use super::{Create, Delete, FindById, List, Repository, Update};
 
+/// Column list for SELECT queries on the execution table.
+///
+/// Defined once to avoid drift between queries and the `Execution` model.
+/// The execution table has DB-only columns (`is_workflow`, `workflow_def`) that
+/// are NOT in the Rust struct, so `SELECT *` must never be used.
+pub const SELECT_COLUMNS: &str = "\
+    id, action, action_ref, config, env_vars, parent, enforcement, \
+    executor, status, result, workflow_task, created, updated";
+
 pub struct ExecutionRepository;
 
 impl Repository for ExecutionRepository {
@@ -54,9 +63,12 @@ impl FindById for ExecutionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        sqlx::query_as::<_, Execution>(
-            "SELECT id, action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task, created, updated FROM execution WHERE id = $1"
-        ).bind(id).fetch_optional(executor).await.map_err(Into::into)
+        let sql = format!("SELECT {SELECT_COLUMNS} FROM execution WHERE id = $1");
+        sqlx::query_as::<_, Execution>(&sql)
+            .bind(id)
+            .fetch_optional(executor)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -66,9 +78,12 @@ impl List for ExecutionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        sqlx::query_as::<_, Execution>(
-            "SELECT id, action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task, created, updated FROM execution ORDER BY created DESC LIMIT 1000"
-        ).fetch_all(executor).await.map_err(Into::into)
+        let sql =
+            format!("SELECT {SELECT_COLUMNS} FROM execution ORDER BY created DESC LIMIT 1000");
+        sqlx::query_as::<_, Execution>(&sql)
+            .fetch_all(executor)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -79,9 +94,26 @@ impl Create for ExecutionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        sqlx::query_as::<_, Execution>(
-            "INSERT INTO execution (action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task, created, updated"
-        ).bind(input.action).bind(&input.action_ref).bind(&input.config).bind(&input.env_vars).bind(input.parent).bind(input.enforcement).bind(input.executor).bind(input.status).bind(&input.result).bind(sqlx::types::Json(&input.workflow_task)).fetch_one(executor).await.map_err(Into::into)
+        let sql = format!(
+            "INSERT INTO execution \
+             (action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             RETURNING {SELECT_COLUMNS}"
+        );
+        sqlx::query_as::<_, Execution>(&sql)
+            .bind(input.action)
+            .bind(&input.action_ref)
+            .bind(&input.config)
+            .bind(&input.env_vars)
+            .bind(input.parent)
+            .bind(input.enforcement)
+            .bind(input.executor)
+            .bind(input.status)
+            .bind(&input.result)
+            .bind(sqlx::types::Json(&input.workflow_task))
+            .fetch_one(executor)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -130,7 +162,8 @@ impl Update for ExecutionRepository {
         }
 
         query.push(", updated = NOW() WHERE id = ").push_bind(id);
-        query.push(" RETURNING id, action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task, created, updated");
+        query.push(" RETURNING ");
+        query.push(SELECT_COLUMNS);
 
         query
             .build_query_as::<Execution>()
@@ -162,9 +195,14 @@ impl ExecutionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        sqlx::query_as::<_, Execution>(
-            "SELECT id, action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task, created, updated FROM execution WHERE status = $1 ORDER BY created DESC"
-        ).bind(status).fetch_all(executor).await.map_err(Into::into)
+        let sql = format!(
+            "SELECT {SELECT_COLUMNS} FROM execution WHERE status = $1 ORDER BY created DESC"
+        );
+        sqlx::query_as::<_, Execution>(&sql)
+            .bind(status)
+            .fetch_all(executor)
+            .await
+            .map_err(Into::into)
     }
 
     pub async fn find_by_enforcement<'e, E>(
@@ -174,8 +212,31 @@ impl ExecutionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        sqlx::query_as::<_, Execution>(
-            "SELECT id, action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task, created, updated FROM execution WHERE enforcement = $1 ORDER BY created DESC"
-        ).bind(enforcement_id).fetch_all(executor).await.map_err(Into::into)
+        let sql = format!(
+            "SELECT {SELECT_COLUMNS} FROM execution WHERE enforcement = $1 ORDER BY created DESC"
+        );
+        sqlx::query_as::<_, Execution>(&sql)
+            .bind(enforcement_id)
+            .fetch_all(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Find all child executions for a given parent execution ID.
+    ///
+    /// Returns child executions ordered by creation time (ascending),
+    /// which is the natural task execution order for workflows.
+    pub async fn find_by_parent<'e, E>(executor: E, parent_id: Id) -> Result<Vec<Execution>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let sql = format!(
+            "SELECT {SELECT_COLUMNS} FROM execution WHERE parent = $1 ORDER BY created ASC"
+        );
+        sqlx::query_as::<_, Execution>(&sql)
+            .bind(parent_id)
+            .fetch_all(executor)
+            .await
+            .map_err(Into::into)
     }
 }

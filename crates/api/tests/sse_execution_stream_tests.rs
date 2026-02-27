@@ -120,23 +120,21 @@ async fn test_sse_stream_receives_execution_updates() -> Result<()> {
         println!("Updating execution {} to 'running' status", execution_id);
 
         // Update execution status - this should trigger PostgreSQL NOTIFY
-        let _ = sqlx::query(
-            "UPDATE execution SET status = 'running', start_time = NOW() WHERE id = $1",
-        )
-        .bind(execution_id)
-        .execute(&pool_clone)
-        .await;
+        let _ =
+            sqlx::query("UPDATE execution SET status = 'running', updated = NOW() WHERE id = $1")
+                .bind(execution_id)
+                .execute(&pool_clone)
+                .await;
 
         println!("Update executed, waiting before setting to succeeded");
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         // Update to succeeded
-        let _ = sqlx::query(
-            "UPDATE execution SET status = 'succeeded', end_time = NOW() WHERE id = $1",
-        )
-        .bind(execution_id)
-        .execute(&pool_clone)
-        .await;
+        let _ =
+            sqlx::query("UPDATE execution SET status = 'succeeded', updated = NOW() WHERE id = $1")
+                .bind(execution_id)
+                .execute(&pool_clone)
+                .await;
 
         println!("Execution {} updated to 'succeeded'", execution_id);
     });

@@ -6,6 +6,7 @@ use serde_json::Value as JsonValue;
 use utoipa::{IntoParams, ToSchema};
 
 use attune_common::models::enums::ExecutionStatus;
+use attune_common::models::execution::WorkflowTaskMetadata;
 
 /// Request DTO for creating a manual execution
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -62,6 +63,11 @@ pub struct ExecutionResponse {
     #[schema(value_type = Object, example = json!({"message_id": "1234567890.123456"}))]
     pub result: Option<JsonValue>,
 
+    /// Workflow task metadata (only populated for workflow task executions)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>, nullable = true)]
+    pub workflow_task: Option<WorkflowTaskMetadata>,
+
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
@@ -101,6 +107,11 @@ pub struct ExecutionSummary {
     /// Trigger reference (if triggered by a trigger)
     #[schema(example = "core.timer")]
     pub trigger_ref: Option<String>,
+
+    /// Workflow task metadata (only populated for workflow task executions)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>, nullable = true)]
+    pub workflow_task: Option<WorkflowTaskMetadata>,
 
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
@@ -150,6 +161,12 @@ pub struct ExecutionQueryParams {
     #[param(example = 1)]
     pub parent: Option<i64>,
 
+    /// If true, only return top-level executions (those without a parent).
+    /// Useful for the "By Workflow" view where child tasks are loaded separately.
+    #[serde(default)]
+    #[param(example = false)]
+    pub top_level_only: Option<bool>,
+
     /// Page number (for pagination)
     #[serde(default = "default_page")]
     #[param(example = 1, minimum = 1)]
@@ -190,6 +207,7 @@ impl From<attune_common::models::execution::Execution> for ExecutionResponse {
             result: execution
                 .result
                 .map(|r| serde_json::to_value(r).unwrap_or(JsonValue::Null)),
+            workflow_task: execution.workflow_task,
             created: execution.created,
             updated: execution.updated,
         }
@@ -207,6 +225,7 @@ impl From<attune_common::models::execution::Execution> for ExecutionSummary {
             enforcement: execution.enforcement,
             rule_ref: None,    // Populated separately via enforcement lookup
             trigger_ref: None, // Populated separately via enforcement lookup
+            workflow_task: execution.workflow_task,
             created: execution.created,
             updated: execution.updated,
         }
@@ -256,6 +275,7 @@ mod tests {
             action_ref: None,
             enforcement: None,
             parent: None,
+            top_level_only: None,
             pack_name: None,
             rule_ref: None,
             trigger_ref: None,
@@ -274,6 +294,7 @@ mod tests {
             action_ref: None,
             enforcement: None,
             parent: None,
+            top_level_only: None,
             pack_name: None,
             rule_ref: None,
             trigger_ref: None,

@@ -53,10 +53,6 @@ pub struct EventResponse {
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
-
-    /// Last update timestamp
-    #[schema(example = "2024-01-13T10:30:00Z")]
-    pub updated: DateTime<Utc>,
 }
 
 impl From<Event> for EventResponse {
@@ -72,7 +68,6 @@ impl From<Event> for EventResponse {
             rule: event.rule,
             rule_ref: event.rule_ref,
             created: event.created,
-            updated: event.updated,
         }
     }
 }
@@ -230,9 +225,9 @@ pub struct EnforcementResponse {
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
 
-    /// Last update timestamp
-    #[schema(example = "2024-01-13T10:30:00Z")]
-    pub updated: DateTime<Utc>,
+    /// Timestamp when the enforcement was resolved (status changed from created to processed/disabled)
+    #[schema(example = "2024-01-13T10:30:01Z", nullable = true)]
+    pub resolved_at: Option<DateTime<Utc>>,
 }
 
 impl From<Enforcement> for EnforcementResponse {
@@ -249,7 +244,7 @@ impl From<Enforcement> for EnforcementResponse {
             condition: enforcement.condition,
             conditions: enforcement.conditions,
             created: enforcement.created,
-            updated: enforcement.updated,
+            resolved_at: enforcement.resolved_at,
         }
     }
 }

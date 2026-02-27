@@ -19,7 +19,7 @@ export type CreateActionRequest = {
      */
     label: string;
     /**
-     * Output schema (JSON Schema) defining expected outputs
+     * Output schema (flat format) defining expected outputs with inline required/secret
      */
     out_schema?: any | null;
     /**
@@ -27,7 +27,7 @@ export type CreateActionRequest = {
      */
     pack_ref: string;
     /**
-     * Parameter schema (JSON Schema) defining expected inputs
+     * Parameter schema (StackStorm-style) defining expected inputs with inline required/secret
      */
     param_schema?: any | null;
     /**
@@ -38,5 +38,9 @@ export type CreateActionRequest = {
      * Optional runtime ID for this action
      */
     runtime?: number | null;
+    /**
+     * Optional semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0")
+     */
+    runtime_version_constraint?: string | null;
 };
 

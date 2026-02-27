@@ -57,7 +57,7 @@ impl FindById for ActionRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
                    runtime, runtime_version_constraint,
-                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
             FROM action
             WHERE id = $1
             "#,
@@ -80,7 +80,7 @@ impl FindByRef for ActionRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
                    runtime, runtime_version_constraint,
-                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
             FROM action
             WHERE ref = $1
             "#,
@@ -103,7 +103,7 @@ impl List for ActionRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
                    runtime, runtime_version_constraint,
-                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
             FROM action
             ORDER BY ref ASC
             "#,
@@ -142,7 +142,7 @@ impl Create for ActionRepository {
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id, ref, pack, pack_ref, label, description, entrypoint,
                       runtime, runtime_version_constraint,
-                      param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                      param_schema, out_schema, workflow_def, is_adhoc, created, updated
             "#,
         )
         .bind(&input.r#ref)
@@ -256,7 +256,7 @@ impl Update for ActionRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(" RETURNING id, ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_version_constraint, param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated");
+        query.push(" RETURNING id, ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_version_constraint, param_schema, out_schema, workflow_def, is_adhoc, created, updated");
 
         let action = query
             .build_query_as::<Action>()
@@ -296,7 +296,7 @@ impl ActionRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
                    runtime, runtime_version_constraint,
-                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
             FROM action
             WHERE pack = $1
             ORDER BY ref ASC
@@ -318,7 +318,7 @@ impl ActionRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
                    runtime, runtime_version_constraint,
-                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
             FROM action
             WHERE runtime = $1
             ORDER BY ref ASC
@@ -341,7 +341,7 @@ impl ActionRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
                    runtime, runtime_version_constraint,
-                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
             FROM action
             WHERE LOWER(ref) LIKE $1 OR LOWER(label) LIKE $1 OR LOWER(description) LIKE $1
             ORDER BY ref ASC
@@ -354,7 +354,7 @@ impl ActionRepository {
         Ok(actions)
     }
 
-    /// Find all workflow actions (actions where is_workflow = true)
+    /// Find all workflow actions (actions linked to a workflow definition)
     pub async fn find_workflows<'e, E>(executor: E) -> Result<Vec<Action>>
     where
         E: Executor<'e, Database = Postgres> + 'e,
@@ -363,9 +363,9 @@ impl ActionRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
                    runtime, runtime_version_constraint,
-                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
             FROM action
-            WHERE is_workflow = true
+            WHERE workflow_def IS NOT NULL
             ORDER BY ref ASC
             "#,
         )
@@ -387,7 +387,7 @@ impl ActionRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
                    runtime, runtime_version_constraint,
-                   param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
             FROM action
             WHERE workflow_def = $1
             "#,
@@ -411,11 +411,11 @@ impl ActionRepository {
         let action = sqlx::query_as::<_, Action>(
             r#"
             UPDATE action
-            SET is_workflow = true, workflow_def = $2, updated = NOW()
+            SET workflow_def = $2, updated = NOW()
             WHERE id = $1
             RETURNING id, ref, pack, pack_ref, label, description, entrypoint,
                       runtime, runtime_version_constraint,
-                      param_schema, out_schema, is_workflow, workflow_def, is_adhoc, created, updated
+                      param_schema, out_schema, workflow_def, is_adhoc, created, updated
             "#,
         )
         .bind(action_id)

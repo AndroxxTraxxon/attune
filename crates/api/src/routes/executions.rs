@@ -168,6 +168,10 @@ pub async fn list_executions(
         filtered_executions.retain(|e| e.parent == Some(parent_id));
     }
 
+    if query.top_level_only == Some(true) {
+        filtered_executions.retain(|e| e.parent.is_none());
+    }
+
     if let Some(executor_id) = query.executor {
         filtered_executions.retain(|e| e.executor == Some(executor_id));
     }

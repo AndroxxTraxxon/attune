@@ -61,12 +61,20 @@ export function useFilterSuggestions() {
     return [...new Set(refs)].sort();
   }, [actionsData]);
 
+  const workflowActionRefs = useMemo(() => {
+    const refs =
+      actionsData?.data
+        ?.filter((a) => a.workflow_def != null)
+        .map((a) => a.ref) || [];
+    return new Set(refs);
+  }, [actionsData]);
+
   const triggerRefs = useMemo(() => {
     const refs = triggersData?.data?.map((t) => t.ref) || [];
     return [...new Set(refs)].sort();
   }, [triggersData]);
 
-  return { packNames, ruleRefs, actionRefs, triggerRefs };
+  return { packNames, ruleRefs, actionRefs, triggerRefs, workflowActionRefs };
 }
 
 /**

@@ -1,7 +1,6 @@
 import { useParams, Link } from "react-router-dom";
 import { useEnforcement } from "@/hooks/useEvents";
 import { EnforcementStatus, EnforcementCondition } from "@/api";
-import EntityHistoryPanel from "@/components/common/EntityHistoryPanel";
 
 export default function EnforcementDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -189,6 +188,18 @@ export default function EnforcementDetailPage() {
                     {formatDate(enforcement.created)}
                   </dd>
                 </div>
+                <div>
+                  <dt className="text-sm font-medium text-gray-500">
+                    Resolved At
+                  </dt>
+                  <dd className="mt-1 text-gray-900">
+                    {enforcement.resolved_at ? (
+                      formatDate(enforcement.resolved_at)
+                    ) : (
+                      <span className="text-gray-500">Pending</span>
+                    )}
+                  </dd>
+                </div>
               </dl>
             </div>
           </div>
@@ -331,6 +342,14 @@ export default function EnforcementDetailPage() {
                     {formatDate(enforcement.created)}
                   </dd>
                 </div>
+                {enforcement.resolved_at && (
+                  <div>
+                    <dt className="text-gray-500">Resolved</dt>
+                    <dd className="text-gray-900">
+                      {formatDate(enforcement.resolved_at)}
+                    </dd>
+                  </div>
+                )}
               </dl>
             </div>
           </div>
@@ -376,15 +395,6 @@ export default function EnforcementDetailPage() {
             </div>
           </div>
         </div>
-      </div>
-
-      {/* Change History */}
-      <div className="mt-6">
-        <EntityHistoryPanel
-          entityType="enforcement"
-          entityId={enforcement.id}
-          title="Enforcement History"
-        />
       </div>
     </div>
   );
