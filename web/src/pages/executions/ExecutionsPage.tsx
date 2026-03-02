@@ -534,7 +534,7 @@ export default function ExecutionsPage() {
   }, [filteredExecutions]);
 
   return (
-    <div className="flex h-[calc(100vh-4rem)]">
+    <div className="flex h-full">
       {/* Main content area */}
       <div
         className={`flex-1 min-w-0 overflow-y-auto p-6 ${selectedExecutionId ? "mr-0" : ""}`}

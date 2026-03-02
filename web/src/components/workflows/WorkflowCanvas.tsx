@@ -62,6 +62,25 @@ function gridBackground(pan: { x: number; y: number }, zoom: number) {
   };
 }
 
+/**
+ * Build a brick-lay tiled watermark using two CSS background layers.
+ * Both layers repeat the same logo at the tile period, but the second
+ * layer is offset by half the period in both axes for a staggered look.
+ * Using background-size equal to the tile period causes the SVG to scale
+ * to fill the tile — the logo's own viewBox whitespace provides the
+ * visual padding around the mark.
+ */
+function watermarkBackground(pan: { x: number; y: number }, zoom: number) {
+  const tileW = 1000 * zoom;
+  const tileH = 700 * zoom;
+  const logo = `url("/attune-logo-watermark-tile.svg")`;
+  return {
+    backgroundImage: `${logo}, ${logo}`,
+    backgroundSize: `${tileW}px ${tileH}px, ${tileW}px ${tileH}px`,
+    backgroundPosition: `${pan.x}px ${pan.y}px, ${pan.x + tileW / 2}px ${pan.y + tileH / 2}px`,
+  };
+}
+
 export type ScreenToCanvas = (
   clientX: number,
   clientY: number,
@@ -79,6 +98,7 @@ export default function WorkflowCanvas({
 }: WorkflowCanvasProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
+  const watermarkRef = useRef<HTMLDivElement>(null);
 
   // ---- Camera state ----
   // We keep refs for high-frequency updates (panning/zooming) and sync to
@@ -140,6 +160,12 @@ export default function WorkflowCanvas({
       const bg = gridBackground(panRef.current, zoomRef.current);
       canvasRef.current.style.backgroundSize = bg.backgroundSize;
       canvasRef.current.style.backgroundPosition = bg.backgroundPosition;
+    }
+    if (watermarkRef.current) {
+      const wm = watermarkBackground(panRef.current, zoomRef.current);
+      watermarkRef.current.style.backgroundImage = wm.backgroundImage;
+      watermarkRef.current.style.backgroundSize = wm.backgroundSize;
+      watermarkRef.current.style.backgroundPosition = wm.backgroundPosition;
     }
   }, []);
 
@@ -461,17 +487,22 @@ export default function WorkflowCanvas({
 
   // ---- Inner div dimensions (large enough to contain all content) ----
   const innerSize = useMemo(() => {
+    let minX = 0;
+    let minY = 0;
     let maxX = 4000;
     let maxY = 4000;
     for (const task of tasks) {
+      minX = Math.min(minX, task.position.x - 100);
+      minY = Math.min(minY, task.position.y - 100);
       maxX = Math.max(maxX, task.position.x + 500);
       maxY = Math.max(maxY, task.position.y + 500);
     }
-    return { width: maxX, height: maxY };
+    return { width: maxX - minX, height: maxY - minY };
   }, [tasks]);
 
   // ---- Grid background (recomputed from React state for the render) ----
   const gridBg = useMemo(() => gridBackground(pan, zoom), [pan, zoom]);
+  const wmBg = useMemo(() => watermarkBackground(pan, zoom), [pan, zoom]);
 
   // Zoom percentage for display
   const zoomPercent = Math.round(zoom * 100);
@@ -491,6 +522,17 @@ export default function WorkflowCanvas({
       onMouseUp={handleCanvasMouseUp}
       onContextMenu={handleContextMenu}
     >
+      {/* Tiled watermark layer — moves with grid, transparent */}
+      <div
+        ref={watermarkRef}
+        className="absolute inset-0 pointer-events-none opacity-[0.15]"
+        style={{
+          backgroundImage: wmBg.backgroundImage,
+          backgroundSize: wmBg.backgroundSize,
+          backgroundPosition: wmBg.backgroundPosition,
+        }}
+      />
+
       {/* Transformed canvas content */}
       <div
         ref={innerRef}

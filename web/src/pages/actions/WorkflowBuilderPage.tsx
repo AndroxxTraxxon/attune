@@ -608,14 +608,14 @@ export default function WorkflowBuilderPage() {
 
   if (isEditing && workflowLoading) {
     return (
-      <div className="flex items-center justify-center h-screen">
+      <div className="flex items-center justify-center h-full">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
       </div>
     );
   }
 
   return (
-    <div className="h-[calc(100vh-4rem)] flex flex-col overflow-hidden">
+    <div className="h-full flex flex-col overflow-hidden">
       {/* Top toolbar */}
       <div className="flex-shrink-0 bg-white border-b border-gray-200 px-4 py-2.5">
         <div className="flex items-center justify-between">

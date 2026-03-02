@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="120 190 272 260" width="64" height="64">
+  <defs>
+    <linearGradient id="grad-primary" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4F46E5" />
+      <stop offset="50%" stop-color="#6366F1" />
+      <stop offset="100%" stop-color="#818CF8" />
+    </linearGradient>
+    <linearGradient id="grad-accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#14B8A6" />
+      <stop offset="100%" stop-color="#22D3EE" />
+    </linearGradient>
+  </defs>
+
+  <!-- Single U-shaped resonator -->
+  <path d="M 220 412 L 220 278 Q 220 248 250 228 Q 256 224 262 228 Q 292 248 292 278 L 292 412"
+        fill="none" stroke="url(#grad-primary)" stroke-width="32" stroke-linecap="round" stroke-linejoin="round" />
+
+  <!-- Crossbar -->
+  <path d="M 218 330 L 294 330"
+        fill="none" stroke="url(#grad-primary)" stroke-width="20" stroke-linecap="round" />
+
+  <!-- Event nodes on the crossbar -->
+  <circle cx="242" cy="330" r="11" fill="#14B8A6" opacity="0.9" />
+  <circle cx="270" cy="330" r="11" fill="#22D3EE" opacity="0.9" />
+
+  <!-- Outer branching event dots -->
+  <circle cx="318" cy="330" r="9" fill="url(#grad-accent)" opacity="0.7" />
+  <line x1="296" y1="330" x2="309" y2="330" stroke="url(#grad-accent)" stroke-width="5" stroke-linecap="round" opacity="0.6" />
+
+  <circle cx="194" cy="330" r="9" fill="url(#grad-accent)" opacity="0.7" />
+  <line x1="216" y1="330" x2="203" y2="330" stroke="url(#grad-accent)" stroke-width="5" stroke-linecap="round" opacity="0.6" />
+
+  <!-- Resonance arcs — left -->
+  <path d="M 168 274 Q 138 330 168 386"
+        fill="none" stroke="url(#grad-accent)" stroke-width="16" stroke-linecap="round" opacity="0.7" />
+  <path d="M 148 254 Q 110 330 148 406"
+        fill="none" stroke="url(#grad-accent)" stroke-width="12" stroke-linecap="round" opacity="0.5" />
+
+  <!-- Resonance arcs — right -->
+  <path d="M 344 274 Q 374 330 344 386"
+        fill="none" stroke="url(#grad-accent)" stroke-width="16" stroke-linecap="round" opacity="0.7" />
+  <path d="M 364 254 Q 402 330 364 406"
+        fill="none" stroke="url(#grad-accent)" stroke-width="12" stroke-linecap="round" opacity="0.5" />
+</svg>

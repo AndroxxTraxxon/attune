@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="60 55 392 385" width="392" height="385">
+  <defs>
+    <!-- Primary gradient: deep indigo to vibrant blue -->
+    <linearGradient id="grad-primary" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4F46E5" />
+      <stop offset="50%" stop-color="#6366F1" />
+      <stop offset="100%" stop-color="#818CF8" />
+    </linearGradient>
+
+    <!-- Accent gradient: teal to cyan for flow lines -->
+    <linearGradient id="grad-accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#14B8A6" />
+      <stop offset="100%" stop-color="#22D3EE" />
+    </linearGradient>
+
+    <!-- Subtle shadow for depth -->
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#4F46E5" flood-opacity="0.2" />
+    </filter>
+  </defs>
+
+  <!-- Resonance arcs — left side (centered on crossbar y=330) -->
+  <path d="M 168 274 Q 138 330 168 386"
+        fill="none" stroke="url(#grad-accent)" stroke-width="6" stroke-linecap="round" opacity="0.5" />
+  <path d="M 148 254 Q 108 330 148 406"
+        fill="none" stroke="url(#grad-accent)" stroke-width="4.5" stroke-linecap="round" opacity="0.35" />
+  <path d="M 130 234 Q 80 330 130 426"
+        fill="none" stroke="url(#grad-accent)" stroke-width="3" stroke-linecap="round" opacity="0.2" />
+
+  <!-- Resonance arcs — right side (centered on crossbar y=330) -->
+  <path d="M 344 274 Q 374 330 344 386"
+        fill="none" stroke="url(#grad-accent)" stroke-width="6" stroke-linecap="round" opacity="0.5" />
+  <path d="M 364 254 Q 404 330 364 406"
+        fill="none" stroke="url(#grad-accent)" stroke-width="4.5" stroke-linecap="round" opacity="0.35" />
+  <path d="M 382 234 Q 432 330 382 426"
+        fill="none" stroke="url(#grad-accent)" stroke-width="3" stroke-linecap="round" opacity="0.2" />
+
+  <!-- Inverted tuning fork forming an 'A' shape -->
+  <g filter="url(#shadow)">
+    <!-- Single U-shaped resonator: left foot → up left leg → curve through apex → down right leg → right foot -->
+    <path d="M 220 412 L 220 278 Q 220 248 250 228 Q 256 224 262 228 Q 292 248 292 278 L 292 412"
+          fill="none" stroke="url(#grad-primary)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" />
+
+    <!-- Handle / stem above the apex -->
+    <path d="M 256 70 L 256 224"
+          fill="none" stroke="url(#grad-primary)" stroke-width="22" stroke-linecap="round" />
+
+    <!-- Crossbar of the A -->
+    <path d="M 224 330 L 288 330"
+          fill="none" stroke="url(#grad-primary)" stroke-width="14" stroke-linecap="round" />
+  </g>
+
+  <!-- Stem dots (orchestration flow along the handle) -->
+  <circle cx="256" cy="120" r="5" fill="#22D3EE" opacity="0.6" />
+  <circle cx="256" cy="150" r="6" fill="#14B8A6" opacity="0.7" />
+  <circle cx="256" cy="182" r="5" fill="#22D3EE" opacity="0.6" />
+
+  <!-- Node dots on the crossbar representing events/connections -->
+  <circle cx="244" cy="330" r="7" fill="#14B8A6" opacity="0.8" />
+  <circle cx="268" cy="330" r="7" fill="#22D3EE" opacity="0.8" />
+
+  <!-- Small orchestration flow dots branching from crossbar -->
+  <circle cx="308" cy="330" r="5" fill="url(#grad-accent)" opacity="0.6" />
+  <line x1="293" y1="330" x2="303" y2="330" stroke="url(#grad-accent)" stroke-width="2" stroke-linecap="round" opacity="0.5" />
+
+  <circle cx="204" cy="330" r="5" fill="url(#grad-accent)" opacity="0.6" />
+  <line x1="219" y1="330" x2="209" y2="330" stroke="url(#grad-accent)" stroke-width="2" stroke-linecap="round" opacity="0.5" />
+
+  <!-- Apex dot at the top of the A -->
+  <circle cx="256" cy="66" r="10" fill="url(#grad-primary)" opacity="0.9" />
+</svg>

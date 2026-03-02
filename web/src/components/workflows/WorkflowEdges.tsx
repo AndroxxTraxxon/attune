@@ -525,15 +525,19 @@ function WorkflowEdgesInner({
 
   const svgBounds = useMemo(() => {
     if (tasks.length === 0) return { width: 2000, height: 2000 };
+    let minX = 0;
+    let minY = 0;
     let maxX = 0;
     let maxY = 0;
     for (const task of tasks) {
+      minX = Math.min(minX, task.position.x - 100);
+      minY = Math.min(minY, task.position.y - 100);
       maxX = Math.max(maxX, task.position.x + nodeWidth + 100);
       maxY = Math.max(maxY, task.position.y + nodeHeight + 100);
     }
     return {
-      width: Math.max(maxX, 2000),
-      height: Math.max(maxY, 2000),
+      width: Math.max(maxX - minX, 2000),
+      height: Math.max(maxY - minY, 2000),
     };
   }, [tasks, nodeWidth, nodeHeight]);
 

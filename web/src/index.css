@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+    html,
+    body,
+    #root {
+        @apply h-full;
+    }
+}
+
 @keyframes flash-highlight {
     0% {
         background-color: rgb(191 219 254); /* blue-200 */

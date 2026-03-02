@@ -200,8 +200,8 @@ function TaskNodeInner({
       const handleMouseMove = (moveEvent: MouseEvent) => {
         const cur = screenToCanvas(moveEvent.clientX, moveEvent.clientY);
         onPositionChange(task.id, {
-          x: Math.max(0, cur.x - dragOffset.current.x),
-          y: Math.max(0, cur.y - dragOffset.current.y),
+          x: cur.x - dragOffset.current.x,
+          y: cur.y - dragOffset.current.y,
         });
       };
 

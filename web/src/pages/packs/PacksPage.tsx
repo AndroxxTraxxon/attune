@@ -53,7 +53,7 @@ export default function PacksPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-4rem)]">
+    <div className="flex h-full">
       {/* Left sidebar - Packs List */}
       <div className="w-96 border-r border-gray-200 overflow-y-auto bg-gray-50">
         <div className="p-4 border-b border-gray-200 bg-white sticky top-0 z-10">
