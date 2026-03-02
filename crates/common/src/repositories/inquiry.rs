@@ -7,6 +7,25 @@ use sqlx::{Executor, Postgres, QueryBuilder};
 
 use super::{Create, Delete, FindById, List, Repository, Update};
 
+/// Filters for [`InquiryRepository::search`].
+///
+/// All fields are optional and combinable (AND). Pagination is always applied.
+#[derive(Debug, Clone, Default)]
+pub struct InquirySearchFilters {
+    pub status: Option<InquiryStatus>,
+    pub execution: Option<Id>,
+    pub assigned_to: Option<Id>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+/// Result of [`InquiryRepository::search`].
+#[derive(Debug)]
+pub struct InquirySearchResult {
+    pub rows: Vec<Inquiry>,
+    pub total: u64,
+}
+
 pub struct InquiryRepository;
 
 impl Repository for InquiryRepository {
@@ -156,5 +175,67 @@ impl InquiryRepository {
         sqlx::query_as::<_, Inquiry>(
             "SELECT id, execution, prompt, response_schema, assigned_to, status, response, timeout_at, responded_at, created, updated FROM inquiry WHERE execution = $1 ORDER BY created DESC"
         ).bind(execution_id).fetch_all(executor).await.map_err(Into::into)
+    }
+
+    /// Search inquiries with all filters pushed into SQL.
+    ///
+    /// All filter fields are combinable (AND). Pagination is server-side.
+    pub async fn search<'e, E>(db: E, filters: &InquirySearchFilters) -> Result<InquirySearchResult>
+    where
+        E: Executor<'e, Database = Postgres> + Copy + 'e,
+    {
+        let select_cols = "id, execution, prompt, response_schema, assigned_to, status, response, timeout_at, responded_at, created, updated";
+
+        let mut qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new(format!("SELECT {select_cols} FROM inquiry"));
+        let mut count_qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new("SELECT COUNT(*) FROM inquiry");
+
+        let mut has_where = false;
+
+        macro_rules! push_condition {
+            ($cond_prefix:expr, $value:expr) => {{
+                if !has_where {
+                    qb.push(" WHERE ");
+                    count_qb.push(" WHERE ");
+                    has_where = true;
+                } else {
+                    qb.push(" AND ");
+                    count_qb.push(" AND ");
+                }
+                qb.push($cond_prefix);
+                qb.push_bind($value.clone());
+                count_qb.push($cond_prefix);
+                count_qb.push_bind($value);
+            }};
+        }
+
+        if let Some(status) = &filters.status {
+            push_condition!("status = ", status.clone());
+        }
+        if let Some(execution_id) = filters.execution {
+            push_condition!("execution = ", execution_id);
+        }
+        if let Some(assigned_to) = filters.assigned_to {
+            push_condition!("assigned_to = ", assigned_to);
+        }
+
+        // Suppress unused-assignment warning from the macro's last expansion.
+        let _ = has_where;
+
+        // Count
+        let total: i64 = count_qb.build_query_scalar().fetch_one(db).await?;
+        let total = total.max(0) as u64;
+
+        // Data query
+        qb.push(" ORDER BY created DESC");
+        qb.push(" LIMIT ");
+        qb.push_bind(filters.limit as i64);
+        qb.push(" OFFSET ");
+        qb.push_bind(filters.offset as i64);
+
+        let rows: Vec<Inquiry> = qb.build_query_as().fetch_all(db).await?;
+
+        Ok(InquirySearchResult { rows, total })
     }
 }

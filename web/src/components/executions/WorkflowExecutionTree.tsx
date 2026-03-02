@@ -128,6 +128,7 @@ const ChildExecutionRow = memo(function ChildExecutionRow({
   return (
     <>
       <tr
+        data-execution-id={execution.id}
         className={`hover:bg-gray-50/80 group border-t border-gray-100 cursor-pointer ${
           selectedExecutionId === execution.id
             ? "bg-blue-50 hover:bg-blue-50"
@@ -314,6 +315,7 @@ const WorkflowExecutionRow = memo(function WorkflowExecutionRow({
     <>
       {/* Main execution row */}
       <tr
+        data-execution-id={execution.id}
         className={`hover:bg-gray-50 border-b border-gray-200 cursor-pointer ${
           selectedExecutionId === execution.id
             ? "bg-blue-50 hover:bg-blue-50"

@@ -9,6 +9,56 @@ use sqlx::{Executor, Postgres, QueryBuilder};
 
 use super::{Create, Delete, FindById, FindByRef, List, Repository, Update};
 
+// ============================================================================
+// Trigger Search
+// ============================================================================
+
+/// Filters for [`TriggerRepository::list_search`].
+///
+/// All fields are optional and combinable (AND). Pagination is always applied.
+#[derive(Debug, Clone, Default)]
+pub struct TriggerSearchFilters {
+    /// Filter by pack ID
+    pub pack: Option<Id>,
+    /// Filter by enabled status
+    pub enabled: Option<bool>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+/// Result of [`TriggerRepository::list_search`].
+#[derive(Debug)]
+pub struct TriggerSearchResult {
+    pub rows: Vec<Trigger>,
+    pub total: u64,
+}
+
+// ============================================================================
+// Sensor Search
+// ============================================================================
+
+/// Filters for [`SensorRepository::list_search`].
+///
+/// All fields are optional and combinable (AND). Pagination is always applied.
+#[derive(Debug, Clone, Default)]
+pub struct SensorSearchFilters {
+    /// Filter by pack ID
+    pub pack: Option<Id>,
+    /// Filter by trigger ID
+    pub trigger: Option<Id>,
+    /// Filter by enabled status
+    pub enabled: Option<bool>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+/// Result of [`SensorRepository::list_search`].
+#[derive(Debug)]
+pub struct SensorSearchResult {
+    pub rows: Vec<Sensor>,
+    pub total: u64,
+}
+
 /// Repository for Trigger operations
 pub struct TriggerRepository;
 
@@ -251,6 +301,68 @@ impl Delete for TriggerRepository {
 }
 
 impl TriggerRepository {
+    /// Search triggers with all filters pushed into SQL.
+    ///
+    /// All filter fields are combinable (AND). Pagination is server-side.
+    pub async fn list_search<'e, E>(
+        db: E,
+        filters: &TriggerSearchFilters,
+    ) -> Result<TriggerSearchResult>
+    where
+        E: Executor<'e, Database = Postgres> + Copy + 'e,
+    {
+        let select_cols = "id, ref, pack, pack_ref, label, description, enabled, param_schema, out_schema, webhook_enabled, webhook_key, webhook_config, is_adhoc, created, updated";
+
+        let mut qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new(format!("SELECT {select_cols} FROM trigger"));
+        let mut count_qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new("SELECT COUNT(*) FROM trigger");
+
+        let mut has_where = false;
+
+        macro_rules! push_condition {
+            ($cond_prefix:expr, $value:expr) => {{
+                if !has_where {
+                    qb.push(" WHERE ");
+                    count_qb.push(" WHERE ");
+                    has_where = true;
+                } else {
+                    qb.push(" AND ");
+                    count_qb.push(" AND ");
+                }
+                qb.push($cond_prefix);
+                qb.push_bind($value.clone());
+                count_qb.push($cond_prefix);
+                count_qb.push_bind($value);
+            }};
+        }
+
+        if let Some(pack_id) = filters.pack {
+            push_condition!("pack = ", pack_id);
+        }
+        if let Some(enabled) = filters.enabled {
+            push_condition!("enabled = ", enabled);
+        }
+
+        // Suppress unused-assignment warning from the macro's last expansion.
+        let _ = has_where;
+
+        // Count
+        let total: i64 = count_qb.build_query_scalar().fetch_one(db).await?;
+        let total = total.max(0) as u64;
+
+        // Data query
+        qb.push(" ORDER BY ref ASC");
+        qb.push(" LIMIT ");
+        qb.push_bind(filters.limit as i64);
+        qb.push(" OFFSET ");
+        qb.push_bind(filters.offset as i64);
+
+        let rows: Vec<Trigger> = qb.build_query_as().fetch_all(db).await?;
+
+        Ok(TriggerSearchResult { rows, total })
+    }
+
     /// Find triggers by pack ID
     pub async fn find_by_pack<'e, E>(executor: E, pack_id: Id) -> Result<Vec<Trigger>>
     where
@@ -795,6 +907,71 @@ impl Delete for SensorRepository {
 }
 
 impl SensorRepository {
+    /// Search sensors with all filters pushed into SQL.
+    ///
+    /// All filter fields are combinable (AND). Pagination is server-side.
+    pub async fn list_search<'e, E>(
+        db: E,
+        filters: &SensorSearchFilters,
+    ) -> Result<SensorSearchResult>
+    where
+        E: Executor<'e, Database = Postgres> + Copy + 'e,
+    {
+        let select_cols = "id, ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_ref, runtime_version_constraint, trigger, trigger_ref, enabled, param_schema, config, created, updated";
+
+        let mut qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new(format!("SELECT {select_cols} FROM sensor"));
+        let mut count_qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new("SELECT COUNT(*) FROM sensor");
+
+        let mut has_where = false;
+
+        macro_rules! push_condition {
+            ($cond_prefix:expr, $value:expr) => {{
+                if !has_where {
+                    qb.push(" WHERE ");
+                    count_qb.push(" WHERE ");
+                    has_where = true;
+                } else {
+                    qb.push(" AND ");
+                    count_qb.push(" AND ");
+                }
+                qb.push($cond_prefix);
+                qb.push_bind($value.clone());
+                count_qb.push($cond_prefix);
+                count_qb.push_bind($value);
+            }};
+        }
+
+        if let Some(pack_id) = filters.pack {
+            push_condition!("pack = ", pack_id);
+        }
+        if let Some(trigger_id) = filters.trigger {
+            push_condition!("trigger = ", trigger_id);
+        }
+        if let Some(enabled) = filters.enabled {
+            push_condition!("enabled = ", enabled);
+        }
+
+        // Suppress unused-assignment warning from the macro's last expansion.
+        let _ = has_where;
+
+        // Count
+        let total: i64 = count_qb.build_query_scalar().fetch_one(db).await?;
+        let total = total.max(0) as u64;
+
+        // Data query
+        qb.push(" ORDER BY ref ASC");
+        qb.push(" LIMIT ");
+        qb.push_bind(filters.limit as i64);
+        qb.push(" OFFSET ");
+        qb.push_bind(filters.offset as i64);
+
+        let rows: Vec<Sensor> = qb.build_query_as().fetch_all(db).await?;
+
+        Ok(SensorSearchResult { rows, total })
+    }
+
     /// Find sensors by trigger ID
     pub async fn find_by_trigger<'e, E>(executor: E, trigger_id: Id) -> Result<Vec<Sensor>>
     where

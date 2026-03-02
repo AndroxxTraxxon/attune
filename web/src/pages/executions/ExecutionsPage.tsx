@@ -194,6 +194,7 @@ const ExecutionsResultsTable = memo(
               {executions.map((exec: any) => (
                 <tr
                   key={exec.id}
+                  data-execution-id={exec.id}
                   className={`hover:bg-gray-50 cursor-pointer ${
                     selectedExecutionId === exec.id
                       ? "bg-blue-50 hover:bg-blue-50"
@@ -471,6 +472,66 @@ export default function ExecutionsPage() {
     localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
     setPage(1);
   }, []);
+
+  // --- Keyboard arrow-key navigation for execution list ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+
+      // Don't interfere with inputs, selects, textareas
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+
+      const list = filteredExecutions;
+      if (!list || list.length === 0) return;
+
+      e.preventDefault();
+
+      setSelectedExecutionId((prevId) => {
+        if (prevId == null) {
+          // Nothing selected — pick first or last depending on direction
+          const nextId =
+            e.key === "ArrowDown" ? list[0].id : list[list.length - 1].id;
+          requestAnimationFrame(() => {
+            document
+              .querySelector(`[data-execution-id="${nextId}"]`)
+              ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          });
+          return nextId;
+        }
+
+        const currentIndex = list.findIndex((ex: any) => ex.id === prevId);
+        if (currentIndex === -1) {
+          const nextId = list[0].id;
+          requestAnimationFrame(() => {
+            document
+              .querySelector(`[data-execution-id="${nextId}"]`)
+              ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          });
+          return nextId;
+        }
+
+        let nextIndex: number;
+        if (e.key === "ArrowDown") {
+          nextIndex =
+            currentIndex < list.length - 1 ? currentIndex + 1 : currentIndex;
+        } else {
+          nextIndex = currentIndex > 0 ? currentIndex - 1 : currentIndex;
+        }
+
+        const nextId = list[nextIndex].id;
+        requestAnimationFrame(() => {
+          document
+            .querySelector(`[data-execution-id="${nextId}"]`)
+            ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        });
+        return nextId;
+      });
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [filteredExecutions]);
 
   return (
     <div className="flex h-[calc(100vh-4rem)]">

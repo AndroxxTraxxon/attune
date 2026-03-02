@@ -44,6 +44,11 @@ export type ExecutionResponse = {
    */
   result: Record<string, any>;
   /**
+   * When the execution actually started running (worker picked it up).
+   * Null if the execution hasn't started running yet.
+   */
+  started_at?: string | null;
+  /**
    * Execution status
    */
   status: ExecutionStatus;

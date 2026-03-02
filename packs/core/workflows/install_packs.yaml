@@ -80,7 +80,7 @@ tasks:
     action: core.download_packs
     input:
       packs: "{{ parameters.packs }}"
-      destination_dir: "{{ vars.temp_dir }}"
+      destination_dir: "{{ workflow.temp_dir }}"
       registry_url: "{{ parameters.registry_url }}"
       ref_spec: "{{ parameters.ref_spec }}"
       api_url: "{{ parameters.api_url }}"
@@ -109,7 +109,7 @@ tasks:
   - name: get_dependencies
     action: core.get_pack_dependencies
     input:
-      pack_paths: "{{ vars.downloaded_packs | map(attribute='pack_path') | list }}"
+      pack_paths: "{{ workflow.downloaded_packs | map(attribute='pack_path') | list }}"
       api_url: "{{ parameters.api_url }}"
       skip_validation: false
     publish:
@@ -125,7 +125,7 @@ tasks:
   - name: install_dependencies
     action: core.install_packs
     input:
-      packs: "{{ vars.missing_dependencies | map(attribute='pack_ref') | list }}"
+      packs: "{{ workflow.missing_dependencies | map(attribute='pack_ref') | list }}"
       skip_dependencies: false
       skip_tests: "{{ parameters.skip_tests }}"
       skip_env_build: "{{ parameters.skip_env_build }}"
@@ -147,7 +147,7 @@ tasks:
   - name: build_environments
     action: core.build_pack_envs
     input:
-      pack_paths: "{{ vars.downloaded_packs | map(attribute='pack_path') | list }}"
+      pack_paths: "{{ workflow.downloaded_packs | map(attribute='pack_path') | list }}"
       packs_base_dir: "{{ parameters.packs_base_dir }}"
       python_version: "3.11"
       nodejs_version: "20"
@@ -174,7 +174,7 @@ tasks:
   - name: run_tests
     action: core.run_pack_tests
     input:
-      pack_paths: "{{ vars.downloaded_packs | map(attribute='pack_path') | list }}"
+      pack_paths: "{{ workflow.downloaded_packs | map(attribute='pack_path') | list }}"
       timeout: 300
       fail_on_error: false
     on_success: register_packs
@@ -188,7 +188,7 @@ tasks:
   - name: register_packs
     action: core.register_packs
     input:
-      pack_paths: "{{ vars.downloaded_packs | map(attribute='pack_path') | list }}"
+      pack_paths: "{{ workflow.downloaded_packs | map(attribute='pack_path') | list }}"
       packs_base_dir: "{{ parameters.packs_base_dir }}"
       skip_validation: false
       skip_tests: "{{ parameters.skip_tests }}"
@@ -201,7 +201,7 @@ tasks:
   - name: cleanup_success
     action: core.noop
     input:
-      message: "Pack installation completed successfully. Cleaning up temporary directory: {{ vars.temp_dir }}"
+      message: "Pack installation completed successfully. Cleaning up temporary directory: {{ workflow.temp_dir }}"
     publish:
       - cleanup_status: "success"
 
@@ -209,7 +209,7 @@ tasks:
   - name: cleanup_on_failure
     action: core.noop
     input:
-      message: "Pack installation failed. Cleaning up temporary directory: {{ vars.temp_dir }}"
+      message: "Pack installation failed. Cleaning up temporary directory: {{ workflow.temp_dir }}"
     publish:
       - cleanup_status: "failed"
 

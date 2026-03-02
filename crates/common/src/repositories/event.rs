@@ -15,6 +15,56 @@ use sqlx::{Executor, Postgres, QueryBuilder};
 
 use super::{Create, Delete, FindById, List, Repository, Update};
 
+// ============================================================================
+// Event Search
+// ============================================================================
+
+/// Filters for [`EventRepository::search`].
+///
+/// All fields are optional. When set, the corresponding WHERE clause is added.
+/// Pagination is always applied.
+#[derive(Debug, Clone, Default)]
+pub struct EventSearchFilters {
+    pub trigger: Option<Id>,
+    pub trigger_ref: Option<String>,
+    pub source: Option<Id>,
+    pub rule_ref: Option<String>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+/// Result of [`EventRepository::search`].
+#[derive(Debug)]
+pub struct EventSearchResult {
+    pub rows: Vec<Event>,
+    pub total: u64,
+}
+
+// ============================================================================
+// Enforcement Search
+// ============================================================================
+
+/// Filters for [`EnforcementRepository::search`].
+///
+/// All fields are optional and combinable. Pagination is always applied.
+#[derive(Debug, Clone, Default)]
+pub struct EnforcementSearchFilters {
+    pub rule: Option<Id>,
+    pub event: Option<Id>,
+    pub status: Option<EnforcementStatus>,
+    pub trigger_ref: Option<String>,
+    pub rule_ref: Option<String>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+/// Result of [`EnforcementRepository::search`].
+#[derive(Debug)]
+pub struct EnforcementSearchResult {
+    pub rows: Vec<Enforcement>,
+    pub total: u64,
+}
+
 /// Repository for Event operations
 pub struct EventRepository;
 
@@ -172,6 +222,75 @@ impl EventRepository {
         .await?;
 
         Ok(events)
+    }
+
+    /// Search events with all filters pushed into SQL.
+    ///
+    /// Builds a dynamic query so that every filter, pagination, and the total
+    /// count are handled in the database — no in-memory filtering or slicing.
+    pub async fn search<'e, E>(db: E, filters: &EventSearchFilters) -> Result<EventSearchResult>
+    where
+        E: Executor<'e, Database = Postgres> + Copy + 'e,
+    {
+        let select_cols = "id, trigger, trigger_ref, config, payload, source, source_ref, rule, rule_ref, created";
+
+        let mut qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new(format!("SELECT {select_cols} FROM event"));
+        let mut count_qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new("SELECT COUNT(*) FROM event");
+
+        let mut has_where = false;
+
+        macro_rules! push_condition {
+            ($cond_prefix:expr, $value:expr) => {{
+                if !has_where {
+                    qb.push(" WHERE ");
+                    count_qb.push(" WHERE ");
+                    has_where = true;
+                } else {
+                    qb.push(" AND ");
+                    count_qb.push(" AND ");
+                }
+                qb.push($cond_prefix);
+                qb.push_bind($value.clone());
+                count_qb.push($cond_prefix);
+                count_qb.push_bind($value);
+            }};
+        }
+
+        if let Some(trigger_id) = filters.trigger {
+            push_condition!("trigger = ", trigger_id);
+        }
+        if let Some(ref trigger_ref) = filters.trigger_ref {
+            push_condition!("trigger_ref = ", trigger_ref.clone());
+        }
+        if let Some(source_id) = filters.source {
+            push_condition!("source = ", source_id);
+        }
+        if let Some(ref rule_ref) = filters.rule_ref {
+            push_condition!(
+                "LOWER(rule_ref) LIKE ",
+                format!("%{}%", rule_ref.to_lowercase())
+            );
+        }
+
+        // Suppress unused-assignment warning from the macro's last expansion.
+        let _ = has_where;
+
+        // Count
+        let total: i64 = count_qb.build_query_scalar().fetch_one(db).await?;
+        let total = total.max(0) as u64;
+
+        // Data query
+        qb.push(" ORDER BY created DESC");
+        qb.push(" LIMIT ");
+        qb.push_bind(filters.limit as i64);
+        qb.push(" OFFSET ");
+        qb.push_bind(filters.offset as i64);
+
+        let rows: Vec<Event> = qb.build_query_as().fetch_all(db).await?;
+
+        Ok(EventSearchResult { rows, total })
     }
 }
 
@@ -424,5 +543,76 @@ impl EnforcementRepository {
         .await?;
 
         Ok(enforcements)
+    }
+
+    /// Search enforcements with all filters pushed into SQL.
+    ///
+    /// All filter fields are combinable (AND). Pagination is server-side.
+    pub async fn search<'e, E>(
+        db: E,
+        filters: &EnforcementSearchFilters,
+    ) -> Result<EnforcementSearchResult>
+    where
+        E: Executor<'e, Database = Postgres> + Copy + 'e,
+    {
+        let select_cols = "id, rule, rule_ref, trigger_ref, config, event, status, payload, condition, conditions, created, resolved_at";
+
+        let mut qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new(format!("SELECT {select_cols} FROM enforcement"));
+        let mut count_qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new("SELECT COUNT(*) FROM enforcement");
+
+        let mut has_where = false;
+
+        macro_rules! push_condition {
+            ($cond_prefix:expr, $value:expr) => {{
+                if !has_where {
+                    qb.push(" WHERE ");
+                    count_qb.push(" WHERE ");
+                    has_where = true;
+                } else {
+                    qb.push(" AND ");
+                    count_qb.push(" AND ");
+                }
+                qb.push($cond_prefix);
+                qb.push_bind($value.clone());
+                count_qb.push($cond_prefix);
+                count_qb.push_bind($value);
+            }};
+        }
+
+        if let Some(status) = &filters.status {
+            push_condition!("status = ", status.clone());
+        }
+        if let Some(rule_id) = filters.rule {
+            push_condition!("rule = ", rule_id);
+        }
+        if let Some(event_id) = filters.event {
+            push_condition!("event = ", event_id);
+        }
+        if let Some(ref trigger_ref) = filters.trigger_ref {
+            push_condition!("trigger_ref = ", trigger_ref.clone());
+        }
+        if let Some(ref rule_ref) = filters.rule_ref {
+            push_condition!("rule_ref = ", rule_ref.clone());
+        }
+
+        // Suppress unused-assignment warning from the macro's last expansion.
+        let _ = has_where;
+
+        // Count
+        let total: i64 = count_qb.build_query_scalar().fetch_one(db).await?;
+        let total = total.max(0) as u64;
+
+        // Data query
+        qb.push(" ORDER BY created DESC");
+        qb.push(" LIMIT ");
+        qb.push_bind(filters.limit as i64);
+        qb.push(" OFFSET ");
+        qb.push_bind(filters.offset as i64);
+
+        let rows: Vec<Enforcement> = qb.build_query_as().fetch_all(db).await?;
+
+        Ok(EnforcementSearchResult { rows, total })
     }
 }

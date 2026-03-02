@@ -16,8 +16,9 @@ use attune_common::repositories::{
     pack::PackRepository,
     workflow::{
         CreateWorkflowDefinitionInput, UpdateWorkflowDefinitionInput, WorkflowDefinitionRepository,
+        WorkflowSearchFilters,
     },
-    Create, Delete, FindByRef, List, Update,
+    Create, Delete, FindByRef, Update,
 };
 
 use crate::{
@@ -54,64 +55,30 @@ pub async fn list_workflows(
     // Validate search params
     search_params.validate()?;
 
-    // Get workflows based on filters
-    let mut workflows = if let Some(tags_str) = &search_params.tags {
-        // Filter by tags
-        let tags: Vec<&str> = tags_str.split(',').map(|s| s.trim()).collect();
-        let mut results = Vec::new();
-        for tag in tags {
-            let mut tag_results = WorkflowDefinitionRepository::find_by_tag(&state.db, tag).await?;
-            results.append(&mut tag_results);
-        }
-        // Remove duplicates by ID
-        results.sort_by_key(|w| w.id);
-        results.dedup_by_key(|w| w.id);
-        results
-    } else if search_params.enabled == Some(true) {
-        // Filter by enabled status (only return enabled workflows)
-        WorkflowDefinitionRepository::find_enabled(&state.db).await?
-    } else {
-        // Get all workflows
-        WorkflowDefinitionRepository::list(&state.db).await?
+    // Parse comma-separated tags into a Vec if provided
+    let tags = search_params.tags.as_ref().map(|t| {
+        t.split(',')
+            .map(|s| s.trim().to_string())
+            .collect::<Vec<_>>()
+    });
+
+    // All filtering and pagination happen in a single SQL query.
+    let filters = WorkflowSearchFilters {
+        pack: None,
+        pack_ref: search_params.pack_ref.clone(),
+        enabled: search_params.enabled,
+        tags,
+        search: search_params.search.clone(),
+        limit: pagination.limit(),
+        offset: pagination.offset(),
     };
 
-    // Apply enabled filter if specified and not already filtered by it
-    if let Some(enabled) = search_params.enabled {
-        if search_params.tags.is_some() {
-            // If we filtered by tags, also apply enabled filter
-            workflows.retain(|w| w.enabled == enabled);
-        }
-    }
+    let result = WorkflowDefinitionRepository::list_search(&state.db, &filters).await?;
 
-    // Apply search filter if provided
-    if let Some(search_term) = &search_params.search {
-        let search_lower = search_term.to_lowercase();
-        workflows.retain(|w| {
-            w.label.to_lowercase().contains(&search_lower)
-                || w.description
-                    .as_ref()
-                    .map(|d| d.to_lowercase().contains(&search_lower))
-                    .unwrap_or(false)
-        });
-    }
+    let paginated_workflows: Vec<WorkflowSummary> =
+        result.rows.into_iter().map(WorkflowSummary::from).collect();
 
-    // Apply pack_ref filter if provided
-    if let Some(pack_ref) = &search_params.pack_ref {
-        workflows.retain(|w| w.pack_ref == *pack_ref);
-    }
-
-    // Calculate pagination
-    let total = workflows.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(workflows.len());
-
-    // Get paginated slice
-    let paginated_workflows: Vec<WorkflowSummary> = workflows[start..end]
-        .iter()
-        .map(|w| WorkflowSummary::from(w.clone()))
-        .collect();
-
-    let response = PaginatedResponse::new(paginated_workflows, &pagination, total);
+    let response = PaginatedResponse::new(paginated_workflows, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -138,25 +105,27 @@ pub async fn list_workflows_by_pack(
     Query(pagination): Query<PaginationParams>,
 ) -> ApiResult<impl IntoResponse> {
     // Verify pack exists
-    let pack = PackRepository::find_by_ref(&state.db, &pack_ref)
+    let _pack = PackRepository::find_by_ref(&state.db, &pack_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", pack_ref)))?;
 
-    // Get workflows for this pack
-    let workflows = WorkflowDefinitionRepository::find_by_pack(&state.db, pack.id).await?;
+    // All filtering and pagination happen in a single SQL query.
+    let filters = WorkflowSearchFilters {
+        pack: None,
+        pack_ref: Some(pack_ref),
+        enabled: None,
+        tags: None,
+        search: None,
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = workflows.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(workflows.len());
+    let result = WorkflowDefinitionRepository::list_search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_workflows: Vec<WorkflowSummary> = workflows[start..end]
-        .iter()
-        .map(|w| WorkflowSummary::from(w.clone()))
-        .collect();
+    let paginated_workflows: Vec<WorkflowSummary> =
+        result.rows.into_iter().map(WorkflowSummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_workflows, &pagination, total);
+    let response = PaginatedResponse::new(paginated_workflows, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }

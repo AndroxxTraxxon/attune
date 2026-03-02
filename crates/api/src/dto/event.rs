@@ -319,6 +319,10 @@ pub struct EnforcementQueryParams {
     #[param(example = "core.webhook")]
     pub trigger_ref: Option<String>,
 
+    /// Filter by rule reference
+    #[param(example = "core.on_webhook")]
+    pub rule_ref: Option<String>,
+
     /// Page number (1-indexed)
     #[serde(default = "default_page")]
     #[param(example = 1, minimum = 1)]

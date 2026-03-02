@@ -16,9 +16,12 @@ use validator::Validate;
 use attune_common::{
     mq::{EventCreatedPayload, MessageEnvelope, MessageType},
     repositories::{
-        event::{CreateEventInput, EnforcementRepository, EventRepository},
+        event::{
+            CreateEventInput, EnforcementRepository, EnforcementSearchFilters, EventRepository,
+            EventSearchFilters,
+        },
         trigger::TriggerRepository,
-        Create, FindById, FindByRef, List,
+        Create, FindById, FindByRef,
     },
 };
 
@@ -220,53 +223,27 @@ pub async fn list_events(
     State(state): State<Arc<AppState>>,
     Query(query): Query<EventQueryParams>,
 ) -> ApiResult<impl IntoResponse> {
-    // Get events based on filters
-    let events = if let Some(trigger_id) = query.trigger {
-        // Filter by trigger ID
-        EventRepository::find_by_trigger(&state.db, trigger_id).await?
-    } else if let Some(trigger_ref) = &query.trigger_ref {
-        // Filter by trigger reference
-        EventRepository::find_by_trigger_ref(&state.db, trigger_ref).await?
-    } else {
-        // Get all events
-        EventRepository::list(&state.db).await?
+    // All filtering and pagination happen in a single SQL query.
+    let filters = EventSearchFilters {
+        trigger: query.trigger,
+        trigger_ref: query.trigger_ref.clone(),
+        source: query.source,
+        rule_ref: query.rule_ref.clone(),
+        limit: query.limit(),
+        offset: query.offset(),
     };
 
-    // Apply additional filters in memory
-    let mut filtered_events = events;
+    let result = EventRepository::search(&state.db, &filters).await?;
 
-    if let Some(source_id) = query.source {
-        filtered_events.retain(|e| e.source == Some(source_id));
-    }
+    let paginated_events: Vec<EventSummary> =
+        result.rows.into_iter().map(EventSummary::from).collect();
 
-    if let Some(rule_ref) = &query.rule_ref {
-        let rule_ref_lower = rule_ref.to_lowercase();
-        filtered_events.retain(|e| {
-            e.rule_ref
-                .as_ref()
-                .map(|r| r.to_lowercase().contains(&rule_ref_lower))
-                .unwrap_or(false)
-        });
-    }
-
-    // Calculate pagination
-    let total = filtered_events.len() as u64;
-    let start = query.offset() as usize;
-    let end = (start + query.limit() as usize).min(filtered_events.len());
-
-    // Get paginated slice
-    let paginated_events: Vec<EventSummary> = filtered_events[start..end]
-        .iter()
-        .map(|event| EventSummary::from(event.clone()))
-        .collect();
-
-    // Convert query params to pagination params for response
     let pagination_params = PaginationParams {
         page: query.page,
         page_size: query.per_page,
     };
 
-    let response = PaginatedResponse::new(paginated_events, &pagination_params, total);
+    let response = PaginatedResponse::new(paginated_events, &pagination_params, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -319,46 +296,32 @@ pub async fn list_enforcements(
     State(state): State<Arc<AppState>>,
     Query(query): Query<EnforcementQueryParams>,
 ) -> ApiResult<impl IntoResponse> {
-    // Get enforcements based on filters
-    let enforcements = if let Some(status) = query.status {
-        // Filter by status
-        EnforcementRepository::find_by_status(&state.db, status).await?
-    } else if let Some(rule_id) = query.rule {
-        // Filter by rule ID
-        EnforcementRepository::find_by_rule(&state.db, rule_id).await?
-    } else if let Some(event_id) = query.event {
-        // Filter by event ID
-        EnforcementRepository::find_by_event(&state.db, event_id).await?
-    } else {
-        // Get all enforcements
-        EnforcementRepository::list(&state.db).await?
+    // All filtering and pagination happen in a single SQL query.
+    // Filters are combinable (AND), not mutually exclusive.
+    let filters = EnforcementSearchFilters {
+        status: query.status,
+        rule: query.rule,
+        event: query.event,
+        trigger_ref: query.trigger_ref.clone(),
+        rule_ref: query.rule_ref.clone(),
+        limit: query.limit(),
+        offset: query.offset(),
     };
 
-    // Apply additional filters in memory
-    let mut filtered_enforcements = enforcements;
+    let result = EnforcementRepository::search(&state.db, &filters).await?;
 
-    if let Some(trigger_ref) = &query.trigger_ref {
-        filtered_enforcements.retain(|e| e.trigger_ref == *trigger_ref);
-    }
-
-    // Calculate pagination
-    let total = filtered_enforcements.len() as u64;
-    let start = query.offset() as usize;
-    let end = (start + query.limit() as usize).min(filtered_enforcements.len());
-
-    // Get paginated slice
-    let paginated_enforcements: Vec<EnforcementSummary> = filtered_enforcements[start..end]
-        .iter()
-        .map(|enforcement| EnforcementSummary::from(enforcement.clone()))
+    let paginated_enforcements: Vec<EnforcementSummary> = result
+        .rows
+        .into_iter()
+        .map(EnforcementSummary::from)
         .collect();
 
-    // Convert query params to pagination params for response
     let pagination_params = PaginationParams {
         page: query.page,
         page_size: query.per_page,
     };
 
-    let response = PaginatedResponse::new(paginated_enforcements, &pagination_params, total);
+    let response = PaginatedResponse::new(paginated_enforcements, &pagination_params, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }

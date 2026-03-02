@@ -218,10 +218,10 @@ Completion listener advances workflow → Schedules successor tasks → Complete
 - **FK ON DELETE Policy**: Historical records (executions) use `ON DELETE SET NULL` so they survive entity deletion while preserving text ref fields (`action_ref`, `trigger_ref`, etc.) for auditing. The `event`, `enforcement`, and `execution` tables are TimescaleDB hypertables, so they **cannot be the target of FK constraints** — `enforcement.event`, `execution.enforcement`, `inquiry.execution`, `workflow_execution.execution`, `execution.parent`, and `execution.original_execution` are plain BIGINT columns (no FK) and may become dangling references if the referenced row is deleted. Pack-owned entities (actions, triggers, sensors, rules, runtimes) use `ON DELETE CASCADE` from pack. Workflow executions cascade-delete with their workflow definition.
 - **Event Table (TimescaleDB Hypertable)**: The `event` table is a TimescaleDB hypertable partitioned on `created` (1-day chunks). Events are **immutable after insert** — there is no `updated` column, no update trigger, and no `Update` repository impl. The `Event` model has no `updated` field. Compression is segmented by `trigger_ref` (after 7 days) and retention is 90 days. The `event_volume_hourly` continuous aggregate queries the `event` table directly.
 - **Enforcement Table (TimescaleDB Hypertable)**: The `enforcement` table is a TimescaleDB hypertable partitioned on `created` (1-day chunks). Enforcements are updated **exactly once** — the executor sets `status` from `created` to `processed` or `disabled` within ~1 second of creation, well before the 7-day compression window. The `resolved_at` column (nullable `TIMESTAMPTZ`) records when this transition occurred; it is `NULL` while status is `created`. There is no `updated` column. Compression is segmented by `rule_ref` (after 7 days) and retention is 90 days. The `enforcement_volume_hourly` continuous aggregate queries the `enforcement` table directly.
-- **Execution Table (TimescaleDB Hypertable)**: The `execution` table is a TimescaleDB hypertable partitioned on `created` (1-day chunks). Executions are updated **~4 times** during their lifecycle (requested → scheduled → running → completed/failed), completing within at most ~1 day — well before the 7-day compression window. The `updated` column and its BEFORE UPDATE trigger are preserved (used by timeout monitor and UI). Compression is segmented by `action_ref` (after 7 days) and retention is 90 days. The `execution_volume_hourly` continuous aggregate queries the execution hypertable directly. The `execution_history` hypertable (field-level diffs) and its continuous aggregates (`execution_status_hourly`, `execution_throughput_hourly`) are preserved alongside — they serve complementary purposes (change tracking vs. volume monitoring).
-- **Entity History Tracking (TimescaleDB)**: Append-only `<table>_history` hypertables track field-level changes to `execution` and `worker` tables. Populated by PostgreSQL `AFTER INSERT OR UPDATE OR DELETE` triggers — no Rust code changes needed for recording. Uses JSONB diff format (`old_values`/`new_values`) with a `changed_fields TEXT[]` column for efficient filtering. Worker heartbeat-only updates are excluded. There are **no `event_history` or `enforcement_history` tables** — events are immutable and enforcements have a single deterministic status transition, so both tables are hypertables themselves. See `docs/plans/timescaledb-entity-history.md` for full design.
+- **Execution Table (TimescaleDB Hypertable)**: The `execution` table is a TimescaleDB hypertable partitioned on `created` (1-day chunks). Executions are updated **~4 times** during their lifecycle (requested → scheduled → running → completed/failed), completing within at most ~1 day — well before the 7-day compression window. The `updated` column and its BEFORE UPDATE trigger are preserved (used by timeout monitor and UI). The `started_at` column (nullable `TIMESTAMPTZ`) records when the worker picked up the execution (status → `running`); it is `NULL` until then. **Duration** in the UI is computed as `updated - started_at` (not `updated - created`) so that queue/scheduling wait time is excluded. Compression is segmented by `action_ref` (after 7 days) and retention is 90 days. The `execution_volume_hourly` continuous aggregate queries the execution hypertable directly. The `execution_history` hypertable (field-level diffs) and its continuous aggregates (`execution_status_hourly`, `execution_throughput_hourly`) are preserved alongside — they serve complementary purposes (change tracking vs. volume monitoring).
+- **Entity History Tracking (TimescaleDB)**: Append-only `<table>_history` hypertables track field-level changes to `execution` and `worker` tables. Populated by PostgreSQL `AFTER INSERT OR UPDATE OR DELETE` triggers — no Rust code changes needed for recording. Uses JSONB diff format (`old_values`/`new_values`) with a `changed_fields TEXT[]` column for efficient filtering. Worker heartbeat-only updates are excluded. There are **no `event_history` or `enforcement_history` tables** — events are immutable and enforcements have a single deterministic status transition, so both tables are hypertables themselves. See `docs/plans/timescaledb-entity-history.md` for full design. The execution history trigger tracks: `status`, `result`, `executor`, `workflow_task`, `env_vars`, `started_at`.
 - **History Large-Field Guardrails**: The `execution` history trigger stores a compact **digest summary** instead of the full value for the `result` column (which can be arbitrarily large). The digest is produced by the `_jsonb_digest_summary(JSONB)` helper function and has the shape `{"digest": "md5:<hex>", "size": <bytes>, "type": "<jsonb_typeof>"}`. This preserves change-detection semantics while avoiding history table bloat. The full result is always available on the live `execution` row. When adding new large JSONB columns to history triggers, use `_jsonb_digest_summary()` instead of storing the raw value.
-- **Nullable FK Fields**: `rule.action` and `rule.trigger` are nullable (`Option<Id>` in Rust) — a rule with NULL action/trigger is non-functional but preserved for traceability. `execution.action`, `execution.parent`, `execution.enforcement`, and `event.source` are also nullable. `enforcement.event` is nullable but has no FK constraint (event is a hypertable). `execution.enforcement` is nullable but has no FK constraint (enforcement is a hypertable). All FK columns on the execution table (`action`, `parent`, `original_execution`, `enforcement`, `executor`, `workflow_def`) have no FK constraints (execution is a hypertable). `inquiry.execution` and `workflow_execution.execution` also have no FK constraints. `enforcement.resolved_at` is nullable — `None` while status is `created`, set when resolved.
+- **Nullable FK Fields**: `rule.action` and `rule.trigger` are nullable (`Option<Id>` in Rust) — a rule with NULL action/trigger is non-functional but preserved for traceability. `execution.action`, `execution.parent`, `execution.enforcement`, `execution.started_at`, and `event.source` are also nullable. `enforcement.event` is nullable but has no FK constraint (event is a hypertable). `execution.enforcement` is nullable but has no FK constraint (enforcement is a hypertable). All FK columns on the execution table (`action`, `parent`, `original_execution`, `enforcement`, `executor`, `workflow_def`) have no FK constraints (execution is a hypertable). `inquiry.execution` and `workflow_execution.execution` also have no FK constraints. `enforcement.resolved_at` is nullable — `None` while status is `created`, set when resolved. `execution.started_at` is nullable — `None` until the worker sets status to `running`.
 **Table Count**: 20 tables total in the schema (including `runtime_version`, 2 `*_history` hypertables, and the `event`, `enforcement`, + `execution` hypertables)
 **Migration Count**: 9 migrations (`000001` through `000009`) — see `migrations/` directory
 - **Pack Component Loading Order**: Runtimes → Triggers → Actions → Sensors (dependency order). Both `PackComponentLoader` (Rust) and `load_core_pack.py` (Python) follow this order.
@@ -229,12 +229,12 @@ Completion listener advances workflow → Schedules successor tasks → Complete
 ### Workflow Execution Orchestration
 - **Detection**: The `ExecutionScheduler` checks `action.workflow_def.is_some()` before dispatching to a worker. Workflow actions are orchestrated by the executor, not sent to workers.
 - **Orchestration Flow**: Scheduler loads the `WorkflowDefinition`, builds a `TaskGraph`, creates a `workflow_execution` record, marks the parent execution as Running, builds an initial `WorkflowContext` from execution parameters and workflow vars, then dispatches entry-point tasks as child executions via MQ with rendered inputs.
-- **Template Resolution**: Task inputs are rendered through `WorkflowContext.render_json()` before dispatching. Supports `{{ parameters.x }}`, `{{ item }}`, `{{ index }}`, `{{ number_list }}` (direct variable), `{{ task.task_name.field }}`, and function expressions. **Type-preserving**: pure template expressions like `"{{ item }}"` preserve the JSON type (integer `5` stays as `5`, not string `"5"`). Mixed expressions like `"Sleeping for {{ item }} seconds"` remain strings.
+- **Template Resolution**: Task inputs are rendered through `WorkflowContext.render_json()` before dispatching. Uses the expression engine for full operator/function support inside `{{ }}`. Canonical namespaces: `parameters`, `workflow` (mutable vars), `task` (results), `config` (pack config), `keystore` (secrets), `item`, `index`, `system`. Backward-compat aliases: `vars`/`variables` → `workflow`, `tasks` → `task`, bare names → `workflow` fallback. **Type-preserving**: pure template expressions like `"{{ item }}"` preserve the JSON type (integer `5` stays as `5`, not string `"5"`). Mixed expressions like `"Sleeping for {{ item }} seconds"` remain strings.
 - **Function Expressions**: `{{ result() }}` returns the last completed task's result. `{{ result().field.subfield }}` navigates into it. `{{ succeeded() }}`, `{{ failed() }}`, `{{ timed_out() }}` return booleans. These are evaluated by `WorkflowContext.try_evaluate_function_call()`.
-- **Publish Directives**: Transition `publish` directives (e.g., `number_list: "{{ result().data.items }}"`) are evaluated when a transition fires. Published variables are persisted to the `workflow_execution.variables` column and available to subsequent tasks. Uses type-preserving rendering so arrays/numbers/booleans retain their types.
+- **Publish Directives**: Transition `publish` directives (e.g., `number_list: "{{ result().data.items }}"`) are evaluated when a transition fires. Published variables are persisted to the `workflow_execution.variables` column and available to subsequent tasks via the `workflow` namespace (e.g., `{{ workflow.number_list }}`). Uses type-preserving rendering so arrays/numbers/booleans retain their types.
 - **Child Task Dispatch**: Each workflow task becomes a child execution with the task's actual action ref (e.g., `core.echo`), `workflow_task` metadata linking it to the `workflow_execution` record, and a parent reference to the workflow execution. Child executions re-enter the normal scheduling pipeline, so nested workflows work recursively.
 - **with_items Expansion**: Tasks declaring `with_items: "{{ expr }}"` are expanded into child executions. The expression is resolved via the `WorkflowContext` to produce a JSON array, then each item gets its own child execution with `item`/`index` set on the context and `task_index` in `WorkflowTaskMetadata`. Completion tracking waits for ALL sibling items to finish before marking the task as completed/failed and advancing the workflow.
-- **with_items Concurrency Limiting**: When a task declares `concurrency: N`, ALL child execution records are created in the database up front (with fully-rendered inputs), but only the first `N` are published to the message queue. The remaining children stay at `Requested` status in the DB. As each item completes, `advance_workflow` counts in-flight siblings (`scheduling`/`scheduled`/`running`), calculates free slots (`concurrency - in_flight`), and calls `publish_pending_with_items_children()` which queries for `Requested`-status siblings ordered by `task_index` and publishes them. The DB `status = 'requested'` query is the authoritative source of undispatched items — no auxiliary state in workflow variables needed. The task is only marked complete when all siblings reach a terminal state. Without a `concurrency` value, all items are dispatched at once (previous behavior).
+- **with_items Concurrency Limiting**: ALL child execution records are created in the database up front (with fully-rendered inputs), but only the first `N` are published to the message queue where `N` is the task's `concurrency` value (**default: 1**, i.e. serial execution). The remaining children stay at `Requested` status in the DB. As each item completes, `advance_workflow` counts in-flight siblings (`scheduling`/`scheduled`/`running`), calculates free slots (`concurrency - in_flight`), and calls `publish_pending_with_items_children()` which queries for `Requested`-status siblings ordered by `task_index` and publishes them. The DB `status = 'requested'` query is the authoritative source of undispatched items — no auxiliary state in workflow variables needed. The task is only marked complete when all siblings reach a terminal state. To run all items in parallel, explicitly set `concurrency` to the list length or a suitably large number.
 - **Advancement**: The `CompletionListener` detects when a completed execution has `workflow_task` metadata and calls `ExecutionScheduler::advance_workflow()`. The scheduler rebuilds the `WorkflowContext` from persisted `workflow_execution.variables` plus all completed child execution results, sets `last_task_outcome`, evaluates transitions (succeeded/failed/always/timed_out/custom with context-based condition evaluation), processes publish directives, schedules successor tasks with rendered inputs, and completes the workflow when all tasks are done.
 - **Transition Evaluation**: `succeeded()`, `failed()`, `timed_out()`, and `always` (no condition) are supported. Custom conditions are evaluated via `WorkflowContext.evaluate_condition()` with fallback to fire-on-success if evaluation fails.
 - **Legacy Coordinator**: The prototype `WorkflowCoordinator` in `crates/executor/src/workflow/coordinator.rs` is bypassed — it has hardcoded schema prefixes and is not integrated with the MQ pipeline.
@@ -316,7 +316,7 @@ Completion listener advances workflow → Schedules successor tasks → Complete
 - **Available at**: `http://localhost:8080` (dev), `/api-spec/openapi.json` for spec
 
 ### Common Library (`crates/common`)
-- **Modules**: `models`, `repositories`, `db`, `config`, `error`, `mq`, `crypto`, `utils`, `workflow`, `pack_registry`, `template_resolver`, `version_matching`, `runtime_detection`
+- **Modules**: `models`, `repositories`, `db`, `config`, `error`, `mq`, `crypto`, `utils`, `workflow` (includes `expression` sub-module), `pack_registry`, `template_resolver`, `version_matching`, `runtime_detection`
 - **Exports**: Commonly used types re-exported from `lib.rs`
 - **Repository Layer**: All DB access goes through repositories in `repositories/`
 - **Message Queue**: Abstractions in `mq/` for RabbitMQ communication
@@ -337,6 +337,84 @@ Rule `action_params` support Jinja2-style `{{ source.path }}` templates resolved
 - **Implementation**: `crates/common/src/template_resolver.rs` (also re-exported from `attune_sensor::template_resolver`)
 - **Integration**: `crates/executor/src/event_processor.rs` calls `resolve_templates()` in `create_enforcement()`
 - **IMPORTANT**: The old `trigger.payload.*` syntax was renamed to `event.payload.*` — the payload data comes from the Event, not the Trigger
+
+### Workflow Expression Engine
+Workflow templates (`{{ expr }}`) support a full expression language for evaluating conditions, computing values, and transforming data. The engine is in `crates/common/src/workflow/expression/` (tokenizer → parser → evaluator) and is integrated into `WorkflowContext` via the `EvalContext` trait.
+
+**Canonical Namespaces** — all data inside `{{ }}` expressions is organised into well-defined, non-overlapping namespaces:
+
+| Namespace | Example | Description |
+|-----------|---------|-------------|
+| `parameters` | `{{ parameters.url }}` | Immutable workflow input parameters |
+| `workflow` | `{{ workflow.counter }}` | Mutable workflow-scoped variables (set via `publish`) |
+| `task` | `{{ task.fetch.result.data }}` | Completed task results keyed by task name |
+| `config` | `{{ config.api_token }}` | Pack configuration values (read-only) |
+| `keystore` | `{{ keystore.secret_key }}` | Encrypted secrets from the key store (read-only) |
+| `item` | `{{ item }}` / `{{ item.name }}` | Current element in a `with_items` loop |
+| `index` | `{{ index }}` | Zero-based iteration index in a `with_items` loop |
+| `system` | `{{ system.workflow_start }}` | System-provided variables |
+
+Backward-compatible aliases (kept for existing workflow definitions):
+- `vars` / `variables` → same as `workflow`
+- `tasks` → same as `task`
+- Bare variable names (e.g. `{{ my_var }}`) resolve against the `workflow` variable store as a last-resort fallback.
+
+**IMPORTANT**: New workflow definitions should always use the canonical namespace names. The `config` and `keystore` namespaces are populated by the scheduler from the pack's `config` JSONB column and decrypted `key` table entries respectively. If not populated, they resolve to `null`.
+
+**Operators** (lowest to highest precedence):
+1. `or` — logical OR (short-circuit)
+2. `and` — logical AND (short-circuit)
+3. `not` — logical NOT (unary)
+4. `==`, `!=`, `<`, `>`, `<=`, `>=`, `in` — comparison & membership
+5. `+`, `-` — addition/subtraction (also string/array concatenation for `+`)
+6. `*`, `/`, `%` — multiplication, division, modulo
+7. Unary `-` — negation
+8. `.field`, `[index]`, `(args)` — postfix access & function calls
+
+**Type Rules**:
+- **No implicit type coercion**: `"3" == 3` → `false`, `"hello" + 5` → error
+- **Int/float cross-comparison allowed**: `3 == 3.0` → `true`
+- **Integer preservation**: `2 + 3` → `5` (int), `2 + 1.5` → `3.5` (float), `10 / 4` → `2.5` (float), `10 / 5` → `2` (int)
+- **Python-like truthiness**: `null`, `false`, `0`, `""`, `[]`, `{}` are falsy
+- **Deep equality**: `==`/`!=` recursively compare objects and arrays
+- **Negative indexing**: `arr[-1]` returns last element
+
+**Built-in Functions**:
+- Type conversion: `string(v)`, `number(v)`, `int(v)`, `bool(v)`
+- Introspection: `type_of(v)`, `length(v)`, `keys(obj)`, `values(obj)`
+- Math: `abs(n)`, `floor(n)`, `ceil(n)`, `round(n)`, `min(a,b)`, `max(a,b)`, `sum(arr)`
+- String: `lower(s)`, `upper(s)`, `trim(s)`, `split(s, sep)`, `join(arr, sep)`, `replace(s, old, new)`, `starts_with(s, prefix)`, `ends_with(s, suffix)`, `match(pattern, s)` (regex)
+- Collection: `contains(haystack, needle)`, `reversed(v)`, `sort(arr)`, `unique(arr)`, `flat(arr)`, `zip(a, b)`, `range(n)` / `range(start, end)`, `slice(v, start, end)`, `index_of(haystack, needle)`, `count(haystack, needle)`, `merge(obj_a, obj_b)`, `chunks(arr, size)`
+- Workflow: `result()`, `succeeded()`, `failed()`, `timed_out()` (resolved via `EvalContext` trait)
+
+**Usage in Conditions** (`when:` on transitions):
+```
+when: "succeeded() and result().code == 200"
+when: "length(workflow.items) > 3 and \"admin\" in workflow.roles"
+when: "not failed()"
+when: "result().status == \"ok\" or result().status == \"accepted\""
+when: "config.retries > 0"
+```
+
+**Usage in Templates** (`{{ expr }}`):
+```
+input:
+  count: "{{ length(workflow.items) }}"
+  greeting: "{{ parameters.first + \" \" + parameters.last }}"
+  doubled: "{{ parameters.x * 2 }}"
+  names: "{{ join(sort(keys(workflow.data)), \", \") }}"
+  auth: "Bearer {{ keystore.api_key }}"
+  endpoint: "{{ config.base_url + \"/api/v1\" }}"
+  prev_output: "{{ task.fetch.result.data.id }}"
+```
+
+**Implementation Files**:
+- `crates/common/src/workflow/expression/mod.rs` — module entry point, `eval_expression()`, `parse_expression()`
+- `crates/common/src/workflow/expression/tokenizer.rs` — lexer
+- `crates/common/src/workflow/expression/parser.rs` — recursive-descent parser
+- `crates/common/src/workflow/expression/evaluator.rs` — AST evaluator, `EvalContext` trait, built-in functions
+- `crates/common/src/workflow/expression/ast.rs` — AST node types (`Expr`, `BinaryOp`, `UnaryOp`)
+- `crates/executor/src/workflow/context.rs` — `WorkflowContext` implements `EvalContext`
 
 ### Web UI (`web/`)
 - **Generated Client**: OpenAPI client auto-generated from API spec
@@ -519,7 +597,7 @@ When reporting, ask: "Should I fix this first or continue with [original task]?"
 - **Web UI**: Static files served separately or via API service
 
 ## Current Development Status
-- ✅ **Complete**: Database migrations (20 tables, 10 migration files), API service (most endpoints), common library, message queue infrastructure, repository layer, JWT auth, CLI tool, Web UI (basic + workflow builder), Executor service (core functionality + workflow orchestration), Worker service (shell/Python execution), Runtime version data model, constraint matching, worker version selection pipeline, version verification at startup, per-version environment isolation, TimescaleDB entity history tracking (execution, worker), Event, enforcement, and execution tables as TimescaleDB hypertables (time-series with retention/compression), History API endpoints (generic + entity-specific with pagination & filtering), History UI panels on entity detail pages (execution), TimescaleDB continuous aggregates (6 hourly rollup views with auto-refresh policies), Analytics API endpoints (7 endpoints under `/api/v1/analytics/` — dashboard, execution status/throughput/failure-rate, event volume, worker status, enforcement volume), Analytics dashboard widgets (bar charts, stacked status charts, failure rate ring gauge, time range selector), Workflow execution orchestration (scheduler detects workflow actions, creates child task executions, completion listener advances workflow via transitions), Workflow template resolution (type-preserving `{{ }}` rendering in task inputs), Workflow `with_items` expansion (parallel child executions per item), Workflow `with_items` concurrency limiting (sliding-window dispatch with pending items stored in workflow variables), Workflow `publish` directive processing (variable propagation between tasks), Workflow function expressions (`result()`, `succeeded()`, `failed()`, `timed_out()`)
+- ✅ **Complete**: Database migrations (20 tables, 10 migration files), API service (most endpoints), common library, message queue infrastructure, repository layer, JWT auth, CLI tool, Web UI (basic + workflow builder), Executor service (core functionality + workflow orchestration), Worker service (shell/Python execution), Runtime version data model, constraint matching, worker version selection pipeline, version verification at startup, per-version environment isolation, TimescaleDB entity history tracking (execution, worker), Event, enforcement, and execution tables as TimescaleDB hypertables (time-series with retention/compression), History API endpoints (generic + entity-specific with pagination & filtering), History UI panels on entity detail pages (execution), TimescaleDB continuous aggregates (6 hourly rollup views with auto-refresh policies), Analytics API endpoints (7 endpoints under `/api/v1/analytics/` — dashboard, execution status/throughput/failure-rate, event volume, worker status, enforcement volume), Analytics dashboard widgets (bar charts, stacked status charts, failure rate ring gauge, time range selector), Workflow execution orchestration (scheduler detects workflow actions, creates child task executions, completion listener advances workflow via transitions), Workflow template resolution (type-preserving `{{ }}` rendering in task inputs), Workflow `with_items` expansion (parallel child executions per item), Workflow `with_items` concurrency limiting (sliding-window dispatch with pending items stored in workflow variables), Workflow `publish` directive processing (variable propagation between tasks), Workflow function expressions (`result()`, `succeeded()`, `failed()`, `timed_out()`), Workflow expression engine (full arithmetic/comparison/boolean/membership operators, 30+ built-in functions, recursive-descent parser), Canonical workflow namespaces (`parameters`, `workflow`, `task`, `config`, `keystore`, `item`, `index`, `system`)
 - 🔄 **In Progress**: Sensor service, advanced workflow features (nested workflow context propagation), Python runtime dependency management, API/UI endpoints for runtime version management
 - 📋 **Planned**: Notifier service, execution policies, monitoring, pack registry system, configurable retention periods via admin settings, export/archival to external storage
 

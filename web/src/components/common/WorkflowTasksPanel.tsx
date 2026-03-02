@@ -15,6 +15,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { useChildExecutions } from "@/hooks/useExecutions";
+import { useExecutionStream } from "@/hooks/useExecutionStream";
 
 interface WorkflowTasksPanelProps {
   /** The parent (workflow) execution ID */
@@ -94,6 +95,11 @@ export default function WorkflowTasksPanel({
 }: WorkflowTasksPanelProps) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
   const { data, isLoading, error } = useChildExecutions(parentExecutionId);
+
+  // Subscribe to the unfiltered execution stream so that child execution
+  // WebSocket notifications update the ["executions", { parent }] query cache
+  // in real-time (the detail page only subscribes filtered by its own ID).
+  useExecutionStream({ enabled: true });
 
   const tasks = useMemo(() => {
     if (!data?.data) return [];
@@ -211,15 +217,20 @@ export default function WorkflowTasksPanel({
                 const maxRetries = wt?.max_retries ?? 0;
                 const timedOut = wt?.timed_out ?? false;
 
-                // Compute duration from created → updated (best available)
+                // Compute duration from started_at → updated (actual run time)
+                const startedAt = task.started_at
+                  ? new Date(task.started_at)
+                  : null;
                 const created = new Date(task.created);
                 const updated = new Date(task.updated);
+                const isTerminal =
+                  task.status === "completed" ||
+                  task.status === "failed" ||
+                  task.status === "timeout";
                 const durationMs =
                   wt?.duration_ms ??
-                  (task.status === "completed" ||
-                  task.status === "failed" ||
-                  task.status === "timeout"
-                    ? updated.getTime() - created.getTime()
+                  (isTerminal && startedAt
+                    ? updated.getTime() - startedAt.getTime()
                     : null);
 
                 return (
@@ -277,7 +288,10 @@ export default function WorkflowTasksPanel({
                     <div className="col-span-2 text-sm text-gray-500">
                       {task.status === "running" ? (
                         <span className="text-blue-600">
-                          {formatDistanceToNow(created, { addSuffix: false })}…
+                          {formatDistanceToNow(startedAt ?? created, {
+                            addSuffix: false,
+                          })}
+                          …
                         </span>
                       ) : durationMs != null && durationMs > 0 ? (
                         formatDuration(durationMs)

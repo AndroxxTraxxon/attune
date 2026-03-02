@@ -11,10 +11,10 @@ use std::sync::Arc;
 use validator::Validate;
 
 use attune_common::repositories::{
-    action::{ActionRepository, CreateActionInput, UpdateActionInput},
+    action::{ActionRepository, ActionSearchFilters, CreateActionInput, UpdateActionInput},
     pack::PackRepository,
     queue_stats::QueueStatsRepository,
-    Create, Delete, FindByRef, List, Update,
+    Create, Delete, FindByRef, Update,
 };
 
 use crate::{
@@ -47,21 +47,20 @@ pub async fn list_actions(
     RequireAuth(_user): RequireAuth,
     Query(pagination): Query<PaginationParams>,
 ) -> ApiResult<impl IntoResponse> {
-    // Get all actions (we'll implement pagination in repository later)
-    let actions = ActionRepository::list(&state.db).await?;
+    // All filtering and pagination happen in a single SQL query.
+    let filters = ActionSearchFilters {
+        pack: None,
+        query: None,
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = actions.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(actions.len());
+    let result = ActionRepository::list_search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_actions: Vec<ActionSummary> = actions[start..end]
-        .iter()
-        .map(|a| ActionSummary::from(a.clone()))
-        .collect();
+    let paginated_actions: Vec<ActionSummary> =
+        result.rows.into_iter().map(ActionSummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_actions, &pagination, total);
+    let response = PaginatedResponse::new(paginated_actions, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -92,21 +91,20 @@ pub async fn list_actions_by_pack(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", pack_ref)))?;
 
-    // Get actions for this pack
-    let actions = ActionRepository::find_by_pack(&state.db, pack.id).await?;
+    // All filtering and pagination happen in a single SQL query.
+    let filters = ActionSearchFilters {
+        pack: Some(pack.id),
+        query: None,
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = actions.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(actions.len());
+    let result = ActionRepository::list_search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_actions: Vec<ActionSummary> = actions[start..end]
-        .iter()
-        .map(|a| ActionSummary::from(a.clone()))
-        .collect();
+    let paginated_actions: Vec<ActionSummary> =
+        result.rows.into_iter().map(ActionSummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_actions, &pagination, total);
+    let response = PaginatedResponse::new(paginated_actions, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }

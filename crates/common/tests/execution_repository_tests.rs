@@ -356,7 +356,7 @@ async fn test_update_execution_status() {
         status: Some(ExecutionStatus::Running),
         result: None,
         executor: None,
-    workflow_task: None,
+        ..Default::default()
     };
 
     let updated = ExecutionRepository::update(&pool, created.id, update)
@@ -401,7 +401,7 @@ async fn test_update_execution_result() {
         status: Some(ExecutionStatus::Completed),
         result: Some(result_data.clone()),
         executor: None,
-    workflow_task: None,
+        ..Default::default()
     };
 
     let updated = ExecutionRepository::update(&pool, created.id, update)
@@ -445,7 +445,7 @@ async fn test_update_execution_executor() {
         status: Some(ExecutionStatus::Scheduled),
         result: None,
         executor: None,
-    workflow_task: None,
+        ..Default::default()
     };
 
     let updated = ExecutionRepository::update(&pool, created.id, update)
@@ -492,7 +492,7 @@ async fn test_update_execution_status_transitions() {
             status: Some(ExecutionStatus::Scheduling),
             result: None,
             executor: None,
-        workflow_task: None,
+            ..Default::default()
         },
     )
     .await
@@ -507,7 +507,7 @@ async fn test_update_execution_status_transitions() {
             status: Some(ExecutionStatus::Scheduled),
             result: None,
             executor: None,
-        workflow_task: None,
+            ..Default::default()
         },
     )
     .await
@@ -522,7 +522,7 @@ async fn test_update_execution_status_transitions() {
             status: Some(ExecutionStatus::Running),
             result: None,
             executor: None,
-        workflow_task: None,
+            ..Default::default()
         },
     )
     .await
@@ -537,7 +537,7 @@ async fn test_update_execution_status_transitions() {
             status: Some(ExecutionStatus::Completed),
             result: Some(json!({"success": true})),
             executor: None,
-        workflow_task: None,
+            ..Default::default()
         },
     )
     .await
@@ -578,7 +578,7 @@ async fn test_update_execution_failed_status() {
         status: Some(ExecutionStatus::Failed),
         result: Some(json!({"error": "Connection timeout"})),
         executor: None,
-    workflow_task: None,
+        ..Default::default()
     };
 
     let updated = ExecutionRepository::update(&pool, created.id, update)
@@ -984,7 +984,7 @@ async fn test_execution_timestamps() {
         status: Some(ExecutionStatus::Running),
         result: None,
         executor: None,
-    workflow_task: None,
+        ..Default::default()
     };
 
     let updated = ExecutionRepository::update(&pool, created.id, update)
@@ -1095,7 +1095,7 @@ async fn test_execution_result_json() {
         status: Some(ExecutionStatus::Completed),
         result: Some(complex_result.clone()),
         executor: None,
-    workflow_task: None,
+        ..Default::default()
     };
 
     let updated = ExecutionRepository::update(&pool, created.id, update)

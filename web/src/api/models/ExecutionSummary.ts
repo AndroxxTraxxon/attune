@@ -36,6 +36,11 @@ export type ExecutionSummary = {
    */
   status: ExecutionStatus;
   /**
+   * When the execution actually started running (worker picked it up).
+   * Null if the execution hasn't started running yet.
+   */
+  started_at?: string | null;
+  /**
    * Trigger reference (if triggered by a trigger)
    */
   trigger_ref?: string | null;

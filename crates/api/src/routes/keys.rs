@@ -13,10 +13,10 @@ use validator::Validate;
 use attune_common::models::OwnerType;
 use attune_common::repositories::{
     action::ActionRepository,
-    key::{CreateKeyInput, KeyRepository, UpdateKeyInput},
+    key::{CreateKeyInput, KeyRepository, KeySearchFilters, UpdateKeyInput},
     pack::PackRepository,
     trigger::SensorRepository,
-    Create, Delete, FindByRef, List, Update,
+    Create, Delete, FindByRef, Update,
 };
 
 use crate::auth::RequireAuth;
@@ -46,40 +46,24 @@ pub async fn list_keys(
     State(state): State<Arc<AppState>>,
     Query(query): Query<KeyQueryParams>,
 ) -> ApiResult<impl IntoResponse> {
-    // Get keys based on filters
-    let keys = if let Some(owner_type) = query.owner_type {
-        // Filter by owner type
-        KeyRepository::find_by_owner_type(&state.db, owner_type).await?
-    } else {
-        // Get all keys
-        KeyRepository::list(&state.db).await?
+    // All filtering and pagination happen in a single SQL query.
+    let filters = KeySearchFilters {
+        owner_type: query.owner_type,
+        owner: query.owner.clone(),
+        limit: query.limit(),
+        offset: query.offset(),
     };
 
-    // Apply additional filters in memory
-    let mut filtered_keys = keys;
+    let result = KeyRepository::search(&state.db, &filters).await?;
 
-    if let Some(owner) = &query.owner {
-        filtered_keys.retain(|k| k.owner.as_ref() == Some(owner));
-    }
+    let paginated_keys: Vec<KeySummary> = result.rows.into_iter().map(KeySummary::from).collect();
 
-    // Calculate pagination
-    let total = filtered_keys.len() as u64;
-    let start = query.offset() as usize;
-    let end = (start + query.limit() as usize).min(filtered_keys.len());
-
-    // Get paginated slice (values redacted in summary)
-    let paginated_keys: Vec<KeySummary> = filtered_keys[start..end]
-        .iter()
-        .map(|key| KeySummary::from(key.clone()))
-        .collect();
-
-    // Convert query params to pagination params for response
     let pagination_params = PaginationParams {
         page: query.page,
         page_size: query.per_page,
     };
 
-    let response = PaginatedResponse::new(paginated_keys, &pagination_params, total);
+    let response = PaginatedResponse::new(paginated_keys, &pagination_params, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }

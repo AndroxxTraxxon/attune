@@ -17,9 +17,9 @@ use attune_common::mq::{
 use attune_common::repositories::{
     action::ActionRepository,
     pack::PackRepository,
-    rule::{CreateRuleInput, RuleRepository, UpdateRuleInput},
+    rule::{CreateRuleInput, RuleRepository, RuleSearchFilters, UpdateRuleInput},
     trigger::TriggerRepository,
-    Create, Delete, FindByRef, List, Update,
+    Create, Delete, FindByRef, Update,
 };
 
 use crate::{
@@ -50,21 +50,21 @@ pub async fn list_rules(
     RequireAuth(_user): RequireAuth,
     Query(pagination): Query<PaginationParams>,
 ) -> ApiResult<impl IntoResponse> {
-    // Get all rules
-    let rules = RuleRepository::list(&state.db).await?;
+    let filters = RuleSearchFilters {
+        pack: None,
+        action: None,
+        trigger: None,
+        enabled: None,
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = rules.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(rules.len());
+    let result = RuleRepository::list_search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_rules: Vec<RuleSummary> = rules[start..end]
-        .iter()
-        .map(|r| RuleSummary::from(r.clone()))
-        .collect();
+    let paginated_rules: Vec<RuleSummary> =
+        result.rows.into_iter().map(RuleSummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_rules, &pagination, total);
+    let response = PaginatedResponse::new(paginated_rules, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -85,21 +85,21 @@ pub async fn list_enabled_rules(
     RequireAuth(_user): RequireAuth,
     Query(pagination): Query<PaginationParams>,
 ) -> ApiResult<impl IntoResponse> {
-    // Get enabled rules
-    let rules = RuleRepository::find_enabled(&state.db).await?;
+    let filters = RuleSearchFilters {
+        pack: None,
+        action: None,
+        trigger: None,
+        enabled: Some(true),
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = rules.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(rules.len());
+    let result = RuleRepository::list_search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_rules: Vec<RuleSummary> = rules[start..end]
-        .iter()
-        .map(|r| RuleSummary::from(r.clone()))
-        .collect();
+    let paginated_rules: Vec<RuleSummary> =
+        result.rows.into_iter().map(RuleSummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_rules, &pagination, total);
+    let response = PaginatedResponse::new(paginated_rules, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -130,21 +130,21 @@ pub async fn list_rules_by_pack(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", pack_ref)))?;
 
-    // Get rules for this pack
-    let rules = RuleRepository::find_by_pack(&state.db, pack.id).await?;
+    let filters = RuleSearchFilters {
+        pack: Some(pack.id),
+        action: None,
+        trigger: None,
+        enabled: None,
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = rules.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(rules.len());
+    let result = RuleRepository::list_search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_rules: Vec<RuleSummary> = rules[start..end]
-        .iter()
-        .map(|r| RuleSummary::from(r.clone()))
-        .collect();
+    let paginated_rules: Vec<RuleSummary> =
+        result.rows.into_iter().map(RuleSummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_rules, &pagination, total);
+    let response = PaginatedResponse::new(paginated_rules, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -175,21 +175,21 @@ pub async fn list_rules_by_action(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Action '{}' not found", action_ref)))?;
 
-    // Get rules for this action
-    let rules = RuleRepository::find_by_action(&state.db, action.id).await?;
+    let filters = RuleSearchFilters {
+        pack: None,
+        action: Some(action.id),
+        trigger: None,
+        enabled: None,
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = rules.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(rules.len());
+    let result = RuleRepository::list_search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_rules: Vec<RuleSummary> = rules[start..end]
-        .iter()
-        .map(|r| RuleSummary::from(r.clone()))
-        .collect();
+    let paginated_rules: Vec<RuleSummary> =
+        result.rows.into_iter().map(RuleSummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_rules, &pagination, total);
+    let response = PaginatedResponse::new(paginated_rules, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -220,21 +220,21 @@ pub async fn list_rules_by_trigger(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Trigger '{}' not found", trigger_ref)))?;
 
-    // Get rules for this trigger
-    let rules = RuleRepository::find_by_trigger(&state.db, trigger.id).await?;
+    let filters = RuleSearchFilters {
+        pack: None,
+        action: None,
+        trigger: Some(trigger.id),
+        enabled: None,
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = rules.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(rules.len());
+    let result = RuleRepository::list_search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_rules: Vec<RuleSummary> = rules[start..end]
-        .iter()
-        .map(|r| RuleSummary::from(r.clone()))
-        .collect();
+    let paginated_rules: Vec<RuleSummary> =
+        result.rows.into_iter().map(RuleSummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_rules, &pagination, total);
+    let response = PaginatedResponse::new(paginated_rules, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }

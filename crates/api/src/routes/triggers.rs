@@ -14,10 +14,10 @@ use attune_common::repositories::{
     pack::PackRepository,
     runtime::RuntimeRepository,
     trigger::{
-        CreateSensorInput, CreateTriggerInput, SensorRepository, TriggerRepository,
-        UpdateSensorInput, UpdateTriggerInput,
+        CreateSensorInput, CreateTriggerInput, SensorRepository, SensorSearchFilters,
+        TriggerRepository, TriggerSearchFilters, UpdateSensorInput, UpdateTriggerInput,
     },
-    Create, Delete, FindByRef, List, Update,
+    Create, Delete, FindByRef, Update,
 };
 
 use crate::{
@@ -54,21 +54,19 @@ pub async fn list_triggers(
     RequireAuth(_user): RequireAuth,
     Query(pagination): Query<PaginationParams>,
 ) -> ApiResult<impl IntoResponse> {
-    // Get all triggers
-    let triggers = TriggerRepository::list(&state.db).await?;
+    let filters = TriggerSearchFilters {
+        pack: None,
+        enabled: None,
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = triggers.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(triggers.len());
+    let result = TriggerRepository::list_search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_triggers: Vec<TriggerSummary> = triggers[start..end]
-        .iter()
-        .map(|t| TriggerSummary::from(t.clone()))
-        .collect();
+    let paginated_triggers: Vec<TriggerSummary> =
+        result.rows.into_iter().map(TriggerSummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_triggers, &pagination, total);
+    let response = PaginatedResponse::new(paginated_triggers, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -89,21 +87,19 @@ pub async fn list_enabled_triggers(
     RequireAuth(_user): RequireAuth,
     Query(pagination): Query<PaginationParams>,
 ) -> ApiResult<impl IntoResponse> {
-    // Get enabled triggers
-    let triggers = TriggerRepository::find_enabled(&state.db).await?;
+    let filters = TriggerSearchFilters {
+        pack: None,
+        enabled: Some(true),
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = triggers.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(triggers.len());
+    let result = TriggerRepository::list_search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_triggers: Vec<TriggerSummary> = triggers[start..end]
-        .iter()
-        .map(|t| TriggerSummary::from(t.clone()))
-        .collect();
+    let paginated_triggers: Vec<TriggerSummary> =
+        result.rows.into_iter().map(TriggerSummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_triggers, &pagination, total);
+    let response = PaginatedResponse::new(paginated_triggers, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -134,21 +130,19 @@ pub async fn list_triggers_by_pack(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", pack_ref)))?;
 
-    // Get triggers for this pack
-    let triggers = TriggerRepository::find_by_pack(&state.db, pack.id).await?;
+    let filters = TriggerSearchFilters {
+        pack: Some(pack.id),
+        enabled: None,
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = triggers.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(triggers.len());
+    let result = TriggerRepository::list_search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_triggers: Vec<TriggerSummary> = triggers[start..end]
-        .iter()
-        .map(|t| TriggerSummary::from(t.clone()))
-        .collect();
+    let paginated_triggers: Vec<TriggerSummary> =
+        result.rows.into_iter().map(TriggerSummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_triggers, &pagination, total);
+    let response = PaginatedResponse::new(paginated_triggers, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -438,21 +432,20 @@ pub async fn list_sensors(
     RequireAuth(_user): RequireAuth,
     Query(pagination): Query<PaginationParams>,
 ) -> ApiResult<impl IntoResponse> {
-    // Get all sensors
-    let sensors = SensorRepository::list(&state.db).await?;
+    let filters = SensorSearchFilters {
+        pack: None,
+        trigger: None,
+        enabled: None,
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = sensors.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(sensors.len());
+    let result = SensorRepository::list_search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_sensors: Vec<SensorSummary> = sensors[start..end]
-        .iter()
-        .map(|s| SensorSummary::from(s.clone()))
-        .collect();
+    let paginated_sensors: Vec<SensorSummary> =
+        result.rows.into_iter().map(SensorSummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_sensors, &pagination, total);
+    let response = PaginatedResponse::new(paginated_sensors, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -473,21 +466,20 @@ pub async fn list_enabled_sensors(
     RequireAuth(_user): RequireAuth,
     Query(pagination): Query<PaginationParams>,
 ) -> ApiResult<impl IntoResponse> {
-    // Get enabled sensors
-    let sensors = SensorRepository::find_enabled(&state.db).await?;
+    let filters = SensorSearchFilters {
+        pack: None,
+        trigger: None,
+        enabled: Some(true),
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = sensors.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(sensors.len());
+    let result = SensorRepository::list_search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_sensors: Vec<SensorSummary> = sensors[start..end]
-        .iter()
-        .map(|s| SensorSummary::from(s.clone()))
-        .collect();
+    let paginated_sensors: Vec<SensorSummary> =
+        result.rows.into_iter().map(SensorSummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_sensors, &pagination, total);
+    let response = PaginatedResponse::new(paginated_sensors, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -518,21 +510,20 @@ pub async fn list_sensors_by_pack(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", pack_ref)))?;
 
-    // Get sensors for this pack
-    let sensors = SensorRepository::find_by_pack(&state.db, pack.id).await?;
+    let filters = SensorSearchFilters {
+        pack: Some(pack.id),
+        trigger: None,
+        enabled: None,
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = sensors.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(sensors.len());
+    let result = SensorRepository::list_search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_sensors: Vec<SensorSummary> = sensors[start..end]
-        .iter()
-        .map(|s| SensorSummary::from(s.clone()))
-        .collect();
+    let paginated_sensors: Vec<SensorSummary> =
+        result.rows.into_iter().map(SensorSummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_sensors, &pagination, total);
+    let response = PaginatedResponse::new(paginated_sensors, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -563,21 +554,20 @@ pub async fn list_sensors_by_trigger(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Trigger '{}' not found", trigger_ref)))?;
 
-    // Get sensors for this trigger
-    let sensors = SensorRepository::find_by_trigger(&state.db, trigger.id).await?;
+    let filters = SensorSearchFilters {
+        pack: None,
+        trigger: Some(trigger.id),
+        enabled: None,
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = sensors.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(sensors.len());
+    let result = SensorRepository::list_search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_sensors: Vec<SensorSummary> = sensors[start..end]
-        .iter()
-        .map(|s| SensorSummary::from(s.clone()))
-        .collect();
+    let paginated_sensors: Vec<SensorSummary> =
+        result.rows.into_iter().map(SensorSummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_sensors, &pagination, total);
+    let response = PaginatedResponse::new(paginated_sensors, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }

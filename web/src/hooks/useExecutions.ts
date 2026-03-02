@@ -1,6 +1,13 @@
-import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import {
+  useQuery,
+  useMutation,
+  useQueryClient,
+  keepPreviousData,
+} from "@tanstack/react-query";
 import { ExecutionsService } from "@/api";
 import type { ExecutionStatus } from "@/api";
+import { OpenAPI } from "@/api/core/OpenAPI";
+import { request as __request } from "@/api/core/request";
 
 interface ExecutionsQueryParams {
   page?: number;
@@ -69,6 +76,42 @@ export function useExecution(id: number) {
  * Enabled only when `parentId` is provided. Polls every 5 seconds while any
  * child execution is still in a running/pending state so the UI stays current.
  */
+/**
+ * Request a manual execution of an action (or workflow).
+ *
+ * Calls POST /api/v1/executions/execute and returns the created execution,
+ * including its `id` which callers can use to navigate to the detail page.
+ */
+export function useRequestExecution() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      actionRef,
+      parameters,
+    }: {
+      actionRef: string;
+      parameters?: Record<string, unknown>;
+    }) => {
+      const response = await __request(OpenAPI, {
+        method: "POST",
+        url: "/api/v1/executions/execute",
+        body: {
+          action_ref: actionRef,
+          parameters: parameters ?? null,
+        },
+        mediaType: "application/json",
+      });
+      return response as {
+        data: { id: number; status: string; action_ref: string };
+      };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["executions"] });
+    },
+  });
+}
+
 export function useChildExecutions(parentId: number | undefined) {
   return useQuery({
     queryKey: ["executions", { parent: parentId }],

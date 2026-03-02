@@ -41,9 +41,12 @@ tasks:
     action: core.echo
     input:
       message: "Starting workflow with: {{ parameters.message }}"
-    publish:
-      - timestamp: "{{ system.timestamp }}"
-    on_success: process_message
+    next:
+      - when: "{{ succeeded() }}"
+        publish:
+          - timestamp: "{{ system.workflow_start }}"
+        do:
+          - process_message
 
   # Task 2: Process the message
   - name: process_message
@@ -51,18 +54,21 @@ tasks:
     input:
       text: "{{ parameters.message }}"
       uppercase: "{{ parameters.uppercase }}"
-    publish:
-      - processed_message: "{{ task.process_message.result.text }}"
-    on_success: finalize
+    next:
+      - when: "{{ succeeded() }}"
+        publish:
+          - processed_message: "{{ task.process_message.result.text }}"
+        do:
+          - finalize
 
   # Task 3: Finalize and log result
   - name: finalize
     action: core.echo
     input:
-      message: "Workflow complete. Result: {{ vars.processed_message }}"
+      message: "Workflow complete. Result: {{ workflow.processed_message }}"
 
 # Map workflow outputs
 output_map:
   original: "{{ parameters.message }}"
-  processed: "{{ vars.processed_message }}"
+  processed: "{{ workflow.processed_message }}"
   final: "{{ task.finalize.result.message }}"

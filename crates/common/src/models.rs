@@ -1104,6 +1104,11 @@ pub mod execution {
         pub status: ExecutionStatus,
         pub result: Option<JsonDict>,
 
+        /// When the execution actually started running (worker picked it up).
+        /// Set when status transitions to `Running`. Used to compute accurate
+        /// duration that excludes queue/scheduling wait time.
+        pub started_at: Option<DateTime<Utc>>,
+
         /// Workflow task metadata (only populated for workflow task executions)
         ///
         /// Provides direct access to workflow orchestration state without JOINs.

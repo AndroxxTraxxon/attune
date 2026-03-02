@@ -134,7 +134,7 @@ tasks:
     publish:
       - approval_granted: "{{ task.require_production_approval.result.approved }}"
     decision:
-      - when: "{{ vars.approval_granted == true }}"
+      - when: "{{ workflow.approval_granted == true }}"
         next: create_deployment_record
       - default: cancel_deployment
     on_timeout: deployment_approval_timeout
@@ -244,7 +244,7 @@ tasks:
     publish:
       - canary_passed: "{{ task.monitor_canary.result.success }}"
     decision:
-      - when: "{{ vars.canary_passed == true }}"
+      - when: "{{ workflow.canary_passed == true }}"
         next: promote_canary
       - default: rollback_canary
 
@@ -305,7 +305,7 @@ tasks:
 
   - name: parallel_health_checks
     action: http.get
-    with_items: "{{ vars.health_check_urls }}"
+    with_items: "{{ workflow.health_check_urls }}"
     batch_size: 5  # Check 5 URLs at a time
     input:
       url: "{{ item }}"
@@ -323,7 +323,7 @@ tasks:
     input:
       app_name: "{{ parameters.app_name }}"
       environment: "{{ parameters.environment }}"
-      base_urls: "{{ vars.health_check_urls }}"
+      base_urls: "{{ workflow.health_check_urls }}"
     timeout: 600
     on_success: verify_metrics
     on_failure: handle_smoke_test_failures
@@ -361,12 +361,12 @@ tasks:
   - name: finalize_deployment
     action: deployments.update_status
     input:
-      deployment_id: "{{ vars.deployment_id }}"
+      deployment_id: "{{ workflow.deployment_id }}"
       status: "success"
       metadata:
         version: "{{ parameters.version }}"
         regions: "{{ parameters.regions }}"
-        duration: "{{ system.timestamp - vars.start_time }}"
+        duration: "{{ system.timestamp - workflow.start_time }}"
     publish:
       - successful_regions: "{{ parameters.regions }}"
     on_success: post_deployment_tasks
@@ -392,7 +392,7 @@ tasks:
         input:
           app_name: "{{ parameters.app_name }}"
           version: "{{ parameters.version }}"
-          deployment_id: "{{ vars.deployment_id }}"
+          deployment_id: "{{ workflow.deployment_id }}"
     on_complete: notify_deployment_success
 
   # ============================================================================
@@ -402,7 +402,7 @@ tasks:
   - name: handle_deployment_failures
     action: deployments.analyze_failures
     input:
-      deployment_id: "{{ vars.deployment_id }}"
+      deployment_id: "{{ workflow.deployment_id }}"
       failed_tasks: "{{ task.deploy_to_all_regions.failed_items }}"
     publish:
       - failed_regions: "{{ task.handle_deployment_failures.result.failed_regions }}"
@@ -414,7 +414,7 @@ tasks:
   - name: handle_health_check_failures
     action: diagnostics.analyze_health_failures
     input:
-      deployment_id: "{{ vars.deployment_id }}"
+      deployment_id: "{{ workflow.deployment_id }}"
       failed_urls: "{{ task.parallel_health_checks.failed_items }}"
     decision:
       - when: "{{ parameters.rollback_on_failure == true }}"
@@ -424,7 +424,7 @@ tasks:
   - name: handle_smoke_test_failures
     action: testing.capture_smoke_test_results
     input:
-      deployment_id: "{{ vars.deployment_id }}"
+      deployment_id: "{{ workflow.deployment_id }}"
       results: "{{ task.run_smoke_tests.result }}"
     decision:
       - when: "{{ parameters.rollback_on_failure == true }}"
@@ -434,7 +434,7 @@ tasks:
   - name: handle_metrics_failures
     action: monitoring.capture_metric_violations
     input:
-      deployment_id: "{{ vars.deployment_id }}"
+      deployment_id: "{{ workflow.deployment_id }}"
       violations: "{{ task.verify_metrics.result.violations }}"
     decision:
       - when: "{{ parameters.rollback_on_failure == true }}"
@@ -467,11 +467,11 @@ tasks:
   - name: update_deployment_rolled_back
     action: deployments.update_status
     input:
-      deployment_id: "{{ vars.deployment_id }}"
+      deployment_id: "{{ workflow.deployment_id }}"
       status: "rolled_back"
       metadata:
         reason: "deployment_failure"
-        failed_regions: "{{ vars.failed_regions }}"
+        failed_regions: "{{ workflow.failed_regions }}"
     on_complete: notify_deployment_rolled_back
 
   # ============================================================================
@@ -481,7 +481,7 @@ tasks:
   - name: cancel_deployment
     action: deployments.update_status
     input:
-      deployment_id: "{{ vars.deployment_id }}"
+      deployment_id: "{{ workflow.deployment_id }}"
       status: "cancelled"
       metadata:
         reason: "approval_denied"
@@ -490,7 +490,7 @@ tasks:
   - name: deployment_approval_timeout
     action: deployments.update_status
     input:
-      deployment_id: "{{ vars.deployment_id }}"
+      deployment_id: "{{ workflow.deployment_id }}"
       status: "cancelled"
       metadata:
         reason: "approval_timeout"
@@ -499,7 +499,7 @@ tasks:
   - name: cleanup_failed_deployment
     action: deployments.cleanup_resources
     input:
-      deployment_id: "{{ vars.deployment_id }}"
+      deployment_id: "{{ workflow.deployment_id }}"
       reason: "pre_deployment_checks_failed"
     on_complete: notify_deployment_failed
 
@@ -516,12 +516,12 @@ tasks:
         Application: {{ parameters.app_name }}
         Version: {{ parameters.version }}
         Environment: {{ parameters.environment }}
-        Regions: {{ vars.successful_regions | join(', ') }}
-        Duration: {{ system.timestamp - vars.start_time }}s
-        Deployment ID: {{ vars.deployment_id }}
+        Regions: {{ workflow.successful_regions | join(', ') }}
+        Duration: {{ system.timestamp - workflow.start_time }}s
+        Deployment ID: {{ workflow.deployment_id }}
       metadata:
         severity: "info"
-        deployment_id: "{{ vars.deployment_id }}"
+        deployment_id: "{{ workflow.deployment_id }}"
 
   - name: notify_deployment_failed
     action: notifications.send_multi_channel
@@ -532,11 +532,11 @@ tasks:
         Application: {{ parameters.app_name }}
         Version: {{ parameters.version }}
         Environment: {{ parameters.environment }}
-        Failed Regions: {{ vars.failed_regions | join(', ') }}
-        Deployment ID: {{ vars.deployment_id }}
+        Failed Regions: {{ workflow.failed_regions | join(', ') }}
+        Deployment ID: {{ workflow.deployment_id }}
       metadata:
         severity: "error"
-        deployment_id: "{{ vars.deployment_id }}"
+        deployment_id: "{{ workflow.deployment_id }}"
 
   - name: notify_deployment_rolled_back
     action: notifications.send_multi_channel
@@ -548,10 +548,10 @@ tasks:
         Version: {{ parameters.version }}
         Environment: {{ parameters.environment }}
         Rollback completed for all regions
-        Deployment ID: {{ vars.deployment_id }}"
+        Deployment ID: {{ workflow.deployment_id }}"
       metadata:
         severity: "warning"
-        deployment_id: "{{ vars.deployment_id }}"
+        deployment_id: "{{ workflow.deployment_id }}"
 
   - name: notify_deployment_cancelled
     action: notifications.send_multi_channel
@@ -648,8 +648,8 @@ tasks:
         ⚠️ Partial Deployment
         Application: {{ parameters.app_name }}
         Version: {{ parameters.version }}
-        Successful Regions: {{ vars.successful_regions | join(', ') }}
-        Failed Regions: {{ vars.failed_regions | join(', ') }}
+        Successful Regions: {{ workflow.successful_regions | join(', ') }}
+        Failed Regions: {{ workflow.failed_regions | join(', ') }}
       metadata:
         severity: "error"
 
@@ -703,8 +703,8 @@ tasks:
 
 # Workflow output mapping
 output_map:
-  deployment_id: "{{ vars.deployment_id }}"
-  status: "{{ vars.rollback_initiated ? 'rolled_back' : 'success' }}"
+  deployment_id: "{{ workflow.deployment_id }}"
+  status: "{{ workflow.rollback_initiated ? 'rolled_back' : 'success' }}"
   deployed_version: "{{ parameters.version }}"
-  deployment_urls: "{{ vars.health_check_urls }}"
-  duration_seconds: "{{ system.timestamp - vars.start_time }}"
+  deployment_urls: "{{ workflow.health_check_urls }}"
+  duration_seconds: "{{ system.timestamp - workflow.start_time }}"

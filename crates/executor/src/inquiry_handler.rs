@@ -244,8 +244,7 @@ impl InquiryHandler {
         let update_input = UpdateExecutionInput {
             status: None, // Keep current status, let worker handle completion
             result: Some(updated_result),
-            executor: None,
-            workflow_task: None, // Not updating workflow metadata
+            ..Default::default()
         };
 
         ExecutionRepository::update(pool, execution.id, update_input).await?;

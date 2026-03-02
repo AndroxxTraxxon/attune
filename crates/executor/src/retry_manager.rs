@@ -381,10 +381,7 @@ impl RetryManager {
             &self.pool,
             execution_id,
             UpdateExecutionInput {
-                status: None,
-                result: None,
-                executor: None,
-                workflow_task: None,
+                ..Default::default()
             },
         )
         .await?;

@@ -8,6 +8,26 @@ use sqlx::{Executor, Postgres, QueryBuilder};
 
 use super::{Create, Delete, FindById, FindByRef, List, Repository, Update};
 
+/// Filters for [`ActionRepository::list_search`].
+///
+/// All fields are optional and combinable (AND). Pagination is always applied.
+#[derive(Debug, Clone, Default)]
+pub struct ActionSearchFilters {
+    /// Filter by pack ID
+    pub pack: Option<Id>,
+    /// Text search across ref, label, description (case-insensitive)
+    pub query: Option<String>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+/// Result of [`ActionRepository::list_search`].
+#[derive(Debug)]
+pub struct ActionSearchResult {
+    pub rows: Vec<Action>,
+    pub total: u64,
+}
+
 /// Repository for Action operations
 pub struct ActionRepository;
 
@@ -287,6 +307,92 @@ impl Delete for ActionRepository {
 }
 
 impl ActionRepository {
+    /// Search actions with all filters pushed into SQL.
+    ///
+    /// All filter fields are combinable (AND). Pagination is server-side.
+    pub async fn list_search<'e, E>(
+        db: E,
+        filters: &ActionSearchFilters,
+    ) -> Result<ActionSearchResult>
+    where
+        E: Executor<'e, Database = Postgres> + Copy + 'e,
+    {
+        let select_cols = "id, ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_version_constraint, param_schema, out_schema, workflow_def, is_adhoc, created, updated";
+
+        let mut qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new(format!("SELECT {select_cols} FROM action"));
+        let mut count_qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new("SELECT COUNT(*) FROM action");
+
+        let mut has_where = false;
+
+        macro_rules! push_condition {
+            ($cond_prefix:expr, $value:expr) => {{
+                if !has_where {
+                    qb.push(" WHERE ");
+                    count_qb.push(" WHERE ");
+                    has_where = true;
+                } else {
+                    qb.push(" AND ");
+                    count_qb.push(" AND ");
+                }
+                qb.push($cond_prefix);
+                qb.push_bind($value.clone());
+                count_qb.push($cond_prefix);
+                count_qb.push_bind($value);
+            }};
+        }
+
+        if let Some(pack_id) = filters.pack {
+            push_condition!("pack = ", pack_id);
+        }
+        if let Some(ref query) = filters.query {
+            let pattern = format!("%{}%", query.to_lowercase());
+            // Search needs an OR across multiple columns, wrapped in parens
+            if !has_where {
+                qb.push(" WHERE ");
+                count_qb.push(" WHERE ");
+                has_where = true;
+            } else {
+                qb.push(" AND ");
+                count_qb.push(" AND ");
+            }
+            qb.push("(LOWER(ref) LIKE ");
+            qb.push_bind(pattern.clone());
+            qb.push(" OR LOWER(label) LIKE ");
+            qb.push_bind(pattern.clone());
+            qb.push(" OR LOWER(description) LIKE ");
+            qb.push_bind(pattern.clone());
+            qb.push(")");
+
+            count_qb.push("(LOWER(ref) LIKE ");
+            count_qb.push_bind(pattern.clone());
+            count_qb.push(" OR LOWER(label) LIKE ");
+            count_qb.push_bind(pattern.clone());
+            count_qb.push(" OR LOWER(description) LIKE ");
+            count_qb.push_bind(pattern);
+            count_qb.push(")");
+        }
+
+        // Suppress unused-assignment warning from the macro's last expansion.
+        let _ = has_where;
+
+        // Count
+        let total: i64 = count_qb.build_query_scalar().fetch_one(db).await?;
+        let total = total.max(0) as u64;
+
+        // Data query
+        qb.push(" ORDER BY ref ASC");
+        qb.push(" LIMIT ");
+        qb.push_bind(filters.limit as i64);
+        qb.push(" OFFSET ");
+        qb.push_bind(filters.offset as i64);
+
+        let rows: Vec<Action> = qb.build_query_as().fetch_all(db).await?;
+
+        Ok(ActionSearchResult { rows, total })
+    }
+
     /// Find actions by pack ID
     pub async fn find_by_pack<'e, E>(executor: E, pack_id: Id) -> Result<Vec<Action>>
     where

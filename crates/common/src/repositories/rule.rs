@@ -8,6 +8,30 @@ use sqlx::{Executor, Postgres, QueryBuilder};
 
 use super::{Create, Delete, FindById, FindByRef, List, Repository, Update};
 
+/// Filters for [`RuleRepository::list_search`].
+///
+/// All fields are optional and combinable (AND). Pagination is always applied.
+#[derive(Debug, Clone, Default)]
+pub struct RuleSearchFilters {
+    /// Filter by pack ID
+    pub pack: Option<Id>,
+    /// Filter by action ID
+    pub action: Option<Id>,
+    /// Filter by trigger ID
+    pub trigger: Option<Id>,
+    /// Filter by enabled status
+    pub enabled: Option<bool>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+/// Result of [`RuleRepository::list_search`].
+#[derive(Debug)]
+pub struct RuleSearchResult {
+    pub rows: Vec<Rule>,
+    pub total: u64,
+}
+
 /// Input for restoring an ad-hoc rule during pack reinstallation.
 /// Unlike `CreateRuleInput`, action and trigger IDs are optional because
 /// the referenced entities may not exist yet or may have been removed.
@@ -275,6 +299,71 @@ impl Delete for RuleRepository {
 }
 
 impl RuleRepository {
+    /// Search rules with all filters pushed into SQL.
+    ///
+    /// All filter fields are combinable (AND). Pagination is server-side.
+    pub async fn list_search<'e, E>(db: E, filters: &RuleSearchFilters) -> Result<RuleSearchResult>
+    where
+        E: Executor<'e, Database = Postgres> + Copy + 'e,
+    {
+        let select_cols = "id, ref, pack, pack_ref, label, description, action, action_ref, trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, created, updated";
+
+        let mut qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new(format!("SELECT {select_cols} FROM rule"));
+        let mut count_qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new("SELECT COUNT(*) FROM rule");
+
+        let mut has_where = false;
+
+        macro_rules! push_condition {
+            ($cond_prefix:expr, $value:expr) => {{
+                if !has_where {
+                    qb.push(" WHERE ");
+                    count_qb.push(" WHERE ");
+                    has_where = true;
+                } else {
+                    qb.push(" AND ");
+                    count_qb.push(" AND ");
+                }
+                qb.push($cond_prefix);
+                qb.push_bind($value.clone());
+                count_qb.push($cond_prefix);
+                count_qb.push_bind($value);
+            }};
+        }
+
+        if let Some(pack_id) = filters.pack {
+            push_condition!("pack = ", pack_id);
+        }
+        if let Some(action_id) = filters.action {
+            push_condition!("action = ", action_id);
+        }
+        if let Some(trigger_id) = filters.trigger {
+            push_condition!("trigger = ", trigger_id);
+        }
+        if let Some(enabled) = filters.enabled {
+            push_condition!("enabled = ", enabled);
+        }
+
+        // Suppress unused-assignment warning from the macro's last expansion.
+        let _ = has_where;
+
+        // Count
+        let total: i64 = count_qb.build_query_scalar().fetch_one(db).await?;
+        let total = total.max(0) as u64;
+
+        // Data query
+        qb.push(" ORDER BY ref ASC");
+        qb.push(" LIMIT ");
+        qb.push_bind(filters.limit as i64);
+        qb.push(" OFFSET ");
+        qb.push_bind(filters.offset as i64);
+
+        let rows: Vec<Rule> = qb.build_query_as().fetch_all(db).await?;
+
+        Ok(RuleSearchResult { rows, total })
+    }
+
     /// Find rules by pack ID
     pub async fn find_by_pack<'e, E>(executor: E, pack_id: Id) -> Result<Vec<Rule>>
     where

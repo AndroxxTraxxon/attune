@@ -34,6 +34,7 @@ BEGIN
         'trigger_ref', enforcement_trigger_ref,
         'parent', NEW.parent,
         'result', NEW.result,
+        'started_at', NEW.started_at,
         'created', NEW.created,
         'updated', NEW.updated
     );
@@ -75,6 +76,7 @@ BEGIN
             'trigger_ref', enforcement_trigger_ref,
             'parent', NEW.parent,
             'result', NEW.result,
+            'started_at', NEW.started_at,
             'created', NEW.created,
             'updated', NEW.updated
         );

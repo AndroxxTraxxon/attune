@@ -4,6 +4,7 @@ import { useQueries } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Save,
+  Play,
   AlertTriangle,
   FileCode,
   Code,
@@ -11,6 +12,9 @@ import {
   X,
   Zap,
   Settings2,
+  ExternalLink,
+  Copy,
+  Check,
 } from "lucide-react";
 import SearchableSelect from "@/components/common/SearchableSelect";
 import yaml from "js-yaml";
@@ -23,6 +27,9 @@ import TaskInspector from "@/components/workflows/TaskInspector";
 import { useActions } from "@/hooks/useActions";
 import { ActionsService } from "@/api";
 import { usePacks } from "@/hooks/usePacks";
+import { useRequestExecution } from "@/hooks/useExecutions";
+import RunWorkflowModal from "@/components/workflows/RunWorkflowModal";
+import type { ParamSchema } from "@/components/common/ParamSchemaForm";
 import { useWorkflow } from "@/hooks/useWorkflows";
 import {
   useSaveWorkflowFile,
@@ -77,6 +84,7 @@ export default function WorkflowBuilderPage() {
   // Mutations
   const saveWorkflowFile = useSaveWorkflowFile();
   const updateWorkflowFile = useUpdateWorkflowFile();
+  const requestExecution = useRequestExecution();
 
   // Builder state
   const [state, setState] = useState<WorkflowBuilderState>(INITIAL_STATE);
@@ -85,6 +93,9 @@ export default function WorkflowBuilderPage() {
   const [showErrors, setShowErrors] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [showRunModal, setShowRunModal] = useState(false);
+  const [yamlCopied, setYamlCopied] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [showYamlPreview, setShowYamlPreview] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"actions" | "inputs">("actions");
@@ -428,7 +439,7 @@ export default function WorkflowBuilderPage() {
 
     if (errors.length > 0) {
       setShowErrors(true);
-      return;
+      return false;
     }
 
     const definition = builderStateToDefinition(state, actionSchemaMap);
@@ -495,16 +506,19 @@ export default function WorkflowBuilderPage() {
       if (!isEditing) {
         const newRef = `${state.packRef}.${state.name}`;
         navigate(`/actions/workflows/${newRef}/edit`, { replace: true });
-        return;
+        return true;
       }
 
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
+
+      return true; // indicate success
     } catch (err: unknown) {
       const error = err as { body?: { message?: string }; message?: string };
       const message =
         error?.body?.message || error?.message || "Failed to save workflow";
       setSaveError(message);
+      return false; // indicate failure
     }
   }, [
     state,
@@ -514,6 +528,49 @@ export default function WorkflowBuilderPage() {
     updateWorkflowFile,
     actionSchemaMap,
     navigate,
+  ]);
+
+  // Check whether the workflow has any parameters defined
+  const hasParameters = useMemo(
+    () => Object.keys(state.parameters).length > 0,
+    [state.parameters],
+  );
+
+  const handleRun = useCallback(async () => {
+    setRunError(null);
+
+    if (hasParameters) {
+      // Open the modal so the user can review / override parameter values
+      setShowRunModal(true);
+      return;
+    }
+
+    // No parameters — save and execute immediately
+    const saved = await doSave();
+    if (!saved) return; // save failed — error already shown
+
+    const actionRef = editRef || `${state.packRef}.${state.name}`;
+
+    try {
+      const response = await requestExecution.mutateAsync({
+        actionRef,
+        parameters: {},
+      });
+      const executionId = response.data.id;
+      window.open(`/executions/${executionId}`, "_blank");
+    } catch (err: unknown) {
+      const error = err as { body?: { message?: string }; message?: string };
+      const message =
+        error?.body?.message || error?.message || "Failed to start execution";
+      setRunError(message);
+    }
+  }, [
+    hasParameters,
+    doSave,
+    editRef,
+    state.packRef,
+    state.name,
+    requestExecution,
   ]);
 
   const handleSave = useCallback(() => {
@@ -547,6 +604,7 @@ export default function WorkflowBuilderPage() {
   }, [state, showYamlPreview, actionSchemaMap]);
 
   const isSaving = saveWorkflowFile.isPending || updateWorkflowFile.isPending;
+  const isExecuting = requestExecution.isPending;
 
   if (isEditing && workflowLoading) {
     return (
@@ -684,6 +742,16 @@ export default function WorkflowBuilderPage() {
               </span>
             )}
 
+            {/* Run error indicator */}
+            {runError && (
+              <span
+                className="text-xs text-red-600 font-medium max-w-[200px] truncate"
+                title={runError}
+              >
+                ✗ {runError}
+              </span>
+            )}
+
             {/* Save button */}
             <button
               onClick={handleSave}
@@ -692,6 +760,31 @@ export default function WorkflowBuilderPage() {
             >
               <Save className="w-4 h-4" />
               {isSaving ? "Saving..." : isEditing ? "Update" : "Save"}
+            </button>
+
+            {/* Run button */}
+            <button
+              onClick={handleRun}
+              disabled={!isEditing || isSaving || isExecuting}
+              title={
+                !isEditing
+                  ? "Save the workflow first to enable execution"
+                  : "Save & run this workflow"
+              }
+              className="flex items-center gap-1.5 px-4 py-1.5 bg-green-600 text-white text-sm font-medium rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+            >
+              {isExecuting ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Running...
+                </>
+              ) : (
+                <>
+                  <Play className="w-4 h-4" />
+                  Run
+                  <ExternalLink className="w-3 h-3 opacity-60" />
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -771,6 +864,30 @@ export default function WorkflowBuilderPage() {
               <span className="text-[10px] text-gray-500 ml-1">
                 (read-only preview of the generated YAML)
               </span>
+              <div className="ml-auto">
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(yamlPreview).then(() => {
+                      setYamlCopied(true);
+                      setTimeout(() => setYamlCopied(false), 2000);
+                    });
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded transition-colors text-gray-400 hover:text-gray-200 hover:bg-gray-700"
+                  title="Copy YAML to clipboard"
+                >
+                  {yamlCopied ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-green-400" />
+                      <span className="text-green-400">Copied</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      Copy
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
             <pre className="flex-1 overflow-auto p-6 text-sm font-mono text-green-400 whitespace-pre leading-relaxed">
               {yamlPreview}
@@ -963,6 +1080,17 @@ export default function WorkflowBuilderPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Run workflow modal (shown when workflow has parameters) */}
+      {showRunModal && (
+        <RunWorkflowModal
+          actionRef={editRef || `${state.packRef}.${state.name}`}
+          paramSchema={state.parameters as unknown as ParamSchema}
+          label={state.label || undefined}
+          onSave={doSave}
+          onClose={() => setShowRunModal(false)}
+        />
       )}
 
       {/* Inline style for fade-in animation */}

@@ -70,11 +70,14 @@ const ExecutionPreviewPanel = memo(function ExecutionPreviewPanel({
     execution?.status === "scheduled" ||
     execution?.status === "requested";
 
+  const startedAt = execution?.started_at
+    ? new Date(execution.started_at)
+    : null;
   const created = execution ? new Date(execution.created) : null;
   const updated = execution ? new Date(execution.updated) : null;
   const durationMs =
-    created && updated && !isRunning
-      ? updated.getTime() - created.getTime()
+    startedAt && updated && !isRunning
+      ? updated.getTime() - startedAt.getTime()
       : null;
 
   return (
@@ -175,9 +178,9 @@ const ExecutionPreviewPanel = memo(function ExecutionPreviewPanel({
                   <dt className="text-xs font-medium text-gray-500 uppercase tracking-wide">
                     Elapsed
                   </dt>
-                  <dd className="mt-0.5 text-sm text-blue-600 flex items-center gap-1.5">
+                  <dd className="mt-0.5 text-blue-600 flex items-center gap-1.5">
                     <Loader2 className="h-3 w-3 animate-spin" />
-                    {formatDistanceToNow(created!)}
+                    {formatDistanceToNow(startedAt ?? created!)}
                   </dd>
                 </div>
               )}
@@ -240,41 +243,39 @@ const ExecutionPreviewPanel = memo(function ExecutionPreviewPanel({
             </div>
 
             {/* Config / Parameters */}
-            {execution.config &&
-              Object.keys(execution.config).length > 0 && (
-                <div className="px-4 py-3">
-                  <dt className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">
-                    Parameters
-                  </dt>
-                  <dd>
-                    <pre className="bg-gray-50 border border-gray-200 rounded p-3 text-xs overflow-x-auto max-h-48 overflow-y-auto">
-                      {JSON.stringify(execution.config, null, 2)}
-                    </pre>
-                  </dd>
-                </div>
-              )}
+            {execution.config && Object.keys(execution.config).length > 0 && (
+              <div className="px-4 py-3">
+                <dt className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">
+                  Parameters
+                </dt>
+                <dd>
+                  <pre className="bg-gray-50 border border-gray-200 rounded p-3 text-xs overflow-x-auto max-h-48 overflow-y-auto">
+                    {JSON.stringify(execution.config, null, 2)}
+                  </pre>
+                </dd>
+              </div>
+            )}
 
             {/* Result */}
-            {execution.result &&
-              Object.keys(execution.result).length > 0 && (
-                <div className="px-4 py-3">
-                  <dt className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">
-                    Result
-                  </dt>
-                  <dd>
-                    <pre
-                      className={`border rounded p-3 text-xs overflow-x-auto max-h-64 overflow-y-auto ${
-                        execution.status === ("failed" as ExecutionStatus) ||
-                        execution.status === ("timeout" as ExecutionStatus)
-                          ? "bg-red-50 border-red-200"
-                          : "bg-gray-50 border-gray-200"
-                      }`}
-                    >
-                      {JSON.stringify(execution.result, null, 2)}
-                    </pre>
-                  </dd>
-                </div>
-              )}
+            {execution.result && Object.keys(execution.result).length > 0 && (
+              <div className="px-4 py-3">
+                <dt className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">
+                  Result
+                </dt>
+                <dd>
+                  <pre
+                    className={`border rounded p-3 text-xs overflow-x-auto max-h-64 overflow-y-auto ${
+                      execution.status === ("failed" as ExecutionStatus) ||
+                      execution.status === ("timeout" as ExecutionStatus)
+                        ? "bg-red-50 border-red-200"
+                        : "bg-gray-50 border-gray-200"
+                    }`}
+                  >
+                    {JSON.stringify(execution.result, null, 2)}
+                  </pre>
+                </dd>
+              </div>
+            )}
           </div>
         )}
       </div>

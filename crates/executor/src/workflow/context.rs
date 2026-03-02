@@ -3,6 +3,33 @@
 //! This module manages workflow execution context, including variables,
 //! template rendering, and data flow between tasks.
 //!
+//! ## Canonical Namespaces
+//!
+//! All data accessible inside `{{ }}` template expressions is organised into
+//! well-defined, non-overlapping namespaces:
+//!
+//! | Namespace | Example | Description |
+//! |-----------|---------|-------------|
+//! | `parameters` | `{{ parameters.url }}` | Immutable workflow input parameters |
+//! | `workflow` | `{{ workflow.counter }}` | Mutable workflow-scoped variables (set via `publish`) |
+//! | `task` | `{{ task.fetch.result.data }}` | Completed task results keyed by task name |
+//! | `config` | `{{ config.api_token }}` | Pack configuration values (read-only) |
+//! | `keystore` | `{{ keystore.secret_key }}` | Encrypted secrets from the key store (read-only) |
+//! | `item` | `{{ item }}` or `{{ item.name }}` | Current element in a `with_items` loop |
+//! | `index` | `{{ index }}` | Zero-based iteration index in a `with_items` loop |
+//! | `system` | `{{ system.workflow_start }}` | System-provided variables |
+//!
+//! ### Backward-compatible aliases
+//!
+//! The following aliases resolve to the same data as their canonical form and
+//! are kept for backward compatibility with existing workflow definitions:
+//!
+//! - `vars` / `variables` → same as `workflow`
+//! - `tasks` → same as `task`
+//!
+//! Bare variable names (e.g. `{{ my_var }}`) also resolve against the
+//! `workflow` variable store as a last-resort fallback.
+//!
 //! ## Function-call expressions
 //!
 //! Templates support Orquesta-style function calls:
@@ -19,6 +46,9 @@
 //! expression instead of stringifying it. This means `"{{ item }}"` resolving
 //! to integer `5` stays as `5`, not the string `"5"`.
 
+use attune_common::workflow::expression::{
+    self, is_truthy, EvalContext, EvalError, EvalResult as ExprResult,
+};
 use dashmap::DashMap;
 use serde_json::{json, Value as JsonValue};
 use std::collections::HashMap;
@@ -63,17 +93,24 @@ pub enum TaskOutcome {
 /// not the underlying data, making it O(1) instead of O(context_size).
 #[derive(Debug, Clone)]
 pub struct WorkflowContext {
-    /// Workflow-level variables (shared via Arc)
+    /// Mutable workflow-scoped variables. Canonical namespace: `workflow`.
+    /// Also accessible as `vars`, `variables`, or bare names (fallback).
     variables: Arc<DashMap<String, JsonValue>>,
 
-    /// Workflow input parameters (shared via Arc)
+    /// Immutable workflow input parameters. Canonical namespace: `parameters`.
     parameters: Arc<JsonValue>,
 
-    /// Task results (shared via Arc, keyed by task name)
+    /// Completed task results keyed by task name. Canonical namespace: `task`.
     task_results: Arc<DashMap<String, JsonValue>>,
 
-    /// System variables (shared via Arc)
+    /// System-provided variables. Canonical namespace: `system`.
     system: Arc<DashMap<String, JsonValue>>,
+
+    /// Pack configuration values (read-only). Canonical namespace: `config`.
+    pack_config: Arc<JsonValue>,
+
+    /// Encrypted keystore values (read-only). Canonical namespace: `keystore`.
+    keystore: Arc<JsonValue>,
 
     /// Current item (for with-items iteration) - per-item data
     current_item: Option<JsonValue>,
@@ -89,7 +126,11 @@ pub struct WorkflowContext {
 }
 
 impl WorkflowContext {
-    /// Create a new workflow context
+    /// Create a new workflow context.
+    ///
+    /// `parameters` — the immutable input parameters for this workflow run.
+    /// `initial_vars` — initial workflow-scoped variables (from the workflow
+    ///   definition's `vars` section).
     pub fn new(parameters: JsonValue, initial_vars: HashMap<String, JsonValue>) -> Self {
         let system = DashMap::new();
         system.insert("workflow_start".to_string(), json!(chrono::Utc::now()));
@@ -104,6 +145,8 @@ impl WorkflowContext {
             parameters: Arc::new(parameters),
             task_results: Arc::new(DashMap::new()),
             system: Arc::new(system),
+            pack_config: Arc::new(JsonValue::Null),
+            keystore: Arc::new(JsonValue::Null),
             current_item: None,
             current_index: None,
             last_task_result: None,
@@ -142,6 +185,8 @@ impl WorkflowContext {
             parameters: Arc::new(parameters),
             task_results: Arc::new(results),
             system: Arc::new(system),
+            pack_config: Arc::new(JsonValue::Null),
+            keystore: Arc::new(JsonValue::Null),
             current_item: None,
             current_index: None,
             last_task_result: None,
@@ -149,26 +194,36 @@ impl WorkflowContext {
         }
     }
 
-    /// Set a variable
+    /// Set a workflow-scoped variable (accessible as `workflow.<name>`).
     pub fn set_var(&mut self, name: &str, value: JsonValue) {
         self.variables.insert(name.to_string(), value);
     }
 
-    /// Get a variable
+    /// Get a workflow-scoped variable by name.
     pub fn get_var(&self, name: &str) -> Option<JsonValue> {
         self.variables.get(name).map(|entry| entry.value().clone())
     }
 
-    /// Store a task result
+    /// Store a completed task's result (accessible as `task.<name>.*`).
     pub fn set_task_result(&mut self, task_name: &str, result: JsonValue) {
         self.task_results.insert(task_name.to_string(), result);
     }
 
-    /// Get a task result
+    /// Get a task result by task name.
     pub fn get_task_result(&self, task_name: &str) -> Option<JsonValue> {
         self.task_results
             .get(task_name)
             .map(|entry| entry.value().clone())
+    }
+
+    /// Set the pack configuration (accessible as `config.<key>`).
+    pub fn set_pack_config(&mut self, config: JsonValue) {
+        self.pack_config = Arc::new(config);
+    }
+
+    /// Set the keystore secrets (accessible as `keystore.<key>`).
+    pub fn set_keystore(&mut self, secrets: JsonValue) {
+        self.keystore = Arc::new(secrets);
     }
 
     /// Set current item for iteration
@@ -299,220 +354,55 @@ impl WorkflowContext {
         }
     }
 
-    /// Evaluate a template expression
-    fn evaluate_expression(&self, expr: &str) -> ContextResult<JsonValue> {
-        // ---------------------------------------------------------------
-        // Function-call expressions: result(), succeeded(), failed(), timed_out()
-        // ---------------------------------------------------------------
-        // We handle these *before* splitting on `.` because the function
-        // name contains parentheses which would confuse the dot-split.
-        //
-        // Supported patterns:
-        //   result()              → last task result
-        //   result().foo.bar      → nested access into result
-        //   result().data.items   → nested access into result
-        //   succeeded()           → boolean
-        //   failed()              → boolean
-        //   timed_out()           → boolean
-        // ---------------------------------------------------------------
-
-        if let Some(result_val) = self.try_evaluate_function_call(expr)? {
-            return Ok(result_val);
-        }
-
-        // ---------------------------------------------------------------
-        // Dot-path expressions
-        // ---------------------------------------------------------------
-        let parts: Vec<&str> = expr.split('.').collect();
-
-        if parts.is_empty() {
-            return Err(ContextError::InvalidExpression(expr.to_string()));
-        }
-
-        match parts[0] {
-            "parameters" => self.get_nested_value(&self.parameters, &parts[1..]),
-            "vars" | "variables" => {
-                if parts.len() < 2 {
-                    return Err(ContextError::InvalidExpression(expr.to_string()));
-                }
-                let var_name = parts[1];
-                if let Some(entry) = self.variables.get(var_name) {
-                    let value = entry.value().clone();
-                    drop(entry);
-                    if parts.len() > 2 {
-                        self.get_nested_value(&value, &parts[2..])
-                    } else {
-                        Ok(value)
-                    }
-                } else {
-                    Err(ContextError::VariableNotFound(var_name.to_string()))
-                }
-            }
-            "task" | "tasks" => {
-                if parts.len() < 2 {
-                    return Err(ContextError::InvalidExpression(expr.to_string()));
-                }
-                let task_name = parts[1];
-                if let Some(entry) = self.task_results.get(task_name) {
-                    let result = entry.value().clone();
-                    drop(entry);
-                    if parts.len() > 2 {
-                        self.get_nested_value(&result, &parts[2..])
-                    } else {
-                        Ok(result)
-                    }
-                } else {
-                    Err(ContextError::VariableNotFound(format!(
-                        "task.{}",
-                        task_name
-                    )))
-                }
-            }
-            "item" => {
-                if let Some(ref item) = self.current_item {
-                    if parts.len() > 1 {
-                        self.get_nested_value(item, &parts[1..])
-                    } else {
-                        Ok(item.clone())
-                    }
-                } else {
-                    Err(ContextError::VariableNotFound("item".to_string()))
-                }
-            }
-            "index" => {
-                if let Some(index) = self.current_index {
-                    Ok(json!(index))
-                } else {
-                    Err(ContextError::VariableNotFound("index".to_string()))
-                }
-            }
-            "system" => {
-                if parts.len() < 2 {
-                    return Err(ContextError::InvalidExpression(expr.to_string()));
-                }
-                let key = parts[1];
-                if let Some(entry) = self.system.get(key) {
-                    Ok(entry.value().clone())
-                } else {
-                    Err(ContextError::VariableNotFound(format!("system.{}", key)))
-                }
-            }
-            // Direct variable reference (e.g., `number_list` published by a
-            // previous task's transition)
-            var_name => {
-                if let Some(entry) = self.variables.get(var_name) {
-                    let value = entry.value().clone();
-                    drop(entry);
-                    if parts.len() > 1 {
-                        self.get_nested_value(&value, &parts[1..])
-                    } else {
-                        Ok(value)
-                    }
-                } else {
-                    Err(ContextError::VariableNotFound(var_name.to_string()))
-                }
-            }
-        }
-    }
-
-    /// Try to evaluate `expr` as a function-call expression.
+    /// Evaluate a template expression using the expression engine.
     ///
-    /// Returns `Ok(Some(value))` if the expression starts with a recognised
-    /// function call, `Ok(None)` if it does not match, or `Err` on failure.
-    fn try_evaluate_function_call(&self, expr: &str) -> ContextResult<Option<JsonValue>> {
-        // succeeded()
-        if expr == "succeeded()" {
-            let val = self
-                .last_task_outcome
-                .map(|o| o == TaskOutcome::Succeeded)
-                .unwrap_or(false);
-            return Ok(Some(json!(val)));
-        }
-
-        // failed()
-        if expr == "failed()" {
-            let val = self
-                .last_task_outcome
-                .map(|o| o == TaskOutcome::Failed)
-                .unwrap_or(false);
-            return Ok(Some(json!(val)));
-        }
-
-        // timed_out()
-        if expr == "timed_out()" {
-            let val = self
-                .last_task_outcome
-                .map(|o| o == TaskOutcome::TimedOut)
-                .unwrap_or(false);
-            return Ok(Some(json!(val)));
-        }
-
-        // result()  or  result().path.to.field
-        if expr == "result()" || expr.starts_with("result().") {
-            let base = self.last_task_result.clone().unwrap_or(JsonValue::Null);
-
-            if expr == "result()" {
-                return Ok(Some(base));
-            }
-
-            // Strip "result()." prefix and navigate the remaining path
-            let rest = &expr["result().".len()..];
-            let path_parts: Vec<&str> = rest.split('.').collect();
-            let val = self.get_nested_value(&base, &path_parts)?;
-            return Ok(Some(val));
-        }
-
-        Ok(None)
+    /// Supports the full expression language including arithmetic, comparison,
+    /// boolean logic, member access, and built-in functions. Falls back to
+    /// legacy dot-path resolution for simple variable references when the
+    /// expression engine cannot parse the input.
+    fn evaluate_expression(&self, expr: &str) -> ContextResult<JsonValue> {
+        // Use the expression engine for all expressions. It handles:
+        // - Dot-path access: parameters.config.port
+        // - Bracket access: arr[0], obj["key"]
+        // - Arithmetic: 2 + 3, length(items) * 2
+        // - Comparison: x > 5, status == "ok"
+        // - Boolean logic: x > 0 and x < 10
+        // - Function calls: length(arr), result(), succeeded()
+        // - Membership: "key" in obj, 5 in arr
+        expression::eval_expression(expr, self).map_err(|e| match e {
+            EvalError::VariableNotFound(name) => ContextError::VariableNotFound(name),
+            EvalError::TypeError(msg) => ContextError::TypeConversion(msg),
+            EvalError::ParseError(msg) => ContextError::InvalidExpression(msg),
+            other => ContextError::InvalidExpression(format!("{}", other)),
+        })
     }
 
-    /// Get nested value from JSON
-    fn get_nested_value(&self, value: &JsonValue, path: &[&str]) -> ContextResult<JsonValue> {
-        let mut current = value;
-
-        for key in path {
-            match current {
-                JsonValue::Object(obj) => {
-                    current = obj
-                        .get(*key)
-                        .ok_or_else(|| ContextError::VariableNotFound(key.to_string()))?;
-                }
-                JsonValue::Array(arr) => {
-                    let index: usize = key.parse().map_err(|_| {
-                        ContextError::InvalidExpression(format!("Invalid array index: {}", key))
-                    })?;
-                    current = arr.get(index).ok_or_else(|| {
-                        ContextError::InvalidExpression(format!(
-                            "Array index out of bounds: {}",
-                            index
-                        ))
-                    })?;
-                }
-                _ => {
-                    return Err(ContextError::InvalidExpression(format!(
-                        "Cannot access property '{}' on non-object/array value",
-                        key
-                    )));
-                }
-            }
-        }
-
-        Ok(current.clone())
-    }
-
-    /// Evaluate a conditional expression (for 'when' clauses)
+    /// Evaluate a conditional expression (for 'when' clauses).
+    ///
+    /// Uses the full expression engine so conditions can contain comparisons,
+    /// boolean operators, function calls, and arithmetic. For example:
+    ///
+    /// ```text
+    /// succeeded()
+    /// result().status == "ok"
+    /// length(items) > 3 and "admin" in roles
+    /// not failed()
+    /// ```
     pub fn evaluate_condition(&self, condition: &str) -> ContextResult<bool> {
-        // For now, simple boolean evaluation
-        // TODO: Support more complex expressions (comparisons, logical operators)
-
-        let rendered = self.render_template(condition)?;
-
-        // Try to parse as boolean
-        match rendered.trim().to_lowercase().as_str() {
-            "true" | "1" | "yes" => Ok(true),
-            "false" | "0" | "no" | "" => Ok(false),
-            other => {
-                // Try to evaluate as truthy/falsy
-                Ok(!other.is_empty())
+        // Try the expression engine first — it handles complex conditions
+        // like `result().code == 200 and succeeded()`.
+        match expression::eval_expression(condition, self) {
+            Ok(val) => Ok(is_truthy(&val)),
+            Err(_) => {
+                // Fall back to template rendering for backward compat with
+                // simple template conditions like `{{ succeeded() }}` (though
+                // bare expressions are preferred going forward).
+                let rendered = self.render_template(condition)?;
+                match rendered.trim().to_lowercase().as_str() {
+                    "true" | "1" | "yes" => Ok(true),
+                    "false" | "0" | "no" | "" => Ok(false),
+                    _ => Ok(!rendered.trim().is_empty()),
+                }
             }
         }
     }
@@ -574,6 +464,8 @@ impl WorkflowContext {
             "parameters": self.parameters.as_ref(),
             "task_results": task_results,
             "system": system,
+            "pack_config": self.pack_config.as_ref(),
+            "keystore": self.keystore.as_ref(),
         })
     }
 
@@ -602,11 +494,16 @@ impl WorkflowContext {
             }
         }
 
+        let pack_config = data["pack_config"].clone();
+        let keystore = data["keystore"].clone();
+
         Ok(Self {
             variables: Arc::new(variables),
             parameters: Arc::new(parameters),
             task_results: Arc::new(task_results),
             system: Arc::new(system),
+            pack_config: Arc::new(pack_config),
+            keystore: Arc::new(keystore),
             current_item: None,
             current_index: None,
             last_task_result: None,
@@ -626,9 +523,121 @@ fn value_to_string(value: &JsonValue) -> String {
     }
 }
 
+// ---------------------------------------------------------------
+// EvalContext implementation — bridges the expression engine into
+// the WorkflowContext's variable resolution and workflow functions.
+// ---------------------------------------------------------------
+
+impl EvalContext for WorkflowContext {
+    fn resolve_variable(&self, name: &str) -> ExprResult<JsonValue> {
+        match name {
+            // ── Canonical namespaces ──────────────────────────────
+            "parameters" => Ok(self.parameters.as_ref().clone()),
+
+            // `workflow` is the canonical name for mutable vars.
+            // `vars` and `variables` are backward-compatible aliases.
+            "workflow" | "vars" | "variables" => {
+                let map: serde_json::Map<String, JsonValue> = self
+                    .variables
+                    .iter()
+                    .map(|entry| (entry.key().clone(), entry.value().clone()))
+                    .collect();
+                Ok(JsonValue::Object(map))
+            }
+
+            // `task` (alias: `tasks`) — completed task results.
+            "task" | "tasks" => {
+                let map: serde_json::Map<String, JsonValue> = self
+                    .task_results
+                    .iter()
+                    .map(|entry| (entry.key().clone(), entry.value().clone()))
+                    .collect();
+                Ok(JsonValue::Object(map))
+            }
+
+            // `config` — pack configuration (read-only).
+            "config" => Ok(self.pack_config.as_ref().clone()),
+
+            // `keystore` — encrypted secrets (read-only).
+            "keystore" => Ok(self.keystore.as_ref().clone()),
+
+            // ── Iteration context ────────────────────────────────
+            "item" => self
+                .current_item
+                .clone()
+                .ok_or_else(|| EvalError::VariableNotFound("item".to_string())),
+            "index" => self
+                .current_index
+                .map(|i| json!(i))
+                .ok_or_else(|| EvalError::VariableNotFound("index".to_string())),
+
+            // ── System variables ──────────────────────────────────
+            "system" => {
+                let map: serde_json::Map<String, JsonValue> = self
+                    .system
+                    .iter()
+                    .map(|entry| (entry.key().clone(), entry.value().clone()))
+                    .collect();
+                Ok(JsonValue::Object(map))
+            }
+
+            // ── Bare-name fallback ───────────────────────────────
+            // Resolve against workflow variables last so that
+            // `{{ my_var }}` still works as shorthand for
+            // `{{ workflow.my_var }}`.
+            _ => {
+                if let Some(entry) = self.variables.get(name) {
+                    Ok(entry.value().clone())
+                } else {
+                    Err(EvalError::VariableNotFound(name.to_string()))
+                }
+            }
+        }
+    }
+
+    fn call_workflow_function(
+        &self,
+        name: &str,
+        _args: &[JsonValue],
+    ) -> ExprResult<Option<JsonValue>> {
+        match name {
+            "succeeded" => {
+                let val = self
+                    .last_task_outcome
+                    .map(|o| o == TaskOutcome::Succeeded)
+                    .unwrap_or(false);
+                Ok(Some(json!(val)))
+            }
+            "failed" => {
+                let val = self
+                    .last_task_outcome
+                    .map(|o| o == TaskOutcome::Failed)
+                    .unwrap_or(false);
+                Ok(Some(json!(val)))
+            }
+            "timed_out" => {
+                let val = self
+                    .last_task_outcome
+                    .map(|o| o == TaskOutcome::TimedOut)
+                    .unwrap_or(false);
+                Ok(Some(json!(val)))
+            }
+            "result" => {
+                let base = self.last_task_result.clone().unwrap_or(JsonValue::Null);
+                Ok(Some(base))
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---------------------------------------------------------------
+    // parameters namespace
+    // ---------------------------------------------------------------
 
     #[test]
     fn test_basic_template_rendering() {
@@ -639,28 +648,6 @@ mod tests {
 
         let result = ctx.render_template("Hello {{ parameters.name }}!").unwrap();
         assert_eq!(result, "Hello World!");
-    }
-
-    #[test]
-    fn test_variable_access() {
-        let mut vars = HashMap::new();
-        vars.insert("greeting".to_string(), json!("Hello"));
-
-        let ctx = WorkflowContext::new(json!({}), vars);
-
-        let result = ctx.render_template("{{ greeting }} World").unwrap();
-        assert_eq!(result, "Hello World");
-    }
-
-    #[test]
-    fn test_task_result_access() {
-        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
-        ctx.set_task_result("task1", json!({"status": "success"}));
-
-        let result = ctx
-            .render_template("Status: {{ task.task1.status }}")
-            .unwrap();
-        assert_eq!(result, "Status: success");
     }
 
     #[test]
@@ -680,6 +667,143 @@ mod tests {
         assert_eq!(result, "Port: 8080");
     }
 
+    // ---------------------------------------------------------------
+    // workflow namespace (canonical) + vars/variables aliases
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_workflow_namespace_canonical() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_var("greeting", json!("Hello"));
+
+        // Canonical: workflow.<name>
+        let result = ctx.render_template("{{ workflow.greeting }} World").unwrap();
+        assert_eq!(result, "Hello World");
+    }
+
+    #[test]
+    fn test_workflow_namespace_vars_alias() {
+        let mut vars = HashMap::new();
+        vars.insert("greeting".to_string(), json!("Hello"));
+        let ctx = WorkflowContext::new(json!({}), vars);
+
+        // Backward-compat alias: vars.<name>
+        let result = ctx.render_template("{{ vars.greeting }} World").unwrap();
+        assert_eq!(result, "Hello World");
+    }
+
+    #[test]
+    fn test_workflow_namespace_variables_alias() {
+        let mut vars = HashMap::new();
+        vars.insert("greeting".to_string(), json!("Hello"));
+        let ctx = WorkflowContext::new(json!({}), vars);
+
+        // Backward-compat alias: variables.<name>
+        let result = ctx.render_template("{{ variables.greeting }} World").unwrap();
+        assert_eq!(result, "Hello World");
+    }
+
+    #[test]
+    fn test_variable_access_bare_name_fallback() {
+        let mut vars = HashMap::new();
+        vars.insert("greeting".to_string(), json!("Hello"));
+
+        let ctx = WorkflowContext::new(json!({}), vars);
+
+        // Bare name falls back to workflow variables
+        let result = ctx.render_template("{{ greeting }} World").unwrap();
+        assert_eq!(result, "Hello World");
+    }
+
+    // ---------------------------------------------------------------
+    // task namespace
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_task_result_access() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_task_result("task1", json!({"status": "success"}));
+
+        let result = ctx
+            .render_template("Status: {{ task.task1.status }}")
+            .unwrap();
+        assert_eq!(result, "Status: success");
+    }
+
+    #[test]
+    fn test_task_result_deep_access() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_task_result("fetch", json!({"result": {"data": {"id": 42}}}));
+
+        let val = ctx.evaluate_expression("task.fetch.result.data.id").unwrap();
+        assert_eq!(val, json!(42));
+    }
+
+    #[test]
+    fn test_task_result_stdout() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_task_result("run_cmd", json!({"result": {"stdout": "hello world"}}));
+
+        let val = ctx.evaluate_expression("task.run_cmd.result.stdout").unwrap();
+        assert_eq!(val, json!("hello world"));
+    }
+
+    // ---------------------------------------------------------------
+    // config namespace (pack configuration)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_config_namespace() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_pack_config(json!({"api_token": "tok_abc123", "base_url": "https://api.example.com"}));
+
+        let val = ctx.evaluate_expression("config.api_token").unwrap();
+        assert_eq!(val, json!("tok_abc123"));
+
+        let result = ctx
+            .render_template("URL: {{ config.base_url }}")
+            .unwrap();
+        assert_eq!(result, "URL: https://api.example.com");
+    }
+
+    #[test]
+    fn test_config_namespace_nested() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_pack_config(json!({"slack": {"webhook_url": "https://hooks.slack.com/xxx"}}));
+
+        let val = ctx.evaluate_expression("config.slack.webhook_url").unwrap();
+        assert_eq!(val, json!("https://hooks.slack.com/xxx"));
+    }
+
+    // ---------------------------------------------------------------
+    // keystore namespace (encrypted secrets)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_keystore_namespace() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_keystore(json!({"secret_key": "s3cr3t", "db_password": "hunter2"}));
+
+        let val = ctx.evaluate_expression("keystore.secret_key").unwrap();
+        assert_eq!(val, json!("s3cr3t"));
+
+        let val = ctx.evaluate_expression("keystore.db_password").unwrap();
+        assert_eq!(val, json!("hunter2"));
+    }
+
+    #[test]
+    fn test_keystore_bracket_access() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_keystore(json!({"My Secret Key": "value123"}));
+
+        let val = ctx.evaluate_expression("keystore[\"My Secret Key\"]").unwrap();
+        assert_eq!(val, json!("value123"));
+    }
+
+    // ---------------------------------------------------------------
+    // item / index (with_items iteration)
+    // ---------------------------------------------------------------
+
     #[test]
     fn test_item_context() {
         let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
@@ -691,6 +815,10 @@ mod tests {
         assert_eq!(result, "Item: item1, Index: 0");
     }
 
+    // ---------------------------------------------------------------
+    // Condition evaluation
+    // ---------------------------------------------------------------
+
     #[test]
     fn test_condition_evaluation() {
         let params = json!({"enabled": true});
@@ -699,6 +827,133 @@ mod tests {
         assert!(ctx.evaluate_condition("true").unwrap());
         assert!(!ctx.evaluate_condition("false").unwrap());
     }
+
+    #[test]
+    fn test_condition_with_comparison() {
+        let ctx = WorkflowContext::new(json!({"count": 10}), HashMap::new());
+        assert!(ctx.evaluate_condition("parameters.count > 5").unwrap());
+        assert!(!ctx.evaluate_condition("parameters.count < 5").unwrap());
+        assert!(ctx.evaluate_condition("parameters.count == 10").unwrap());
+        assert!(ctx.evaluate_condition("parameters.count >= 10").unwrap());
+        assert!(ctx.evaluate_condition("parameters.count != 99").unwrap());
+    }
+
+    #[test]
+    fn test_condition_with_boolean_operators() {
+        let ctx = WorkflowContext::new(json!({"x": 10, "y": 20}), HashMap::new());
+        assert!(ctx
+            .evaluate_condition("parameters.x > 5 and parameters.y > 15")
+            .unwrap());
+        assert!(!ctx
+            .evaluate_condition("parameters.x > 5 and parameters.y > 25")
+            .unwrap());
+        assert!(ctx
+            .evaluate_condition("parameters.x > 50 or parameters.y > 15")
+            .unwrap());
+        assert!(ctx
+            .evaluate_condition("not parameters.x > 50")
+            .unwrap());
+    }
+
+    #[test]
+    fn test_condition_with_in_operator() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_var("roles", json!(["admin", "user"]));
+        // Via bare-name fallback
+        assert!(ctx.evaluate_condition("\"admin\" in roles").unwrap());
+        assert!(!ctx.evaluate_condition("\"root\" in roles").unwrap());
+        // Via canonical workflow namespace
+        assert!(ctx.evaluate_condition("\"admin\" in workflow.roles").unwrap());
+    }
+
+    #[test]
+    fn test_condition_with_function_calls() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_last_task_outcome(
+            json!({"status": "ok", "code": 200}),
+            TaskOutcome::Succeeded,
+        );
+        assert!(ctx.evaluate_condition("succeeded()").unwrap());
+        assert!(!ctx.evaluate_condition("failed()").unwrap());
+        assert!(ctx
+            .evaluate_condition("succeeded() and result().code == 200")
+            .unwrap());
+        assert!(!ctx
+            .evaluate_condition("succeeded() and result().code == 404")
+            .unwrap());
+    }
+
+    #[test]
+    fn test_condition_with_length() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_var("items", json!([1, 2, 3, 4, 5]));
+        assert!(ctx.evaluate_condition("length(items) > 3").unwrap());
+        assert!(!ctx.evaluate_condition("length(items) > 10").unwrap());
+        assert!(ctx
+            .evaluate_condition("length(items) == 5")
+            .unwrap());
+    }
+
+    #[test]
+    fn test_condition_with_config() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_pack_config(json!({"retries": 3}));
+        assert!(ctx.evaluate_condition("config.retries > 0").unwrap());
+        assert!(ctx.evaluate_condition("config.retries == 3").unwrap());
+    }
+
+    // ---------------------------------------------------------------
+    // Expression engine in templates
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_expression_arithmetic() {
+        let ctx = WorkflowContext::new(json!({"x": 10}), HashMap::new());
+        let input = json!({"result": "{{ parameters.x + 5 }}"});
+        let result = ctx.render_json(&input).unwrap();
+        assert_eq!(result["result"], json!(15));
+    }
+
+    #[test]
+    fn test_expression_string_concat() {
+        let ctx = WorkflowContext::new(
+            json!({"first": "Hello", "second": "World"}),
+            HashMap::new(),
+        );
+        let input = json!({"msg": "{{ parameters.first + \" \" + parameters.second }}"});
+        let result = ctx.render_json(&input).unwrap();
+        assert_eq!(result["msg"], json!("Hello World"));
+    }
+
+    #[test]
+    fn test_expression_nested_functions() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_var("data", json!("a,b,c"));
+        let input = json!({"count": "{{ length(split(data, \",\")) }}"});
+        let result = ctx.render_json(&input).unwrap();
+        assert_eq!(result["count"], json!(3));
+    }
+
+    #[test]
+    fn test_expression_bracket_access() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_var("arr", json!([10, 20, 30]));
+        let input = json!({"second": "{{ arr[1] }}"});
+        let result = ctx.render_json(&input).unwrap();
+        assert_eq!(result["second"], json!(20));
+    }
+
+    #[test]
+    fn test_expression_type_conversion() {
+        let ctx = WorkflowContext::new(json!({}), HashMap::new());
+        let input = json!({"val": "{{ int(3.9) }}"});
+        let result = ctx.render_json(&input).unwrap();
+        assert_eq!(result["val"], json!(3));
+    }
+
+    // ---------------------------------------------------------------
+    // render_json type-preserving behaviour
+    // ---------------------------------------------------------------
 
     #[test]
     fn test_render_json() {
@@ -769,6 +1024,10 @@ mod tests {
         assert!(result["ok"].is_boolean());
     }
 
+    // ---------------------------------------------------------------
+    // result() / succeeded() / failed() / timed_out()
+    // ---------------------------------------------------------------
+
     #[test]
     fn test_result_function() {
         let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
@@ -813,6 +1072,10 @@ mod tests {
         assert_eq!(ctx.evaluate_expression("timed_out()").unwrap(), json!(true));
     }
 
+    // ---------------------------------------------------------------
+    // Publish
+    // ---------------------------------------------------------------
+
     #[test]
     fn test_publish_with_result_function() {
         let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
@@ -847,6 +1110,28 @@ mod tests {
     }
 
     #[test]
+    fn test_published_var_accessible_via_workflow_namespace() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_var("counter", json!(42));
+
+        // Via canonical namespace
+        let val = ctx.evaluate_expression("workflow.counter").unwrap();
+        assert_eq!(val, json!(42));
+
+        // Via backward-compat alias
+        let val = ctx.evaluate_expression("vars.counter").unwrap();
+        assert_eq!(val, json!(42));
+
+        // Via bare-name fallback
+        let val = ctx.evaluate_expression("counter").unwrap();
+        assert_eq!(val, json!(42));
+    }
+
+    // ---------------------------------------------------------------
+    // Rebuild / Export / Import round-trip
+    // ---------------------------------------------------------------
+
+    #[test]
     fn test_rebuild_context() {
         let stored_vars = json!({"number_list": [0, 1, 2]});
         let mut task_results = HashMap::new();
@@ -868,16 +1153,30 @@ mod tests {
         let mut ctx = WorkflowContext::new(json!({"key": "value"}), HashMap::new());
         ctx.set_var("test", json!("data"));
         ctx.set_task_result("task1", json!({"result": "ok"}));
+        ctx.set_pack_config(json!({"setting": "val"}));
+        ctx.set_keystore(json!({"secret": "hidden"}));
 
         let exported = ctx.export();
-        let _imported = WorkflowContext::import(exported).unwrap();
+        let imported = WorkflowContext::import(exported).unwrap();
 
-        assert_eq!(ctx.get_var("test").unwrap(), json!("data"));
+        assert_eq!(imported.get_var("test").unwrap(), json!("data"));
         assert_eq!(
-            ctx.get_task_result("task1").unwrap(),
+            imported.get_task_result("task1").unwrap(),
             json!({"result": "ok"})
         );
+        assert_eq!(
+            imported.evaluate_expression("config.setting").unwrap(),
+            json!("val")
+        );
+        assert_eq!(
+            imported.evaluate_expression("keystore.secret").unwrap(),
+            json!("hidden")
+        );
     }
+
+    // ---------------------------------------------------------------
+    // with_items type preservation
+    // ---------------------------------------------------------------
 
     #[test]
     fn test_with_items_integer_type_preservation() {
@@ -901,5 +1200,41 @@ mod tests {
         // message should be a string with the value interpolated
         assert_eq!(rendered["message"], json!("Sleeping for 3 seconds "));
         assert!(rendered["message"].is_string());
+    }
+
+    // ---------------------------------------------------------------
+    // Cross-namespace expressions
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_cross_namespace_expression() {
+        let mut ctx = WorkflowContext::new(json!({"limit": 5}), HashMap::new());
+        ctx.set_var("items", json!([1, 2, 3]));
+        ctx.set_pack_config(json!({"multiplier": 2}));
+
+        assert!(ctx
+            .evaluate_condition("length(workflow.items) < parameters.limit")
+            .unwrap());
+        let val = ctx
+            .evaluate_expression("parameters.limit * config.multiplier")
+            .unwrap();
+        assert_eq!(val, json!(10));
+    }
+
+    #[test]
+    fn test_keystore_in_template() {
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_keystore(json!({"api_key": "abc-123"}));
+
+        let input = json!({"auth": "Bearer {{ keystore.api_key }}"});
+        let result = ctx.render_json(&input).unwrap();
+        assert_eq!(result["auth"], json!("Bearer abc-123"));
+    }
+
+    #[test]
+    fn test_config_null_when_not_set() {
+        let ctx = WorkflowContext::new(json!({}), HashMap::new());
+        let val = ctx.evaluate_expression("config").unwrap();
+        assert_eq!(val, json!(null));
     }
 }

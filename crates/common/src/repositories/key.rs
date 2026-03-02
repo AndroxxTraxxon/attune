@@ -6,6 +6,24 @@ use sqlx::{Executor, Postgres, QueryBuilder};
 
 use super::{Create, Delete, FindById, List, Repository, Update};
 
+/// Filters for [`KeyRepository::search`].
+///
+/// All fields are optional and combinable (AND). Pagination is always applied.
+#[derive(Debug, Clone, Default)]
+pub struct KeySearchFilters {
+    pub owner_type: Option<OwnerType>,
+    pub owner: Option<String>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+/// Result of [`KeyRepository::search`].
+#[derive(Debug)]
+pub struct KeySearchResult {
+    pub rows: Vec<Key>,
+    pub total: u64,
+}
+
 pub struct KeyRepository;
 
 impl Repository for KeyRepository {
@@ -164,5 +182,64 @@ impl KeyRepository {
         sqlx::query_as::<_, Key>(
             "SELECT id, ref, owner_type, owner, owner_identity, owner_pack, owner_pack_ref, owner_action, owner_action_ref, owner_sensor, owner_sensor_ref, name, encrypted, encryption_key_hash, value, created, updated FROM key WHERE owner_type = $1 ORDER BY ref ASC"
         ).bind(owner_type).fetch_all(executor).await.map_err(Into::into)
+    }
+
+    /// Search keys with all filters pushed into SQL.
+    ///
+    /// All filter fields are combinable (AND). Pagination is server-side.
+    pub async fn search<'e, E>(db: E, filters: &KeySearchFilters) -> Result<KeySearchResult>
+    where
+        E: Executor<'e, Database = Postgres> + Copy + 'e,
+    {
+        let select_cols = "id, ref, owner_type, owner, owner_identity, owner_pack, owner_pack_ref, owner_action, owner_action_ref, owner_sensor, owner_sensor_ref, name, encrypted, encryption_key_hash, value, created, updated";
+
+        let mut qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new(format!("SELECT {select_cols} FROM key"));
+        let mut count_qb: QueryBuilder<'_, Postgres> =
+            QueryBuilder::new("SELECT COUNT(*) FROM key");
+
+        let mut has_where = false;
+
+        macro_rules! push_condition {
+            ($cond_prefix:expr, $value:expr) => {{
+                if !has_where {
+                    qb.push(" WHERE ");
+                    count_qb.push(" WHERE ");
+                    has_where = true;
+                } else {
+                    qb.push(" AND ");
+                    count_qb.push(" AND ");
+                }
+                qb.push($cond_prefix);
+                qb.push_bind($value.clone());
+                count_qb.push($cond_prefix);
+                count_qb.push_bind($value);
+            }};
+        }
+
+        if let Some(ref owner_type) = filters.owner_type {
+            push_condition!("owner_type = ", owner_type.clone());
+        }
+        if let Some(ref owner) = filters.owner {
+            push_condition!("owner = ", owner.clone());
+        }
+
+        // Suppress unused-assignment warning from the macro's last expansion.
+        let _ = has_where;
+
+        // Count
+        let total: i64 = count_qb.build_query_scalar().fetch_one(db).await?;
+        let total = total.max(0) as u64;
+
+        // Data query
+        qb.push(" ORDER BY ref ASC");
+        qb.push(" LIMIT ");
+        qb.push_bind(filters.limit as i64);
+        qb.push(" OFFSET ");
+        qb.push_bind(filters.offset as i64);
+
+        let rows: Vec<Key> = qb.build_query_as().fetch_all(db).await?;
+
+        Ok(KeySearchResult { rows, total })
     }
 }

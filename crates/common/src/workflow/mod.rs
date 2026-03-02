@@ -3,6 +3,7 @@
 //! This module provides utilities for loading, parsing, validating, and registering
 //! workflow definitions from YAML files.
 
+pub mod expression;
 pub mod loader;
 pub mod pack_service;
 pub mod parser;

@@ -14,8 +14,10 @@ use attune_common::{
     mq::{InquiryRespondedPayload, MessageEnvelope, MessageType},
     repositories::{
         execution::ExecutionRepository,
-        inquiry::{CreateInquiryInput, InquiryRepository, UpdateInquiryInput},
-        Create, Delete, FindById, List, Update,
+        inquiry::{
+            CreateInquiryInput, InquiryRepository, InquirySearchFilters, UpdateInquiryInput,
+        },
+        Create, Delete, FindById, Update,
     },
 };
 
@@ -51,45 +53,30 @@ pub async fn list_inquiries(
     State(state): State<Arc<AppState>>,
     Query(query): Query<InquiryQueryParams>,
 ) -> ApiResult<impl IntoResponse> {
-    // Get inquiries based on filters
-    let inquiries = if let Some(status) = query.status {
-        // Filter by status
-        InquiryRepository::find_by_status(&state.db, status).await?
-    } else if let Some(execution_id) = query.execution {
-        // Filter by execution
-        InquiryRepository::find_by_execution(&state.db, execution_id).await?
-    } else {
-        // Get all inquiries
-        InquiryRepository::list(&state.db).await?
+    // All filtering and pagination happen in a single SQL query.
+    // Filters are combinable (AND), not mutually exclusive.
+    let limit = query.limit.unwrap_or(50).min(500) as u32;
+    let offset = query.offset.unwrap_or(0) as u32;
+
+    let filters = InquirySearchFilters {
+        status: query.status,
+        execution: query.execution,
+        assigned_to: query.assigned_to,
+        limit,
+        offset,
     };
 
-    // Apply additional filters in memory
-    let mut filtered_inquiries = inquiries;
+    let result = InquiryRepository::search(&state.db, &filters).await?;
 
-    if let Some(assigned_to) = query.assigned_to {
-        filtered_inquiries.retain(|i| i.assigned_to == Some(assigned_to));
-    }
+    let paginated_inquiries: Vec<InquirySummary> =
+        result.rows.into_iter().map(InquirySummary::from).collect();
 
-    // Calculate pagination
-    let total = filtered_inquiries.len() as u64;
-    let offset = query.offset.unwrap_or(0);
-    let limit = query.limit.unwrap_or(50).min(500);
-    let start = offset;
-    let end = (start + limit).min(filtered_inquiries.len());
-
-    // Get paginated slice
-    let paginated_inquiries: Vec<InquirySummary> = filtered_inquiries[start..end]
-        .iter()
-        .map(|inquiry| InquirySummary::from(inquiry.clone()))
-        .collect();
-
-    // Convert to pagination params for response
     let pagination_params = PaginationParams {
-        page: (offset / limit.max(1)) as u32 + 1,
-        page_size: limit as u32,
+        page: (offset / limit.max(1)) + 1,
+        page_size: limit,
     };
 
-    let response = PaginatedResponse::new(paginated_inquiries, &pagination_params, total);
+    let response = PaginatedResponse::new(paginated_inquiries, &pagination_params, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -161,20 +148,21 @@ pub async fn list_inquiries_by_status(
         }
     };
 
-    let inquiries = InquiryRepository::find_by_status(&state.db, status).await?;
+    // Use the search method for SQL-side filtering + pagination.
+    let filters = InquirySearchFilters {
+        status: Some(status),
+        execution: None,
+        assigned_to: None,
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = inquiries.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(inquiries.len());
+    let result = InquiryRepository::search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_inquiries: Vec<InquirySummary> = inquiries[start..end]
-        .iter()
-        .map(|inquiry| InquirySummary::from(inquiry.clone()))
-        .collect();
+    let paginated_inquiries: Vec<InquirySummary> =
+        result.rows.into_iter().map(InquirySummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_inquiries, &pagination, total);
+    let response = PaginatedResponse::new(paginated_inquiries, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -209,20 +197,21 @@ pub async fn list_inquiries_by_execution(
             ApiError::NotFound(format!("Execution with ID {} not found", execution_id))
         })?;
 
-    let inquiries = InquiryRepository::find_by_execution(&state.db, execution_id).await?;
+    // Use the search method for SQL-side filtering + pagination.
+    let filters = InquirySearchFilters {
+        status: None,
+        execution: Some(execution_id),
+        assigned_to: None,
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
 
-    // Calculate pagination
-    let total = inquiries.len() as u64;
-    let start = ((pagination.page - 1) * pagination.limit()) as usize;
-    let end = (start + pagination.limit() as usize).min(inquiries.len());
+    let result = InquiryRepository::search(&state.db, &filters).await?;
 
-    // Get paginated slice
-    let paginated_inquiries: Vec<InquirySummary> = inquiries[start..end]
-        .iter()
-        .map(|inquiry| InquirySummary::from(inquiry.clone()))
-        .collect();
+    let paginated_inquiries: Vec<InquirySummary> =
+        result.rows.into_iter().map(InquirySummary::from).collect();
 
-    let response = PaginatedResponse::new(paginated_inquiries, &pagination, total);
+    let response = PaginatedResponse::new(paginated_inquiries, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
 }

@@ -7,6 +7,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use attune_common::models::enums::ExecutionStatus;
 use attune_common::models::execution::WorkflowTaskMetadata;
+use attune_common::repositories::execution::ExecutionWithRefs;
 
 /// Request DTO for creating a manual execution
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -63,6 +64,12 @@ pub struct ExecutionResponse {
     #[schema(value_type = Object, example = json!({"message_id": "1234567890.123456"}))]
     pub result: Option<JsonValue>,
 
+    /// When the execution actually started running (worker picked it up).
+    /// Null if the execution hasn't started running yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "2024-01-13T10:31:00Z", nullable = true)]
+    pub started_at: Option<DateTime<Utc>>,
+
     /// Workflow task metadata (only populated for workflow task executions)
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<Object>, nullable = true)]
@@ -107,6 +114,12 @@ pub struct ExecutionSummary {
     /// Trigger reference (if triggered by a trigger)
     #[schema(example = "core.timer")]
     pub trigger_ref: Option<String>,
+
+    /// When the execution actually started running (worker picked it up).
+    /// Null if the execution hasn't started running yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "2024-01-13T10:31:00Z", nullable = true)]
+    pub started_at: Option<DateTime<Utc>>,
 
     /// Workflow task metadata (only populated for workflow task executions)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -207,6 +220,7 @@ impl From<attune_common::models::execution::Execution> for ExecutionResponse {
             result: execution
                 .result
                 .map(|r| serde_json::to_value(r).unwrap_or(JsonValue::Null)),
+            started_at: execution.started_at,
             workflow_task: execution.workflow_task,
             created: execution.created,
             updated: execution.updated,
@@ -225,9 +239,30 @@ impl From<attune_common::models::execution::Execution> for ExecutionSummary {
             enforcement: execution.enforcement,
             rule_ref: None,    // Populated separately via enforcement lookup
             trigger_ref: None, // Populated separately via enforcement lookup
+            started_at: execution.started_at,
             workflow_task: execution.workflow_task,
             created: execution.created,
             updated: execution.updated,
+        }
+    }
+}
+
+/// Convert from the joined query result (execution + enforcement refs).
+/// `rule_ref` and `trigger_ref` are already populated from the SQL JOIN.
+impl From<ExecutionWithRefs> for ExecutionSummary {
+    fn from(row: ExecutionWithRefs) -> Self {
+        Self {
+            id: row.id,
+            action_ref: row.action_ref,
+            status: row.status,
+            parent: row.parent,
+            enforcement: row.enforcement,
+            rule_ref: row.rule_ref,
+            trigger_ref: row.trigger_ref,
+            started_at: row.started_at,
+            workflow_task: row.workflow_task,
+            created: row.created,
+            updated: row.updated,
         }
     }
 }

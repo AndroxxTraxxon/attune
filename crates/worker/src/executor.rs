@@ -654,8 +654,7 @@ impl ActionExecutor {
         let input = UpdateExecutionInput {
             status: Some(ExecutionStatus::Completed),
             result: Some(result_data),
-            executor: None,
-            workflow_task: None, // Not updating workflow metadata
+            ..Default::default()
         };
 
         ExecutionRepository::update(&self.pool, execution_id, input).await?;
@@ -755,8 +754,7 @@ impl ActionExecutor {
         let input = UpdateExecutionInput {
             status: Some(ExecutionStatus::Failed),
             result: Some(result_data),
-            executor: None,
-            workflow_task: None, // Not updating workflow metadata
+            ..Default::default()
         };
 
         ExecutionRepository::update(&self.pool, execution_id, input).await?;
@@ -775,11 +773,16 @@ impl ActionExecutor {
             execution_id, status
         );
 
+        let started_at = if status == ExecutionStatus::Running {
+            Some(chrono::Utc::now())
+        } else {
+            None
+        };
+
         let input = UpdateExecutionInput {
             status: Some(status),
-            result: None,
-            executor: None,
-            workflow_task: None, // Not updating workflow metadata
+            started_at,
+            ..Default::default()
         };
 
         ExecutionRepository::update(&self.pool, execution_id, input).await?;
