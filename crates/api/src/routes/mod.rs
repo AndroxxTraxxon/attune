@@ -2,6 +2,7 @@
 
 pub mod actions;
 pub mod analytics;
+pub mod artifacts;
 pub mod auth;
 pub mod events;
 pub mod executions;
@@ -17,6 +18,7 @@ pub mod workflows;
 
 pub use actions::routes as action_routes;
 pub use analytics::routes as analytics_routes;
+pub use artifacts::routes as artifact_routes;
 pub use auth::routes as auth_routes;
 pub use events::routes as event_routes;
 pub use executions::routes as execution_routes;

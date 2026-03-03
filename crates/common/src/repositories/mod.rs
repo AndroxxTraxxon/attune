@@ -49,7 +49,7 @@ pub mod workflow;
 // Re-export repository types
 pub use action::{ActionRepository, PolicyRepository};
 pub use analytics::AnalyticsRepository;
-pub use artifact::ArtifactRepository;
+pub use artifact::{ArtifactRepository, ArtifactVersionRepository};
 pub use entity_history::EntityHistoryRepository;
 pub use event::{EnforcementRepository, EventRepository};
 pub use execution::ExecutionRepository;

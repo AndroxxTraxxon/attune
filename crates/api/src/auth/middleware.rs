@@ -10,7 +10,9 @@ use axum::{
 use serde_json::json;
 use std::sync::Arc;
 
-use super::jwt::{extract_token_from_header, validate_token, Claims, JwtConfig, TokenType};
+use attune_common::auth::jwt::{
+    extract_token_from_header, validate_token, Claims, JwtConfig, TokenType,
+};
 
 /// Authentication middleware state
 #[derive(Clone)]
@@ -105,8 +107,11 @@ impl axum::extract::FromRequestParts<crate::state::SharedState> for RequireAuth 
             _ => AuthError::InvalidToken,
         })?;
 
-        // Allow both access tokens and sensor tokens
-        if claims.token_type != TokenType::Access && claims.token_type != TokenType::Sensor {
+        // Allow access, sensor, and execution-scoped tokens
+        if claims.token_type != TokenType::Access
+            && claims.token_type != TokenType::Sensor
+            && claims.token_type != TokenType::Execution
+        {
             return Err(AuthError::InvalidToken);
         }
 
@@ -154,7 +159,7 @@ mod tests {
             login: "testuser".to_string(),
             iat: 1234567890,
             exp: 1234571490,
-            token_type: super::super::jwt::TokenType::Access,
+            token_type: TokenType::Access,
             scope: None,
             metadata: None,
         };

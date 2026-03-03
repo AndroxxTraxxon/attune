@@ -10,6 +10,8 @@ use sqlx::FromRow;
 
 // Re-export common types
 pub use action::*;
+pub use artifact::Artifact;
+pub use artifact_version::ArtifactVersion;
 pub use entity_history::*;
 pub use enums::*;
 pub use event::*;
@@ -355,7 +357,7 @@ pub mod enums {
         Url,
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, ToSchema)]
     #[sqlx(type_name = "artifact_retention_enum", rename_all = "lowercase")]
     #[serde(rename_all = "lowercase")]
     pub enum RetentionPolicyType {
@@ -1268,9 +1270,66 @@ pub mod artifact {
         pub r#type: ArtifactType,
         pub retention_policy: RetentionPolicyType,
         pub retention_limit: i32,
+        /// Human-readable name (e.g. "Build Log", "Test Results")
+        pub name: Option<String>,
+        /// Optional longer description
+        pub description: Option<String>,
+        /// MIME content type (e.g. "application/json", "text/plain")
+        pub content_type: Option<String>,
+        /// Size of the latest version's content in bytes
+        pub size_bytes: Option<i64>,
+        /// Execution that produced this artifact (no FK — execution is a hypertable)
+        pub execution: Option<Id>,
+        /// Structured JSONB data for progress artifacts or metadata
+        pub data: Option<serde_json::Value>,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
     }
+
+    /// Select columns for Artifact queries (excludes DB-only columns if any arise).
+    /// Must be kept in sync with the Artifact struct field order.
+    pub const SELECT_COLUMNS: &str =
+        "id, ref, scope, owner, type, retention_policy, retention_limit, \
+         name, description, content_type, size_bytes, execution, data, \
+         created, updated";
+}
+
+/// Artifact version model — immutable content snapshots
+pub mod artifact_version {
+    use super::*;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+    pub struct ArtifactVersion {
+        pub id: Id,
+        /// Parent artifact
+        pub artifact: Id,
+        /// Version number (1-based, monotonically increasing per artifact)
+        pub version: i32,
+        /// MIME content type for this version
+        pub content_type: Option<String>,
+        /// Size of content in bytes
+        pub size_bytes: Option<i64>,
+        /// Binary content (file data) — not included in default queries for performance
+        #[serde(skip_serializing)]
+        pub content: Option<Vec<u8>>,
+        /// Structured JSON content
+        pub content_json: Option<serde_json::Value>,
+        /// Free-form metadata about this version
+        pub meta: Option<serde_json::Value>,
+        /// Who created this version
+        pub created_by: Option<String>,
+        pub created: DateTime<Utc>,
+    }
+
+    /// Select columns WITHOUT the potentially large `content` BYTEA column.
+    /// Use `SELECT_COLUMNS_WITH_CONTENT` when you need the binary payload.
+    pub const SELECT_COLUMNS: &str = "id, artifact, version, content_type, size_bytes, \
+         NULL::bytea AS content, content_json, meta, created_by, created";
+
+    /// Select columns INCLUDING the binary `content` column.
+    pub const SELECT_COLUMNS_WITH_CONTENT: &str =
+        "id, artifact, version, content_type, size_bytes, \
+         content, content_json, meta, created_by, created";
 }
 
 /// Workflow orchestration models

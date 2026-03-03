@@ -2,6 +2,7 @@
 
 pub mod action;
 pub mod analytics;
+pub mod artifact;
 pub mod auth;
 pub mod common;
 pub mod event;
@@ -20,6 +21,11 @@ pub use analytics::{
     AnalyticsQueryParams, DashboardAnalyticsResponse, EventVolumeResponse,
     ExecutionStatusTimeSeriesResponse, ExecutionThroughputResponse, FailureRateResponse,
     TimeSeriesPoint,
+};
+pub use artifact::{
+    AppendProgressRequest, ArtifactQueryParams, ArtifactResponse, ArtifactSummary,
+    ArtifactVersionResponse, ArtifactVersionSummary, CreateArtifactRequest,
+    CreateVersionJsonRequest, SetDataRequest, UpdateArtifactRequest,
 };
 pub use auth::{
     ChangePasswordRequest, CurrentUserResponse, LoginRequest, RefreshTokenRequest, RegisterRequest,

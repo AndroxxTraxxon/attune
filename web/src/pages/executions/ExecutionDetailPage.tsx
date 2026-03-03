@@ -23,6 +23,7 @@ import { RotateCcw, Loader2 } from "lucide-react";
 import ExecuteActionModal from "@/components/common/ExecuteActionModal";
 import EntityHistoryPanel from "@/components/common/EntityHistoryPanel";
 import WorkflowTasksPanel from "@/components/common/WorkflowTasksPanel";
+import ExecutionArtifactsPanel from "@/components/executions/ExecutionArtifactsPanel";
 
 const getStatusColor = (status: string) => {
   switch (status) {
@@ -538,6 +539,14 @@ export default function ExecutionDetailPage() {
           <WorkflowTasksPanel parentExecutionId={execution.id} />
         </div>
       )}
+
+      {/* Artifacts */}
+      <div className="mt-6">
+        <ExecutionArtifactsPanel
+          executionId={execution.id}
+          isRunning={isRunning}
+        />
+      </div>
 
       {/* Change History */}
       <div className="mt-6">

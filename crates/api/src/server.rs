@@ -57,8 +57,7 @@ impl Server {
             .merge(routes::webhook_routes())
             .merge(routes::history_routes())
             .merge(routes::analytics_routes())
-            // TODO: Add more route modules here
-            // etc.
+            .merge(routes::artifact_routes())
             .with_state(self.state.clone());
 
         // Auth routes at root level (not versioned for frontend compatibility)

@@ -285,6 +285,17 @@ impl WorkerService {
         let api_url = std::env::var("ATTUNE_API_URL")
             .unwrap_or_else(|_| format!("http://{}:{}", config.server.host, config.server.port));
 
+        // Build JWT config for generating execution-scoped tokens
+        let jwt_config = attune_common::auth::jwt::JwtConfig {
+            secret: config
+                .security
+                .jwt_secret
+                .clone()
+                .unwrap_or_else(|| "insecure_default_secret_change_in_production".to_string()),
+            access_token_expiration: config.security.jwt_access_expiration as i64,
+            refresh_token_expiration: config.security.jwt_refresh_expiration as i64,
+        };
+
         let executor = Arc::new(ActionExecutor::new(
             pool.clone(),
             runtime_registry,
@@ -294,6 +305,7 @@ impl WorkerService {
             max_stderr_bytes,
             packs_base_dir.clone(),
             api_url,
+            jwt_config,
         ));
 
         // Initialize heartbeat manager

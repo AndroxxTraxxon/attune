@@ -21,9 +21,6 @@ pub type GraphResult<T> = Result<T, GraphError>;
 pub enum GraphError {
     #[error("Invalid task reference: {0}")]
     InvalidTaskReference(String),
-
-    #[error("Graph building error: {0}")]
-    BuildError(String),
 }
 
 /// Executable task graph
@@ -197,6 +194,7 @@ impl TaskGraph {
     }
 
     /// Get all tasks that can transition into the given task (inbound edges)
+    #[allow(dead_code)] // Part of complete graph API; used in tests
     pub fn get_inbound_tasks(&self, task_name: &str) -> Vec<String> {
         self.inbound_edges
             .get(task_name)
@@ -221,7 +219,8 @@ impl TaskGraph {
     /// * `success` - Whether the task succeeded
     ///
     /// # Returns
-    /// A vector of (task_name, publish_vars) tuples to schedule next
+    /// A vector of task names to schedule next
+    #[allow(dead_code)] // Part of complete graph API; used in tests
     pub fn next_tasks(&self, task_name: &str, success: bool) -> Vec<String> {
         let mut next = Vec::new();
 
@@ -251,7 +250,8 @@ impl TaskGraph {
     /// Get the next tasks with full transition information.
     ///
     /// Returns matching transitions with their publish directives and targets,
-    /// giving the coordinator full context for variable publishing.
+    /// giving the caller full context for variable publishing.
+    #[allow(dead_code)] // Part of complete graph API; used in tests
     pub fn matching_transitions(&self, task_name: &str, success: bool) -> Vec<&GraphTransition> {
         let mut matching = Vec::new();
 
@@ -275,6 +275,7 @@ impl TaskGraph {
     }
 
     /// Collect all unique target task names from all transitions of a given task.
+    #[allow(dead_code)] // Part of complete graph API; used in tests
     pub fn all_transition_targets(&self, task_name: &str) -> HashSet<String> {
         let mut targets = HashSet::new();
         if let Some(node) = self.nodes.get(task_name) {

@@ -13,6 +13,7 @@
 //! so the `ProcessRuntime` uses version-specific interpreter binaries,
 //! environment commands, etc.
 
+use attune_common::auth::jwt::{generate_execution_token, JwtConfig};
 use attune_common::error::{Error, Result};
 use attune_common::models::runtime::RuntimeExecutionConfig;
 use attune_common::models::{runtime::Runtime as RuntimeModel, Action, Execution, ExecutionStatus};
@@ -42,6 +43,18 @@ pub struct ActionExecutor {
     max_stderr_bytes: usize,
     packs_base_dir: PathBuf,
     api_url: String,
+    jwt_config: JwtConfig,
+}
+
+/// Normalize a server bind address into a connectable URL.
+///
+/// When the server binds to `0.0.0.0` (all interfaces) or `::` (IPv6 any),
+/// we substitute `127.0.0.1` so that actions running on the same host can
+/// reach the API.
+fn normalize_api_url(raw_url: &str) -> String {
+    raw_url
+        .replace("://0.0.0.0", "://127.0.0.1")
+        .replace("://[::]", "://127.0.0.1")
 }
 
 impl ActionExecutor {
@@ -55,7 +68,9 @@ impl ActionExecutor {
         max_stderr_bytes: usize,
         packs_base_dir: PathBuf,
         api_url: String,
+        jwt_config: JwtConfig,
     ) -> Self {
+        let api_url = normalize_api_url(&api_url);
         Self {
             pool,
             runtime_registry,
@@ -65,6 +80,7 @@ impl ActionExecutor {
             max_stderr_bytes,
             packs_base_dir,
             api_url,
+            jwt_config,
         }
     }
 
@@ -276,9 +292,34 @@ impl ActionExecutor {
         env.insert("ATTUNE_ACTION".to_string(), execution.action_ref.clone());
         env.insert("ATTUNE_API_URL".to_string(), self.api_url.clone());
 
-        // TODO: Generate execution-scoped API token
-        // For now, set placeholder to maintain interface compatibility
-        env.insert("ATTUNE_API_TOKEN".to_string(), "".to_string());
+        // Generate execution-scoped API token.
+        // The identity that triggered the execution is derived from the `sub` claim
+        // of the original token; for rule-triggered executions we use identity 1
+        // (the system identity) as a reasonable default.
+        let identity_id: i64 = 1; // System identity fallback
+                                  // Default timeout is 300s; add 60s grace period for cleanup.
+                                  // The actual `timeout` variable is computed later in this function,
+                                  // but the token TTL just needs a reasonable upper bound.
+        let token_ttl = Some(360_i64);
+        match generate_execution_token(
+            identity_id,
+            execution.id,
+            &execution.action_ref,
+            &self.jwt_config,
+            token_ttl,
+        ) {
+            Ok(token) => {
+                env.insert("ATTUNE_API_TOKEN".to_string(), token);
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to generate execution token for execution {}: {}. \
+                     Actions that call back to the API will not authenticate.",
+                    execution.id, e
+                );
+                env.insert("ATTUNE_API_TOKEN".to_string(), String::new());
+            }
+        }
 
         // Add rule and trigger context if execution was triggered by enforcement
         if let Some(enforcement_id) = execution.enforcement {

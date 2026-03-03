@@ -31,7 +31,6 @@ clap = { workspace = true }
 lapin = { workspace = true }
 redis = { workspace = true }
 dashmap = { workspace = true }
-tera = "1.19"
 serde_yaml_ng = { workspace = true }
 validator = { workspace = true }
 futures = { workspace = true }

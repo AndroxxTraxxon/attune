@@ -67,6 +67,11 @@ impl ArtifactFixture {
             r#type: ArtifactType::FileText,
             retention_policy: RetentionPolicyType::Versions,
             retention_limit: 5,
+            name: None,
+            description: None,
+            content_type: None,
+            execution: None,
+            data: None,
         }
     }
 }
@@ -249,6 +254,11 @@ async fn test_update_artifact_all_fields() {
         r#type: Some(ArtifactType::FileImage),
         retention_policy: Some(RetentionPolicyType::Days),
         retention_limit: Some(30),
+        name: Some("Updated Name".to_string()),
+        description: Some("Updated description".to_string()),
+        content_type: Some("image/png".to_string()),
+        size_bytes: Some(12345),
+        data: Some(serde_json::json!({"key": "value"})),
     };
 
     let updated = ArtifactRepository::update(&pool, created.id, update_input.clone())

@@ -175,17 +175,20 @@ export default function MainLayout() {
   });
   const [showUserMenu, setShowUserMenu] = useState(false);
 
-  // Persist collapsed state to localStorage
+  // Persist collapsed state to localStorage and close user menu when expanding
   useEffect(() => {
     localStorage.setItem("sidebar-collapsed", isCollapsed.toString());
   }, [isCollapsed]);
 
-  // Close user menu when expanding sidebar
-  useEffect(() => {
-    if (!isCollapsed) {
-      setShowUserMenu(false);
-    }
-  }, [isCollapsed]);
+  const handleToggleCollapse = () => {
+    setIsCollapsed((prev) => {
+      const next = !prev;
+      if (!next) {
+        setShowUserMenu(false);
+      }
+      return next;
+    });
+  };
 
   const handleLogout = () => {
     logout();
@@ -248,7 +251,7 @@ export default function MainLayout() {
         {/* Toggle Button */}
         <div className="px-4 py-3">
           <button
-            onClick={() => setIsCollapsed(!isCollapsed)}
+            onClick={handleToggleCollapse}
             className="flex items-center w-full px-3 py-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-md transition-colors whitespace-nowrap"
             title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >

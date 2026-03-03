@@ -37,7 +37,7 @@ def main():
 
         # Simulate failure if requested
         if should_fail:
-            raise RuntimeError(f"Action intentionally failed as requested (fail=true)")
+            raise RuntimeError("Action intentionally failed as requested (fail=true)")
 
         # Calculate execution time
         execution_time = time.time() - start_time

@@ -61,9 +61,6 @@ pub type ContextResult<T> = Result<T, ContextError>;
 /// Errors that can occur during context operations
 #[derive(Debug, Error)]
 pub enum ContextError {
-    #[error("Template rendering error: {0}")]
-    TemplateError(String),
-
     #[error("Variable not found: {0}")]
     VariableNotFound(String),
 
@@ -200,16 +197,19 @@ impl WorkflowContext {
     }
 
     /// Get a workflow-scoped variable by name.
+    #[allow(dead_code)] // Part of complete context API; used in tests
     pub fn get_var(&self, name: &str) -> Option<JsonValue> {
         self.variables.get(name).map(|entry| entry.value().clone())
     }
 
     /// Store a completed task's result (accessible as `task.<name>.*`).
+    #[allow(dead_code)] // Part of complete context API; used in tests
     pub fn set_task_result(&mut self, task_name: &str, result: JsonValue) {
         self.task_results.insert(task_name.to_string(), result);
     }
 
     /// Get a task result by task name.
+    #[allow(dead_code)] // Part of complete context API; used in tests
     pub fn get_task_result(&self, task_name: &str) -> Option<JsonValue> {
         self.task_results
             .get(task_name)
@@ -217,11 +217,13 @@ impl WorkflowContext {
     }
 
     /// Set the pack configuration (accessible as `config.<key>`).
+    #[allow(dead_code)] // Part of complete context API; used in tests
     pub fn set_pack_config(&mut self, config: JsonValue) {
         self.pack_config = Arc::new(config);
     }
 
     /// Set the keystore secrets (accessible as `keystore.<key>`).
+    #[allow(dead_code)] // Part of complete context API; used in tests
     pub fn set_keystore(&mut self, secrets: JsonValue) {
         self.keystore = Arc::new(secrets);
     }
@@ -233,6 +235,7 @@ impl WorkflowContext {
     }
 
     /// Clear current item
+    #[allow(dead_code)] // Part of complete context API; symmetric with set_current_item
     pub fn clear_current_item(&mut self) {
         self.current_item = None;
         self.current_index = None;
@@ -440,6 +443,7 @@ impl WorkflowContext {
     }
 
     /// Export context for storage
+    #[allow(dead_code)] // Part of complete context API; used in tests
     pub fn export(&self) -> JsonValue {
         let variables: HashMap<String, JsonValue> = self
             .variables
@@ -470,6 +474,7 @@ impl WorkflowContext {
     }
 
     /// Import context from stored data
+    #[allow(dead_code)] // Part of complete context API; used in tests
     pub fn import(data: JsonValue) -> ContextResult<Self> {
         let variables = DashMap::new();
         if let Some(obj) = data["variables"].as_object() {
@@ -677,7 +682,9 @@ mod tests {
         ctx.set_var("greeting", json!("Hello"));
 
         // Canonical: workflow.<name>
-        let result = ctx.render_template("{{ workflow.greeting }} World").unwrap();
+        let result = ctx
+            .render_template("{{ workflow.greeting }} World")
+            .unwrap();
         assert_eq!(result, "Hello World");
     }
 
@@ -699,7 +706,9 @@ mod tests {
         let ctx = WorkflowContext::new(json!({}), vars);
 
         // Backward-compat alias: variables.<name>
-        let result = ctx.render_template("{{ variables.greeting }} World").unwrap();
+        let result = ctx
+            .render_template("{{ variables.greeting }} World")
+            .unwrap();
         assert_eq!(result, "Hello World");
     }
 
@@ -735,7 +744,9 @@ mod tests {
         let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
         ctx.set_task_result("fetch", json!({"result": {"data": {"id": 42}}}));
 
-        let val = ctx.evaluate_expression("task.fetch.result.data.id").unwrap();
+        let val = ctx
+            .evaluate_expression("task.fetch.result.data.id")
+            .unwrap();
         assert_eq!(val, json!(42));
     }
 
@@ -744,7 +755,9 @@ mod tests {
         let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
         ctx.set_task_result("run_cmd", json!({"result": {"stdout": "hello world"}}));
 
-        let val = ctx.evaluate_expression("task.run_cmd.result.stdout").unwrap();
+        let val = ctx
+            .evaluate_expression("task.run_cmd.result.stdout")
+            .unwrap();
         assert_eq!(val, json!("hello world"));
     }
 
@@ -755,14 +768,14 @@ mod tests {
     #[test]
     fn test_config_namespace() {
         let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
-        ctx.set_pack_config(json!({"api_token": "tok_abc123", "base_url": "https://api.example.com"}));
+        ctx.set_pack_config(
+            json!({"api_token": "tok_abc123", "base_url": "https://api.example.com"}),
+        );
 
         let val = ctx.evaluate_expression("config.api_token").unwrap();
         assert_eq!(val, json!("tok_abc123"));
 
-        let result = ctx
-            .render_template("URL: {{ config.base_url }}")
-            .unwrap();
+        let result = ctx.render_template("URL: {{ config.base_url }}").unwrap();
         assert_eq!(result, "URL: https://api.example.com");
     }
 
@@ -796,7 +809,9 @@ mod tests {
         let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
         ctx.set_keystore(json!({"My Secret Key": "value123"}));
 
-        let val = ctx.evaluate_expression("keystore[\"My Secret Key\"]").unwrap();
+        let val = ctx
+            .evaluate_expression("keystore[\"My Secret Key\"]")
+            .unwrap();
         assert_eq!(val, json!("value123"));
     }
 
@@ -850,9 +865,7 @@ mod tests {
         assert!(ctx
             .evaluate_condition("parameters.x > 50 or parameters.y > 15")
             .unwrap());
-        assert!(ctx
-            .evaluate_condition("not parameters.x > 50")
-            .unwrap());
+        assert!(ctx.evaluate_condition("not parameters.x > 50").unwrap());
     }
 
     #[test]
@@ -863,16 +876,15 @@ mod tests {
         assert!(ctx.evaluate_condition("\"admin\" in roles").unwrap());
         assert!(!ctx.evaluate_condition("\"root\" in roles").unwrap());
         // Via canonical workflow namespace
-        assert!(ctx.evaluate_condition("\"admin\" in workflow.roles").unwrap());
+        assert!(ctx
+            .evaluate_condition("\"admin\" in workflow.roles")
+            .unwrap());
     }
 
     #[test]
     fn test_condition_with_function_calls() {
         let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
-        ctx.set_last_task_outcome(
-            json!({"status": "ok", "code": 200}),
-            TaskOutcome::Succeeded,
-        );
+        ctx.set_last_task_outcome(json!({"status": "ok", "code": 200}), TaskOutcome::Succeeded);
         assert!(ctx.evaluate_condition("succeeded()").unwrap());
         assert!(!ctx.evaluate_condition("failed()").unwrap());
         assert!(ctx
@@ -889,9 +901,7 @@ mod tests {
         ctx.set_var("items", json!([1, 2, 3, 4, 5]));
         assert!(ctx.evaluate_condition("length(items) > 3").unwrap());
         assert!(!ctx.evaluate_condition("length(items) > 10").unwrap());
-        assert!(ctx
-            .evaluate_condition("length(items) == 5")
-            .unwrap());
+        assert!(ctx.evaluate_condition("length(items) == 5").unwrap());
     }
 
     #[test]
@@ -916,10 +926,8 @@ mod tests {
 
     #[test]
     fn test_expression_string_concat() {
-        let ctx = WorkflowContext::new(
-            json!({"first": "Hello", "second": "World"}),
-            HashMap::new(),
-        );
+        let ctx =
+            WorkflowContext::new(json!({"first": "Hello", "second": "World"}), HashMap::new());
         let input = json!({"msg": "{{ parameters.first + \" \" + parameters.second }}"});
         let result = ctx.render_json(&input).unwrap();
         assert_eq!(result["msg"], json!("Hello World"));

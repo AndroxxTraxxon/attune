@@ -1,13 +1,18 @@
-//! Artifact repository for database operations
+//! Artifact and ArtifactVersion repositories for database operations
 
 use crate::models::{
     artifact::*,
+    artifact_version::ArtifactVersion,
     enums::{ArtifactType, OwnerType, RetentionPolicyType},
 };
 use crate::Result;
 use sqlx::{Executor, Postgres, QueryBuilder};
 
 use super::{Create, Delete, FindById, FindByRef, List, Repository, Update};
+
+// ============================================================================
+// ArtifactRepository
+// ============================================================================
 
 pub struct ArtifactRepository;
 
@@ -26,6 +31,11 @@ pub struct CreateArtifactInput {
     pub r#type: ArtifactType,
     pub retention_policy: RetentionPolicyType,
     pub retention_limit: i32,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub content_type: Option<String>,
+    pub execution: Option<i64>,
+    pub data: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -36,6 +46,29 @@ pub struct UpdateArtifactInput {
     pub r#type: Option<ArtifactType>,
     pub retention_policy: Option<RetentionPolicyType>,
     pub retention_limit: Option<i32>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub content_type: Option<String>,
+    pub size_bytes: Option<i64>,
+    pub data: Option<serde_json::Value>,
+}
+
+/// Filters for searching artifacts
+#[derive(Debug, Clone, Default)]
+pub struct ArtifactSearchFilters {
+    pub scope: Option<OwnerType>,
+    pub owner: Option<String>,
+    pub r#type: Option<ArtifactType>,
+    pub execution: Option<i64>,
+    pub name_contains: Option<String>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+/// Search result with total count
+pub struct ArtifactSearchResult {
+    pub rows: Vec<Artifact>,
+    pub total: i64,
 }
 
 #[async_trait::async_trait]
@@ -44,15 +77,12 @@ impl FindById for ArtifactRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        sqlx::query_as::<_, Artifact>(
-            "SELECT id, ref, scope, owner, type, retention_policy, retention_limit, created, updated
-             FROM artifact
-             WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(executor)
-        .await
-        .map_err(Into::into)
+        let query = format!("SELECT {} FROM artifact WHERE id = $1", SELECT_COLUMNS);
+        sqlx::query_as::<_, Artifact>(&query)
+            .bind(id)
+            .fetch_optional(executor)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -62,15 +92,12 @@ impl FindByRef for ArtifactRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        sqlx::query_as::<_, Artifact>(
-            "SELECT id, ref, scope, owner, type, retention_policy, retention_limit, created, updated
-             FROM artifact
-             WHERE ref = $1",
-        )
-        .bind(ref_str)
-        .fetch_optional(executor)
-        .await
-        .map_err(Into::into)
+        let query = format!("SELECT {} FROM artifact WHERE ref = $1", SELECT_COLUMNS);
+        sqlx::query_as::<_, Artifact>(&query)
+            .bind(ref_str)
+            .fetch_optional(executor)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -80,15 +107,14 @@ impl List for ArtifactRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        sqlx::query_as::<_, Artifact>(
-            "SELECT id, ref, scope, owner, type, retention_policy, retention_limit, created, updated
-             FROM artifact
-             ORDER BY created DESC
-             LIMIT 1000",
-        )
-        .fetch_all(executor)
-        .await
-        .map_err(Into::into)
+        let query = format!(
+            "SELECT {} FROM artifact ORDER BY created DESC LIMIT 1000",
+            SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, Artifact>(&query)
+            .fetch_all(executor)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -100,20 +126,28 @@ impl Create for ArtifactRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        sqlx::query_as::<_, Artifact>(
-            "INSERT INTO artifact (ref, scope, owner, type, retention_policy, retention_limit)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             RETURNING id, ref, scope, owner, type, retention_policy, retention_limit, created, updated",
-        )
-        .bind(&input.r#ref)
-        .bind(input.scope)
-        .bind(&input.owner)
-        .bind(input.r#type)
-        .bind(input.retention_policy)
-        .bind(input.retention_limit)
-        .fetch_one(executor)
-        .await
-        .map_err(Into::into)
+        let query = format!(
+            "INSERT INTO artifact (ref, scope, owner, type, retention_policy, retention_limit, \
+             name, description, content_type, execution, data) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             RETURNING {}",
+            SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, Artifact>(&query)
+            .bind(&input.r#ref)
+            .bind(input.scope)
+            .bind(&input.owner)
+            .bind(input.r#type)
+            .bind(input.retention_policy)
+            .bind(input.retention_limit)
+            .bind(&input.name)
+            .bind(&input.description)
+            .bind(&input.content_type)
+            .bind(input.execution)
+            .bind(&input.data)
+            .fetch_one(executor)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -125,59 +159,40 @@ impl Update for ArtifactRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        // Build update query dynamically
         let mut query = QueryBuilder::new("UPDATE artifact SET ");
         let mut has_updates = false;
 
-        if let Some(ref_value) = &input.r#ref {
-            query.push("ref = ").push_bind(ref_value);
-            has_updates = true;
-        }
-        if let Some(scope) = input.scope {
-            if has_updates {
-                query.push(", ");
-            }
-            query.push("scope = ").push_bind(scope);
-            has_updates = true;
-        }
-        if let Some(owner) = &input.owner {
-            if has_updates {
-                query.push(", ");
-            }
-            query.push("owner = ").push_bind(owner);
-            has_updates = true;
-        }
-        if let Some(artifact_type) = input.r#type {
-            if has_updates {
-                query.push(", ");
-            }
-            query.push("type = ").push_bind(artifact_type);
-            has_updates = true;
-        }
-        if let Some(retention_policy) = input.retention_policy {
-            if has_updates {
-                query.push(", ");
-            }
-            query
-                .push("retention_policy = ")
-                .push_bind(retention_policy);
-            has_updates = true;
-        }
-        if let Some(retention_limit) = input.retention_limit {
-            if has_updates {
-                query.push(", ");
-            }
-            query.push("retention_limit = ").push_bind(retention_limit);
-            has_updates = true;
+        macro_rules! push_field {
+            ($field:expr, $col:expr) => {
+                if let Some(val) = $field {
+                    if has_updates {
+                        query.push(", ");
+                    }
+                    query.push(concat!($col, " = ")).push_bind(val);
+                    has_updates = true;
+                }
+            };
         }
 
+        push_field!(&input.r#ref, "ref");
+        push_field!(input.scope, "scope");
+        push_field!(&input.owner, "owner");
+        push_field!(input.r#type, "type");
+        push_field!(input.retention_policy, "retention_policy");
+        push_field!(input.retention_limit, "retention_limit");
+        push_field!(&input.name, "name");
+        push_field!(&input.description, "description");
+        push_field!(&input.content_type, "content_type");
+        push_field!(input.size_bytes, "size_bytes");
+        push_field!(&input.data, "data");
+
         if !has_updates {
-            // No updates requested, fetch and return existing entity
             return Self::get_by_id(executor, id).await;
         }
 
         query.push(", updated = NOW() WHERE id = ").push_bind(id);
-        query.push(" RETURNING id, ref, scope, owner, type, retention_policy, retention_limit, created, updated");
+        query.push(" RETURNING ");
+        query.push(SELECT_COLUMNS);
 
         query
             .build_query_as::<Artifact>()
@@ -202,21 +217,113 @@ impl Delete for ArtifactRepository {
 }
 
 impl ArtifactRepository {
+    /// Search artifacts with filters and pagination
+    pub async fn search<'e, E>(
+        executor: E,
+        filters: &ArtifactSearchFilters,
+    ) -> Result<ArtifactSearchResult>
+    where
+        E: Executor<'e, Database = Postgres> + Copy + 'e,
+    {
+        // Build WHERE clauses
+        let mut conditions: Vec<String> = Vec::new();
+        let mut param_idx: usize = 0;
+
+        if filters.scope.is_some() {
+            param_idx += 1;
+            conditions.push(format!("scope = ${}", param_idx));
+        }
+        if filters.owner.is_some() {
+            param_idx += 1;
+            conditions.push(format!("owner = ${}", param_idx));
+        }
+        if filters.r#type.is_some() {
+            param_idx += 1;
+            conditions.push(format!("type = ${}", param_idx));
+        }
+        if filters.execution.is_some() {
+            param_idx += 1;
+            conditions.push(format!("execution = ${}", param_idx));
+        }
+        if filters.name_contains.is_some() {
+            param_idx += 1;
+            conditions.push(format!("name ILIKE '%' || ${} || '%'", param_idx));
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        // Count query
+        let count_sql = format!("SELECT COUNT(*) AS cnt FROM artifact {}", where_clause);
+        let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
+
+        // Bind params for count
+        if let Some(scope) = filters.scope {
+            count_query = count_query.bind(scope);
+        }
+        if let Some(ref owner) = filters.owner {
+            count_query = count_query.bind(owner.clone());
+        }
+        if let Some(r#type) = filters.r#type {
+            count_query = count_query.bind(r#type);
+        }
+        if let Some(execution) = filters.execution {
+            count_query = count_query.bind(execution);
+        }
+        if let Some(ref name) = filters.name_contains {
+            count_query = count_query.bind(name.clone());
+        }
+
+        let total = count_query.fetch_one(executor).await?;
+
+        // Data query
+        let limit = filters.limit.min(1000);
+        let offset = filters.offset;
+        let data_sql = format!(
+            "SELECT {} FROM artifact {} ORDER BY created DESC LIMIT {} OFFSET {}",
+            SELECT_COLUMNS, where_clause, limit, offset
+        );
+
+        let mut data_query = sqlx::query_as::<_, Artifact>(&data_sql);
+
+        if let Some(scope) = filters.scope {
+            data_query = data_query.bind(scope);
+        }
+        if let Some(ref owner) = filters.owner {
+            data_query = data_query.bind(owner.clone());
+        }
+        if let Some(r#type) = filters.r#type {
+            data_query = data_query.bind(r#type);
+        }
+        if let Some(execution) = filters.execution {
+            data_query = data_query.bind(execution);
+        }
+        if let Some(ref name) = filters.name_contains {
+            data_query = data_query.bind(name.clone());
+        }
+
+        let rows = data_query.fetch_all(executor).await?;
+
+        Ok(ArtifactSearchResult { rows, total })
+    }
+
     /// Find artifacts by scope
     pub async fn find_by_scope<'e, E>(executor: E, scope: OwnerType) -> Result<Vec<Artifact>>
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        sqlx::query_as::<_, Artifact>(
-            "SELECT id, ref, scope, owner, type, retention_policy, retention_limit, created, updated
-             FROM artifact
-             WHERE scope = $1
-             ORDER BY created DESC",
-        )
-        .bind(scope)
-        .fetch_all(executor)
-        .await
-        .map_err(Into::into)
+        let query = format!(
+            "SELECT {} FROM artifact WHERE scope = $1 ORDER BY created DESC",
+            SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, Artifact>(&query)
+            .bind(scope)
+            .fetch_all(executor)
+            .await
+            .map_err(Into::into)
     }
 
     /// Find artifacts by owner
@@ -224,16 +331,15 @@ impl ArtifactRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        sqlx::query_as::<_, Artifact>(
-            "SELECT id, ref, scope, owner, type, retention_policy, retention_limit, created, updated
-             FROM artifact
-             WHERE owner = $1
-             ORDER BY created DESC",
-        )
-        .bind(owner)
-        .fetch_all(executor)
-        .await
-        .map_err(Into::into)
+        let query = format!(
+            "SELECT {} FROM artifact WHERE owner = $1 ORDER BY created DESC",
+            SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, Artifact>(&query)
+            .bind(owner)
+            .fetch_all(executor)
+            .await
+            .map_err(Into::into)
     }
 
     /// Find artifacts by type
@@ -244,19 +350,18 @@ impl ArtifactRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        sqlx::query_as::<_, Artifact>(
-            "SELECT id, ref, scope, owner, type, retention_policy, retention_limit, created, updated
-             FROM artifact
-             WHERE type = $1
-             ORDER BY created DESC",
-        )
-        .bind(artifact_type)
-        .fetch_all(executor)
-        .await
-        .map_err(Into::into)
+        let query = format!(
+            "SELECT {} FROM artifact WHERE type = $1 ORDER BY created DESC",
+            SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, Artifact>(&query)
+            .bind(artifact_type)
+            .fetch_all(executor)
+            .await
+            .map_err(Into::into)
     }
 
-    /// Find artifacts by scope and owner (common query pattern)
+    /// Find artifacts by scope and owner
     pub async fn find_by_scope_and_owner<'e, E>(
         executor: E,
         scope: OwnerType,
@@ -265,17 +370,32 @@ impl ArtifactRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        sqlx::query_as::<_, Artifact>(
-            "SELECT id, ref, scope, owner, type, retention_policy, retention_limit, created, updated
-             FROM artifact
-             WHERE scope = $1 AND owner = $2
-             ORDER BY created DESC",
-        )
-        .bind(scope)
-        .bind(owner)
-        .fetch_all(executor)
-        .await
-        .map_err(Into::into)
+        let query = format!(
+            "SELECT {} FROM artifact WHERE scope = $1 AND owner = $2 ORDER BY created DESC",
+            SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, Artifact>(&query)
+            .bind(scope)
+            .bind(owner)
+            .fetch_all(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Find artifacts by execution ID
+    pub async fn find_by_execution<'e, E>(executor: E, execution_id: i64) -> Result<Vec<Artifact>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "SELECT {} FROM artifact WHERE execution = $1 ORDER BY created DESC",
+            SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, Artifact>(&query)
+            .bind(execution_id)
+            .fetch_all(executor)
+            .await
+            .map_err(Into::into)
     }
 
     /// Find artifacts by retention policy
@@ -286,15 +406,297 @@ impl ArtifactRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        sqlx::query_as::<_, Artifact>(
-            "SELECT id, ref, scope, owner, type, retention_policy, retention_limit, created, updated
-             FROM artifact
-             WHERE retention_policy = $1
-             ORDER BY created DESC",
-        )
-        .bind(retention_policy)
-        .fetch_all(executor)
-        .await
-        .map_err(Into::into)
+        let query = format!(
+            "SELECT {} FROM artifact WHERE retention_policy = $1 ORDER BY created DESC",
+            SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, Artifact>(&query)
+            .bind(retention_policy)
+            .fetch_all(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Append data to a progress-type artifact.
+    ///
+    /// If `artifact.data` is currently NULL, it is initialized as a JSON array
+    /// containing the new entry. Otherwise the entry is appended to the existing
+    /// array. This is done atomically in a single SQL statement.
+    pub async fn append_progress<'e, E>(
+        executor: E,
+        id: i64,
+        entry: &serde_json::Value,
+    ) -> Result<Artifact>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "UPDATE artifact \
+             SET data = CASE \
+                 WHEN data IS NULL THEN jsonb_build_array($2::jsonb) \
+                 ELSE data || jsonb_build_array($2::jsonb) \
+             END, \
+             updated = NOW() \
+             WHERE id = $1 AND type = 'progress' \
+             RETURNING {}",
+            SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, Artifact>(&query)
+            .bind(id)
+            .bind(entry)
+            .fetch_one(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Replace the full data payload on a progress-type artifact (for "set" semantics).
+    pub async fn set_data<'e, E>(executor: E, id: i64, data: &serde_json::Value) -> Result<Artifact>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "UPDATE artifact SET data = $2, updated = NOW() \
+             WHERE id = $1 RETURNING {}",
+            SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, Artifact>(&query)
+            .bind(id)
+            .bind(data)
+            .fetch_one(executor)
+            .await
+            .map_err(Into::into)
+    }
+}
+
+// ============================================================================
+// ArtifactVersionRepository
+// ============================================================================
+
+use crate::models::artifact_version;
+
+pub struct ArtifactVersionRepository;
+
+impl Repository for ArtifactVersionRepository {
+    type Entity = ArtifactVersion;
+    fn table_name() -> &'static str {
+        "artifact_version"
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateArtifactVersionInput {
+    pub artifact: i64,
+    pub content_type: Option<String>,
+    pub content: Option<Vec<u8>>,
+    pub content_json: Option<serde_json::Value>,
+    pub meta: Option<serde_json::Value>,
+    pub created_by: Option<String>,
+}
+
+impl ArtifactVersionRepository {
+    /// Find a version by ID (without binary content for performance)
+    pub async fn find_by_id<'e, E>(executor: E, id: i64) -> Result<Option<ArtifactVersion>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "SELECT {} FROM artifact_version WHERE id = $1",
+            artifact_version::SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, ArtifactVersion>(&query)
+            .bind(id)
+            .fetch_optional(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Find a version by ID including binary content
+    pub async fn find_by_id_with_content<'e, E>(
+        executor: E,
+        id: i64,
+    ) -> Result<Option<ArtifactVersion>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "SELECT {} FROM artifact_version WHERE id = $1",
+            artifact_version::SELECT_COLUMNS_WITH_CONTENT
+        );
+        sqlx::query_as::<_, ArtifactVersion>(&query)
+            .bind(id)
+            .fetch_optional(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// List all versions for an artifact (without binary content), newest first
+    pub async fn list_by_artifact<'e, E>(
+        executor: E,
+        artifact_id: i64,
+    ) -> Result<Vec<ArtifactVersion>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "SELECT {} FROM artifact_version WHERE artifact = $1 ORDER BY version DESC",
+            artifact_version::SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, ArtifactVersion>(&query)
+            .bind(artifact_id)
+            .fetch_all(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Get the latest version for an artifact (without binary content)
+    pub async fn find_latest<'e, E>(
+        executor: E,
+        artifact_id: i64,
+    ) -> Result<Option<ArtifactVersion>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "SELECT {} FROM artifact_version WHERE artifact = $1 ORDER BY version DESC LIMIT 1",
+            artifact_version::SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, ArtifactVersion>(&query)
+            .bind(artifact_id)
+            .fetch_optional(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Get the latest version for an artifact (with binary content)
+    pub async fn find_latest_with_content<'e, E>(
+        executor: E,
+        artifact_id: i64,
+    ) -> Result<Option<ArtifactVersion>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "SELECT {} FROM artifact_version WHERE artifact = $1 ORDER BY version DESC LIMIT 1",
+            artifact_version::SELECT_COLUMNS_WITH_CONTENT
+        );
+        sqlx::query_as::<_, ArtifactVersion>(&query)
+            .bind(artifact_id)
+            .fetch_optional(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Get a specific version by artifact and version number (without binary content)
+    pub async fn find_by_version<'e, E>(
+        executor: E,
+        artifact_id: i64,
+        version: i32,
+    ) -> Result<Option<ArtifactVersion>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "SELECT {} FROM artifact_version WHERE artifact = $1 AND version = $2",
+            artifact_version::SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, ArtifactVersion>(&query)
+            .bind(artifact_id)
+            .bind(version)
+            .fetch_optional(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Get a specific version by artifact and version number (with binary content)
+    pub async fn find_by_version_with_content<'e, E>(
+        executor: E,
+        artifact_id: i64,
+        version: i32,
+    ) -> Result<Option<ArtifactVersion>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "SELECT {} FROM artifact_version WHERE artifact = $1 AND version = $2",
+            artifact_version::SELECT_COLUMNS_WITH_CONTENT
+        );
+        sqlx::query_as::<_, ArtifactVersion>(&query)
+            .bind(artifact_id)
+            .bind(version)
+            .fetch_optional(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Create a new artifact version. The version number is auto-assigned
+    /// (MAX(version) + 1) and the retention trigger fires after insert.
+    pub async fn create<'e, E>(
+        executor: E,
+        input: CreateArtifactVersionInput,
+    ) -> Result<ArtifactVersion>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let size_bytes = input.content.as_ref().map(|c| c.len() as i64).or_else(|| {
+            input
+                .content_json
+                .as_ref()
+                .map(|j| serde_json::to_string(j).unwrap_or_default().len() as i64)
+        });
+
+        let query = format!(
+            "INSERT INTO artifact_version \
+                 (artifact, version, content_type, size_bytes, content, content_json, meta, created_by) \
+             VALUES ($1, next_artifact_version($1), $2, $3, $4, $5, $6, $7) \
+             RETURNING {}",
+            artifact_version::SELECT_COLUMNS_WITH_CONTENT
+        );
+        sqlx::query_as::<_, ArtifactVersion>(&query)
+            .bind(input.artifact)
+            .bind(&input.content_type)
+            .bind(size_bytes)
+            .bind(&input.content)
+            .bind(&input.content_json)
+            .bind(&input.meta)
+            .bind(&input.created_by)
+            .fetch_one(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Delete a specific version by ID
+    pub async fn delete<'e, E>(executor: E, id: i64) -> Result<bool>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = sqlx::query("DELETE FROM artifact_version WHERE id = $1")
+            .bind(id)
+            .execute(executor)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Delete all versions for an artifact
+    pub async fn delete_all_for_artifact<'e, E>(executor: E, artifact_id: i64) -> Result<u64>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = sqlx::query("DELETE FROM artifact_version WHERE artifact = $1")
+            .bind(artifact_id)
+            .execute(executor)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Count versions for an artifact
+    pub async fn count_by_artifact<'e, E>(executor: E, artifact_id: i64) -> Result<i64>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM artifact_version WHERE artifact = $1")
+            .bind(artifact_id)
+            .fetch_one(executor)
+            .await
+            .map_err(Into::into)
     }
 }

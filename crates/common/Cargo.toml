@@ -53,6 +53,9 @@ jsonschema = { workspace = true }
 # OpenAPI
 utoipa = { workspace = true }
 
+# JWT
+jsonwebtoken = { workspace = true }
+
 # Encryption
 argon2 = { workspace = true }
 ring = { workspace = true }

@@ -28,7 +28,3 @@ pub use queue_manager::{ExecutionQueueManager, QueueConfig, QueueStats};
 pub use retry_manager::{RetryAnalysis, RetryConfig, RetryManager, RetryReason};
 pub use timeout_monitor::{ExecutionTimeoutMonitor, TimeoutMonitorConfig};
 pub use worker_health::{HealthMetrics, HealthProbeConfig, HealthStatus, WorkerHealthProbe};
-pub use workflow::{
-    parse_workflow_yaml, BackoffStrategy, ParseError, TemplateEngine, VariableContext,
-    WorkflowDefinition, WorkflowValidator,
-};

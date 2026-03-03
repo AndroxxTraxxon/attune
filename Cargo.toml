@@ -73,6 +73,9 @@ jsonschema = "0.38"
 # OpenAPI/Swagger
 utoipa = { version = "5.4", features = ["chrono", "uuid"] }
 
+# JWT
+jsonwebtoken = { version = "10.2", features = ["rust_crypto"] }
+
 # Encryption
 argon2 = "0.5"
 ring = "0.17"
