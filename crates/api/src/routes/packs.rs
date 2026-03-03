@@ -14,10 +14,7 @@ use validator::Validate;
 use attune_common::models::pack_test::PackTestResult;
 use attune_common::mq::{MessageEnvelope, MessageType, PackRegisteredPayload};
 use attune_common::repositories::{
-    action::ActionRepository,
     pack::{CreatePackInput, UpdatePackInput},
-    rule::{RestoreRuleInput, RuleRepository},
-    trigger::TriggerRepository,
     Create, Delete, FindById, FindByRef, PackRepository, PackTestRepository, Pagination, Update,
 };
 use attune_common::workflow::{PackWorkflowService, PackWorkflowServiceConfig};
@@ -732,84 +729,99 @@ async fn register_pack_internal(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // Ad-hoc rules to restore after pack reinstallation
-    let mut saved_adhoc_rules: Vec<attune_common::models::rule::Rule> = Vec::new();
+    // Extract common metadata fields used for both create and update
+    let conf_schema = pack_yaml
+        .get("config_schema")
+        .and_then(|v| serde_json::to_value(v).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let meta = pack_yaml
+        .get("metadata")
+        .and_then(|v| serde_json::to_value(v).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let tags: Vec<String> = pack_yaml
+        .get("keywords")
+        .and_then(|v| v.as_sequence())
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let runtime_deps: Vec<String> = pack_yaml
+        .get("runtime_deps")
+        .and_then(|v| v.as_sequence())
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let dependencies: Vec<String> = pack_yaml
+        .get("dependencies")
+        .and_then(|v| v.as_sequence())
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
 
-    // Check if pack already exists
-    if !force {
-        if PackRepository::exists_by_ref(&state.db, &pack_ref).await? {
+    // Check if pack already exists — update in place to preserve IDs
+    let existing_pack = PackRepository::find_by_ref(&state.db, &pack_ref).await?;
+
+    let is_new_pack;
+
+    let pack = if let Some(existing) = existing_pack {
+        if !force {
             return Err(ApiError::Conflict(format!(
                 "Pack '{}' already exists. Use force=true to reinstall.",
                 pack_ref
             )));
         }
+
+        // Update existing pack in place — preserves pack ID and all child entity IDs
+        let update_input = UpdatePackInput {
+            label: Some(label),
+            description: Some(description.unwrap_or_default()),
+            version: Some(version.clone()),
+            conf_schema: Some(conf_schema),
+            config: None, // preserve user-set config
+            meta: Some(meta),
+            tags: Some(tags),
+            runtime_deps: Some(runtime_deps),
+            dependencies: Some(dependencies),
+            is_standard: None,
+            installers: None,
+        };
+
+        let updated = PackRepository::update(&state.db, existing.id, update_input).await?;
+        tracing::info!(
+            "Updated existing pack '{}' (ID: {}) in place",
+            pack_ref,
+            updated.id
+        );
+        is_new_pack = false;
+        updated
     } else {
-        // Delete existing pack if force is true, preserving ad-hoc (user-created) rules
-        if let Some(existing_pack) = PackRepository::find_by_ref(&state.db, &pack_ref).await? {
-            // Save ad-hoc rules before deletion — CASCADE on pack FK would destroy them
-            saved_adhoc_rules = RuleRepository::find_adhoc_by_pack(&state.db, existing_pack.id)
-                .await
-                .unwrap_or_default();
-            if !saved_adhoc_rules.is_empty() {
-                tracing::info!(
-                    "Preserving {} ad-hoc rule(s) during reinstall of pack '{}'",
-                    saved_adhoc_rules.len(),
-                    pack_ref
-                );
-            }
+        // Create new pack
+        let pack_input = CreatePackInput {
+            r#ref: pack_ref.clone(),
+            label,
+            description,
+            version: version.clone(),
+            conf_schema,
+            config: serde_json::json!({}),
+            meta,
+            tags,
+            runtime_deps,
+            dependencies,
+            is_standard: false,
+            installers: serde_json::json!({}),
+        };
 
-            PackRepository::delete(&state.db, existing_pack.id).await?;
-            tracing::info!("Deleted existing pack '{}' for forced reinstall", pack_ref);
-        }
-    }
-
-    // Create pack input
-    let pack_input = CreatePackInput {
-        r#ref: pack_ref.clone(),
-        label,
-        description,
-        version: version.clone(),
-        conf_schema: pack_yaml
-            .get("config_schema")
-            .and_then(|v| serde_json::to_value(v).ok())
-            .unwrap_or_else(|| serde_json::json!({})),
-        config: serde_json::json!({}),
-        meta: pack_yaml
-            .get("metadata")
-            .and_then(|v| serde_json::to_value(v).ok())
-            .unwrap_or_else(|| serde_json::json!({})),
-        tags: pack_yaml
-            .get("keywords")
-            .and_then(|v| v.as_sequence())
-            .map(|seq| {
-                seq.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        runtime_deps: pack_yaml
-            .get("runtime_deps")
-            .and_then(|v| v.as_sequence())
-            .map(|seq| {
-                seq.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        dependencies: pack_yaml
-            .get("dependencies")
-            .and_then(|v| v.as_sequence())
-            .map(|seq| {
-                seq.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        is_standard: false,
-        installers: serde_json::json!({}),
+        is_new_pack = true;
+        PackRepository::create(&state.db, pack_input).await?
     };
-
-    let pack = PackRepository::create(&state.db, pack_input).await?;
 
     // Auto-sync workflows after pack creation
     let packs_base_dir = PathBuf::from(&state.config.packs_base_dir);
@@ -850,14 +862,18 @@ async fn register_pack_internal(
         match component_loader.load_all(&pack_path).await {
             Ok(load_result) => {
                 tracing::info!(
-                    "Pack '{}' components loaded: {} runtimes, {} triggers, {} actions, {} sensors ({} skipped, {} warnings)",
+                    "Pack '{}' components loaded: {} created, {} updated, {} skipped, {} removed, {} warnings \
+                     (runtimes: {}/{}, triggers: {}/{}, actions: {}/{}, sensors: {}/{})",
                     pack.r#ref,
-                    load_result.runtimes_loaded,
-                    load_result.triggers_loaded,
-                    load_result.actions_loaded,
-                    load_result.sensors_loaded,
+                    load_result.total_loaded(),
+                    load_result.total_updated(),
                     load_result.total_skipped(),
-                    load_result.warnings.len()
+                    load_result.removed,
+                    load_result.warnings.len(),
+                    load_result.runtimes_loaded, load_result.runtimes_updated,
+                    load_result.triggers_loaded, load_result.triggers_updated,
+                    load_result.actions_loaded, load_result.actions_updated,
+                    load_result.sensors_loaded, load_result.sensors_updated,
                 );
                 for warning in &load_result.warnings {
                     tracing::warn!("Pack component warning: {}", warning);
@@ -873,122 +889,9 @@ async fn register_pack_internal(
         }
     }
 
-    // Restore ad-hoc rules that were saved before pack deletion, and
-    // re-link any rules from other packs whose action/trigger FKs were
-    // set to NULL when the old pack's entities were cascade-deleted.
-    {
-        // Phase 1: Restore saved ad-hoc rules
-        if !saved_adhoc_rules.is_empty() {
-            let mut restored = 0u32;
-            for saved_rule in &saved_adhoc_rules {
-                // Resolve action and trigger IDs by ref (they may have been recreated)
-                let action_id = ActionRepository::find_by_ref(&state.db, &saved_rule.action_ref)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|a| a.id);
-                let trigger_id = TriggerRepository::find_by_ref(&state.db, &saved_rule.trigger_ref)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|t| t.id);
-
-                let input = RestoreRuleInput {
-                    r#ref: saved_rule.r#ref.clone(),
-                    pack: pack.id,
-                    pack_ref: pack.r#ref.clone(),
-                    label: saved_rule.label.clone(),
-                    description: saved_rule.description.clone(),
-                    action: action_id,
-                    action_ref: saved_rule.action_ref.clone(),
-                    trigger: trigger_id,
-                    trigger_ref: saved_rule.trigger_ref.clone(),
-                    conditions: saved_rule.conditions.clone(),
-                    action_params: saved_rule.action_params.clone(),
-                    trigger_params: saved_rule.trigger_params.clone(),
-                    enabled: saved_rule.enabled,
-                };
-
-                match RuleRepository::restore_rule(&state.db, input).await {
-                    Ok(rule) => {
-                        restored += 1;
-                        if rule.action.is_none() || rule.trigger.is_none() {
-                            tracing::warn!(
-                                "Restored ad-hoc rule '{}' with unresolved references \
-                                 (action: {}, trigger: {})",
-                                rule.r#ref,
-                                if rule.action.is_some() {
-                                    "linked"
-                                } else {
-                                    "NULL"
-                                },
-                                if rule.trigger.is_some() {
-                                    "linked"
-                                } else {
-                                    "NULL"
-                                },
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to restore ad-hoc rule '{}': {}",
-                            saved_rule.r#ref,
-                            e
-                        );
-                    }
-                }
-            }
-            tracing::info!(
-                "Restored {}/{} ad-hoc rule(s) for pack '{}'",
-                restored,
-                saved_adhoc_rules.len(),
-                pack.r#ref
-            );
-        }
-
-        // Phase 2: Re-link rules from other packs whose action/trigger FKs
-        // were set to NULL when the old pack's entities were cascade-deleted
-        let new_actions = ActionRepository::find_by_pack(&state.db, pack.id)
-            .await
-            .unwrap_or_default();
-        let new_triggers = TriggerRepository::find_by_pack(&state.db, pack.id)
-            .await
-            .unwrap_or_default();
-
-        for action in &new_actions {
-            match RuleRepository::relink_action_by_ref(&state.db, &action.r#ref, action.id).await {
-                Ok(count) if count > 0 => {
-                    tracing::info!("Re-linked {} rule(s) to action '{}'", count, action.r#ref);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to re-link rules to action '{}': {}",
-                        action.r#ref,
-                        e
-                    );
-                }
-                _ => {}
-            }
-        }
-
-        for trigger in &new_triggers {
-            match RuleRepository::relink_trigger_by_ref(&state.db, &trigger.r#ref, trigger.id).await
-            {
-                Ok(count) if count > 0 => {
-                    tracing::info!("Re-linked {} rule(s) to trigger '{}'", count, trigger.r#ref);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to re-link rules to trigger '{}': {}",
-                        trigger.r#ref,
-                        e
-                    );
-                }
-                _ => {}
-            }
-        }
-    }
+    // Since entities are now updated in place (IDs preserved), ad-hoc rules
+    // and cross-pack FK references survive reinstallation automatically.
+    // No need to save/restore rules or re-link FKs.
 
     // Set up runtime environments for the pack's actions.
     // This creates virtualenvs, installs dependencies, etc. based on each
@@ -1199,8 +1102,11 @@ async fn register_pack_internal(
                     let test_passed = result.status == "passed";
 
                     if !test_passed && !force {
-                        // Tests failed and force is not set - rollback pack creation
-                        let _ = PackRepository::delete(&state.db, pack.id).await;
+                        // Tests failed and force is not set — only delete if we just created this pack.
+                        // If we updated an existing pack, deleting would destroy the original.
+                        if is_new_pack {
+                            let _ = PackRepository::delete(&state.db, pack.id).await;
+                        }
                         return Err(ApiError::BadRequest(format!(
                             "Pack registration failed: tests did not pass. Use force=true to register anyway."
                         )));
@@ -1217,7 +1123,9 @@ async fn register_pack_internal(
                     tracing::warn!("Failed to execute tests for pack '{}': {}", pack.r#ref, e);
                     // If tests can't be executed and force is not set, fail the registration
                     if !force {
-                        let _ = PackRepository::delete(&state.db, pack.id).await;
+                        if is_new_pack {
+                            let _ = PackRepository::delete(&state.db, pack.id).await;
+                        }
                         return Err(ApiError::BadRequest(format!(
                             "Pack registration failed: could not execute tests. Error: {}. Use force=true to register anyway.",
                             e

@@ -105,6 +105,9 @@ pub struct UpdateArtifactRequest {
     /// Updated content type
     pub content_type: Option<String>,
 
+    /// Updated execution ID (re-links artifact to a different execution)
+    pub execution: Option<i64>,
+
     /// Updated structured data (replaces existing data entirely)
     pub data: Option<JsonValue>,
 }

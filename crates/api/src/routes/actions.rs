@@ -237,6 +237,9 @@ pub async fn update_action(
         runtime_version_constraint: request.runtime_version_constraint,
         param_schema: request.param_schema,
         out_schema: request.out_schema,
+        parameter_delivery: None,
+        parameter_format: None,
+        output_format: None,
     };
 
     let action = ActionRepository::update(&state.db, existing_action.id, update_input).await?;

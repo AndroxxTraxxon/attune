@@ -196,11 +196,7 @@ async fn test_update_action() {
     let update = UpdateActionInput {
         label: Some("Updated Label".to_string()),
         description: Some("Updated description".to_string()),
-        entrypoint: None,
-        runtime: None,
-        runtime_version_constraint: None,
-        param_schema: None,
-        out_schema: None,
+        ..Default::default()
     };
 
     let updated = ActionRepository::update(&pool, action.id, update)

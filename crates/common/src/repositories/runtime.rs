@@ -284,6 +284,34 @@ impl RuntimeRepository {
         Ok(runtime)
     }
 
+    /// Delete runtimes belonging to a pack whose refs are NOT in the given set.
+    ///
+    /// Used during pack reinstallation to clean up runtimes that were removed
+    /// from the pack's YAML files. Associated runtime_version rows are
+    /// cascade-deleted by the FK constraint.
+    pub async fn delete_by_pack_excluding<'e, E>(
+        executor: E,
+        pack_id: Id,
+        keep_refs: &[String],
+    ) -> Result<u64>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = if keep_refs.is_empty() {
+            sqlx::query("DELETE FROM runtime WHERE pack = $1")
+                .bind(pack_id)
+                .execute(executor)
+                .await?
+        } else {
+            sqlx::query("DELETE FROM runtime WHERE pack = $1 AND ref != ALL($2)")
+                .bind(pack_id)
+                .bind(keep_refs)
+                .execute(executor)
+                .await?
+        };
+
+        Ok(result.rows_affected())
+    }
 }
 
 // ============================================================================

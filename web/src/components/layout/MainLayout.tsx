@@ -16,8 +16,6 @@ import {
   SquareAsterisk,
   KeyRound,
   Home,
-  Paperclip,
-  FolderOpenDot,
   FolderArchive,
 } from "lucide-react";
 

@@ -8,6 +8,11 @@ use sqlx::{Executor, Postgres, QueryBuilder};
 
 use super::{Create, Delete, FindById, FindByRef, List, Repository, Update};
 
+/// Columns selected in all Action queries. Must match the `Action` model's `FromRow` fields.
+pub const ACTION_COLUMNS: &str = "id, ref, pack, pack_ref, label, description, entrypoint, \
+    runtime, runtime_version_constraint, param_schema, out_schema, workflow_def, is_adhoc, \
+    parameter_delivery, parameter_format, output_format, created, updated";
+
 /// Filters for [`ActionRepository::list_search`].
 ///
 /// All fields are optional and combinable (AND). Pagination is always applied.
@@ -65,6 +70,9 @@ pub struct UpdateActionInput {
     pub runtime_version_constraint: Option<Option<String>>,
     pub param_schema: Option<JsonSchema>,
     pub out_schema: Option<JsonSchema>,
+    pub parameter_delivery: Option<String>,
+    pub parameter_format: Option<String>,
+    pub output_format: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -73,15 +81,10 @@ impl FindById for ActionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let action = sqlx::query_as::<_, Action>(
-            r#"
-            SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_version_constraint,
-                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
-            FROM action
-            WHERE id = $1
-            "#,
-        )
+        let action = sqlx::query_as::<_, Action>(&format!(
+            "SELECT {} FROM action WHERE id = $1",
+            ACTION_COLUMNS
+        ))
         .bind(id)
         .fetch_optional(executor)
         .await?;
@@ -96,15 +99,10 @@ impl FindByRef for ActionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let action = sqlx::query_as::<_, Action>(
-            r#"
-            SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_version_constraint,
-                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
-            FROM action
-            WHERE ref = $1
-            "#,
-        )
+        let action = sqlx::query_as::<_, Action>(&format!(
+            "SELECT {} FROM action WHERE ref = $1",
+            ACTION_COLUMNS
+        ))
         .bind(ref_str)
         .fetch_optional(executor)
         .await?;
@@ -119,15 +117,10 @@ impl List for ActionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let actions = sqlx::query_as::<_, Action>(
-            r#"
-            SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_version_constraint,
-                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
-            FROM action
-            ORDER BY ref ASC
-            "#,
-        )
+        let actions = sqlx::query_as::<_, Action>(&format!(
+            "SELECT {} FROM action ORDER BY ref ASC",
+            ACTION_COLUMNS
+        ))
         .fetch_all(executor)
         .await?;
 
@@ -155,16 +148,15 @@ impl Create for ActionRepository {
         }
 
         // Try to insert - database will enforce uniqueness constraint
-        let action = sqlx::query_as::<_, Action>(
+        let action = sqlx::query_as::<_, Action>(&format!(
             r#"
             INSERT INTO action (ref, pack, pack_ref, label, description, entrypoint,
                                 runtime, runtime_version_constraint, param_schema, out_schema, is_adhoc)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            RETURNING id, ref, pack, pack_ref, label, description, entrypoint,
-                      runtime, runtime_version_constraint,
-                      param_schema, out_schema, workflow_def, is_adhoc, created, updated
+            RETURNING {}
             "#,
-        )
+            ACTION_COLUMNS
+        ))
         .bind(&input.r#ref)
         .bind(input.pack)
         .bind(&input.pack_ref)
@@ -267,6 +259,33 @@ impl Update for ActionRepository {
             has_updates = true;
         }
 
+        if let Some(parameter_delivery) = &input.parameter_delivery {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("parameter_delivery = ");
+            query.push_bind(parameter_delivery);
+            has_updates = true;
+        }
+
+        if let Some(parameter_format) = &input.parameter_format {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("parameter_format = ");
+            query.push_bind(parameter_format);
+            has_updates = true;
+        }
+
+        if let Some(output_format) = &input.output_format {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("output_format = ");
+            query.push_bind(output_format);
+            has_updates = true;
+        }
+
         if !has_updates {
             // No updates requested, fetch and return existing action
             return Self::find_by_id(executor, id)
@@ -276,7 +295,7 @@ impl Update for ActionRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(" RETURNING id, ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_version_constraint, param_schema, out_schema, workflow_def, is_adhoc, created, updated");
+        query.push(&format!(" RETURNING {}", ACTION_COLUMNS));
 
         let action = query
             .build_query_as::<Action>()
@@ -317,10 +336,8 @@ impl ActionRepository {
     where
         E: Executor<'e, Database = Postgres> + Copy + 'e,
     {
-        let select_cols = "id, ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_version_constraint, param_schema, out_schema, workflow_def, is_adhoc, created, updated";
-
         let mut qb: QueryBuilder<'_, Postgres> =
-            QueryBuilder::new(format!("SELECT {select_cols} FROM action"));
+            QueryBuilder::new(format!("SELECT {} FROM action", ACTION_COLUMNS));
         let mut count_qb: QueryBuilder<'_, Postgres> =
             QueryBuilder::new("SELECT COUNT(*) FROM action");
 
@@ -398,16 +415,10 @@ impl ActionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let actions = sqlx::query_as::<_, Action>(
-            r#"
-            SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_version_constraint,
-                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
-            FROM action
-            WHERE pack = $1
-            ORDER BY ref ASC
-            "#,
-        )
+        let actions = sqlx::query_as::<_, Action>(&format!(
+            "SELECT {} FROM action WHERE pack = $1 ORDER BY ref ASC",
+            ACTION_COLUMNS
+        ))
         .bind(pack_id)
         .fetch_all(executor)
         .await?;
@@ -420,16 +431,10 @@ impl ActionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let actions = sqlx::query_as::<_, Action>(
-            r#"
-            SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_version_constraint,
-                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
-            FROM action
-            WHERE runtime = $1
-            ORDER BY ref ASC
-            "#,
-        )
+        let actions = sqlx::query_as::<_, Action>(&format!(
+            "SELECT {} FROM action WHERE runtime = $1 ORDER BY ref ASC",
+            ACTION_COLUMNS
+        ))
         .bind(runtime_id)
         .fetch_all(executor)
         .await?;
@@ -443,16 +448,10 @@ impl ActionRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         let search_pattern = format!("%{}%", query.to_lowercase());
-        let actions = sqlx::query_as::<_, Action>(
-            r#"
-            SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_version_constraint,
-                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
-            FROM action
-            WHERE LOWER(ref) LIKE $1 OR LOWER(label) LIKE $1 OR LOWER(description) LIKE $1
-            ORDER BY ref ASC
-            "#,
-        )
+        let actions = sqlx::query_as::<_, Action>(&format!(
+            "SELECT {} FROM action WHERE LOWER(ref) LIKE $1 OR LOWER(label) LIKE $1 OR LOWER(description) LIKE $1 ORDER BY ref ASC",
+            ACTION_COLUMNS
+        ))
         .bind(&search_pattern)
         .fetch_all(executor)
         .await?;
@@ -465,16 +464,10 @@ impl ActionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let actions = sqlx::query_as::<_, Action>(
-            r#"
-            SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_version_constraint,
-                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
-            FROM action
-            WHERE workflow_def IS NOT NULL
-            ORDER BY ref ASC
-            "#,
-        )
+        let actions = sqlx::query_as::<_, Action>(&format!(
+            "SELECT {} FROM action WHERE workflow_def IS NOT NULL ORDER BY ref ASC",
+            ACTION_COLUMNS
+        ))
         .fetch_all(executor)
         .await?;
 
@@ -489,20 +482,45 @@ impl ActionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let action = sqlx::query_as::<_, Action>(
-            r#"
-            SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_version_constraint,
-                   param_schema, out_schema, workflow_def, is_adhoc, created, updated
-            FROM action
-            WHERE workflow_def = $1
-            "#,
-        )
+        let action = sqlx::query_as::<_, Action>(&format!(
+            "SELECT {} FROM action WHERE workflow_def = $1",
+            ACTION_COLUMNS
+        ))
         .bind(workflow_def_id)
         .fetch_optional(executor)
         .await?;
 
         Ok(action)
+    }
+
+    /// Delete non-adhoc actions belonging to a pack whose refs are NOT in the given set.
+    ///
+    /// Used during pack reinstallation to clean up actions that were removed
+    /// from the pack's YAML files. Ad-hoc (user-created) actions are preserved.
+    pub async fn delete_non_adhoc_by_pack_excluding<'e, E>(
+        executor: E,
+        pack_id: Id,
+        keep_refs: &[String],
+    ) -> Result<u64>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = if keep_refs.is_empty() {
+            sqlx::query("DELETE FROM action WHERE pack = $1 AND is_adhoc = false")
+                .bind(pack_id)
+                .execute(executor)
+                .await?
+        } else {
+            sqlx::query(
+                "DELETE FROM action WHERE pack = $1 AND is_adhoc = false AND ref != ALL($2)",
+            )
+            .bind(pack_id)
+            .bind(keep_refs)
+            .execute(executor)
+            .await?
+        };
+
+        Ok(result.rows_affected())
     }
 
     /// Link an action to a workflow definition
@@ -514,16 +532,15 @@ impl ActionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let action = sqlx::query_as::<_, Action>(
+        let action = sqlx::query_as::<_, Action>(&format!(
             r#"
             UPDATE action
             SET workflow_def = $2, updated = NOW()
             WHERE id = $1
-            RETURNING id, ref, pack, pack_ref, label, description, entrypoint,
-                      runtime, runtime_version_constraint,
-                      param_schema, out_schema, workflow_def, is_adhoc, created, updated
+            RETURNING {}
             "#,
-        )
+            ACTION_COLUMNS
+        ))
         .bind(action_id)
         .bind(workflow_def_id)
         .fetch_one(executor)

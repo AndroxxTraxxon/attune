@@ -263,6 +263,7 @@ async fn test_update_artifact_all_fields() {
         content_type: Some("image/png".to_string()),
         size_bytes: Some(12345),
         data: Some(serde_json::json!({"key": "value"})),
+        execution: None,
     };
 
     let updated = ArtifactRepository::update(&pool, created.id, update_input.clone())

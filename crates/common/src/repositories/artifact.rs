@@ -52,6 +52,7 @@ pub struct UpdateArtifactInput {
     pub description: Option<String>,
     pub content_type: Option<String>,
     pub size_bytes: Option<i64>,
+    pub execution: Option<Option<i64>>,
     pub data: Option<serde_json::Value>,
 }
 
@@ -189,6 +190,15 @@ impl Update for ArtifactRepository {
         push_field!(&input.description, "description");
         push_field!(&input.content_type, "content_type");
         push_field!(input.size_bytes, "size_bytes");
+        // execution is Option<Option<i64>> — outer Option = "was field provided?",
+        // inner Option = nullable column value
+        if let Some(exec_val) = input.execution {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("execution = ").push_bind(exec_val);
+            has_updates = true;
+        }
         push_field!(&input.data, "data");
 
         if !has_updates {

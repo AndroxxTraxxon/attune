@@ -301,6 +301,36 @@ impl Delete for TriggerRepository {
 }
 
 impl TriggerRepository {
+    /// Delete non-adhoc triggers belonging to a pack whose refs are NOT in the given set.
+    ///
+    /// Used during pack reinstallation to clean up triggers that were removed
+    /// from the pack's YAML files. Ad-hoc (user-created) triggers are preserved.
+    pub async fn delete_non_adhoc_by_pack_excluding<'e, E>(
+        executor: E,
+        pack_id: Id,
+        keep_refs: &[String],
+    ) -> Result<u64>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = if keep_refs.is_empty() {
+            sqlx::query("DELETE FROM trigger WHERE pack = $1 AND is_adhoc = false")
+                .bind(pack_id)
+                .execute(executor)
+                .await?
+        } else {
+            sqlx::query(
+                "DELETE FROM trigger WHERE pack = $1 AND is_adhoc = false AND ref != ALL($2)",
+            )
+            .bind(pack_id)
+            .bind(keep_refs)
+            .execute(executor)
+            .await?
+        };
+
+        Ok(result.rows_affected())
+    }
+
     /// Search triggers with all filters pushed into SQL.
     ///
     /// All filter fields are combinable (AND). Pagination is server-side.
@@ -907,6 +937,34 @@ impl Delete for SensorRepository {
 }
 
 impl SensorRepository {
+    /// Delete non-adhoc sensors belonging to a pack whose refs are NOT in the given set.
+    ///
+    /// Used during pack reinstallation to clean up sensors that were removed
+    /// from the pack's YAML files.
+    pub async fn delete_by_pack_excluding<'e, E>(
+        executor: E,
+        pack_id: Id,
+        keep_refs: &[String],
+    ) -> Result<u64>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = if keep_refs.is_empty() {
+            sqlx::query("DELETE FROM sensor WHERE pack = $1")
+                .bind(pack_id)
+                .execute(executor)
+                .await?
+        } else {
+            sqlx::query("DELETE FROM sensor WHERE pack = $1 AND ref != ALL($2)")
+                .bind(pack_id)
+                .bind(keep_refs)
+                .execute(executor)
+                .await?
+        };
+
+        Ok(result.rows_affected())
+    }
+
     /// Search sensors with all filters pushed into SQL.
     ///
     /// All filter fields are combinable (AND). Pagination is server-side.

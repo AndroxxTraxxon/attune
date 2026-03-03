@@ -8,6 +8,7 @@
 //! - Progress append for progress-type artifacts (streaming updates)
 //! - Listing artifacts by execution
 //! - Version history and retrieval
+//! - Upsert-and-upload: create-or-reuse an artifact by ref and upload a version in one call
 
 use axum::{
     body::Body,
@@ -20,7 +21,9 @@ use axum::{
 use std::sync::Arc;
 use tracing::warn;
 
-use attune_common::models::enums::{ArtifactType, ArtifactVisibility};
+use attune_common::models::enums::{
+    ArtifactType, ArtifactVisibility, OwnerType, RetentionPolicyType,
+};
 use attune_common::repositories::{
     artifact::{
         ArtifactRepository, ArtifactSearchFilters, ArtifactVersionRepository, CreateArtifactInput,
@@ -251,6 +254,7 @@ pub async fn update_artifact(
         description: request.description,
         content_type: request.content_type,
         size_bytes: None, // Managed by version creation trigger
+        execution: request.execution.map(Some),
         data: request.data,
     };
 
@@ -971,6 +975,282 @@ pub async fn delete_version(
 }
 
 // ============================================================================
+// Upsert-and-upload by ref
+// ============================================================================
+
+/// Upload a file version to an artifact identified by ref, creating the artifact if it does not
+/// already exist.
+///
+/// This is the recommended way for actions to produce versioned file artifacts. The caller
+/// provides the artifact ref and file content in a single multipart request. The server:
+///
+/// 1. Looks up the artifact by `ref`.
+/// 2. If not found, creates it using the metadata fields in the multipart body.
+/// 3. If found, optionally updates the `execution` link to the current execution.
+/// 4. Uploads the file bytes as a new version (version number is auto-assigned).
+///
+/// **Multipart fields:**
+/// - `file` (required) — the binary file content
+/// - `ref` (required for creation) — artifact reference (ignored if artifact already exists)
+/// - `scope` — owner scope: `system`, `pack`, `action`, `sensor`, `rule` (default: `action`)
+/// - `owner` — owner identifier (default: empty string)
+/// - `type` — artifact type: `file_text`, `file_image`, etc. (default: `file_text`)
+/// - `visibility` — `public` or `private` (default: type-aware server default)
+/// - `name` — human-readable name
+/// - `description` — optional description
+/// - `content_type` — MIME type (default: auto-detected from multipart or `application/octet-stream`)
+/// - `execution` — execution ID to link this artifact to (updates existing artifacts too)
+/// - `retention_policy` — `versions`, `days`, `hours`, `minutes` (default: `versions`)
+/// - `retention_limit` — limit value (default: `10`)
+/// - `created_by` — who created this version
+/// - `meta` — JSON metadata for this version
+#[utoipa::path(
+    post,
+    path = "/api/v1/artifacts/ref/{ref}/versions/upload",
+    tag = "artifacts",
+    params(("ref" = String, Path, description = "Artifact reference (created if not found)")),
+    request_body(content = String, content_type = "multipart/form-data"),
+    responses(
+        (status = 201, description = "Version created (artifact may have been created too)", body = inline(ApiResponse<ArtifactVersionResponse>)),
+        (status = 400, description = "Missing file field or invalid metadata"),
+        (status = 413, description = "File too large"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn upload_version_by_ref(
+    RequireAuth(_user): RequireAuth,
+    State(state): State<Arc<AppState>>,
+    Path(artifact_ref): Path<String>,
+    mut multipart: Multipart,
+) -> ApiResult<impl IntoResponse> {
+    // 50 MB limit
+    const MAX_FILE_SIZE: usize = 50 * 1024 * 1024;
+
+    // Collect all multipart fields
+    let mut file_data: Option<Vec<u8>> = None;
+    let mut file_content_type: Option<String> = None;
+    let mut content_type_field: Option<String> = None;
+    let mut meta: Option<serde_json::Value> = None;
+    let mut created_by: Option<String> = None;
+
+    // Artifact-creation metadata (used only when creating a new artifact)
+    let mut scope: Option<String> = None;
+    let mut owner: Option<String> = None;
+    let mut artifact_type: Option<String> = None;
+    let mut visibility: Option<String> = None;
+    let mut name: Option<String> = None;
+    let mut description: Option<String> = None;
+    let mut execution: Option<String> = None;
+    let mut retention_policy: Option<String> = None;
+    let mut retention_limit: Option<String> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("Multipart error: {}", e)))?
+    {
+        let field_name = field.name().unwrap_or("").to_string();
+        match field_name.as_str() {
+            "file" => {
+                file_content_type = field.content_type().map(|s| s.to_string());
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|e| ApiError::BadRequest(format!("Failed to read file: {}", e)))?;
+                if bytes.len() > MAX_FILE_SIZE {
+                    return Err(ApiError::BadRequest(format!(
+                        "File exceeds maximum size of {} bytes",
+                        MAX_FILE_SIZE
+                    )));
+                }
+                file_data = Some(bytes.to_vec());
+            }
+            "content_type" => {
+                let t = field.text().await.unwrap_or_default();
+                if !t.is_empty() {
+                    content_type_field = Some(t);
+                }
+            }
+            "meta" => {
+                let t = field.text().await.unwrap_or_default();
+                if !t.is_empty() {
+                    meta =
+                        Some(serde_json::from_str(&t).map_err(|e| {
+                            ApiError::BadRequest(format!("Invalid meta JSON: {}", e))
+                        })?);
+                }
+            }
+            "created_by" => {
+                let t = field.text().await.unwrap_or_default();
+                if !t.is_empty() {
+                    created_by = Some(t);
+                }
+            }
+            "scope" => {
+                scope = Some(field.text().await.unwrap_or_default());
+            }
+            "owner" => {
+                owner = Some(field.text().await.unwrap_or_default());
+            }
+            "type" => {
+                artifact_type = Some(field.text().await.unwrap_or_default());
+            }
+            "visibility" => {
+                visibility = Some(field.text().await.unwrap_or_default());
+            }
+            "name" => {
+                name = Some(field.text().await.unwrap_or_default());
+            }
+            "description" => {
+                description = Some(field.text().await.unwrap_or_default());
+            }
+            "execution" => {
+                execution = Some(field.text().await.unwrap_or_default());
+            }
+            "retention_policy" => {
+                retention_policy = Some(field.text().await.unwrap_or_default());
+            }
+            "retention_limit" => {
+                retention_limit = Some(field.text().await.unwrap_or_default());
+            }
+            _ => { /* skip unknown fields */ }
+        }
+    }
+
+    let file_bytes = file_data.ok_or_else(|| {
+        ApiError::BadRequest("Missing required 'file' field in multipart upload".to_string())
+    })?;
+
+    // Parse execution ID
+    let execution_id: Option<i64> = match &execution {
+        Some(s) if !s.is_empty() => Some(
+            s.parse::<i64>()
+                .map_err(|_| ApiError::BadRequest(format!("Invalid execution ID: '{}'", s)))?,
+        ),
+        _ => None,
+    };
+
+    // Upsert: find existing artifact or create a new one
+    let artifact = match ArtifactRepository::find_by_ref(&state.db, &artifact_ref).await? {
+        Some(existing) => {
+            // Update execution link if a new execution ID was provided
+            if execution_id.is_some() && execution_id != existing.execution {
+                let update_input = UpdateArtifactInput {
+                    r#ref: None,
+                    scope: None,
+                    owner: None,
+                    r#type: None,
+                    visibility: None,
+                    retention_policy: None,
+                    retention_limit: None,
+                    name: None,
+                    description: None,
+                    content_type: None,
+                    size_bytes: None,
+                    execution: execution_id.map(Some),
+                    data: None,
+                };
+                ArtifactRepository::update(&state.db, existing.id, update_input).await?
+            } else {
+                existing
+            }
+        }
+        None => {
+            // Parse artifact type
+            let a_type: ArtifactType = match &artifact_type {
+                Some(t) => serde_json::from_value(serde_json::Value::String(t.clone()))
+                    .map_err(|_| ApiError::BadRequest(format!("Invalid artifact type: '{}'", t)))?,
+                None => ArtifactType::FileText,
+            };
+
+            // Parse scope
+            let a_scope: OwnerType = match &scope {
+                Some(s) if !s.is_empty() => {
+                    serde_json::from_value(serde_json::Value::String(s.clone()))
+                        .map_err(|_| ApiError::BadRequest(format!("Invalid scope: '{}'", s)))?
+                }
+                _ => OwnerType::Action,
+            };
+
+            // Parse visibility with type-aware default
+            let a_visibility: ArtifactVisibility = match &visibility {
+                Some(v) if !v.is_empty() => {
+                    serde_json::from_value(serde_json::Value::String(v.clone()))
+                        .map_err(|_| ApiError::BadRequest(format!("Invalid visibility: '{}'", v)))?
+                }
+                _ => {
+                    if a_type == ArtifactType::Progress {
+                        ArtifactVisibility::Public
+                    } else {
+                        ArtifactVisibility::Private
+                    }
+                }
+            };
+
+            // Parse retention
+            let a_retention_policy: RetentionPolicyType = match &retention_policy {
+                Some(rp) if !rp.is_empty() => {
+                    serde_json::from_value(serde_json::Value::String(rp.clone())).map_err(|_| {
+                        ApiError::BadRequest(format!("Invalid retention_policy: '{}'", rp))
+                    })?
+                }
+                _ => RetentionPolicyType::Versions,
+            };
+            let a_retention_limit: i32 = match &retention_limit {
+                Some(rl) if !rl.is_empty() => rl.parse::<i32>().map_err(|_| {
+                    ApiError::BadRequest(format!("Invalid retention_limit: '{}'", rl))
+                })?,
+                _ => 10,
+            };
+
+            let create_input = CreateArtifactInput {
+                r#ref: artifact_ref.clone(),
+                scope: a_scope,
+                owner: owner.unwrap_or_default(),
+                r#type: a_type,
+                visibility: a_visibility,
+                retention_policy: a_retention_policy,
+                retention_limit: a_retention_limit,
+                name: name.filter(|s| !s.is_empty()),
+                description: description.filter(|s| !s.is_empty()),
+                content_type: content_type_field
+                    .clone()
+                    .or_else(|| file_content_type.clone()),
+                execution: execution_id,
+                data: None,
+            };
+
+            ArtifactRepository::create(&state.db, create_input).await?
+        }
+    };
+
+    // Resolve content type: explicit field > multipart header > fallback
+    let resolved_ct = content_type_field
+        .or(file_content_type)
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+
+    let version_input = CreateArtifactVersionInput {
+        artifact: artifact.id,
+        content_type: Some(resolved_ct),
+        content: Some(file_bytes),
+        content_json: None,
+        file_path: None,
+        meta,
+        created_by,
+    };
+
+    let version = ArtifactVersionRepository::create(&state.db, version_input).await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ApiResponse::with_message(
+            ArtifactVersionResponse::from(version),
+            "Version uploaded successfully",
+        )),
+    ))
+}
+
+// ============================================================================
 // Helpers
 // ============================================================================
 
@@ -1219,6 +1499,10 @@ pub fn routes() -> Router<Arc<AppState>> {
                 .delete(delete_artifact),
         )
         .route("/artifacts/ref/{ref}", get(get_artifact_by_ref))
+        .route(
+            "/artifacts/ref/{ref}/versions/upload",
+            post(upload_version_by_ref),
+        )
         // Progress / data
         .route("/artifacts/{id}/progress", post(append_progress))
         .route(

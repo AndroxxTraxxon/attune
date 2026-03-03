@@ -669,6 +669,9 @@ async fn update_companion_action(
             runtime_version_constraint: None,
             param_schema: param_schema.cloned(),
             out_schema: out_schema.cloned(),
+            parameter_delivery: None,
+            parameter_format: None,
+            output_format: None,
         };
 
         ActionRepository::update(db, action.id, update_input)
@@ -731,6 +734,9 @@ async fn ensure_companion_action(
             runtime_version_constraint: None,
             param_schema: param_schema.cloned(),
             out_schema: out_schema.cloned(),
+            parameter_delivery: None,
+            parameter_format: None,
+            output_format: None,
         };
 
         ActionRepository::update(db, action.id, update_input)
