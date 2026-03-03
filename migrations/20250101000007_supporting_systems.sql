@@ -143,6 +143,7 @@ CREATE TABLE artifact (
     scope owner_type_enum NOT NULL DEFAULT 'system',
     owner TEXT NOT NULL DEFAULT '',
     type artifact_type_enum NOT NULL,
+    visibility artifact_visibility_enum NOT NULL DEFAULT 'private',
     retention_policy artifact_retention_enum NOT NULL DEFAULT 'versions',
     retention_limit INTEGER NOT NULL DEFAULT 1,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -157,6 +158,8 @@ CREATE INDEX idx_artifact_type ON artifact(type);
 CREATE INDEX idx_artifact_created ON artifact(created DESC);
 CREATE INDEX idx_artifact_scope_owner ON artifact(scope, owner);
 CREATE INDEX idx_artifact_type_created ON artifact(type, created DESC);
+CREATE INDEX idx_artifact_visibility ON artifact(visibility);
+CREATE INDEX idx_artifact_visibility_scope ON artifact(visibility, scope, owner);
 
 -- Trigger
 CREATE TRIGGER update_artifact_updated
@@ -170,6 +173,7 @@ COMMENT ON COLUMN artifact.ref IS 'Artifact reference/path';
 COMMENT ON COLUMN artifact.scope IS 'Owner type (system, identity, pack, action, sensor)';
 COMMENT ON COLUMN artifact.owner IS 'Owner identifier';
 COMMENT ON COLUMN artifact.type IS 'Artifact type (file, url, progress, etc.)';
+COMMENT ON COLUMN artifact.visibility IS 'Visibility level: public (all users) or private (scoped by scope/owner)';
 COMMENT ON COLUMN artifact.retention_policy IS 'How to retain artifacts (versions, days, hours, minutes)';
 COMMENT ON COLUMN artifact.retention_limit IS 'Numeric limit for retention policy';
 

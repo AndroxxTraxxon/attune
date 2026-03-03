@@ -3,7 +3,9 @@
 //! Tests cover CRUD operations, specialized queries, constraints,
 //! enum handling, timestamps, and edge cases.
 
-use attune_common::models::enums::{ArtifactType, OwnerType, RetentionPolicyType};
+use attune_common::models::enums::{
+    ArtifactType, ArtifactVisibility, OwnerType, RetentionPolicyType,
+};
 use attune_common::repositories::artifact::{
     ArtifactRepository, CreateArtifactInput, UpdateArtifactInput,
 };
@@ -65,6 +67,7 @@ impl ArtifactFixture {
             scope: OwnerType::System,
             owner: self.unique_owner("system"),
             r#type: ArtifactType::FileText,
+            visibility: ArtifactVisibility::default(),
             retention_policy: RetentionPolicyType::Versions,
             retention_limit: 5,
             name: None,
@@ -252,6 +255,7 @@ async fn test_update_artifact_all_fields() {
         scope: Some(OwnerType::Identity),
         owner: Some(fixture.unique_owner("identity")),
         r#type: Some(ArtifactType::FileImage),
+        visibility: Some(ArtifactVisibility::Public),
         retention_policy: Some(RetentionPolicyType::Days),
         retention_limit: Some(30),
         name: Some("Updated Name".to_string()),

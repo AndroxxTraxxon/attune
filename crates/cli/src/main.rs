@@ -5,6 +5,7 @@ mod client;
 mod commands;
 mod config;
 mod output;
+mod wait;
 
 use commands::{
     action::{handle_action_command, ActionCommands},
@@ -112,6 +113,11 @@ enum Commands {
         /// Timeout in seconds when waiting (default: 300)
         #[arg(long, default_value = "300", requires = "wait")]
         timeout: u64,
+
+        /// Notifier WebSocket base URL (e.g. ws://localhost:8081).
+        /// Derived from --api-url automatically when not set.
+        #[arg(long, requires = "wait")]
+        notifier_url: Option<String>,
     },
 }
 
@@ -193,6 +199,7 @@ async fn main() {
             params_json,
             wait,
             timeout,
+            notifier_url,
         } => {
             // Delegate to action execute command
             handle_action_command(
@@ -203,6 +210,7 @@ async fn main() {
                     params_json,
                     wait,
                     timeout,
+                    notifier_url,
                 },
                 &cli.api_url,
                 output_format,

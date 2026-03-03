@@ -136,7 +136,7 @@ impl WorkerService {
         // Initialize worker registration
         let registration = Arc::new(RwLock::new(WorkerRegistration::new(pool.clone(), &config)));
 
-        // Initialize artifact manager
+        // Initialize artifact manager (legacy, for stdout/stderr log storage)
         let artifact_base_dir = std::path::PathBuf::from(
             config
                 .worker
@@ -147,6 +147,22 @@ impl WorkerService {
         );
         let artifact_manager = ArtifactManager::new(artifact_base_dir);
         artifact_manager.initialize().await?;
+
+        // Initialize artifacts directory for file-backed artifact storage (shared volume).
+        // Execution processes write artifact files here; the API serves them from the same path.
+        let artifacts_dir = std::path::PathBuf::from(&config.artifacts_dir);
+        if let Err(e) = tokio::fs::create_dir_all(&artifacts_dir).await {
+            warn!(
+                "Failed to create artifacts directory '{}': {}. File-backed artifacts may not work.",
+                artifacts_dir.display(),
+                e,
+            );
+        } else {
+            info!(
+                "Artifacts directory initialized at: {}",
+                artifacts_dir.display()
+            );
+        }
 
         let packs_base_dir = std::path::PathBuf::from(&config.packs_base_dir);
         let runtime_envs_dir = std::path::PathBuf::from(&config.runtime_envs_dir);
@@ -304,6 +320,7 @@ impl WorkerService {
             max_stdout_bytes,
             max_stderr_bytes,
             packs_base_dir.clone(),
+            artifacts_dir,
             api_url,
             jwt_config,
         ));

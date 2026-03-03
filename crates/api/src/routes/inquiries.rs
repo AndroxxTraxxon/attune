@@ -403,7 +403,7 @@ pub async fn respond_to_inquiry(
     let updated_inquiry = InquiryRepository::update(&state.db, id, update_input).await?;
 
     // Publish InquiryResponded message if publisher is available
-    if let Some(publisher) = &state.publisher {
+    if let Some(publisher) = state.get_publisher().await {
         let user_id = user
             .0
             .identity_id()

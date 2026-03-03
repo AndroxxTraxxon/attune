@@ -3,7 +3,7 @@
 use crate::models::{
     artifact::*,
     artifact_version::ArtifactVersion,
-    enums::{ArtifactType, OwnerType, RetentionPolicyType},
+    enums::{ArtifactType, ArtifactVisibility, OwnerType, RetentionPolicyType},
 };
 use crate::Result;
 use sqlx::{Executor, Postgres, QueryBuilder};
@@ -29,6 +29,7 @@ pub struct CreateArtifactInput {
     pub scope: OwnerType,
     pub owner: String,
     pub r#type: ArtifactType,
+    pub visibility: ArtifactVisibility,
     pub retention_policy: RetentionPolicyType,
     pub retention_limit: i32,
     pub name: Option<String>,
@@ -44,6 +45,7 @@ pub struct UpdateArtifactInput {
     pub scope: Option<OwnerType>,
     pub owner: Option<String>,
     pub r#type: Option<ArtifactType>,
+    pub visibility: Option<ArtifactVisibility>,
     pub retention_policy: Option<RetentionPolicyType>,
     pub retention_limit: Option<i32>,
     pub name: Option<String>,
@@ -59,6 +61,7 @@ pub struct ArtifactSearchFilters {
     pub scope: Option<OwnerType>,
     pub owner: Option<String>,
     pub r#type: Option<ArtifactType>,
+    pub visibility: Option<ArtifactVisibility>,
     pub execution: Option<i64>,
     pub name_contains: Option<String>,
     pub limit: u32,
@@ -127,9 +130,9 @@ impl Create for ArtifactRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         let query = format!(
-            "INSERT INTO artifact (ref, scope, owner, type, retention_policy, retention_limit, \
+            "INSERT INTO artifact (ref, scope, owner, type, visibility, retention_policy, retention_limit, \
              name, description, content_type, execution, data) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
              RETURNING {}",
             SELECT_COLUMNS
         );
@@ -138,6 +141,7 @@ impl Create for ArtifactRepository {
             .bind(input.scope)
             .bind(&input.owner)
             .bind(input.r#type)
+            .bind(input.visibility)
             .bind(input.retention_policy)
             .bind(input.retention_limit)
             .bind(&input.name)
@@ -178,6 +182,7 @@ impl Update for ArtifactRepository {
         push_field!(input.scope, "scope");
         push_field!(&input.owner, "owner");
         push_field!(input.r#type, "type");
+        push_field!(input.visibility, "visibility");
         push_field!(input.retention_policy, "retention_policy");
         push_field!(input.retention_limit, "retention_limit");
         push_field!(&input.name, "name");
@@ -241,6 +246,10 @@ impl ArtifactRepository {
             param_idx += 1;
             conditions.push(format!("type = ${}", param_idx));
         }
+        if filters.visibility.is_some() {
+            param_idx += 1;
+            conditions.push(format!("visibility = ${}", param_idx));
+        }
         if filters.execution.is_some() {
             param_idx += 1;
             conditions.push(format!("execution = ${}", param_idx));
@@ -270,6 +279,9 @@ impl ArtifactRepository {
         if let Some(r#type) = filters.r#type {
             count_query = count_query.bind(r#type);
         }
+        if let Some(visibility) = filters.visibility {
+            count_query = count_query.bind(visibility);
+        }
         if let Some(execution) = filters.execution {
             count_query = count_query.bind(execution);
         }
@@ -297,6 +309,9 @@ impl ArtifactRepository {
         }
         if let Some(r#type) = filters.r#type {
             data_query = data_query.bind(r#type);
+        }
+        if let Some(visibility) = filters.visibility {
+            data_query = data_query.bind(visibility);
         }
         if let Some(execution) = filters.execution {
             data_query = data_query.bind(execution);
@@ -466,6 +481,21 @@ impl ArtifactRepository {
             .await
             .map_err(Into::into)
     }
+
+    /// Update the size_bytes of an artifact (used by worker finalization to sync
+    /// the parent artifact's size with the latest file-based version).
+    pub async fn update_size_bytes<'e, E>(executor: E, id: i64, size_bytes: i64) -> Result<bool>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result =
+            sqlx::query("UPDATE artifact SET size_bytes = $1, updated = NOW() WHERE id = $2")
+                .bind(size_bytes)
+                .bind(id)
+                .execute(executor)
+                .await?;
+        Ok(result.rows_affected() > 0)
+    }
 }
 
 // ============================================================================
@@ -489,6 +519,7 @@ pub struct CreateArtifactVersionInput {
     pub content_type: Option<String>,
     pub content: Option<Vec<u8>>,
     pub content_json: Option<serde_json::Value>,
+    pub file_path: Option<String>,
     pub meta: Option<serde_json::Value>,
     pub created_by: Option<String>,
 }
@@ -646,8 +677,8 @@ impl ArtifactVersionRepository {
 
         let query = format!(
             "INSERT INTO artifact_version \
-                 (artifact, version, content_type, size_bytes, content, content_json, meta, created_by) \
-             VALUES ($1, next_artifact_version($1), $2, $3, $4, $5, $6, $7) \
+                 (artifact, version, content_type, size_bytes, content, content_json, file_path, meta, created_by) \
+             VALUES ($1, next_artifact_version($1), $2, $3, $4, $5, $6, $7, $8) \
              RETURNING {}",
             artifact_version::SELECT_COLUMNS_WITH_CONTENT
         );
@@ -657,6 +688,7 @@ impl ArtifactVersionRepository {
             .bind(size_bytes)
             .bind(&input.content)
             .bind(&input.content_json)
+            .bind(&input.file_path)
             .bind(&input.meta)
             .bind(&input.created_by)
             .fetch_one(executor)
@@ -696,6 +728,69 @@ impl ArtifactVersionRepository {
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM artifact_version WHERE artifact = $1")
             .bind(artifact_id)
             .fetch_one(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Update the size_bytes of a specific artifact version (used by worker finalization).
+    pub async fn update_size_bytes<'e, E>(
+        executor: E,
+        version_id: i64,
+        size_bytes: i64,
+    ) -> Result<bool>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = sqlx::query("UPDATE artifact_version SET size_bytes = $1 WHERE id = $2")
+            .bind(size_bytes)
+            .bind(version_id)
+            .execute(executor)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Find all file-backed versions linked to an execution.
+    /// Joins artifact_version → artifact on artifact.execution to find all
+    /// file-based versions produced by a given execution.
+    pub async fn find_file_versions_by_execution<'e, E>(
+        executor: E,
+        execution_id: i64,
+    ) -> Result<Vec<ArtifactVersion>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "SELECT av.{} \
+             FROM artifact_version av \
+             JOIN artifact a ON av.artifact = a.id \
+             WHERE a.execution = $1 AND av.file_path IS NOT NULL",
+            artifact_version::SELECT_COLUMNS
+                .split(", ")
+                .collect::<Vec<_>>()
+                .join(", av.")
+        );
+        sqlx::query_as::<_, ArtifactVersion>(&query)
+            .bind(execution_id)
+            .fetch_all(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Find all file-backed versions for a specific artifact (used for disk cleanup on delete).
+    pub async fn find_file_versions_by_artifact<'e, E>(
+        executor: E,
+        artifact_id: i64,
+    ) -> Result<Vec<ArtifactVersion>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "SELECT {} FROM artifact_version WHERE artifact = $1 AND file_path IS NOT NULL",
+            artifact_version::SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, ArtifactVersion>(&query)
+            .bind(artifact_id)
+            .fetch_all(executor)
             .await
             .map_err(Into::into)
     }

@@ -99,7 +99,7 @@ pub async fn create_execution(
         .with_source("api-service")
         .with_correlation_id(uuid::Uuid::new_v4());
 
-    if let Some(publisher) = &state.publisher {
+    if let Some(publisher) = state.get_publisher().await {
         publisher.publish_envelope(&message).await.map_err(|e| {
             ApiError::InternalServerError(format!("Failed to publish message: {}", e))
         })?;

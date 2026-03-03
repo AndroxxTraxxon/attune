@@ -68,6 +68,13 @@ jsonschema = { workspace = true }
 # HTTP client
 reqwest = { workspace = true }
 
+# Archive/compression
+tar = { workspace = true }
+flate2 = { workspace = true }
+
+# Temp files (used for pack upload extraction)
+tempfile = { workspace = true }
+
 # Authentication
 argon2 = { workspace = true }
 rand = "0.9"

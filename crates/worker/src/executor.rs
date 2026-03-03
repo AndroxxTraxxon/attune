@@ -17,6 +17,7 @@ use attune_common::auth::jwt::{generate_execution_token, JwtConfig};
 use attune_common::error::{Error, Result};
 use attune_common::models::runtime::RuntimeExecutionConfig;
 use attune_common::models::{runtime::Runtime as RuntimeModel, Action, Execution, ExecutionStatus};
+use attune_common::repositories::artifact::{ArtifactRepository, ArtifactVersionRepository};
 use attune_common::repositories::execution::{ExecutionRepository, UpdateExecutionInput};
 use attune_common::repositories::runtime_version::RuntimeVersionRepository;
 use attune_common::repositories::{FindById, Update};
@@ -42,6 +43,7 @@ pub struct ActionExecutor {
     max_stdout_bytes: usize,
     max_stderr_bytes: usize,
     packs_base_dir: PathBuf,
+    artifacts_dir: PathBuf,
     api_url: String,
     jwt_config: JwtConfig,
 }
@@ -67,6 +69,7 @@ impl ActionExecutor {
         max_stdout_bytes: usize,
         max_stderr_bytes: usize,
         packs_base_dir: PathBuf,
+        artifacts_dir: PathBuf,
         api_url: String,
         jwt_config: JwtConfig,
     ) -> Self {
@@ -79,6 +82,7 @@ impl ActionExecutor {
             max_stdout_bytes,
             max_stderr_bytes,
             packs_base_dir,
+            artifacts_dir,
             api_url,
             jwt_config,
         }
@@ -140,6 +144,15 @@ impl ActionExecutor {
         if let Err(e) = self.store_execution_artifacts(execution_id, &result).await {
             warn!("Failed to store artifacts: {}", e);
             // Don't fail the execution just because artifact storage failed
+        }
+
+        // Finalize file-backed artifacts (stat files on disk and update size_bytes)
+        if let Err(e) = self.finalize_file_artifacts(execution_id).await {
+            warn!(
+                "Failed to finalize file-backed artifacts for execution {}: {}",
+                execution_id, e
+            );
+            // Don't fail the execution just because artifact finalization failed
         }
 
         // Update execution with result
@@ -291,6 +304,10 @@ impl ActionExecutor {
         env.insert("ATTUNE_EXEC_ID".to_string(), execution.id.to_string());
         env.insert("ATTUNE_ACTION".to_string(), execution.action_ref.clone());
         env.insert("ATTUNE_API_URL".to_string(), self.api_url.clone());
+        env.insert(
+            "ATTUNE_ARTIFACTS_DIR".to_string(),
+            self.artifacts_dir.to_string_lossy().to_string(),
+        );
 
         // Generate execution-scoped API token.
         // The identity that triggered the execution is derived from the `sub` claim
@@ -653,6 +670,95 @@ impl ActionExecutor {
                 .store_result(execution_id, result_data)
                 .await?;
         }
+
+        Ok(())
+    }
+
+    /// Finalize file-backed artifacts after execution completes.
+    ///
+    /// Scans all artifact versions linked to this execution that have a `file_path`,
+    /// stats each file on disk, and updates `size_bytes` on both the version row
+    /// and the parent artifact row.
+    async fn finalize_file_artifacts(&self, execution_id: i64) -> Result<()> {
+        let versions =
+            ArtifactVersionRepository::find_file_versions_by_execution(&self.pool, execution_id)
+                .await?;
+
+        if versions.is_empty() {
+            return Ok(());
+        }
+
+        info!(
+            "Finalizing {} file-backed artifact version(s) for execution {}",
+            versions.len(),
+            execution_id,
+        );
+
+        // Track the latest version per artifact so we can update parent size_bytes
+        let mut latest_size_per_artifact: HashMap<i64, (i32, i64)> = HashMap::new();
+
+        for ver in &versions {
+            let file_path = match &ver.file_path {
+                Some(fp) => fp,
+                None => continue,
+            };
+
+            let full_path = self.artifacts_dir.join(file_path);
+            let size_bytes = match tokio::fs::metadata(&full_path).await {
+                Ok(metadata) => metadata.len() as i64,
+                Err(e) => {
+                    warn!(
+                        "Could not stat artifact file '{}' for version {}: {}. Setting size_bytes=0.",
+                        full_path.display(),
+                        ver.id,
+                        e,
+                    );
+                    0
+                }
+            };
+
+            // Update the version row
+            if let Err(e) =
+                ArtifactVersionRepository::update_size_bytes(&self.pool, ver.id, size_bytes).await
+            {
+                warn!(
+                    "Failed to update size_bytes for artifact version {}: {}",
+                    ver.id, e,
+                );
+            }
+
+            // Track the highest version number per artifact for parent update
+            let entry = latest_size_per_artifact
+                .entry(ver.artifact)
+                .or_insert((ver.version, size_bytes));
+            if ver.version > entry.0 {
+                *entry = (ver.version, size_bytes);
+            }
+
+            debug!(
+                "Finalized artifact version {} (artifact {}): file='{}', size={}",
+                ver.id, ver.artifact, file_path, size_bytes,
+            );
+        }
+
+        // Update parent artifact size_bytes to reflect the latest version's size
+        for (artifact_id, (_version, size_bytes)) in &latest_size_per_artifact {
+            if let Err(e) =
+                ArtifactRepository::update_size_bytes(&self.pool, *artifact_id, *size_bytes).await
+            {
+                warn!(
+                    "Failed to update size_bytes for artifact {}: {}",
+                    artifact_id, e,
+                );
+            }
+        }
+
+        info!(
+            "Finalized file-backed artifacts for execution {}: {} version(s), {} artifact(s)",
+            execution_id,
+            versions.len(),
+            latest_size_per_artifact.len(),
+        );
 
         Ok(())
     }

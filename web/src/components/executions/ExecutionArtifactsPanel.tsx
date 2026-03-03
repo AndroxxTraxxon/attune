@@ -21,6 +21,7 @@ import {
   type ArtifactSummary,
   type ArtifactType,
 } from "@/hooks/useArtifacts";
+import { useArtifactStream } from "@/hooks/useArtifactStream";
 import { OpenAPI } from "@/api/core/OpenAPI";
 
 interface ExecutionArtifactsPanelProps {
@@ -348,6 +349,11 @@ export default function ExecutionArtifactsPanel({
   const [expandedTextFileId, setExpandedTextFileId] = useState<number | null>(
     null,
   );
+
+  // Subscribe to real-time artifact notifications for this execution.
+  // WebSocket-driven cache invalidation replaces most of the polling need,
+  // but we keep polling as a fallback (staleTime/refetchInterval in the hook).
+  useArtifactStream({ executionId, enabled: isRunning });
 
   const { data, isLoading, error } = useExecutionArtifacts(
     executionId,

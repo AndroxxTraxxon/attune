@@ -329,3 +329,98 @@ CREATE TRIGGER workflow_execution_status_changed_notify
     EXECUTE FUNCTION notify_workflow_execution_status_changed();
 
 COMMENT ON FUNCTION notify_workflow_execution_status_changed() IS 'Sends workflow execution status change notifications via PostgreSQL LISTEN/NOTIFY';
+
+-- ============================================================================
+-- ARTIFACT NOTIFICATIONS
+-- ============================================================================
+
+-- Function to notify on artifact creation
+CREATE OR REPLACE FUNCTION notify_artifact_created()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    payload := json_build_object(
+        'entity_type', 'artifact',
+        'entity_id', NEW.id,
+        'id', NEW.id,
+        'ref', NEW.ref,
+        'type', NEW.type,
+        'visibility', NEW.visibility,
+        'name', NEW.name,
+        'execution', NEW.execution,
+        'scope', NEW.scope,
+        'owner', NEW.owner,
+        'content_type', NEW.content_type,
+        'size_bytes', NEW.size_bytes,
+        'created', NEW.created
+    );
+
+    PERFORM pg_notify('artifact_created', payload::text);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger on artifact table for creation
+CREATE TRIGGER artifact_created_notify
+    AFTER INSERT ON artifact
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_artifact_created();
+
+COMMENT ON FUNCTION notify_artifact_created() IS 'Sends artifact creation notifications via PostgreSQL LISTEN/NOTIFY';
+
+-- Function to notify on artifact updates (progress appends, data changes)
+CREATE OR REPLACE FUNCTION notify_artifact_updated()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+    latest_percent DOUBLE PRECISION;
+    latest_message TEXT;
+    entry_count INTEGER;
+BEGIN
+    -- Only notify on actual changes
+    IF TG_OP = 'UPDATE' THEN
+        -- Extract progress summary from data array if this is a progress artifact
+        IF NEW.type = 'progress' AND NEW.data IS NOT NULL AND jsonb_typeof(NEW.data) = 'array' THEN
+            entry_count := jsonb_array_length(NEW.data);
+            IF entry_count > 0 THEN
+                latest_percent := (NEW.data -> (entry_count - 1) ->> 'percent')::DOUBLE PRECISION;
+                latest_message := NEW.data -> (entry_count - 1) ->> 'message';
+            END IF;
+        END IF;
+
+        payload := json_build_object(
+            'entity_type', 'artifact',
+            'entity_id', NEW.id,
+            'id', NEW.id,
+            'ref', NEW.ref,
+            'type', NEW.type,
+            'visibility', NEW.visibility,
+            'name', NEW.name,
+            'execution', NEW.execution,
+            'scope', NEW.scope,
+            'owner', NEW.owner,
+            'content_type', NEW.content_type,
+            'size_bytes', NEW.size_bytes,
+            'progress_percent', latest_percent,
+            'progress_message', latest_message,
+            'progress_entries', entry_count,
+            'created', NEW.created,
+            'updated', NEW.updated
+        );
+
+        PERFORM pg_notify('artifact_updated', payload::text);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger on artifact table for updates
+CREATE TRIGGER artifact_updated_notify
+    AFTER UPDATE ON artifact
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_artifact_updated();
+
+COMMENT ON FUNCTION notify_artifact_updated() IS 'Sends artifact update notifications via PostgreSQL LISTEN/NOTIFY (includes progress summary for progress-type artifacts)';

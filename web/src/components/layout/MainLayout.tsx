@@ -16,6 +16,9 @@ import {
   SquareAsterisk,
   KeyRound,
   Home,
+  Paperclip,
+  FolderOpenDot,
+  FolderArchive,
 } from "lucide-react";
 
 // Color mappings for navigation items — defined outside component for stable reference
@@ -113,6 +116,12 @@ const navSections = [
   {
     items: [
       { to: "/keys", label: "Keys & Secrets", icon: KeyRound, color: "gray" },
+      {
+        to: "/artifacts",
+        label: "Artifacts",
+        icon: FolderArchive,
+        color: "gray",
+      },
       {
         to: "/packs",
         label: "Pack Management",

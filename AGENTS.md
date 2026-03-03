@@ -57,7 +57,12 @@ attune/
 2. **attune-executor**: Manages execution lifecycle, scheduling, policy enforcement, workflow orchestration
 3. **attune-worker**: Executes actions in multiple runtimes (Python/Node.js/containers)
 4. **attune-sensor**: Monitors triggers, generates events
-5. **attune-notifier**: Real-time notifications via PostgreSQL LISTEN/NOTIFY + WebSocket
+5. **attune-notifier**: Real-time notifications via PostgreSQL LISTEN/NOTIFY + WebSocket (port 8081)
+   - **PostgreSQL listener**: Uses `PgListener::listen_all()` (single batch command) to subscribe to all 11 channels. **Do NOT use individual `listen()` calls in a loop** — this leaves the listener in a broken state where it stops receiving after the last call.
+   - **Artifact notifications**: `artifact_created` and `artifact_updated` channels. The `artifact_updated` trigger extracts a progress summary (`progress_percent`, `progress_message`, `progress_entries`) from the last entry in the `data` JSONB array for progress-type artifacts, enabling inline progress bars without extra API calls. The Web UI uses `useArtifactStream` hook to subscribe to `entity_type:artifact` notifications and invalidate React Query caches + push progress summaries to a `artifact_progress` cache key.
+   - **WebSocket protocol** (client → server): `{"type":"subscribe","filter":"entity:execution:<id>"}` — filter formats: `all`, `entity_type:<type>`, `entity:<type>:<id>`, `user:<id>`, `notification_type:<type>`
+   - **WebSocket protocol** (server → client): All messages use `#[serde(tag="type")]` — `{"type":"welcome","client_id":"...","message":"..."}` on connect; `{"type":"notification","notification_type":"...","entity_type":"...","entity_id":...,"payload":{...},"user_id":null,"timestamp":"..."}` for notifications; `{"type":"error","message":"..."}` for errors
+   - **Key invariant**: The outgoing task in `websocket_server.rs` MUST wrap `Notification` in `ClientMessage::Notification(notification)` before serializing — bare `Notification` serialization omits the `"type"` field and breaks clients
 
 **Communication**: Services communicate via RabbitMQ for async operations
 
@@ -66,13 +71,20 @@ attune/
 **All Attune services run via Docker Compose.**
 
 - **Compose file**: `docker-compose.yaml` (root directory)
-- **Configuration**: `config.docker.yaml` (Docker-specific settings)
+- **Configuration**: `config.docker.yaml` (Docker-specific settings, including `artifacts_dir: /opt/attune/artifacts`)
 - **Default user**: `test@attune.local` / `TestPass123!` (auto-created)
 
 **Services**:
 - **Infrastructure**: postgres (TimescaleDB), rabbitmq, redis
 - **Init** (run-once): migrations, init-user, init-packs
 - **Application**: api (8080), executor, worker-{shell,python,node,full}, sensor, notifier (8081), web (3000)
+
+**Volumes** (named):
+- `postgres_data`, `rabbitmq_data`, `redis_data` — infrastructure state
+- `packs_data` — pack files (shared across all services)
+- `runtime_envs` — isolated runtime environments (virtualenvs, node_modules)
+- `artifacts_data` — file-backed artifact storage (shared between API rw, workers rw, executor ro)
+- `*_logs` — per-service log volumes
 
 **Commands**:
 ```bash
@@ -148,8 +160,8 @@ Completion listener advances workflow → Schedules successor tasks → Complete
 - **Inquiry**: Human-in-the-loop async interaction (approvals, inputs)
 - **Identity**: User/service account with RBAC permissions
 - **Key**: Encrypted secrets storage
-- **Artifact**: Tracked output from executions (files, logs, progress indicators). Metadata + optional structured `data` (JSONB). Linked to execution via plain BIGINT (no FK). Supports retention policies (version-count or time-based).
-- **ArtifactVersion**: Immutable content snapshot for an artifact. Stores binary content (BYTEA) and/or structured JSON. Version number auto-assigned. Retention trigger auto-deletes oldest versions beyond limit.
+- **Artifact**: Tracked output from executions (files, logs, progress indicators). Metadata + optional structured `data` (JSONB). Linked to execution via plain BIGINT (no FK). Supports retention policies (version-count or time-based). File-type artifacts (FileBinary, FileDataTable, FileImage, FileText) use disk-based storage on a shared volume; Progress and Url artifacts use DB storage. Each artifact has a `visibility` field (`ArtifactVisibility` enum: `public` or `private`, DB default `private`). Public artifacts are viewable by all authenticated users; private artifacts are restricted based on the artifact's `scope` (Identity, Pack, Action, Sensor) and `owner` fields. **Type-aware API default**: when `visibility` is omitted from `POST /api/v1/artifacts`, the API defaults to `public` for Progress artifacts (informational status indicators anyone watching an execution should see) and `private` for all other types. Callers can always override by explicitly setting `visibility`. Full RBAC enforcement is deferred — the column and basic filtering are in place for future permission checks.
+- **ArtifactVersion**: Immutable content snapshot for an artifact. File-type versions store a `file_path` (relative path on shared volume) with `content` BYTEA left NULL. DB-stored versions use `content` BYTEA and/or `content_json` JSONB. Version number auto-assigned via `next_artifact_version()`. Retention trigger auto-deletes oldest versions beyond limit. Invariant: exactly one of `content`, `content_json`, or `file_path` should be non-NULL per row.
 
 ## Key Tools & Libraries
 
@@ -168,6 +180,7 @@ Completion listener advances workflow → Schedules successor tasks → Complete
 - **OpenAPI**: utoipa, utoipa-swagger-ui
 - **Message Queue**: lapin (RabbitMQ)
 - **HTTP Client**: reqwest
+- **Archive/Compression**: tar, flate2 (used for pack upload/extraction)
 - **Testing**: mockall, tempfile, serial_test
 
 ### Web UI Dependencies
@@ -188,6 +201,7 @@ Completion listener advances workflow → Schedules successor tasks → Complete
 - **Key Settings**:
   - `packs_base_dir` - Where pack files are stored (default: `/opt/attune/packs`)
   - `runtime_envs_dir` - Where isolated runtime environments are created (default: `/opt/attune/runtime_envs`)
+  - `artifacts_dir` - Where file-backed artifacts are stored (default: `/opt/attune/artifacts`). Shared volume between API and workers.
 
 ## Authentication & Security
 - **Auth Type**: JWT (access tokens: 1h, refresh tokens: 7d)
@@ -226,7 +240,8 @@ Completion listener advances workflow → Schedules successor tasks → Complete
 - **Nullable FK Fields**: `rule.action` and `rule.trigger` are nullable (`Option<Id>` in Rust) — a rule with NULL action/trigger is non-functional but preserved for traceability. `execution.action`, `execution.parent`, `execution.enforcement`, `execution.started_at`, and `event.source` are also nullable. `enforcement.event` is nullable but has no FK constraint (event is a hypertable). `execution.enforcement` is nullable but has no FK constraint (enforcement is a hypertable). All FK columns on the execution table (`action`, `parent`, `original_execution`, `enforcement`, `executor`, `workflow_def`) have no FK constraints (execution is a hypertable). `inquiry.execution` and `workflow_execution.execution` also have no FK constraints. `enforcement.resolved_at` is nullable — `None` while status is `created`, set when resolved. `execution.started_at` is nullable — `None` until the worker sets status to `running`.
 **Table Count**: 21 tables total in the schema (including `runtime_version`, `artifact_version`, 2 `*_history` hypertables, and the `event`, `enforcement`, + `execution` hypertables)
 **Migration Count**: 10 migrations (`000001` through `000010`) — see `migrations/` directory
-- **Artifact System**: The `artifact` table stores metadata + structured data (progress entries via JSONB `data` column). The `artifact_version` table stores immutable content snapshots (binary BYTEA or JSONB). Version numbering is auto-assigned via `next_artifact_version()` SQL function. A DB trigger (`enforce_artifact_retention`) auto-deletes oldest versions when count exceeds the artifact's `retention_limit`. `artifact.execution` is a plain BIGINT (no FK — execution is a hypertable). Progress-type artifacts use `artifact.data` (atomic JSON array append); file-type artifacts use `artifact_version` rows. Binary content is excluded from default queries for performance (`SELECT_COLUMNS` vs `SELECT_COLUMNS_WITH_CONTENT`).
+- **Artifact System**: The `artifact` table stores metadata + structured data (progress entries via JSONB `data` column). The `artifact_version` table stores immutable content snapshots — either on disk (via `file_path` column) or in DB (via `content` BYTEA / `content_json` JSONB). Version numbering is auto-assigned via `next_artifact_version()` SQL function. A DB trigger (`enforce_artifact_retention`) auto-deletes oldest versions when count exceeds the artifact's `retention_limit`. `artifact.execution` is a plain BIGINT (no FK — execution is a hypertable). Progress-type artifacts use `artifact.data` (atomic JSON array append); file-type artifacts use `artifact_version` rows with `file_path` set. Binary content is excluded from default queries for performance (`SELECT_COLUMNS` vs `SELECT_COLUMNS_WITH_CONTENT`). **Visibility**: Each artifact has a `visibility` column (`artifact_visibility_enum`: `public` or `private`, DB default `private`). The `CreateArtifactRequest` DTO accepts `visibility` as `Option<ArtifactVisibility>` — when omitted the API route handler applies a **type-aware default**: `public` for Progress artifacts (informational status indicators), `private` for all other types. Callers can always override explicitly. Public artifacts are viewable by all authenticated users; private artifacts are restricted based on the artifact's `scope` (Identity, Pack, Action, Sensor) and `owner` fields. The visibility field is filterable via the search/list API (`?visibility=public`). Full RBAC enforcement is deferred — the column and basic query filtering are in place for future permission checks. **Notifications**: `artifact_created` and `artifact_updated` DB triggers (in migration `000008`) fire PostgreSQL NOTIFY with entity_type `artifact` and include `visibility` in the payload. The `artifact_updated` trigger extracts a progress summary (`progress_percent`, `progress_message`, `progress_entries`) from the last entry of the `data` JSONB array for progress-type artifacts. The Web UI `ExecutionProgressBar` component (`web/src/components/executions/ExecutionProgressBar.tsx`) renders an inline progress bar in the Execution Details card using the `useArtifactStream` hook (`web/src/hooks/useArtifactStream.ts`) for real-time WebSocket updates, with polling fallback via `useExecutionArtifacts`.
+- **File-Based Artifact Storage**: File-type artifacts (FileBinary, FileDataTable, FileImage, FileText) use a shared filesystem volume instead of PostgreSQL BYTEA. The `artifact_version.file_path` column stores the relative path from the `artifacts_dir` root (e.g., `mypack/build_log/v1.txt`). Pattern: `{ref_with_dots_as_dirs}/v{version}.{ext}`. The artifact ref (globally unique) is used as the directory key — no execution ID in the path, so artifacts can outlive executions and be shared across them. **Endpoint**: `POST /api/v1/artifacts/{id}/versions/file` allocates a version number and file path without any file content; the execution process writes the file to `$ATTUNE_ARTIFACTS_DIR/{file_path}`. **Download**: `GET /api/v1/artifacts/{id}/download` and version-specific downloads check `file_path` first (read from disk), fall back to DB BYTEA/JSON. **Finalization**: After execution exits, the worker stats all file-backed versions for that execution and updates `size_bytes` on both `artifact_version` and parent `artifact` rows via direct DB access. **Cleanup**: Delete endpoints remove disk files before deleting DB rows; empty parent directories are cleaned up. **Backward compatible**: Existing DB-stored artifacts (`file_path = NULL`) continue to work unchanged.
 - **Pack Component Loading Order**: Runtimes → Triggers → Actions → Sensors (dependency order). Both `PackComponentLoader` (Rust) and `load_core_pack.py` (Python) follow this order.
 
 ### Workflow Execution Orchestration
@@ -306,6 +321,8 @@ Completion listener advances workflow → Schedules successor tasks → Complete
   - `ATTUNE_ACTION` - Action ref (always present)
   - `ATTUNE_EXEC_ID` - Execution database ID (always present)
   - `ATTUNE_API_TOKEN` - Execution-scoped API token (always present)
+  - `ATTUNE_API_URL` - API base URL (always present)
+  - `ATTUNE_ARTIFACTS_DIR` - Absolute path to shared artifact volume (always present, e.g., `/opt/attune/artifacts`)
   - `ATTUNE_RULE` - Rule ref (if triggered by rule)
   - `ATTUNE_TRIGGER` - Trigger ref (if triggered by event/trigger)
 - **Custom Environment Variables**: Optional, set via `execution.env_vars` JSONB field (for debug flags, runtime config only)
@@ -492,9 +509,22 @@ make db-reset           # Drop & recreate DB
 cargo install --path crates/cli  # Install CLI
 attune auth login                # Login
 attune pack list                 # List packs
+attune pack upload ./path/to/pack  # Upload local pack to API (works with Docker)
+attune pack register /opt/attune/packs/mypak  # Register from API-visible path
 attune action execute <ref> --param key=value
 attune execution list            # Monitor executions
 ```
+
+**Pack Upload vs Register**:
+- `attune pack upload <local-path>` — Tarballs the local directory and POSTs it to `POST /api/v1/packs/upload`. Works regardless of whether the API is local or in Docker. This is the primary way to install packs from your local machine into a Dockerized system.
+- `attune pack register <server-path>` — Sends a filesystem path string to the API (`POST /api/v1/packs/register`). Only works if the path is accessible from inside the API container (e.g. `/opt/attune/packs/...` or `/opt/attune/packs.dev/...`).
+
+**Pack Upload API endpoint**: `POST /api/v1/packs/upload` — accepts `multipart/form-data` with:
+- `pack` (required): a `.tar.gz` archive of the pack directory
+- `force` (optional, text): `"true"` to overwrite an existing pack with the same ref
+- `skip_tests` (optional, text): `"true"` to skip test execution after registration
+
+The server extracts the archive to a temp directory, finds the `pack.yaml` (at root or one level deep), then moves it to `{packs_base_dir}/{pack_ref}/` and calls `register_pack_internal`.
 
 ## Test Failure Protocol
 
@@ -600,9 +630,9 @@ When reporting, ask: "Should I fix this first or continue with [original task]?"
 - **Web UI**: Static files served separately or via API service
 
 ## Current Development Status
-- ✅ **Complete**: Database migrations (21 tables, 10 migration files), API service (most endpoints), common library, message queue infrastructure, repository layer, JWT auth, CLI tool, Web UI (basic + workflow builder), Executor service (core functionality + workflow orchestration), Worker service (shell/Python execution), Runtime version data model, constraint matching, worker version selection pipeline, version verification at startup, per-version environment isolation, TimescaleDB entity history tracking (execution, worker), Event, enforcement, and execution tables as TimescaleDB hypertables (time-series with retention/compression), History API endpoints (generic + entity-specific with pagination & filtering), History UI panels on entity detail pages (execution), TimescaleDB continuous aggregates (6 hourly rollup views with auto-refresh policies), Analytics API endpoints (7 endpoints under `/api/v1/analytics/` — dashboard, execution status/throughput/failure-rate, event volume, worker status, enforcement volume), Analytics dashboard widgets (bar charts, stacked status charts, failure rate ring gauge, time range selector), Workflow execution orchestration (scheduler detects workflow actions, creates child task executions, completion listener advances workflow via transitions), Workflow template resolution (type-preserving `{{ }}` rendering in task inputs), Workflow `with_items` expansion (parallel child executions per item), Workflow `with_items` concurrency limiting (sliding-window dispatch with pending items stored in workflow variables), Workflow `publish` directive processing (variable propagation between tasks), Workflow function expressions (`result()`, `succeeded()`, `failed()`, `timed_out()`), Workflow expression engine (full arithmetic/comparison/boolean/membership operators, 30+ built-in functions, recursive-descent parser), Canonical workflow namespaces (`parameters`, `workflow`, `task`, `config`, `keystore`, `item`, `index`, `system`), Artifact content system (versioned file/JSON storage, progress-append semantics, binary upload/download, retention enforcement, execution-linked artifacts, 17 API endpoints under `/api/v1/artifacts/`)
-- 🔄 **In Progress**: Sensor service, advanced workflow features (nested workflow context propagation), Python runtime dependency management, API/UI endpoints for runtime version management, Artifact UI (web UI for browsing/downloading artifacts)
-- 📋 **Planned**: Notifier service, execution policies, monitoring, pack registry system, configurable retention periods via admin settings, export/archival to external storage
+- ✅ **Complete**: Database migrations (21 tables, 10 migration files), API service (most endpoints), common library, message queue infrastructure, repository layer, JWT auth, CLI tool, Web UI (basic + workflow builder), Executor service (core functionality + workflow orchestration), Worker service (shell/Python execution), Runtime version data model, constraint matching, worker version selection pipeline, version verification at startup, per-version environment isolation, TimescaleDB entity history tracking (execution, worker), Event, enforcement, and execution tables as TimescaleDB hypertables (time-series with retention/compression), History API endpoints (generic + entity-specific with pagination & filtering), History UI panels on entity detail pages (execution), TimescaleDB continuous aggregates (6 hourly rollup views with auto-refresh policies), Analytics API endpoints (7 endpoints under `/api/v1/analytics/` — dashboard, execution status/throughput/failure-rate, event volume, worker status, enforcement volume), Analytics dashboard widgets (bar charts, stacked status charts, failure rate ring gauge, time range selector), Workflow execution orchestration (scheduler detects workflow actions, creates child task executions, completion listener advances workflow via transitions), Workflow template resolution (type-preserving `{{ }}` rendering in task inputs), Workflow `with_items` expansion (parallel child executions per item), Workflow `with_items` concurrency limiting (sliding-window dispatch with pending items stored in workflow variables), Workflow `publish` directive processing (variable propagation between tasks), Workflow function expressions (`result()`, `succeeded()`, `failed()`, `timed_out()`), Workflow expression engine (full arithmetic/comparison/boolean/membership operators, 30+ built-in functions, recursive-descent parser), Canonical workflow namespaces (`parameters`, `workflow`, `task`, `config`, `keystore`, `item`, `index`, `system`), Artifact content system (versioned file/JSON storage, progress-append semantics, binary upload/download, retention enforcement, execution-linked artifacts, 18 API endpoints under `/api/v1/artifacts/`, file-backed disk storage via shared volume for file-type artifacts), CLI `--wait` flag (WebSocket-first with polling fallback — connects to notifier on port 8081, subscribes to execution, returns immediately on terminal status; falls back to exponential-backoff REST polling if WS unavailable; polling always gets at least 10s budget regardless of how long WS path ran)
+- 🔄 **In Progress**: Sensor service, advanced workflow features (nested workflow context propagation), Python runtime dependency management, API/UI endpoints for runtime version management, Artifact UI (web UI for browsing/downloading artifacts), Notifier service WebSocket (functional but lacks auth — the WS connection is unauthenticated; the subscribe filter controls visibility)
+- 📋 **Planned**: Execution policies, monitoring, pack registry system, configurable retention periods via admin settings, export/archival to external storage
 
 ## Quick Reference
 

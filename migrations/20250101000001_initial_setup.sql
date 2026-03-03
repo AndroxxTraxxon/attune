@@ -186,6 +186,18 @@ END $$;
 
 COMMENT ON TYPE artifact_retention_enum IS 'Type of retention policy';
 
+-- ArtifactVisibility enum
+DO $$ BEGIN
+    CREATE TYPE artifact_visibility_enum AS ENUM (
+        'public',
+        'private'
+    );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+COMMENT ON TYPE artifact_visibility_enum IS 'Visibility of an artifact (public = viewable by all users, private = scoped by owner)';
+
 
 -- PackEnvironmentStatus enum
 DO $$ BEGIN

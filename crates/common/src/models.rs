@@ -367,6 +367,24 @@ pub mod enums {
         Minutes,
     }
 
+    /// Visibility level for artifacts.
+    /// - `Public`: viewable by all authenticated users on the platform.
+    /// - `Private`: restricted based on the artifact's `scope` and `owner` fields.
+    ///   Full RBAC enforcement is deferred; for now the field enables filtering.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, ToSchema)]
+    #[sqlx(type_name = "artifact_visibility_enum", rename_all = "lowercase")]
+    #[serde(rename_all = "lowercase")]
+    pub enum ArtifactVisibility {
+        Public,
+        Private,
+    }
+
+    impl Default for ArtifactVisibility {
+        fn default() -> Self {
+            Self::Private
+        }
+    }
+
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, ToSchema)]
     #[sqlx(type_name = "workflow_task_status_enum", rename_all = "lowercase")]
     #[serde(rename_all = "lowercase")]
@@ -1268,6 +1286,7 @@ pub mod artifact {
         pub scope: OwnerType,
         pub owner: String,
         pub r#type: ArtifactType,
+        pub visibility: ArtifactVisibility,
         pub retention_policy: RetentionPolicyType,
         pub retention_limit: i32,
         /// Human-readable name (e.g. "Build Log", "Test Results")
@@ -1289,7 +1308,7 @@ pub mod artifact {
     /// Select columns for Artifact queries (excludes DB-only columns if any arise).
     /// Must be kept in sync with the Artifact struct field order.
     pub const SELECT_COLUMNS: &str =
-        "id, ref, scope, owner, type, retention_policy, retention_limit, \
+        "id, ref, scope, owner, type, visibility, retention_policy, retention_limit, \
          name, description, content_type, size_bytes, execution, data, \
          created, updated";
 }
@@ -1314,6 +1333,10 @@ pub mod artifact_version {
         pub content: Option<Vec<u8>>,
         /// Structured JSON content
         pub content_json: Option<serde_json::Value>,
+        /// Relative path from `artifacts_dir` root for disk-stored content.
+        /// When set, `content` BYTEA is NULL — the file lives on a shared volume.
+        /// Pattern: `{ref_slug}/v{version}.{ext}`
+        pub file_path: Option<String>,
         /// Free-form metadata about this version
         pub meta: Option<serde_json::Value>,
         /// Who created this version
@@ -1324,12 +1347,12 @@ pub mod artifact_version {
     /// Select columns WITHOUT the potentially large `content` BYTEA column.
     /// Use `SELECT_COLUMNS_WITH_CONTENT` when you need the binary payload.
     pub const SELECT_COLUMNS: &str = "id, artifact, version, content_type, size_bytes, \
-         NULL::bytea AS content, content_json, meta, created_by, created";
+         NULL::bytea AS content, content_json, file_path, meta, created_by, created";
 
     /// Select columns INCLUDING the binary `content` column.
     pub const SELECT_COLUMNS_WITH_CONTENT: &str =
         "id, artifact, version, content_type, size_bytes, \
-         content, content_json, meta, created_by, created";
+         content, content_json, file_path, meta, created_by, created";
 }
 
 /// Workflow orchestration models

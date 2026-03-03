@@ -1,5 +1,6 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Subcommand;
+use flate2::{write::GzEncoder, Compression};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -77,9 +78,9 @@ pub enum PackCommands {
         #[arg(short = 'y', long)]
         yes: bool,
     },
-    /// Register a pack from a local directory
+    /// Register a pack from a local directory (path must be accessible by the API server)
     Register {
-        /// Path to pack directory
+        /// Path to pack directory (must be a path the API server can access)
         path: String,
 
         /// Force re-registration if pack already exists
@@ -87,6 +88,22 @@ pub enum PackCommands {
         force: bool,
 
         /// Skip running pack tests during registration
+        #[arg(long)]
+        skip_tests: bool,
+    },
+    /// Upload a local pack directory to the API server and register it
+    ///
+    /// This command tarballs the local directory and streams it to the API,
+    /// so it works regardless of whether the API is local or running in Docker.
+    Upload {
+        /// Path to the local pack directory (must contain pack.yaml)
+        path: String,
+
+        /// Force re-registration if a pack with the same ref already exists
+        #[arg(short, long)]
+        force: bool,
+
+        /// Skip running pack tests after upload
         #[arg(long)]
         skip_tests: bool,
     },
@@ -256,6 +273,15 @@ struct RegisterPackRequest {
     skip_tests: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct UploadPackResponse {
+    pack: Pack,
+    #[serde(default)]
+    test_result: Option<serde_json::Value>,
+    #[serde(default)]
+    tests_skipped: bool,
+}
+
 pub async fn handle_pack_command(
     profile: &Option<String>,
     command: PackCommands,
@@ -296,6 +322,11 @@ pub async fn handle_pack_command(
             force,
             skip_tests,
         } => handle_register(profile, path, force, skip_tests, api_url, output_format).await,
+        PackCommands::Upload {
+            path,
+            force,
+            skip_tests,
+        } => handle_upload(profile, path, force, skip_tests, api_url, output_format).await,
         PackCommands::Test {
             pack,
             verbose,
@@ -593,6 +624,160 @@ async fn handle_uninstall(
     Ok(())
 }
 
+async fn handle_upload(
+    profile: &Option<String>,
+    path: String,
+    force: bool,
+    skip_tests: bool,
+    api_url: &Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let pack_dir = Path::new(&path);
+
+    // Validate the directory exists and contains pack.yaml
+    if !pack_dir.exists() {
+        anyhow::bail!("Path does not exist: {}", path);
+    }
+    if !pack_dir.is_dir() {
+        anyhow::bail!("Path is not a directory: {}", path);
+    }
+    let pack_yaml_path = pack_dir.join("pack.yaml");
+    if !pack_yaml_path.exists() {
+        anyhow::bail!("No pack.yaml found in: {}", path);
+    }
+
+    // Read pack ref from pack.yaml so we can display it
+    let pack_yaml_content = std::fs::read_to_string(&pack_yaml_path)
+        .context("Failed to read pack.yaml")?;
+    let pack_yaml: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&pack_yaml_content).context("Failed to parse pack.yaml")?;
+    let pack_ref = pack_yaml
+        .get("ref")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    match output_format {
+        OutputFormat::Table => {
+            output::print_info(&format!(
+                "Uploading pack '{}' from: {}",
+                pack_ref, path
+            ));
+            output::print_info("Creating archive...");
+        }
+        _ => {}
+    }
+
+    // Build an in-memory tar.gz of the pack directory
+    let tar_gz_bytes = {
+        let buf = Vec::new();
+        let enc = GzEncoder::new(buf, Compression::default());
+        let mut tar = tar::Builder::new(enc);
+
+        // Walk the directory and add files to the archive
+        // We strip the leading path so the archive root is the pack directory contents
+        let abs_pack_dir = pack_dir
+            .canonicalize()
+            .context("Failed to resolve pack directory path")?;
+
+        append_dir_to_tar(&mut tar, &abs_pack_dir, &abs_pack_dir)?;
+
+        let encoder = tar.into_inner().context("Failed to finalise tar archive")?;
+        encoder.finish().context("Failed to flush gzip stream")?
+    };
+
+    let archive_size_kb = tar_gz_bytes.len() / 1024;
+
+    match output_format {
+        OutputFormat::Table => {
+            output::print_info(&format!(
+                "Archive ready ({} KB), uploading...",
+                archive_size_kb
+            ));
+        }
+        _ => {}
+    }
+
+    let config = CliConfig::load_with_profile(profile.as_deref())?;
+    let mut client = ApiClient::from_config(&config, api_url);
+
+    let mut extra_fields = Vec::new();
+    if force {
+        extra_fields.push(("force", "true".to_string()));
+    }
+    if skip_tests {
+        extra_fields.push(("skip_tests", "true".to_string()));
+    }
+
+    let archive_name = format!("{}.tar.gz", pack_ref);
+    let response: UploadPackResponse = client
+        .multipart_post(
+            "/packs/upload",
+            "pack",
+            tar_gz_bytes,
+            &archive_name,
+            "application/gzip",
+            extra_fields,
+        )
+        .await?;
+
+    match output_format {
+        OutputFormat::Json | OutputFormat::Yaml => {
+            output::print_output(&response, output_format)?;
+        }
+        OutputFormat::Table => {
+            println!();
+            output::print_success(&format!(
+                "✓ Pack '{}' uploaded and registered successfully",
+                response.pack.pack_ref
+            ));
+            output::print_info(&format!("  Version: {}", response.pack.version));
+            output::print_info(&format!("  ID: {}", response.pack.id));
+
+            if response.tests_skipped {
+                output::print_info("  ⚠ Tests were skipped");
+            } else if let Some(test_result) = &response.test_result {
+                if let Some(status) = test_result.get("status").and_then(|s| s.as_str()) {
+                    if status == "passed" {
+                        output::print_success("  ✓ All tests passed");
+                    } else if status == "failed" {
+                        output::print_error("  ✗ Some tests failed");
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Recursively append a directory's contents to a tar archive.
+/// `base` is the root directory being archived; `dir` is the current directory
+/// being walked. Files are stored with paths relative to `base`.
+fn append_dir_to_tar<W: std::io::Write>(
+    tar: &mut tar::Builder<W>,
+    base: &Path,
+    dir: &Path,
+) -> Result<()> {
+    for entry in std::fs::read_dir(dir).context("Failed to read directory")? {
+        let entry = entry.context("Failed to read directory entry")?;
+        let entry_path = entry.path();
+        let relative_path = entry_path
+            .strip_prefix(base)
+            .context("Failed to compute relative path")?;
+
+        if entry_path.is_dir() {
+            append_dir_to_tar(tar, base, &entry_path)?;
+        } else if entry_path.is_file() {
+            tar.append_path_with_name(&entry_path, relative_path)
+                .with_context(|| {
+                    format!("Failed to add {} to archive", entry_path.display())
+                })?;
+        }
+        // symlinks are intentionally skipped
+    }
+    Ok(())
+}
+
 async fn handle_register(
     profile: &Option<String>,
     path: String,
@@ -604,18 +789,38 @@ async fn handle_register(
     let config = CliConfig::load_with_profile(profile.as_deref())?;
     let mut client = ApiClient::from_config(&config, api_url);
 
+    // Warn if the path looks like a local filesystem path that the API server
+    // probably can't see (i.e. not a known container mount point).
+    let looks_local = !path.starts_with("/opt/attune/")
+        && !path.starts_with("/app/")
+        && !path.starts_with("/packs");
+    if looks_local {
+        match output_format {
+            OutputFormat::Table => {
+                output::print_info(&format!("Registering pack from: {}", path));
+                eprintln!(
+                    "⚠  Warning: '{}' looks like a local path. If the API is running in \
+                     Docker it may not be able to access this path.\n   \
+                     Use `attune pack upload {}` instead to upload the pack directly.",
+                    path, path
+                );
+            }
+            _ => {}
+        }
+    } else {
+        match output_format {
+            OutputFormat::Table => {
+                output::print_info(&format!("Registering pack from: {}", path));
+            }
+            _ => {}
+        }
+    }
+
     let request = RegisterPackRequest {
         path: path.clone(),
         force,
         skip_tests,
     };
-
-    match output_format {
-        OutputFormat::Table => {
-            output::print_info(&format!("Registering pack from: {}", path));
-        }
-        _ => {}
-    }
 
     let response: PackInstallResponse = client.post("/packs/register", &request).await?;
 

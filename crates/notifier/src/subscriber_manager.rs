@@ -180,6 +180,7 @@ impl SubscriberManager {
                     // Channel closed, client disconnected
                     failed_count += 1;
                     to_remove.push(client_id.clone());
+                    debug!("Client {} disconnected — removing", client_id);
                 }
             }
         }
@@ -191,8 +192,12 @@ impl SubscriberManager {
 
         if sent_count > 0 {
             debug!(
-                "Broadcast notification: sent={}, failed={}, type={}",
-                sent_count, failed_count, notification.notification_type
+                "Broadcast notification: sent={}, failed={}, type={}, entity_type={}, entity_id={}",
+                sent_count,
+                failed_count,
+                notification.notification_type,
+                notification.entity_type,
+                notification.entity_id,
             );
         }
     }

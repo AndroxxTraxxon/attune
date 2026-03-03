@@ -5,7 +5,7 @@
 //! with headers and payload.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
@@ -124,6 +124,17 @@ impl MessageType {
     }
 }
 
+/// Deserialize a UUID, substituting a freshly-generated one when the value is
+/// null or absent. This keeps envelope parsing tolerant of messages that were
+/// hand-crafted or produced by older tooling.
+fn deserialize_uuid_default<'de, D>(deserializer: D) -> Result<Uuid, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt: Option<Uuid> = Option::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_else(Uuid::new_v4))
+}
+
 /// Message envelope that wraps all messages with metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageEnvelope<T>
@@ -131,9 +142,17 @@ where
     T: Clone,
 {
     /// Unique message identifier
+    #[serde(
+        default = "Uuid::new_v4",
+        deserialize_with = "deserialize_uuid_default"
+    )]
     pub message_id: Uuid,
 
     /// Correlation ID for tracing related messages
+    #[serde(
+        default = "Uuid::new_v4",
+        deserialize_with = "deserialize_uuid_default"
+    )]
     pub correlation_id: Uuid,
 
     /// Message type

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use reqwest::{Client as HttpClient, Method, RequestBuilder, Response, StatusCode};
+use reqwest::{multipart, Client as HttpClient, Method, RequestBuilder, Response, StatusCode};
 use serde::{de::DeserializeOwned, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -39,7 +39,7 @@ impl ApiClient {
 
         Self {
             client: HttpClient::builder()
-                .timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(300)) // longer timeout for uploads
                 .build()
                 .expect("Failed to build HTTP client"),
             base_url,
@@ -50,10 +50,15 @@ impl ApiClient {
     }
 
     /// Create a new API client
+    /// Return the base URL this client is configured to talk to.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     #[cfg(test)]
     pub fn new(base_url: String, auth_token: Option<String>) -> Self {
         let client = HttpClient::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(300))
             .build()
             .expect("Failed to build HTTP client");
 
@@ -295,6 +300,55 @@ impl ApiClient {
                 .unwrap_or_else(|_| "Unknown error".to_string());
             anyhow::bail!("API error ({}): {}", status, error_text);
         }
+    }
+
+    /// POST a multipart/form-data request with a file field and optional text fields.
+    ///
+    /// - `file_field_name`: the multipart field name for the file
+    /// - `file_bytes`: raw bytes of the file content
+    /// - `file_name`: filename hint sent in the Content-Disposition header
+    /// - `mime_type`: MIME type of the file (e.g. `"application/gzip"`)
+    /// - `extra_fields`: additional text key/value fields to include in the form
+    pub async fn multipart_post<T: DeserializeOwned>(
+        &mut self,
+        path: &str,
+        file_field_name: &str,
+        file_bytes: Vec<u8>,
+        file_name: &str,
+        mime_type: &str,
+        extra_fields: Vec<(&str, String)>,
+    ) -> Result<T> {
+        let url = format!("{}/api/v1{}", self.base_url, path);
+
+        let file_part = multipart::Part::bytes(file_bytes)
+            .file_name(file_name.to_string())
+            .mime_str(mime_type)
+            .context("Invalid MIME type")?;
+
+        let mut form = multipart::Form::new().part(file_field_name.to_string(), file_part);
+
+        for (key, value) in extra_fields {
+            form = form.text(key.to_string(), value);
+        }
+
+        let mut req = self.client.post(&url).multipart(form);
+
+        if let Some(token) = &self.auth_token {
+            req = req.bearer_auth(token);
+        }
+
+        let response = req.send().await.context("Failed to send multipart request to API")?;
+
+        // Handle 401 + refresh (same pattern as execute())
+        if response.status() == StatusCode::UNAUTHORIZED && self.refresh_token.is_some() {
+            if self.refresh_auth_token().await? {
+                return Err(anyhow::anyhow!(
+                    "Token expired and was refreshed. Please retry your command."
+                ));
+            }
+        }
+
+        self.handle_response(response).await
     }
 }
 

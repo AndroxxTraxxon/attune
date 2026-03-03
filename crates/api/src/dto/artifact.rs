@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use utoipa::{IntoParams, ToSchema};
 
-use attune_common::models::enums::{ArtifactType, OwnerType, RetentionPolicyType};
+use attune_common::models::enums::{
+    ArtifactType, ArtifactVisibility, OwnerType, RetentionPolicyType,
+};
 
 // ============================================================================
 // Artifact DTOs
@@ -29,6 +31,10 @@ pub struct CreateArtifactRequest {
     /// Artifact type
     #[schema(example = "file_text")]
     pub r#type: ArtifactType,
+
+    /// Visibility level (public = all users, private = scope/owner restricted).
+    /// If omitted, defaults to `public` for progress artifacts and `private` for all others.
+    pub visibility: Option<ArtifactVisibility>,
 
     /// Retention policy type
     #[serde(default = "default_retention_policy")]
@@ -80,6 +86,9 @@ pub struct UpdateArtifactRequest {
 
     /// Updated artifact type
     pub r#type: Option<ArtifactType>,
+
+    /// Updated visibility
+    pub visibility: Option<ArtifactVisibility>,
 
     /// Updated retention policy
     pub retention_policy: Option<RetentionPolicyType>,
@@ -138,6 +147,9 @@ pub struct ArtifactResponse {
     /// Artifact type
     pub r#type: ArtifactType,
 
+    /// Visibility level
+    pub visibility: ArtifactVisibility,
+
     /// Retention policy
     pub retention_policy: RetentionPolicyType,
 
@@ -185,6 +197,9 @@ pub struct ArtifactSummary {
     /// Artifact type
     pub r#type: ArtifactType,
 
+    /// Visibility level
+    pub visibility: ArtifactVisibility,
+
     /// Human-readable name
     pub name: Option<String>,
 
@@ -221,6 +236,9 @@ pub struct ArtifactQueryParams {
 
     /// Filter by artifact type
     pub r#type: Option<ArtifactType>,
+
+    /// Filter by visibility
+    pub visibility: Option<ArtifactVisibility>,
 
     /// Filter by execution ID
     pub execution: Option<i64>,
@@ -279,6 +297,23 @@ pub struct CreateVersionJsonRequest {
     pub created_by: Option<String>,
 }
 
+/// Request DTO for creating a new file-backed artifact version.
+/// No file content is included — the caller writes the file directly to
+/// `$ATTUNE_ARTIFACTS_DIR/{file_path}` after receiving the response.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct CreateFileVersionRequest {
+    /// MIME content type (e.g. "text/plain", "application/octet-stream")
+    #[schema(example = "text/plain")]
+    pub content_type: Option<String>,
+
+    /// Free-form metadata about this version
+    #[schema(value_type = Option<Object>)]
+    pub meta: Option<JsonValue>,
+
+    /// Who created this version (e.g. action ref, identity, "system")
+    pub created_by: Option<String>,
+}
+
 /// Response DTO for an artifact version (without binary content)
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ArtifactVersionResponse {
@@ -300,6 +335,11 @@ pub struct ArtifactVersionResponse {
     /// Structured JSON content (if this version has JSON data)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_json: Option<JsonValue>,
+
+    /// Relative file path for disk-backed versions (from artifacts_dir root).
+    /// When present, the file content lives on the shared volume, not in the DB.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
 
     /// Free-form metadata
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -327,6 +367,10 @@ pub struct ArtifactVersionSummary {
     /// Size of content in bytes
     pub size_bytes: Option<i64>,
 
+    /// Relative file path for disk-backed versions
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+
     /// Who created this version
     pub created_by: Option<String>,
 
@@ -346,6 +390,7 @@ impl From<attune_common::models::artifact::Artifact> for ArtifactResponse {
             scope: a.scope,
             owner: a.owner,
             r#type: a.r#type,
+            visibility: a.visibility,
             retention_policy: a.retention_policy,
             retention_limit: a.retention_limit,
             name: a.name,
@@ -366,6 +411,7 @@ impl From<attune_common::models::artifact::Artifact> for ArtifactSummary {
             id: a.id,
             r#ref: a.r#ref,
             r#type: a.r#type,
+            visibility: a.visibility,
             name: a.name,
             content_type: a.content_type,
             size_bytes: a.size_bytes,
@@ -387,6 +433,7 @@ impl From<attune_common::models::artifact_version::ArtifactVersion> for Artifact
             content_type: v.content_type,
             size_bytes: v.size_bytes,
             content_json: v.content_json,
+            file_path: v.file_path,
             meta: v.meta,
             created_by: v.created_by,
             created: v.created,
@@ -401,6 +448,7 @@ impl From<attune_common::models::artifact_version::ArtifactVersion> for Artifact
             version: v.version,
             content_type: v.content_type,
             size_bytes: v.size_bytes,
+            file_path: v.file_path,
             created_by: v.created_by,
             created: v.created,
         }
@@ -419,6 +467,7 @@ mod tests {
         assert_eq!(params.per_page, 20);
         assert!(params.scope.is_none());
         assert!(params.r#type.is_none());
+        assert!(params.visibility.is_none());
     }
 
     #[test]
@@ -427,6 +476,7 @@ mod tests {
             scope: None,
             owner: None,
             r#type: None,
+            visibility: None,
             execution: None,
             name: None,
             page: 3,
@@ -441,6 +491,7 @@ mod tests {
             scope: None,
             owner: None,
             r#type: None,
+            visibility: None,
             execution: None,
             name: None,
             page: 1,
@@ -460,6 +511,10 @@ mod tests {
         let req: CreateArtifactRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.retention_policy, RetentionPolicyType::Versions);
         assert_eq!(req.retention_limit, 5);
+        assert!(
+            req.visibility.is_none(),
+            "Omitting visibility should deserialize as None (server applies type-aware default)"
+        );
     }
 
     #[test]

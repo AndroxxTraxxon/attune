@@ -3,7 +3,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use attune_common::config::Config;
 
@@ -108,8 +108,25 @@ impl NotifierService {
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
-                        Ok(notification) = notification_rx.recv() => {
-                            subscriber_manager.broadcast(notification);
+                        recv_result = notification_rx.recv() => {
+                            match recv_result {
+                                Ok(notification) => {
+                                    debug!(
+                                        "Broadcasting notification: type={}, entity_type={}, entity_id={}",
+                                        notification.notification_type,
+                                        notification.entity_type,
+                                        notification.entity_id,
+                                    );
+                                    subscriber_manager.broadcast(notification);
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                    error!("Notification broadcaster lagged — dropped {} messages", n);
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                    error!("Notification broadcast channel closed — broadcaster exiting");
+                                    break;
+                                }
+                            }
                         }
                         _ = shutdown_rx.recv() => {
                             info!("Notification broadcaster shutting down");

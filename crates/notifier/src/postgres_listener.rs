@@ -2,8 +2,9 @@
 
 use anyhow::{Context, Result};
 use sqlx::postgres::PgListener;
+use std::time::Duration;
 use tokio::sync::broadcast;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::service::Notification;
 
@@ -18,6 +19,8 @@ const NOTIFICATION_CHANNELS: &[&str] = &[
     "enforcement_status_changed",
     "event_created",
     "workflow_execution_status_changed",
+    "artifact_created",
+    "artifact_updated",
 ];
 
 /// PostgreSQL listener that receives NOTIFY events and broadcasts them
@@ -46,70 +49,111 @@ impl PostgresListener {
         );
 
         // Create a dedicated listener connection
+        let mut listener = self.create_listener().await?;
+
+        info!("PostgreSQL listener ready — entering recv loop");
+
+        // Periodic heartbeat so we can confirm the task is alive even when idle.
+        let heartbeat_interval = Duration::from_secs(60);
+        let mut next_heartbeat = tokio::time::Instant::now() + heartbeat_interval;
+
+        // Process notifications in a loop
+        loop {
+            // Log a heartbeat if no notification has arrived for a while.
+            let now = tokio::time::Instant::now();
+            if now >= next_heartbeat {
+                info!("PostgreSQL listener heartbeat — still waiting for notifications");
+                next_heartbeat = now + heartbeat_interval;
+            }
+
+            trace!("Calling listener.recv() — waiting for next notification");
+
+            // Use a timeout so the heartbeat fires even during long idle periods.
+            match tokio::time::timeout(heartbeat_interval, listener.recv()).await {
+                // Timed out waiting — loop back and log the heartbeat above.
+                Err(_timeout) => {
+                    trace!("listener.recv() timed out — re-entering loop");
+                    continue;
+                }
+                Ok(recv_result) => match recv_result {
+                    Ok(pg_notification) => {
+                        let channel = pg_notification.channel();
+                        let payload = pg_notification.payload();
+                        debug!(
+                            "Received PostgreSQL notification: channel={}, payload_len={}",
+                            channel,
+                            payload.len()
+                        );
+                        debug!("Notification payload: {}", payload);
+
+                        // Parse and broadcast notification
+                        if let Err(e) = self.process_notification(channel, payload) {
+                            error!(
+                                "Failed to process notification from channel '{}': {}",
+                                channel, e
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error receiving PostgreSQL notification: {}", e);
+
+                        // Sleep briefly before retrying to avoid tight loop on persistent errors
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+
+                        // Try to reconnect
+                        warn!("Attempting to reconnect PostgreSQL listener...");
+                        match self.create_listener().await {
+                            Ok(new_listener) => {
+                                listener = new_listener;
+                                next_heartbeat = tokio::time::Instant::now() + heartbeat_interval;
+                                info!("PostgreSQL listener reconnected successfully");
+                            }
+                            Err(e) => {
+                                error!("Failed to reconnect PostgreSQL listener: {}", e);
+                                tokio::time::sleep(Duration::from_secs(5)).await;
+                            }
+                        }
+                    }
+                }, // end Ok(recv_result)
+            } // end timeout match
+        }
+    }
+
+    /// Create a fresh [`PgListener`] subscribed to all notification channels.
+    async fn create_listener(&self) -> Result<PgListener> {
+        info!("Connecting PostgreSQL LISTEN connection to {}", {
+            // Mask the password for logging
+            let url = &self.database_url;
+            if let Some(at) = url.rfind('@') {
+                if let Some(colon) = url[..at].rfind(':') {
+                    format!("{}:****{}", &url[..colon], &url[at..])
+                } else {
+                    url.clone()
+                }
+            } else {
+                url.clone()
+            }
+        });
+
         let mut listener = PgListener::connect(&self.database_url)
             .await
             .context("Failed to connect PostgreSQL listener")?;
 
-        // Listen on all notification channels
-        for channel in NOTIFICATION_CHANNELS {
-            listener
-                .listen(channel)
-                .await
-                .context(format!("Failed to LISTEN on channel '{}'", channel))?;
-            info!("Listening on PostgreSQL channel: {}", channel);
-        }
+        info!("PostgreSQL LISTEN connection established — subscribing to channels");
 
-        // Process notifications in a loop
-        loop {
-            match listener.recv().await {
-                Ok(pg_notification) => {
-                    debug!(
-                        "Received PostgreSQL notification: channel={}, payload={}",
-                        pg_notification.channel(),
-                        pg_notification.payload()
-                    );
+        // Use listen_all for a single round-trip instead of N separate commands
+        listener
+            .listen_all(NOTIFICATION_CHANNELS.iter().copied())
+            .await
+            .context("Failed to LISTEN on notification channels")?;
 
-                    // Parse and broadcast notification
-                    if let Err(e) = self
-                        .process_notification(pg_notification.channel(), pg_notification.payload())
-                    {
-                        error!(
-                            "Failed to process notification from channel '{}': {}",
-                            pg_notification.channel(),
-                            e
-                        );
-                    }
-                }
-                Err(e) => {
-                    error!("Error receiving PostgreSQL notification: {}", e);
+        info!(
+            "Subscribed to {} PostgreSQL channels: {:?}",
+            NOTIFICATION_CHANNELS.len(),
+            NOTIFICATION_CHANNELS
+        );
 
-                    // Sleep briefly before retrying to avoid tight loop on persistent errors
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
-                    // Try to reconnect
-                    warn!("Attempting to reconnect PostgreSQL listener...");
-                    match PgListener::connect(&self.database_url).await {
-                        Ok(new_listener) => {
-                            listener = new_listener;
-                            // Re-subscribe to all channels
-                            for channel in NOTIFICATION_CHANNELS {
-                                if let Err(e) = listener.listen(channel).await {
-                                    error!(
-                                        "Failed to re-subscribe to channel '{}': {}",
-                                        channel, e
-                                    );
-                                }
-                            }
-                            info!("PostgreSQL listener reconnected successfully");
-                        }
-                        Err(e) => {
-                            error!("Failed to reconnect PostgreSQL listener: {}", e);
-                            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                        }
-                    }
-                }
-            }
-        }
+        Ok(listener)
     }
 
     /// Process a PostgreSQL notification and broadcast it to WebSocket clients
@@ -171,6 +215,8 @@ mod tests {
         assert!(NOTIFICATION_CHANNELS.contains(&"enforcement_created"));
         assert!(NOTIFICATION_CHANNELS.contains(&"enforcement_status_changed"));
         assert!(NOTIFICATION_CHANNELS.contains(&"inquiry_created"));
+        assert!(NOTIFICATION_CHANNELS.contains(&"artifact_created"));
+        assert!(NOTIFICATION_CHANNELS.contains(&"artifact_updated"));
     }
 
     #[test]

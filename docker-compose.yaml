@@ -189,6 +189,7 @@ services:
       - packs_data:/opt/attune/packs:rw
       - ./packs.dev:/opt/attune/packs.dev:rw
       - runtime_envs:/opt/attune/runtime_envs
+      - artifacts_data:/opt/attune/artifacts
       - api_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -233,6 +234,7 @@ services:
     volumes:
       - packs_data:/opt/attune/packs:ro
       - ./packs.dev:/opt/attune/packs.dev:rw
+      - artifacts_data:/opt/attune/artifacts:ro
       - executor_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -279,10 +281,12 @@ services:
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE_API_URL: http://attune-api:8080
     volumes:
       - packs_data:/opt/attune/packs:ro
       - ./packs.dev:/opt/attune/packs.dev:rw
       - runtime_envs:/opt/attune/runtime_envs
+      - artifacts_data:/opt/attune/artifacts
       - worker_shell_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -325,10 +329,12 @@ services:
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE_API_URL: http://attune-api:8080
     volumes:
       - packs_data:/opt/attune/packs:ro
       - ./packs.dev:/opt/attune/packs.dev:rw
       - runtime_envs:/opt/attune/runtime_envs
+      - artifacts_data:/opt/attune/artifacts
       - worker_python_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -371,10 +377,12 @@ services:
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE_API_URL: http://attune-api:8080
     volumes:
       - packs_data:/opt/attune/packs:ro
       - ./packs.dev:/opt/attune/packs.dev:rw
       - runtime_envs:/opt/attune/runtime_envs
+      - artifacts_data:/opt/attune/artifacts
       - worker_node_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -417,10 +425,12 @@ services:
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE_API_URL: http://attune-api:8080
     volumes:
       - packs_data:/opt/attune/packs:ro
       - ./packs.dev:/opt/attune/packs.dev:rw
       - runtime_envs:/opt/attune/runtime_envs
+      - artifacts_data:/opt/attune/artifacts
       - worker_full_logs:/opt/attune/logs
     depends_on:
       init-packs:
@@ -593,6 +603,8 @@ volumes:
   packs_data:
     driver: local
   runtime_envs:
+    driver: local
+  artifacts_data:
     driver: local
 
 # ============================================================================

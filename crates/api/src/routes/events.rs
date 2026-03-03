@@ -170,7 +170,7 @@ pub async fn create_event(
     let event = EventRepository::create(&state.db, input).await?;
 
     // Publish EventCreated message to message queue if publisher is available
-    if let Some(ref publisher) = state.publisher {
+    if let Some(publisher) = state.get_publisher().await {
         let message_payload = EventCreatedPayload {
             event_id: event.id,
             trigger_id: event.trigger,

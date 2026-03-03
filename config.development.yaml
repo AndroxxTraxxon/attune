@@ -55,6 +55,11 @@ packs_base_dir: ./packs
 # Pattern: {runtime_envs_dir}/{pack_ref}/{runtime_name}
 runtime_envs_dir: ./runtime_envs
 
+# Artifacts directory (shared volume for file-based artifact storage).
+# File-type artifacts are written here by execution processes and served by the API.
+# Pattern: {artifacts_dir}/{ref_slug}/v{version}.{ext}
+artifacts_dir: ./artifacts
+
 # Worker service configuration
 worker:
   service_name: attune-worker-e2e

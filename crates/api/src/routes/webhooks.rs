@@ -650,7 +650,7 @@ pub async fn receive_webhook(
         "Webhook event {} created, attempting to publish EventCreated message",
         event.id
     );
-    if let Some(ref publisher) = state.publisher {
+    if let Some(publisher) = state.get_publisher().await {
         let message_payload = EventCreatedPayload {
             event_id: event.id,
             trigger_id: event.trigger,

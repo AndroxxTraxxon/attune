@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { OpenAPI } from "@/api/core/OpenAPI";
 import { request as __request } from "@/api/core/request";
 
@@ -12,6 +12,8 @@ export type ArtifactType =
   | "progress"
   | "url";
 
+export type ArtifactVisibility = "public" | "private";
+
 export type OwnerType = "system" | "pack" | "action" | "sensor" | "rule";
 
 export type RetentionPolicyType = "versions" | "days" | "hours" | "minutes";
@@ -20,6 +22,7 @@ export interface ArtifactSummary {
   id: number;
   ref: string;
   type: ArtifactType;
+  visibility: ArtifactVisibility;
   name: string | null;
   content_type: string | null;
   size_bytes: number | null;
@@ -36,6 +39,7 @@ export interface ArtifactResponse {
   scope: OwnerType;
   owner: string;
   type: ArtifactType;
+  visibility: ArtifactVisibility;
   retention_policy: RetentionPolicyType;
   retention_limit: number;
   name: string | null;
@@ -55,6 +59,70 @@ export interface ArtifactVersionSummary {
   size_bytes: number | null;
   created_by: string | null;
   created: string;
+}
+
+// ============================================================================
+// Search / List params
+// ============================================================================
+
+export interface ArtifactsListParams {
+  page?: number;
+  perPage?: number;
+  scope?: OwnerType;
+  owner?: string;
+  type?: ArtifactType;
+  visibility?: ArtifactVisibility;
+  execution?: number;
+  name?: string;
+}
+
+// ============================================================================
+// Paginated list response shape
+// ============================================================================
+
+export interface PaginatedArtifacts {
+  data: ArtifactSummary[];
+  pagination: {
+    page: number;
+    page_size: number;
+    total_items: number;
+    total_pages: number;
+  };
+}
+
+// ============================================================================
+// Hooks
+// ============================================================================
+
+/**
+ * Fetch a paginated, filterable list of all artifacts.
+ *
+ * Uses GET /api/v1/artifacts with query params for server-side filtering.
+ */
+export function useArtifactsList(params: ArtifactsListParams = {}) {
+  return useQuery({
+    queryKey: ["artifacts", "list", params],
+    queryFn: async () => {
+      const query: Record<string, string> = {};
+      if (params.page) query.page = String(params.page);
+      if (params.perPage) query.per_page = String(params.perPage);
+      if (params.scope) query.scope = params.scope;
+      if (params.owner) query.owner = params.owner;
+      if (params.type) query.type = params.type;
+      if (params.visibility) query.visibility = params.visibility;
+      if (params.execution) query.execution = String(params.execution);
+      if (params.name) query.name = params.name;
+
+      const response = await __request<PaginatedArtifacts>(OpenAPI, {
+        method: "GET",
+        url: "/api/v1/artifacts",
+        query,
+      });
+      return response;
+    },
+    staleTime: 10000,
+    placeholderData: keepPreviousData,
+  });
 }
 
 /**

@@ -157,8 +157,10 @@ async fn handle_websocket(socket: WebSocket, state: Arc<AppState>) {
     let subscriber_manager_clone = state.subscriber_manager.clone();
     let outgoing_task = tokio::spawn(async move {
         while let Some(notification) = rx.recv().await {
-            // Serialize notification to JSON
-            match serde_json::to_string(&notification) {
+            // Wrap in the tagged ClientMessage envelope so the client sees
+            // {"type":"notification", "notification_type":..., "entity_type":..., ...}
+            let envelope = ClientMessage::Notification(notification);
+            match serde_json::to_string(&envelope) {
                 Ok(json) => {
                     if let Err(e) = ws_sender.send(Message::Text(json.into())).await {
                         error!("Failed to send notification to {}: {}", client_id_clone, e);

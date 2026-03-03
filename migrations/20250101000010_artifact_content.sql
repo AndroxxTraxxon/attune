@@ -1,7 +1,7 @@
 -- Migration: Artifact Content System
 -- Description: Enhances the artifact table with content fields (name, description,
---              content_type, size_bytes, execution link, structured data) and creates
---              the artifact_version table for versioned file/data storage.
+--              content_type, size_bytes, execution link, structured data, visibility)
+--              and creates the artifact_version table for versioned file/data storage.
 --
 --              The artifact table now serves as the "header" for a logical artifact,
 --              while artifact_version rows hold the actual immutable content snapshots.
@@ -33,10 +33,19 @@ ALTER TABLE artifact ADD COLUMN IF NOT EXISTS execution BIGINT;
 -- Progress artifacts append entries here; file artifacts may store parsed metadata.
 ALTER TABLE artifact ADD COLUMN IF NOT EXISTS data JSONB;
 
+-- Visibility: public artifacts are viewable by all authenticated users;
+-- private artifacts are restricted based on the artifact's scope/owner.
+-- The scope (identity, action, pack, etc.) + owner fields define who can access
+-- a private artifact. Full RBAC enforcement is deferred — for now the column
+-- enables filtering and is available for future permission checks.
+ALTER TABLE artifact ADD COLUMN IF NOT EXISTS visibility artifact_visibility_enum NOT NULL DEFAULT 'private';
+
 -- New indexes for the added columns
 CREATE INDEX IF NOT EXISTS idx_artifact_execution ON artifact(execution);
 CREATE INDEX IF NOT EXISTS idx_artifact_name ON artifact(name);
 CREATE INDEX IF NOT EXISTS idx_artifact_execution_type ON artifact(execution, type);
+CREATE INDEX IF NOT EXISTS idx_artifact_visibility ON artifact(visibility);
+CREATE INDEX IF NOT EXISTS idx_artifact_visibility_scope ON artifact(visibility, scope, owner);
 
 -- Comments for new columns
 COMMENT ON COLUMN artifact.name IS 'Human-readable artifact name';
@@ -45,6 +54,7 @@ COMMENT ON COLUMN artifact.content_type IS 'MIME content type (e.g. application/
 COMMENT ON COLUMN artifact.size_bytes IS 'Size of latest version content in bytes';
 COMMENT ON COLUMN artifact.execution IS 'Execution that produced this artifact (no FK — execution is a hypertable)';
 COMMENT ON COLUMN artifact.data IS 'Structured JSONB data for progress artifacts or metadata';
+COMMENT ON COLUMN artifact.visibility IS 'Access visibility: public (all users) or private (scope/owner-restricted)';
 
 
 -- ============================================================================
@@ -69,12 +79,17 @@ CREATE TABLE artifact_version (
     -- Size of the content in bytes
     size_bytes BIGINT,
 
-    -- Binary content (file uploads). Use BYTEA for simplicity; large files
-    -- should use external object storage in production (future enhancement).
+    -- Binary content (file uploads, DB-stored). NULL for file-backed versions.
     content BYTEA,
 
     -- Structured content (JSON payloads, parsed results, etc.)
     content_json JSONB,
+
+    -- Relative path from artifacts_dir root for disk-stored content.
+    -- When set, content BYTEA is NULL — file lives on shared volume.
+    -- Pattern: {ref_slug}/v{version}.{ext}
+    -- e.g., "mypack/build_log/v1.txt"
+    file_path TEXT,
 
     -- Free-form metadata about this version (e.g. commit hash, build number)
     meta JSONB,
@@ -94,6 +109,7 @@ ALTER TABLE artifact_version
 CREATE INDEX idx_artifact_version_artifact ON artifact_version(artifact);
 CREATE INDEX idx_artifact_version_artifact_version ON artifact_version(artifact, version DESC);
 CREATE INDEX idx_artifact_version_created ON artifact_version(created DESC);
+CREATE INDEX idx_artifact_version_file_path ON artifact_version(file_path) WHERE file_path IS NOT NULL;
 
 -- Comments
 COMMENT ON TABLE artifact_version IS 'Immutable content snapshots for artifacts (file uploads, structured data)';
@@ -105,6 +121,7 @@ COMMENT ON COLUMN artifact_version.content IS 'Binary content (file data)';
 COMMENT ON COLUMN artifact_version.content_json IS 'Structured JSON content';
 COMMENT ON COLUMN artifact_version.meta IS 'Free-form metadata about this version';
 COMMENT ON COLUMN artifact_version.created_by IS 'Who created this version (identity ref, action ref, system)';
+COMMENT ON COLUMN artifact_version.file_path IS 'Relative path from artifacts_dir root for disk-stored content. When set, content BYTEA is NULL — file lives on shared volume.';
 
 
 -- ============================================================================

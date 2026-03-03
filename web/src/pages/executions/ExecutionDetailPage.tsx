@@ -24,6 +24,7 @@ import ExecuteActionModal from "@/components/common/ExecuteActionModal";
 import EntityHistoryPanel from "@/components/common/EntityHistoryPanel";
 import WorkflowTasksPanel from "@/components/common/WorkflowTasksPanel";
 import ExecutionArtifactsPanel from "@/components/executions/ExecutionArtifactsPanel";
+import ExecutionProgressBar from "@/components/executions/ExecutionProgressBar";
 
 const getStatusColor = (status: string) => {
   switch (status) {
@@ -360,6 +361,14 @@ export default function ExecutionDetailPage() {
                 </div>
               )}
             </dl>
+
+            {/* Inline progress bar (visible when execution has progress artifacts) */}
+            {isRunning && (
+              <ExecutionProgressBar
+                executionId={execution.id}
+                isRunning={isRunning}
+              />
+            )}
           </div>
 
           {/* Config/Parameters */}

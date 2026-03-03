@@ -17,6 +17,14 @@ pub enum AuthCommands {
         /// Password (will prompt if not provided)
         #[arg(long)]
         password: Option<String>,
+
+        /// API URL to log in to (saved into the profile for future use)
+        #[arg(long)]
+        url: Option<String>,
+
+        /// Save credentials into a named profile (creates it if it doesn't exist)
+        #[arg(long)]
+        save_profile: Option<String>,
     },
     /// Log out and clear authentication tokens
     Logout,
@@ -53,8 +61,22 @@ pub async fn handle_auth_command(
     output_format: OutputFormat,
 ) -> Result<()> {
     match command {
-        AuthCommands::Login { username, password } => {
-            handle_login(username, password, profile, api_url, output_format).await
+        AuthCommands::Login {
+            username,
+            password,
+            url,
+            save_profile,
+        } => {
+            // --url is a convenient alias for --api-url at login time
+            let effective_api_url = url.or_else(|| api_url.clone());
+            handle_login(
+                username,
+                password,
+                save_profile.as_ref().or(profile.as_ref()),
+                &effective_api_url,
+                output_format,
+            )
+            .await
         }
         AuthCommands::Logout => handle_logout(profile, output_format).await,
         AuthCommands::Whoami => handle_whoami(profile, api_url, output_format).await,
@@ -65,11 +87,44 @@ pub async fn handle_auth_command(
 async fn handle_login(
     username: String,
     password: Option<String>,
-    profile: &Option<String>,
+    profile: Option<&String>,
     api_url: &Option<String>,
     output_format: OutputFormat,
 ) -> Result<()> {
-    let config = CliConfig::load_with_profile(profile.as_deref())?;
+    // Determine which profile name will own these credentials.
+    // If --save-profile / --profile was given, use that; otherwise use the
+    // currently-active profile.
+    let mut config = CliConfig::load()?;
+    let target_profile_name = profile
+        .cloned()
+        .unwrap_or_else(|| config.current_profile.clone());
+
+    // If a URL was provided and the target profile doesn't exist yet, create it.
+    if !config.profiles.contains_key(&target_profile_name) {
+        let url = api_url.clone().unwrap_or_else(|| "http://localhost:8080".to_string());
+        use crate::config::Profile;
+        config.set_profile(
+            target_profile_name.clone(),
+            Profile {
+                api_url: url,
+                auth_token: None,
+                refresh_token: None,
+                output_format: None,
+                description: None,
+            },
+        )?;
+    } else if let Some(url) = api_url {
+        // Profile exists — update its api_url if an explicit URL was provided.
+        if let Some(p) = config.profiles.get_mut(&target_profile_name) {
+            p.api_url = url.clone();
+        }
+        config.save()?;
+    }
+
+    // Build a temporary config view that points at the target profile so
+    // ApiClient uses the right base URL.
+    let mut login_config = CliConfig::load()?;
+    login_config.current_profile = target_profile_name.clone();
 
     // Prompt for password if not provided
     let password = match password {
@@ -82,7 +137,7 @@ async fn handle_login(
         }
     };
 
-    let mut client = ApiClient::from_config(&config, api_url);
+    let mut client = ApiClient::from_config(&login_config, api_url);
 
     let login_req = LoginRequest {
         login: username,
@@ -91,12 +146,17 @@ async fn handle_login(
 
     let response: LoginResponse = client.post("/auth/login", &login_req).await?;
 
-    // Save tokens to config
+    // Persist tokens into the target profile.
     let mut config = CliConfig::load()?;
-    config.set_auth(
-        response.access_token.clone(),
-        response.refresh_token.clone(),
-    )?;
+    // Ensure the profile exists (it may have just been created above and saved).
+    if let Some(p) = config.profiles.get_mut(&target_profile_name) {
+        p.auth_token = Some(response.access_token.clone());
+        p.refresh_token = Some(response.refresh_token.clone());
+        config.save()?;
+    } else {
+        // Fallback: set_auth writes to the current profile.
+        config.set_auth(response.access_token.clone(), response.refresh_token.clone())?;
+    }
 
     match output_format {
         OutputFormat::Json | OutputFormat::Yaml => {
@@ -105,6 +165,12 @@ async fn handle_login(
         OutputFormat::Table => {
             output::print_success("Successfully logged in");
             output::print_info(&format!("Token expires in {} seconds", response.expires_in));
+            if target_profile_name != config.current_profile {
+                output::print_info(&format!(
+                    "Credentials saved to profile '{}'",
+                    target_profile_name
+                ));
+            }
         }
     }
 

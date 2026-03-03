@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use crate::client::ApiClient;
 use crate::config::CliConfig;
 use crate::output::{self, OutputFormat};
+use crate::wait::{wait_for_execution, WaitOptions};
 
 #[derive(Subcommand)]
 pub enum ActionCommands {
@@ -74,6 +75,11 @@ pub enum ActionCommands {
         /// Timeout in seconds when waiting (default: 300)
         #[arg(long, default_value = "300", requires = "wait")]
         timeout: u64,
+
+        /// Notifier WebSocket base URL (e.g. ws://localhost:8081).
+        /// Derived from --api-url automatically when not set.
+        #[arg(long, requires = "wait")]
+        notifier_url: Option<String>,
     },
 }
 
@@ -182,6 +188,7 @@ pub async fn handle_action_command(
             params_json,
             wait,
             timeout,
+            notifier_url,
         } => {
             handle_execute(
                 action_ref,
@@ -191,6 +198,7 @@ pub async fn handle_action_command(
                 api_url,
                 wait,
                 timeout,
+                notifier_url,
                 output_format,
             )
             .await
@@ -415,6 +423,7 @@ async fn handle_execute(
     api_url: &Option<String>,
     wait: bool,
     timeout: u64,
+    notifier_url: Option<String>,
     output_format: OutputFormat,
 ) -> Result<()> {
     let config = CliConfig::load_with_profile(profile.as_deref())?;
@@ -453,62 +462,61 @@ async fn handle_execute(
     }
 
     let path = "/executions/execute".to_string();
-    let mut execution: Execution = client.post(&path, &request).await?;
+    let execution: Execution = client.post(&path, &request).await?;
 
-    if wait {
+    if !wait {
         match output_format {
+            OutputFormat::Json | OutputFormat::Yaml => {
+                output::print_output(&execution, output_format)?;
+            }
             OutputFormat::Table => {
-                output::print_info(&format!(
-                    "Waiting for execution {} to complete...",
-                    execution.id
-                ));
+                output::print_success(&format!("Execution {} started", execution.id));
+                output::print_key_value_table(vec![
+                    ("Execution ID", execution.id.to_string()),
+                    ("Action", execution.action_ref.clone()),
+                    ("Status", output::format_status(&execution.status)),
+                ]);
             }
-            _ => {}
         }
-
-        // Poll for completion
-        let start = std::time::Instant::now();
-        let timeout_duration = std::time::Duration::from_secs(timeout);
-
-        loop {
-            if start.elapsed() > timeout_duration {
-                anyhow::bail!("Execution timed out after {} seconds", timeout);
-            }
-
-            let exec_path = format!("/executions/{}", execution.id);
-            execution = client.get(&exec_path).await?;
-
-            if execution.status == "succeeded"
-                || execution.status == "failed"
-                || execution.status == "canceled"
-            {
-                break;
-            }
-
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-        }
+        return Ok(());
     }
 
     match output_format {
+        OutputFormat::Table => {
+            output::print_info(&format!(
+                "Waiting for execution {} to complete...",
+                execution.id
+            ));
+        }
+        _ => {}
+    }
+
+    let verbose = matches!(output_format, OutputFormat::Table);
+    let summary = wait_for_execution(WaitOptions {
+        execution_id: execution.id,
+        timeout_secs: timeout,
+        api_client: &mut client,
+        notifier_ws_url: notifier_url,
+        verbose,
+    })
+    .await?;
+
+    match output_format {
         OutputFormat::Json | OutputFormat::Yaml => {
-            output::print_output(&execution, output_format)?;
+            output::print_output(&summary, output_format)?;
         }
         OutputFormat::Table => {
-            output::print_success(&format!(
-                "Execution {} {}",
-                execution.id,
-                if wait { "completed" } else { "started" }
-            ));
+            output::print_success(&format!("Execution {} completed", summary.id));
             output::print_section("Execution Details");
             output::print_key_value_table(vec![
-                ("Execution ID", execution.id.to_string()),
-                ("Action", execution.action_ref.clone()),
-                ("Status", output::format_status(&execution.status)),
-                ("Created", output::format_timestamp(&execution.created)),
-                ("Updated", output::format_timestamp(&execution.updated)),
+                ("Execution ID", summary.id.to_string()),
+                ("Action", summary.action_ref.clone()),
+                ("Status", output::format_status(&summary.status)),
+                ("Created", output::format_timestamp(&summary.created)),
+                ("Updated", output::format_timestamp(&summary.updated)),
             ]);
 
-            if let Some(result) = execution.result {
+            if let Some(result) = summary.result {
                 if !result.is_null() {
                     output::print_section("Result");
                     println!("{}", serde_json::to_string_pretty(&result)?);

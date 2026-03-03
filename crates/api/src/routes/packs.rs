@@ -1,7 +1,7 @@
 //! Pack management API routes
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::get,
@@ -446,6 +446,190 @@ async fn execute_and_store_pack_tests(
     }
 
     Some(Ok(result))
+}
+
+/// Upload and register a pack from a tar.gz archive (multipart/form-data)
+///
+/// The archive should be a gzipped tar containing the pack directory at its root
+/// (i.e. the archive should unpack to files like `pack.yaml`, `actions/`, etc.).
+/// The multipart field name must be `pack`.
+///
+/// Optional form fields:
+/// - `force`: `"true"` to overwrite an existing pack with the same ref
+/// - `skip_tests`: `"true"` to skip test execution after registration
+#[utoipa::path(
+    post,
+    path = "/api/v1/packs/upload",
+    tag = "packs",
+    request_body(content = String, content_type = "multipart/form-data"),
+    responses(
+        (status = 201, description = "Pack uploaded and registered successfully", body = inline(ApiResponse<PackInstallResponse>)),
+        (status = 400, description = "Invalid archive or missing pack.yaml"),
+        (status = 409, description = "Pack already exists (use force=true to overwrite)"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn upload_pack(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    mut multipart: Multipart,
+) -> ApiResult<impl IntoResponse> {
+    use std::io::Cursor;
+
+    const MAX_PACK_SIZE: usize = 100 * 1024 * 1024; // 100 MB
+
+    let mut pack_bytes: Option<Vec<u8>> = None;
+    let mut force = false;
+    let mut skip_tests = false;
+
+    // Parse multipart fields
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("Multipart error: {}", e)))?
+    {
+        match field.name() {
+            Some("pack") => {
+                let data = field.bytes().await.map_err(|e| {
+                    ApiError::BadRequest(format!("Failed to read pack data: {}", e))
+                })?;
+                if data.len() > MAX_PACK_SIZE {
+                    return Err(ApiError::BadRequest(format!(
+                        "Pack archive too large: {} bytes (max {} bytes)",
+                        data.len(),
+                        MAX_PACK_SIZE
+                    )));
+                }
+                pack_bytes = Some(data.to_vec());
+            }
+            Some("force") => {
+                let val = field.text().await.map_err(|e| {
+                    ApiError::BadRequest(format!("Failed to read force field: {}", e))
+                })?;
+                force = val.trim().eq_ignore_ascii_case("true");
+            }
+            Some("skip_tests") => {
+                let val = field.text().await.map_err(|e| {
+                    ApiError::BadRequest(format!("Failed to read skip_tests field: {}", e))
+                })?;
+                skip_tests = val.trim().eq_ignore_ascii_case("true");
+            }
+            _ => {
+                // Consume and ignore unknown fields
+                let _ = field.bytes().await;
+            }
+        }
+    }
+
+    let pack_data = pack_bytes.ok_or_else(|| {
+        ApiError::BadRequest("Missing required 'pack' field in multipart upload".to_string())
+    })?;
+
+    // Extract the tar.gz archive into a temporary directory
+    let temp_extract_dir = tempfile::tempdir().map_err(|e| {
+        ApiError::InternalServerError(format!("Failed to create temp directory: {}", e))
+    })?;
+
+    {
+        let cursor = Cursor::new(&pack_data[..]);
+        let gz = flate2::read::GzDecoder::new(cursor);
+        let mut archive = tar::Archive::new(gz);
+        archive.unpack(temp_extract_dir.path()).map_err(|e| {
+            ApiError::BadRequest(format!(
+                "Failed to extract pack archive (must be a valid .tar.gz): {}",
+                e
+            ))
+        })?;
+    }
+
+    // Find pack.yaml — it may be at the root or inside a single subdirectory
+    // (e.g. when GitHub tarballs add a top-level directory)
+    let pack_root = find_pack_root(temp_extract_dir.path()).ok_or_else(|| {
+        ApiError::BadRequest(
+            "Could not find pack.yaml in the uploaded archive. \
+             Ensure the archive contains pack.yaml at its root or in a single top-level directory."
+                .to_string(),
+        )
+    })?;
+
+    // Read pack ref from pack.yaml to determine the final storage path
+    let pack_yaml_path = pack_root.join("pack.yaml");
+    let pack_yaml_content = std::fs::read_to_string(&pack_yaml_path)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to read pack.yaml: {}", e)))?;
+    let pack_yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&pack_yaml_content)
+        .map_err(|e| ApiError::BadRequest(format!("Failed to parse pack.yaml: {}", e)))?;
+    let pack_ref = pack_yaml
+        .get("ref")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ApiError::BadRequest("Missing 'ref' field in pack.yaml".to_string()))?
+        .to_string();
+
+    // Move pack to permanent storage
+    use attune_common::pack_registry::PackStorage;
+    let storage = PackStorage::new(&state.config.packs_base_dir);
+    let final_path = storage
+        .install_pack(&pack_root, &pack_ref, None)
+        .map_err(|e| {
+            ApiError::InternalServerError(format!("Failed to move pack to storage: {}", e))
+        })?;
+
+    tracing::info!(
+        "Pack '{}' uploaded and stored at {:?}",
+        pack_ref,
+        final_path
+    );
+
+    // Register the pack in the database
+    let pack_id = register_pack_internal(
+        state.clone(),
+        user.claims.sub,
+        final_path.to_string_lossy().to_string(),
+        force,
+        skip_tests,
+    )
+    .await
+    .map_err(|e| {
+        // Clean up permanent storage on failure
+        let _ = std::fs::remove_dir_all(&final_path);
+        e
+    })?;
+
+    // Fetch the registered pack
+    let pack = PackRepository::find_by_id(&state.db, pack_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Pack with ID {} not found", pack_id)))?;
+
+    let response = ApiResponse::with_message(
+        PackInstallResponse {
+            pack: PackResponse::from(pack),
+            test_result: None,
+            tests_skipped: skip_tests,
+        },
+        "Pack uploaded and registered successfully",
+    );
+
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+/// Walk the extracted directory and find the directory that contains `pack.yaml`.
+/// Returns the path of the directory containing `pack.yaml`, or `None` if not found.
+fn find_pack_root(base: &std::path::Path) -> Option<PathBuf> {
+    // Check root first
+    if base.join("pack.yaml").exists() {
+        return Some(base.to_path_buf());
+    }
+
+    // Check one level deep (e.g. GitHub tarballs: repo-main/pack.yaml)
+    if let Ok(entries) = std::fs::read_dir(base) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && path.join("pack.yaml").exists() {
+                return Some(path);
+            }
+        }
+    }
+
+    None
 }
 
 /// Register a pack from local filesystem
@@ -1051,7 +1235,7 @@ async fn register_pack_internal(
 
     // Publish pack.registered event so workers can proactively set up
     // runtime environments (virtualenvs, node_modules, etc.).
-    if let Some(ref publisher) = state.publisher {
+    if let Some(publisher) = state.get_publisher().await {
         let runtime_names = attune_common::pack_environment::collect_runtime_names_for_pack(
             &state.db, pack.id, &pack_path,
         )
@@ -2241,6 +2425,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             axum::routing::post(register_packs_batch),
         )
         .route("/packs/install", axum::routing::post(install_pack))
+        .route("/packs/upload", axum::routing::post(upload_pack))
         .route("/packs/download", axum::routing::post(download_packs))
         .route(
             "/packs/dependencies",

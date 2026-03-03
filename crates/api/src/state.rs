@@ -2,7 +2,7 @@
 
 use sqlx::PgPool;
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, RwLock};
 
 use crate::auth::jwt::JwtConfig;
 use attune_common::{config::Config, mq::Publisher};
@@ -18,8 +18,8 @@ pub struct AppState {
     pub cors_origins: Vec<String>,
     /// Application configuration
     pub config: Arc<Config>,
-    /// Optional message queue publisher
-    pub publisher: Option<Arc<Publisher>>,
+    /// Optional message queue publisher (shared, swappable after reconnection)
+    pub publisher: Arc<RwLock<Option<Arc<Publisher>>>>,
     /// Broadcast channel for SSE notifications
     pub broadcast_tx: broadcast::Sender<String>,
 }
@@ -50,15 +50,20 @@ impl AppState {
             jwt_config: Arc::new(jwt_config),
             cors_origins,
             config: Arc::new(config),
-            publisher: None,
+            publisher: Arc::new(RwLock::new(None)),
             broadcast_tx,
         }
     }
 
-    /// Set the message queue publisher
-    pub fn with_publisher(mut self, publisher: Arc<Publisher>) -> Self {
-        self.publisher = Some(publisher);
-        self
+    /// Set the message queue publisher (called once at startup or after reconnection)
+    pub async fn set_publisher(&self, publisher: Arc<Publisher>) {
+        let mut guard = self.publisher.write().await;
+        *guard = Some(publisher);
+    }
+
+    /// Get a clone of the current publisher, if available
+    pub async fn get_publisher(&self) -> Option<Arc<Publisher>> {
+        self.publisher.read().await.clone()
     }
 }
 

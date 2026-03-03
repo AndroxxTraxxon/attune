@@ -341,7 +341,7 @@ pub async fn create_rule(
     let rule = RuleRepository::create(&state.db, rule_input).await?;
 
     // Publish RuleCreated message to notify sensor service
-    if let Some(ref publisher) = state.publisher {
+    if let Some(publisher) = state.get_publisher().await {
         let payload = RuleCreatedPayload {
             rule_id: rule.id,
             rule_ref: rule.r#ref.clone(),
@@ -440,7 +440,7 @@ pub async fn update_rule(
     // If the rule is enabled and trigger params changed, publish RuleEnabled message
     // to notify sensors to restart with new parameters
     if rule.enabled && trigger_params_changed {
-        if let Some(ref publisher) = state.publisher {
+        if let Some(publisher) = state.get_publisher().await {
             let payload = RuleEnabledPayload {
                 rule_id: rule.id,
                 rule_ref: rule.r#ref.clone(),
@@ -543,7 +543,7 @@ pub async fn enable_rule(
     let rule = RuleRepository::update(&state.db, existing_rule.id, update_input).await?;
 
     // Publish RuleEnabled message to notify sensor service
-    if let Some(ref publisher) = state.publisher {
+    if let Some(publisher) = state.get_publisher().await {
         let payload = RuleEnabledPayload {
             rule_id: rule.id,
             rule_ref: rule.r#ref.clone(),
@@ -606,7 +606,7 @@ pub async fn disable_rule(
     let rule = RuleRepository::update(&state.db, existing_rule.id, update_input).await?;
 
     // Publish RuleDisabled message to notify sensor service
-    if let Some(ref publisher) = state.publisher {
+    if let Some(publisher) = state.get_publisher().await {
         let payload = RuleDisabledPayload {
             rule_id: rule.id,
             rule_ref: rule.r#ref.clone(),

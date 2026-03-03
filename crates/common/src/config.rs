@@ -582,6 +582,13 @@ pub struct Config {
     #[serde(default = "default_runtime_envs_dir")]
     pub runtime_envs_dir: String,
 
+    /// Artifacts directory (shared volume for file-based artifact storage).
+    /// File-type artifacts (FileBinary, FileDatatable, FileText, Log) are stored
+    /// on disk at this location rather than in the database.
+    /// Pattern: {artifacts_dir}/{ref_slug}/v{version}.{ext}
+    #[serde(default = "default_artifacts_dir")]
+    pub artifacts_dir: String,
+
     /// Notifier configuration (optional, for notifier service)
     pub notifier: Option<NotifierConfig>,
 
@@ -607,6 +614,10 @@ fn default_packs_base_dir() -> String {
 
 fn default_runtime_envs_dir() -> String {
     "/opt/attune/runtime_envs".to_string()
+}
+
+fn default_artifacts_dir() -> String {
+    "/opt/attune/artifacts".to_string()
 }
 
 impl Default for DatabaseConfig {
@@ -844,6 +855,7 @@ mod tests {
             sensor: None,
             packs_base_dir: default_packs_base_dir(),
             runtime_envs_dir: default_runtime_envs_dir(),
+            artifacts_dir: default_artifacts_dir(),
             notifier: None,
             pack_registry: PackRegistryConfig::default(),
             executor: None,
@@ -917,6 +929,7 @@ mod tests {
             sensor: None,
             packs_base_dir: default_packs_base_dir(),
             runtime_envs_dir: default_runtime_envs_dir(),
+            artifacts_dir: default_artifacts_dir(),
             notifier: None,
             pack_registry: PackRegistryConfig::default(),
             executor: None,
