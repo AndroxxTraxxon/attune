@@ -947,60 +947,61 @@ async fn register_pack_internal(
                         // where the API host has the interpreter available.
                         if let Some(ref env_cfg) = exec_config.environment {
                             if env_cfg.env_type != "none"
-                                && !env_dir.exists() && !env_cfg.create_command.is_empty() {
-                                    // Ensure parent directories exist
-                                    if let Some(parent) = env_dir.parent() {
-                                        let _ = std::fs::create_dir_all(parent);
-                                    }
+                                && !env_dir.exists()
+                                && !env_cfg.create_command.is_empty()
+                            {
+                                // Ensure parent directories exist
+                                if let Some(parent) = env_dir.parent() {
+                                    let _ = std::fs::create_dir_all(parent);
+                                }
 
-                                    let vars = exec_config
-                                        .build_template_vars_with_env(&pack_path, Some(&env_dir));
-                                    let resolved_cmd = attune_common::models::runtime::RuntimeExecutionConfig::resolve_command(
+                                let vars = exec_config
+                                    .build_template_vars_with_env(&pack_path, Some(&env_dir));
+                                let resolved_cmd = attune_common::models::runtime::RuntimeExecutionConfig::resolve_command(
                                         &env_cfg.create_command,
                                         &vars,
                                     );
 
-                                    tracing::info!(
-                                        "Attempting to create {} environment (best-effort) at {}: {:?}",
-                                        env_cfg.env_type,
-                                        env_dir.display(),
-                                        resolved_cmd
-                                    );
+                                tracing::info!(
+                                    "Attempting to create {} environment (best-effort) at {}: {:?}",
+                                    env_cfg.env_type,
+                                    env_dir.display(),
+                                    resolved_cmd
+                                );
 
-                                    if let Some((program, args)) = resolved_cmd.split_first() {
-                                        match tokio::process::Command::new(program)
-                                            .args(args)
-                                            .current_dir(&pack_path)
-                                            .output()
-                                            .await
-                                        {
-                                            Ok(output) if output.status.success() => {
-                                                tracing::info!(
-                                                    "Created {} environment at {}",
-                                                    env_cfg.env_type,
-                                                    env_dir.display()
-                                                );
-                                            }
-                                            Ok(output) => {
-                                                let stderr =
-                                                    String::from_utf8_lossy(&output.stderr);
-                                                tracing::info!(
+                                if let Some((program, args)) = resolved_cmd.split_first() {
+                                    match tokio::process::Command::new(program)
+                                        .args(args)
+                                        .current_dir(&pack_path)
+                                        .output()
+                                        .await
+                                    {
+                                        Ok(output) if output.status.success() => {
+                                            tracing::info!(
+                                                "Created {} environment at {}",
+                                                env_cfg.env_type,
+                                                env_dir.display()
+                                            );
+                                        }
+                                        Ok(output) => {
+                                            let stderr = String::from_utf8_lossy(&output.stderr);
+                                            tracing::info!(
                                                     "Environment creation skipped in API service (exit {}): {}. \
                                                      The worker will create it on first execution.",
                                                     output.status.code().unwrap_or(-1),
                                                     stderr.trim()
                                                 );
-                                            }
-                                            Err(e) => {
-                                                tracing::info!(
+                                        }
+                                        Err(e) => {
+                                            tracing::info!(
                                                     "Runtime '{}' not available in API service: {}. \
                                                      The worker will create the environment on first execution.",
                                                     program, e
                                                 );
-                                            }
                                         }
                                     }
                                 }
+                            }
                         }
 
                         // Attempt to install dependencies if manifest file exists.

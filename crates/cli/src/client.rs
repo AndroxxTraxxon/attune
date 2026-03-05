@@ -180,16 +180,18 @@ impl ApiClient {
         let req = self.attach_body(self.build_request(method.clone(), path), body);
         let response = req.send().await.context("Failed to send request to API")?;
 
-        if response.status() == StatusCode::UNAUTHORIZED && self.refresh_token.is_some()
-            && self.refresh_auth_token().await? {
-                // Retry with new token
-                let req = self.attach_body(self.build_request(method, path), body);
-                let response = req
-                    .send()
-                    .await
-                    .context("Failed to send request to API (retry)")?;
-                return self.handle_response(response).await;
-            }
+        if response.status() == StatusCode::UNAUTHORIZED
+            && self.refresh_token.is_some()
+            && self.refresh_auth_token().await?
+        {
+            // Retry with new token
+            let req = self.attach_body(self.build_request(method, path), body);
+            let response = req
+                .send()
+                .await
+                .context("Failed to send request to API (retry)")?;
+            return self.handle_response(response).await;
+        }
 
         self.handle_response(response).await
     }
@@ -204,15 +206,17 @@ impl ApiClient {
         let req = self.attach_body(self.build_request(method.clone(), path), body);
         let response = req.send().await.context("Failed to send request to API")?;
 
-        if response.status() == StatusCode::UNAUTHORIZED && self.refresh_token.is_some()
-            && self.refresh_auth_token().await? {
-                let req = self.attach_body(self.build_request(method, path), body);
-                let response = req
-                    .send()
-                    .await
-                    .context("Failed to send request to API (retry)")?;
-                return self.handle_empty_response(response).await;
-            }
+        if response.status() == StatusCode::UNAUTHORIZED
+            && self.refresh_token.is_some()
+            && self.refresh_auth_token().await?
+        {
+            let req = self.attach_body(self.build_request(method, path), body);
+            let response = req
+                .send()
+                .await
+                .context("Failed to send request to API (retry)")?;
+            return self.handle_empty_response(response).await;
+        }
 
         self.handle_empty_response(response).await
     }
@@ -391,16 +395,18 @@ impl ApiClient {
             .await
             .context("Failed to send multipart request to API")?;
 
-        if response.status() == StatusCode::UNAUTHORIZED && self.refresh_token.is_some()
-            && self.refresh_auth_token().await? {
-                // Retry with new token
-                let req = build_multipart_request(self, &file_bytes)?;
-                let response = req
-                    .send()
-                    .await
-                    .context("Failed to send multipart request to API (retry)")?;
-                return self.handle_response(response).await;
-            }
+        if response.status() == StatusCode::UNAUTHORIZED
+            && self.refresh_token.is_some()
+            && self.refresh_auth_token().await?
+        {
+            // Retry with new token
+            let req = build_multipart_request(self, &file_bytes)?;
+            let response = req
+                .send()
+                .await
+                .context("Failed to send multipart request to API (retry)")?;
+            return self.handle_response(response).await;
+        }
 
         self.handle_response(response).await
     }

@@ -730,8 +730,7 @@ impl SensorInstance {
 }
 
 /// Sensor status information
-#[derive(Clone, Debug)]
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct SensorStatus {
     /// Whether the sensor is running
     pub running: bool,
@@ -745,7 +744,6 @@ pub struct SensorStatus {
     /// Last successful poll time
     pub last_poll: Option<chrono::DateTime<chrono::Utc>>,
 }
-
 
 #[cfg(test)]
 mod tests {
