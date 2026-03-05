@@ -219,6 +219,7 @@ export interface ParamDefinition {
   secret?: boolean;
   default?: unknown;
   enum?: string[];
+  [key: string]: unknown;
 }
 
 /** Workflow definition as stored in the YAML file / API */

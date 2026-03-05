@@ -1,6 +1,9 @@
 import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEntityNotifications } from "@/contexts/WebSocketContext";
+import {
+  useEntityNotifications,
+  type Notification,
+} from "@/contexts/WebSocketContext";
 import type { EnforcementSummary } from "@/api";
 
 interface UseEnforcementStreamOptions {
@@ -120,7 +123,8 @@ export function useEnforcementStream(
   const queryClient = useQueryClient();
 
   const handleNotification = useCallback(
-    (notification: EnforcementNotification) => {
+    (raw: Notification) => {
+      const notification = raw as unknown as EnforcementNotification;
       // Filter by enforcement ID if specified
       if (enforcementId && notification.entity_id !== enforcementId) {
         return;

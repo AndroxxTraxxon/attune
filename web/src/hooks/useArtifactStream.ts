@@ -1,6 +1,9 @@
 import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEntityNotifications } from "@/contexts/WebSocketContext";
+import {
+  useEntityNotifications,
+  type Notification,
+} from "@/contexts/WebSocketContext";
 
 interface UseArtifactStreamOptions {
   /**
@@ -62,7 +65,8 @@ export function useArtifactStream(options: UseArtifactStreamOptions = {}) {
   const queryClient = useQueryClient();
 
   const handleNotification = useCallback(
-    (notification: ArtifactNotification) => {
+    (raw: Notification) => {
+      const notification = raw as unknown as ArtifactNotification;
       const payload = notification.payload;
 
       // If we're filtering by execution ID, only process matching artifacts

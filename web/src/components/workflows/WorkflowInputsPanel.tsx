@@ -213,7 +213,9 @@ export default function WorkflowInputsPanel({
               <SchemaBuilder
                 value={draftSchema}
                 onChange={(schema) =>
-                  setDraftSchema(schema as Record<string, ParamDefinition>)
+                  setDraftSchema(
+                    schema as unknown as Record<string, ParamDefinition>,
+                  )
                 }
                 placeholder={
                   modalTarget === "parameters"

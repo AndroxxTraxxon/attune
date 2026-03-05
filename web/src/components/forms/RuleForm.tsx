@@ -15,6 +15,7 @@ import type {
   TriggerResponse,
   ActionResponse,
 } from "@/types/api";
+import type { CreateRuleRequest, UpdateRuleRequest } from "@/api";
 import { labelToRef, extractLocalRef, combineRefs } from "@/lib/format-utils";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -205,7 +206,7 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
     // Combine pack ref and local ref to create full ref
     const fullRef = combineRefs(selectedPackData?.ref || "", localRef.trim());
 
-    const formData: Record<string, JsonValue> = {
+    const formData: Record<string, JsonValue> & Partial<CreateRuleRequest> = {
       pack_ref: selectedPackData?.ref || "",
       ref: fullRef,
       label: label.trim(),
@@ -232,9 +233,14 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
 
     try {
       if (isEditing && rule) {
-        await updateRule.mutateAsync({ ref: rule.ref, data: formData });
+        await updateRule.mutateAsync({
+          ref: rule.ref,
+          data: formData as unknown as UpdateRuleRequest,
+        });
       } else {
-        const newRuleResponse = await createRule.mutateAsync(formData);
+        const newRuleResponse = await createRule.mutateAsync(
+          formData as unknown as CreateRuleRequest,
+        );
         if (!onSuccess) {
           navigate(`/rules/${newRuleResponse.data.ref}`);
         }

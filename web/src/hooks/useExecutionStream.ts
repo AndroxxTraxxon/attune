@@ -1,7 +1,10 @@
 import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEntityNotifications } from "@/contexts/WebSocketContext";
-import type { ExecutionSummary } from "@/api";
+import {
+  useEntityNotifications,
+  type Notification,
+} from "@/contexts/WebSocketContext";
+import type { ExecutionSummary, ExecutionStatus } from "@/api";
 
 interface UseExecutionStreamOptions {
   /**
@@ -132,10 +135,8 @@ function executionMatchesParams(
     return false;
   }
 
-  // Check executor filter (may be present)
-  if (params.executor !== undefined && execution.executor !== params.executor) {
-    return false;
-  }
+  // Note: executor is not part of ExecutionSummary so we cannot filter on it
+  // from WebSocket payloads. Executor-filtered queries rely on API refetch.
 
   // Note: rule_ref and trigger_ref are NOT checked here because they may not be
   // present in WebSocket payloads (they come from enforcement data which is
@@ -152,7 +153,7 @@ function hasUnsupportedFilters(
   params: ExecutionQueryParams | undefined,
 ): boolean {
   if (!params) return false;
-  return !!(params.ruleRef || params.triggerRef);
+  return !!(params.ruleRef || params.triggerRef || params.executor);
 }
 
 /**
@@ -175,21 +176,23 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
   const queryClient = useQueryClient();
 
   const handleNotification = useCallback(
-    (notification: ExecutionNotification) => {
+    (notification: Notification) => {
+      const executionNotification =
+        notification as unknown as ExecutionNotification;
       // Filter by execution ID if specified
-      if (executionId && notification.entity_id !== executionId) {
+      if (executionId && executionNotification.entity_id !== executionId) {
         return;
       }
 
       // Extract execution data from notification payload (flat structure).
       // Keep raw payload for old_status inspection, but use cleaned data for cache.
-      const rawPayload = notification.payload;
+      const rawPayload = executionNotification.payload;
       const oldStatus: string | undefined = rawPayload?.old_status;
       const executionData = stripNotificationMeta(rawPayload);
 
       // Update specific execution query if it exists
       queryClient.setQueryData(
-        ["executions", notification.entity_id],
+        ["executions", executionNotification.entity_id],
         (old: ExecutionDetailCache | undefined) => {
           if (!old) return old;
           return {
@@ -223,7 +226,7 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
 
         // Check if execution already exists in the list
         const existingIndex = old.data.findIndex(
-          (exec) => exec.id === notification.entity_id,
+          (exec) => exec.id === executionNotification.entity_id,
         );
 
         // Merge the updated fields to determine if the execution matches the query
@@ -266,7 +269,7 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
             // not in our local data array, total_items must stay accurate.
             const virtualOldExecution = {
               ...mergedExecution,
-              status: oldStatus,
+              status: oldStatus as ExecutionStatus,
             };
             const oldMatchedQuery = executionMatchesParams(
               virtualOldExecution,

@@ -68,7 +68,9 @@ export default function TriggerForm({
           setPackId(pack.id);
         }
         // Extract local ref from full ref
-        setLocalRef(extractLocalRef(initialData.ref, initialData.pack_ref));
+        setLocalRef(
+          extractLocalRef(initialData.ref, initialData.pack_ref ?? undefined),
+        );
       }
     }
   }, [initialData, packs, isEditing]);

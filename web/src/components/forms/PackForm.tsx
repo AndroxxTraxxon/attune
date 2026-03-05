@@ -4,7 +4,9 @@ import { useCreatePack, useUpdatePack } from "@/hooks/usePacks";
 import type { PackResponse } from "@/api";
 import { labelToRef } from "@/lib/format-utils";
 import SchemaBuilder from "@/components/common/SchemaBuilder";
-import ParamSchemaForm from "@/components/common/ParamSchemaForm";
+import ParamSchemaForm, {
+  type ParamSchema,
+} from "@/components/common/ParamSchemaForm";
 import { RotateCcw } from "lucide-react";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -603,7 +605,7 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
               </p>
             </div>
             <ParamSchemaForm
-              schema={confSchema}
+              schema={confSchema as unknown as ParamSchema}
               values={configValues}
               onChange={setConfigValues}
               errors={errors}
