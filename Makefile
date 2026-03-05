@@ -343,7 +343,18 @@ ci-web-advisory:
 
 ci-security-blocking:
 	mkdir -p $$HOME/bin
-	curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/install.sh | sh -s -- -b $$HOME/bin v8.24.2
+	GITLEAKS_VERSION="8.24.2"; \
+	ARCH="$$(uname -m)"; \
+	case "$$ARCH" in \
+		x86_64) ARCH="x64" ;; \
+		aarch64|arm64) ARCH="arm64" ;; \
+		*) echo "Unsupported architecture: $$ARCH"; exit 1 ;; \
+	esac; \
+	curl -sSfL \
+		-o /tmp/gitleaks.tar.gz \
+		"https://github.com/gitleaks/gitleaks/releases/download/v$$GITLEAKS_VERSION/gitleaks_$$GITLEAKS_VERSION"_linux_"$$ARCH".tar.gz; \
+	tar -xzf /tmp/gitleaks.tar.gz -C $$HOME/bin gitleaks; \
+	chmod +x $$HOME/bin/gitleaks
 	$$HOME/bin/gitleaks git --report-format sarif --report-path gitleaks.sarif --config .gitleaks.toml
 
 ci-security-advisory:
