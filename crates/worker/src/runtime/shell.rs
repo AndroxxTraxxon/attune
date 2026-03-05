@@ -61,6 +61,7 @@ impl ShellRuntime {
     }
 
     /// Execute with streaming and bounded log collection
+    #[allow(clippy::too_many_arguments)]
     async fn execute_with_streaming(
         &self,
         mut cmd: Command,
@@ -383,6 +384,7 @@ impl ShellRuntime {
     }
 
     /// Execute shell script from file
+    #[allow(clippy::too_many_arguments)]
     async fn execute_shell_file(
         &self,
         script_path: PathBuf,

@@ -290,7 +290,10 @@ pub async fn create_rule(
     request.validate()?;
 
     // Check if rule with same ref already exists
-    if let Some(_) = RuleRepository::find_by_ref(&state.db, &request.r#ref).await? {
+    if RuleRepository::find_by_ref(&state.db, &request.r#ref)
+        .await?
+        .is_some()
+    {
         return Err(ApiError::Conflict(format!(
             "Rule with ref '{}' already exists",
             request.r#ref

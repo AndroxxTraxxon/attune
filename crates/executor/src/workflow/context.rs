@@ -1129,7 +1129,7 @@ mod tests {
         let mut publish_map = HashMap::new();
         publish_map.insert("flag".to_string(), JsonValue::Bool(true));
         publish_map.insert("count".to_string(), json!(42));
-        publish_map.insert("ratio".to_string(), json!(3.14));
+        publish_map.insert("ratio".to_string(), json!(3.15));
         publish_map.insert("nothing".to_string(), JsonValue::Null);
         publish_map.insert(
             "template".to_string(),
@@ -1152,7 +1152,7 @@ mod tests {
         assert!(ctx.get_var("count").unwrap().is_number());
 
         // Float preserved
-        assert_eq!(ctx.get_var("ratio").unwrap(), json!(3.14));
+        assert_eq!(ctx.get_var("ratio").unwrap(), json!(3.15));
 
         // Null preserved
         assert_eq!(ctx.get_var("nothing").unwrap(), json!(null));

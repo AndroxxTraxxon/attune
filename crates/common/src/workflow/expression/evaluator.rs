@@ -278,7 +278,7 @@ fn json_eq(a: &JsonValue, b: &JsonValue) -> bool {
                 return false;
             }
             a.iter()
-                .all(|(k, v)| b.get(k).map_or(false, |bv| json_eq(v, bv)))
+                .all(|(k, v)| b.get(k).is_some_and(|bv| json_eq(v, bv)))
         }
         // Different types (other than number cross-compare) are never equal
         _ => false,
@@ -680,10 +680,8 @@ impl NumericValue {
 fn as_numeric(v: &JsonValue) -> Option<NumericValue> {
     if let Some(i) = v.as_i64() {
         Some(NumericValue::Int(i))
-    } else if let Some(f) = v.as_f64() {
-        Some(NumericValue::Float(f))
     } else {
-        None
+        v.as_f64().map(NumericValue::Float)
     }
 }
 

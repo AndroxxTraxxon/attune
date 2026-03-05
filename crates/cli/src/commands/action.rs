@@ -314,6 +314,7 @@ async fn handle_show(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_update(
     action_ref: String,
     label: Option<String>,
@@ -415,6 +416,7 @@ async fn handle_delete(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_execute(
     action_ref: String,
     params: Vec<String>,
@@ -454,11 +456,8 @@ async fn handle_execute(
         parameters,
     };
 
-    match output_format {
-        OutputFormat::Table => {
-            output::print_info(&format!("Executing action: {}", action_ref));
-        }
-        _ => {}
+    if output_format == OutputFormat::Table {
+        output::print_info(&format!("Executing action: {}", action_ref));
     }
 
     let path = "/executions/execute".to_string();
@@ -481,14 +480,11 @@ async fn handle_execute(
         return Ok(());
     }
 
-    match output_format {
-        OutputFormat::Table => {
-            output::print_info(&format!(
-                "Waiting for execution {} to complete...",
-                execution.id
-            ));
-        }
-        _ => {}
+    if output_format == OutputFormat::Table {
+        output::print_info(&format!(
+            "Waiting for execution {} to complete...",
+            execution.id
+        ));
     }
 
     let verbose = matches!(output_format, OutputFormat::Table);

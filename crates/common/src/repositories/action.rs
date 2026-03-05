@@ -295,7 +295,7 @@ impl Update for ActionRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(&format!(" RETURNING {}", ACTION_COLUMNS));
+        query.push(format!(" RETURNING {}", ACTION_COLUMNS));
 
         let action = query
             .build_query_as::<Action>()
@@ -554,7 +554,6 @@ impl ActionRepository {
     }
 }
 
-/// Repository for Policy operations
 // ============================================================================
 // Policy Repository
 // ============================================================================

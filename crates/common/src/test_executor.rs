@@ -106,7 +106,7 @@ impl TestExecutor {
             );
 
             match self
-                .execute_test_suite(&pack_dir, runner_name, runner_config)
+                .execute_test_suite(pack_dir, runner_name, runner_config)
                 .await
             {
                 Ok(suite_result) => {
@@ -369,7 +369,7 @@ impl TestExecutor {
         let total = self.extract_number(&text, "Total Tests:");
         let passed = self.extract_number(&text, "Passed:");
         let failed = self.extract_number(&text, "Failed:");
-        let skipped = self.extract_number(&text, "Skipped:").or_else(|| Some(0));
+        let skipped = self.extract_number(&text, "Skipped:").or(Some(0));
 
         // If we couldn't parse counts, use exit code
         let (total, passed, failed, skipped) = if total.is_none() || passed.is_none() {
@@ -441,7 +441,6 @@ impl TestExecutor {
             .and_then(|line| {
                 line.split(label)
                     .nth(1)?
-                    .trim()
                     .split_whitespace()
                     .next()?
                     .parse::<i32>()

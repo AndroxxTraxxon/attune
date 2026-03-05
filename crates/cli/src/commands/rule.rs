@@ -354,6 +354,7 @@ async fn handle_show(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_update(
     profile: &Option<String>,
     rule_ref: String,
@@ -477,6 +478,7 @@ async fn handle_toggle(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_create(
     profile: &Option<String>,
     name: String,

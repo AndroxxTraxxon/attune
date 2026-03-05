@@ -276,7 +276,7 @@ impl Update for TriggerRepository {
             .map_err(|e| {
                 // Convert RowNotFound to NotFound error
                 if matches!(e, sqlx::Error::RowNotFound) {
-                    return crate::Error::not_found("trigger", "id", &id.to_string());
+                    return crate::Error::not_found("trigger", "id", id.to_string());
                 }
                 e.into()
             })?;

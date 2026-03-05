@@ -35,7 +35,7 @@ async fn test_create_key_system_owner() {
     assert_eq!(key.owner_pack, None);
     assert_eq!(key.owner_action, None);
     assert_eq!(key.owner_sensor, None);
-    assert_eq!(key.encrypted, false);
+    assert!(!key.encrypted);
     assert_eq!(key.value, "test_value");
     assert!(key.created.timestamp() > 0);
     assert!(key.updated.timestamp() > 0);
@@ -52,7 +52,7 @@ async fn test_create_key_system_encrypted() {
         .await
         .unwrap();
 
-    assert_eq!(key.encrypted, true);
+    assert!(key.encrypted);
     assert_eq!(key.encryption_key_hash, Some("sha256:abc123".to_string()));
 }
 
@@ -427,7 +427,7 @@ async fn test_update_encrypted_status() {
         .await
         .unwrap();
 
-    assert_eq!(key.encrypted, false);
+    assert!(!key.encrypted);
 
     let input = UpdateKeyInput {
         encrypted: Some(true),
@@ -438,7 +438,7 @@ async fn test_update_encrypted_status() {
 
     let updated = KeyRepository::update(&pool, key.id, input).await.unwrap();
 
-    assert_eq!(updated.encrypted, true);
+    assert!(updated.encrypted);
     assert_eq!(
         updated.encryption_key_hash,
         Some("sha256:xyz789".to_string())
@@ -468,7 +468,7 @@ async fn test_update_multiple_fields() {
 
     assert_eq!(updated.name, new_name);
     assert_eq!(updated.value, "updated_value");
-    assert_eq!(updated.encrypted, true);
+    assert!(updated.encrypted);
     assert_eq!(updated.encryption_key_hash, Some("hash123".to_string()));
 }
 
@@ -768,10 +768,10 @@ async fn test_key_encrypted_flag() {
         .await
         .unwrap();
 
-    assert_eq!(plain_key.encrypted, false);
+    assert!(!plain_key.encrypted);
     assert_eq!(plain_key.encryption_key_hash, None);
 
-    assert_eq!(encrypted_key.encrypted, true);
+    assert!(encrypted_key.encrypted);
     assert_eq!(
         encrypted_key.encryption_key_hash,
         Some("sha256:abc".to_string())
@@ -788,7 +788,7 @@ async fn test_update_encryption_status() {
         .await
         .unwrap();
 
-    assert_eq!(key.encrypted, false);
+    assert!(!key.encrypted);
 
     // Encrypt it
     let input = UpdateKeyInput {
@@ -800,7 +800,7 @@ async fn test_update_encryption_status() {
 
     let encrypted = KeyRepository::update(&pool, key.id, input).await.unwrap();
 
-    assert_eq!(encrypted.encrypted, true);
+    assert!(encrypted.encrypted);
     assert_eq!(
         encrypted.encryption_key_hash,
         Some("sha256:newkey".to_string())
@@ -817,7 +817,7 @@ async fn test_update_encryption_status() {
 
     let decrypted = KeyRepository::update(&pool, key.id, input).await.unwrap();
 
-    assert_eq!(decrypted.encrypted, false);
+    assert!(!decrypted.encrypted);
     assert_eq!(decrypted.value, "plain_value");
 }
 

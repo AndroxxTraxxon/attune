@@ -74,7 +74,7 @@ async fn test_create_rule() {
         rule.conditions,
         json!({"equals": {"event.status": "success"}})
     );
-    assert_eq!(rule.enabled, true);
+    assert!(rule.enabled);
     assert!(rule.created.timestamp() > 0);
     assert!(rule.updated.timestamp() > 0);
 }
@@ -117,7 +117,7 @@ async fn test_create_rule_disabled() {
 
     let rule = RuleRepository::create(&pool, input).await.unwrap();
 
-    assert_eq!(rule.enabled, false);
+    assert!(!rule.enabled);
 }
 
 #[tokio::test]
@@ -759,7 +759,7 @@ async fn test_update_rule_enabled() {
         .await
         .unwrap();
 
-    assert_eq!(updated.enabled, false);
+    assert!(!updated.enabled);
 }
 
 #[tokio::test]
@@ -816,7 +816,7 @@ async fn test_update_rule_multiple_fields() {
     assert_eq!(updated.label, "New Label");
     assert_eq!(updated.description, "New Description");
     assert_eq!(updated.conditions, json!({"updated": true}));
-    assert_eq!(updated.enabled, false);
+    assert!(!updated.enabled);
 }
 
 #[tokio::test]

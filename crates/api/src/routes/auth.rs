@@ -158,7 +158,10 @@ pub async fn register(
         .map_err(|e| ApiError::ValidationError(format!("Invalid registration request: {}", e)))?;
 
     // Check if login already exists
-    if let Some(_) = IdentityRepository::find_by_login(&state.db, &payload.login).await? {
+    if IdentityRepository::find_by_login(&state.db, &payload.login)
+        .await?
+        .is_some()
+    {
         return Err(ApiError::Conflict(format!(
             "Identity with login '{}' already exists",
             payload.login

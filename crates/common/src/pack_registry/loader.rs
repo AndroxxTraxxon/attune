@@ -288,17 +288,15 @@ impl<'a> PackComponentLoader<'a> {
                 }
                 Err(e) => {
                     // Check for unique constraint violation (race condition)
-                    if let Error::Database(ref db_err) = e {
-                        if let sqlx::Error::Database(ref inner) = db_err {
-                            if inner.is_unique_violation() {
-                                info!(
-                                    "Runtime '{}' already exists (concurrent creation), treating as update",
-                                    runtime_ref
-                                );
-                                loaded_refs.push(runtime_ref);
-                                result.runtimes_updated += 1;
-                                continue;
-                            }
+                    if let Error::Database(sqlx::Error::Database(ref inner)) = e {
+                        if inner.is_unique_violation() {
+                            info!(
+                                "Runtime '{}' already exists (concurrent creation), treating as update",
+                                runtime_ref
+                            );
+                            loaded_refs.push(runtime_ref);
+                            result.runtimes_updated += 1;
+                            continue;
                         }
                     }
                     let msg = format!("Failed to create runtime '{}': {}", runtime_ref, e);
@@ -438,16 +436,14 @@ impl<'a> PackComponentLoader<'a> {
                 }
                 Err(e) => {
                     // Check for unique constraint violation (race condition)
-                    if let Error::Database(ref db_err) = e {
-                        if let sqlx::Error::Database(ref inner) = db_err {
-                            if inner.is_unique_violation() {
-                                info!(
-                                    "Version '{}' for runtime '{}' already exists (concurrent), skipping",
-                                    version_str, runtime_ref
-                                );
-                                loaded_versions.push(version_str);
-                                continue;
-                            }
+                    if let Error::Database(sqlx::Error::Database(ref inner)) = e {
+                        if inner.is_unique_violation() {
+                            info!(
+                                "Version '{}' for runtime '{}' already exists (concurrent), skipping",
+                                version_str, runtime_ref
+                            );
+                            loaded_versions.push(version_str);
+                            continue;
                         }
                     }
                     let msg = format!(

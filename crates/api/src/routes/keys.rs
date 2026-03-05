@@ -138,7 +138,10 @@ pub async fn create_key(
     request.validate()?;
 
     // Check if key with same ref already exists
-    if let Some(_) = KeyRepository::find_by_ref(&state.db, &request.r#ref).await? {
+    if KeyRepository::find_by_ref(&state.db, &request.r#ref)
+        .await?
+        .is_some()
+    {
         return Err(ApiError::Conflict(format!(
             "Key with ref '{}' already exists",
             request.r#ref

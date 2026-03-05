@@ -965,7 +965,7 @@ tasks:
         publish:
           - validation_passed: true
           - count: 42
-          - ratio: 3.14
+          - ratio: 3.15
           - label: "hello"
           - template_val: "{{ result().data }}"
           - nothing: null
@@ -1003,7 +1003,7 @@ tasks:
         assert_eq!(publish_map["count"], &serde_json::json!(42));
 
         // Float is preserved as a JSON number
-        assert_eq!(publish_map["ratio"], &serde_json::json!(3.14));
+        assert_eq!(publish_map["ratio"], &serde_json::json!(3.15));
 
         // Plain string stays as a string
         assert_eq!(

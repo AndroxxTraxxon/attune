@@ -61,7 +61,7 @@ async fn test_create_sensor_minimal() {
     assert_eq!(sensor.runtime_ref, runtime.r#ref);
     assert_eq!(sensor.trigger, trigger.id);
     assert_eq!(sensor.trigger_ref, trigger.r#ref);
-    assert_eq!(sensor.enabled, true);
+    assert!(sensor.enabled);
     assert_eq!(sensor.param_schema, None);
     assert!(sensor.created.timestamp() > 0);
     assert!(sensor.updated.timestamp() > 0);
@@ -796,7 +796,7 @@ async fn test_update_enabled_status() {
     .await
     .unwrap();
 
-    assert_eq!(sensor.enabled, true);
+    assert!(sensor.enabled);
 
     let input = UpdateSensorInput {
         enabled: Some(false),
@@ -807,7 +807,7 @@ async fn test_update_enabled_status() {
         .await
         .unwrap();
 
-    assert_eq!(updated.enabled, false);
+    assert!(!updated.enabled);
 
     // Enable it again
     let input = UpdateSensorInput {
@@ -819,7 +819,7 @@ async fn test_update_enabled_status() {
         .await
         .unwrap();
 
-    assert_eq!(updated.enabled, true);
+    assert!(updated.enabled);
 }
 
 #[tokio::test]
@@ -924,7 +924,7 @@ async fn test_update_multiple_fields() {
     assert_eq!(updated.label, "Multi Update");
     assert_eq!(updated.description, "Updated multiple fields");
     assert_eq!(updated.entrypoint, "sensors/multi.py");
-    assert_eq!(updated.enabled, false);
+    assert!(!updated.enabled);
     assert_eq!(updated.param_schema, Some(json!({"type": "object"})));
 }
 

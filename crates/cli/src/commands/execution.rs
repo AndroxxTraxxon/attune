@@ -163,6 +163,7 @@ pub async fn handle_execution_command(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_list(
     profile: &Option<String>,
     pack: Option<String>,

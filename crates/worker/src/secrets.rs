@@ -220,7 +220,7 @@ impl SecretManager {
             .map_err(|e| Error::Internal(format!("Encryption failed: {}", e)))?;
 
         // Format: "nonce:ciphertext" (both base64-encoded)
-        let nonce_b64 = BASE64.encode(&nonce);
+        let nonce_b64 = BASE64.encode(nonce);
         let ciphertext_b64 = BASE64.encode(&ciphertext);
 
         Ok(format!("{}:{}", nonce_b64, ciphertext_b64))

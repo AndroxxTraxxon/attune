@@ -406,7 +406,7 @@ impl WorkerHealthProbe {
 
         runtime_array.iter().any(|v| {
             v.as_str()
-                .map_or(false, |s| s.eq_ignore_ascii_case(runtime_name))
+                .is_some_and(|s| s.eq_ignore_ascii_case(runtime_name))
         })
     }
 }

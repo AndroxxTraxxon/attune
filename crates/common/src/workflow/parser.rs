@@ -1449,7 +1449,7 @@ tasks:
         publish:
           - validation_passed: true
           - count: 42
-          - ratio: 3.14
+          - ratio: 3.15
           - label: "hello"
           - template_val: "{{ result().data }}"
           - nothing: null
@@ -1486,7 +1486,7 @@ tasks:
                 } else if let Some(val) = map.get("count") {
                     assert_eq!(val, &serde_json::json!(42), "integer");
                 } else if let Some(val) = map.get("ratio") {
-                    assert_eq!(val, &serde_json::json!(3.14), "float");
+                    assert_eq!(val, &serde_json::json!(3.15), "float");
                 } else if let Some(val) = map.get("label") {
                     assert_eq!(val, &serde_json::json!("hello"), "string");
                 } else if let Some(val) = map.get("template_val") {

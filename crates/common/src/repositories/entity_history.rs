@@ -47,7 +47,7 @@ pub struct HistoryQueryParams {
 impl HistoryQueryParams {
     /// Returns the effective limit, capped at 1000.
     pub fn effective_limit(&self) -> i64 {
-        self.limit.unwrap_or(100).min(1000).max(1)
+        self.limit.unwrap_or(100).clamp(1, 1000)
     }
 
     /// Returns the effective offset.

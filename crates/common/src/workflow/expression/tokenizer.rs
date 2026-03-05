@@ -431,8 +431,8 @@ mod tests {
 
     #[test]
     fn test_float() {
-        let kinds = tokenize("3.14");
-        assert_eq!(kinds, vec![TokenKind::Float(3.14), TokenKind::Eof]);
+        let kinds = tokenize("3.15");
+        assert_eq!(kinds, vec![TokenKind::Float(3.15), TokenKind::Eof]);
     }
 
     #[test]

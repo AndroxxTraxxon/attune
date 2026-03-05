@@ -257,7 +257,6 @@ mod tests {
     fn test_execution_manager_creation() {
         // This is a placeholder test
         // Real tests will require database and message queue setup
-        assert!(true);
     }
 
     #[test]

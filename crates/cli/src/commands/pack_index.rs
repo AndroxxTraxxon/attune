@@ -76,10 +76,8 @@ pub async fn handle_index_update(
         if output_format == OutputFormat::Table {
             output::print_info(&format!("Updating existing entry for '{}'", pack_ref));
         }
-    } else {
-        if output_format == OutputFormat::Table {
-            output::print_info(&format!("Adding new entry for '{}'", pack_ref));
-        }
+    } else if output_format == OutputFormat::Table {
+        output::print_info(&format!("Adding new entry for '{}'", pack_ref));
     }
 
     // Calculate checksum
@@ -93,7 +91,7 @@ pub async fn handle_index_update(
 
     if let Some(ref git) = git_url {
         let default_ref = format!("v{}", version);
-        let ref_value = git_ref.as_ref().map(|s| s.as_str()).unwrap_or(&default_ref);
+        let ref_value = git_ref.as_deref().unwrap_or(&default_ref);
         install_sources.push(serde_json::json!({
             "type": "git",
             "url": git,
@@ -318,13 +316,11 @@ pub async fn handle_index_merge(
                         ));
                     }
                     packs_map.insert(pack_ref.to_string(), pack.clone());
-                } else {
-                    if output_format == OutputFormat::Table {
-                        output::print_info(&format!(
-                            "  Keeping '{}' at {} (newer than {})",
-                            pack_ref, existing_version, new_version
-                        ));
-                    }
+                } else if output_format == OutputFormat::Table {
+                    output::print_info(&format!(
+                        "  Keeping '{}' at {} (newer than {})",
+                        pack_ref, existing_version, new_version
+                    ));
                 }
                 duplicates_resolved += 1;
             } else {

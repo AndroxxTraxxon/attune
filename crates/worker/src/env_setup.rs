@@ -381,14 +381,12 @@ async fn setup_environments_for_pack(
                         )
                         .await;
                         // Also set up version-specific environments
-                        let versions = match RuntimeVersionRepository::find_available_by_runtime(
-                            db_pool, runtime_id,
-                        )
-                        .await
-                        {
-                            Ok(v) => v,
-                            Err(_) => Vec::new(),
-                        };
+                        let versions: Vec<attune_common::models::RuntimeVersion> =
+                            RuntimeVersionRepository::find_available_by_runtime(
+                                db_pool, runtime_id,
+                            )
+                            .await
+                            .unwrap_or_default();
                         setup_version_environments_from_list(
                             &versions,
                             &rt_name,

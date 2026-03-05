@@ -443,6 +443,7 @@ impl WorkerService {
     /// 3. Wait for in-flight tasks with timeout
     /// 4. Close MQ connection
     /// 5. Close DB connection
+    ///
     /// Verify which runtime versions are available on this host/container.
     ///
     /// Runs each version's verification commands (from `distributions` JSONB)
@@ -634,7 +635,7 @@ impl WorkerService {
             shutdown_timeout
         );
 
-        let timeout_duration = Duration::from_secs(shutdown_timeout as u64);
+        let timeout_duration = Duration::from_secs(shutdown_timeout);
         match tokio::time::timeout(timeout_duration, self.wait_for_in_flight_tasks()).await {
             Ok(_) => info!("All in-flight tasks completed"),
             Err(_) => warn!("Shutdown timeout reached - some tasks may have been interrupted"),

@@ -423,14 +423,11 @@ mod tests {
             "always_available": true
         });
 
-        assert_eq!(
-            verification
-                .get("always_available")
-                .unwrap()
-                .as_bool()
-                .unwrap(),
-            true
-        );
+        assert!(verification
+            .get("always_available")
+            .unwrap()
+            .as_bool()
+            .unwrap());
     }
 
     #[tokio::test]

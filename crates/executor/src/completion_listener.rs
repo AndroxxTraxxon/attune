@@ -116,13 +116,7 @@ impl CompletionListener {
         // Verify execution exists in database
         let execution = ExecutionRepository::find_by_id(pool, execution_id).await?;
 
-        if execution.is_none() {
-            warn!(
-                "Execution {} not found in database, but still releasing queue slot",
-                execution_id
-            );
-        } else {
-            let exec = execution.as_ref().unwrap();
+        if let Some(ref exec) = execution {
             debug!(
                 "Execution {} found with status: {:?}",
                 execution_id, exec.status
@@ -180,6 +174,11 @@ impl CompletionListener {
                     }
                 }
             }
+        } else {
+            warn!(
+                "Execution {} not found in database, but still releasing queue slot",
+                execution_id
+            );
         }
 
         // Release queue slot for this action

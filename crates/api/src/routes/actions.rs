@@ -160,7 +160,10 @@ pub async fn create_action(
     request.validate()?;
 
     // Check if action with same ref already exists
-    if let Some(_) = ActionRepository::find_by_ref(&state.db, &request.r#ref).await? {
+    if ActionRepository::find_by_ref(&state.db, &request.r#ref)
+        .await?
+        .is_some()
+    {
         return Err(ApiError::Conflict(format!(
             "Action with ref '{}' already exists",
             request.r#ref

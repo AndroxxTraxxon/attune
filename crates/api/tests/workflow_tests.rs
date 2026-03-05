@@ -14,7 +14,7 @@ use helpers::*;
 fn unique_pack_name() -> String {
     format!(
         "test_pack_{}",
-        uuid::Uuid::new_v4().to_string().replace("-", "")[..8].to_string()
+        &uuid::Uuid::new_v4().to_string().replace("-", "")[..8]
     )
 }
 

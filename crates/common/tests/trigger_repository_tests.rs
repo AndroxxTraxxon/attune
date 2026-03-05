@@ -42,7 +42,7 @@ async fn test_create_trigger() {
     assert_eq!(trigger.pack, Some(pack.id));
     assert_eq!(trigger.pack_ref, Some(pack.r#ref));
     assert_eq!(trigger.label, "Webhook Trigger");
-    assert_eq!(trigger.enabled, true);
+    assert!(trigger.enabled);
     assert!(trigger.created.timestamp() > 0);
     assert!(trigger.updated.timestamp() > 0);
 }
@@ -134,7 +134,7 @@ async fn test_create_trigger_disabled() {
 
     let trigger = TriggerRepository::create(&pool, input).await.unwrap();
 
-    assert_eq!(trigger.enabled, false);
+    assert!(!trigger.enabled);
 }
 
 #[tokio::test]
@@ -478,7 +478,7 @@ async fn test_update_trigger() {
     assert_eq!(updated.r#ref, trigger.r#ref); // Ref should not change
     assert_eq!(updated.label, "Updated Label");
     assert_eq!(updated.description, Some("Updated description".to_string()));
-    assert_eq!(updated.enabled, false);
+    assert!(!updated.enabled);
     assert!(updated.updated > original_updated);
 }
 

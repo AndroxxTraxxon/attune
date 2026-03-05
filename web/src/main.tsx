@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./index.css";
 import "./lib/api-config";
 import { initializeApiWrapper } from "./lib/api-wrapper";
-import App from "./App.tsx";
+import App from "./App";
 
 // Initialize API wrapper for token refresh
 initializeApiWrapper();

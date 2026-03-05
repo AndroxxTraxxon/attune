@@ -468,7 +468,7 @@ pub async fn handle_pack_command(
 ///
 /// Splits on `_`, `-`, or `.` and title-cases each word.
 fn label_from_ref(r: &str) -> String {
-    r.split(|c| c == '_' || c == '-' || c == '.')
+    r.split(['_', '-', '.'])
         .filter(|s| !s.is_empty())
         .map(|word| {
             let mut chars = word.chars();
@@ -484,6 +484,7 @@ fn label_from_ref(r: &str) -> String {
         .join(" ")
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_create(
     profile: &Option<String>,
     ref_flag: Option<String>,
@@ -725,6 +726,7 @@ async fn handle_show(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_install(
     profile: &Option<String>,
     source: String,
@@ -742,18 +744,15 @@ async fn handle_install(
     // Detect source type
     let source_type = detect_source_type(&source, ref_spec.as_deref(), no_registry);
 
-    match output_format {
-        OutputFormat::Table => {
-            output::print_info(&format!(
-                "Installing pack from: {} ({})",
-                source, source_type
-            ));
-            output::print_info("Starting installation...");
-            if skip_deps {
-                output::print_info("⚠ Dependency validation will be skipped");
-            }
+    if output_format == OutputFormat::Table {
+        output::print_info(&format!(
+            "Installing pack from: {} ({})",
+            source, source_type
+        ));
+        output::print_info("Starting installation...");
+        if skip_deps {
+            output::print_info("⚠ Dependency validation will be skipped");
         }
-        _ => {}
     }
 
     let request = InstallPackRequest {
@@ -880,12 +879,9 @@ async fn handle_upload(
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
 
-    match output_format {
-        OutputFormat::Table => {
-            output::print_info(&format!("Uploading pack '{}' from: {}", pack_ref, path));
-            output::print_info("Creating archive...");
-        }
-        _ => {}
+    if output_format == OutputFormat::Table {
+        output::print_info(&format!("Uploading pack '{}' from: {}", pack_ref, path));
+        output::print_info("Creating archive...");
     }
 
     // Build an in-memory tar.gz of the pack directory
@@ -908,14 +904,11 @@ async fn handle_upload(
 
     let archive_size_kb = tar_gz_bytes.len() / 1024;
 
-    match output_format {
-        OutputFormat::Table => {
-            output::print_info(&format!(
-                "Archive ready ({} KB), uploading...",
-                archive_size_kb
-            ));
-        }
-        _ => {}
+    if output_format == OutputFormat::Table {
+        output::print_info(&format!(
+            "Archive ready ({} KB), uploading...",
+            archive_size_kb
+        ));
     }
 
     let config = CliConfig::load_with_profile(profile.as_deref())?;
@@ -1014,25 +1007,17 @@ async fn handle_register(
         && !path.starts_with("/app/")
         && !path.starts_with("/packs");
     if looks_local {
-        match output_format {
-            OutputFormat::Table => {
-                output::print_info(&format!("Registering pack from: {}", path));
-                eprintln!(
-                    "⚠  Warning: '{}' looks like a local path. If the API is running in \
-                     Docker it may not be able to access this path.\n   \
-                     Use `attune pack upload {}` instead to upload the pack directly.",
-                    path, path
-                );
-            }
-            _ => {}
+        if output_format == OutputFormat::Table {
+            output::print_info(&format!("Registering pack from: {}", path));
+            eprintln!(
+                "⚠  Warning: '{}' looks like a local path. If the API is running in \
+                 Docker it may not be able to access this path.\n   \
+                 Use `attune pack upload {}` instead to upload the pack directly.",
+                path, path
+            );
         }
-    } else {
-        match output_format {
-            OutputFormat::Table => {
-                output::print_info(&format!("Registering pack from: {}", path));
-            }
-            _ => {}
-        }
+    } else if output_format == OutputFormat::Table {
+        output::print_info(&format!("Registering pack from: {}", path));
     }
 
     let request = RegisterPackRequest {
@@ -1173,13 +1158,10 @@ async fn handle_test(
     let executor = TestExecutor::new(pack_base_dir);
 
     // Print test start message
-    match output_format {
-        OutputFormat::Table => {
-            println!();
-            output::print_section(&format!("🧪 Testing Pack: {} v{}", pack_ref, pack_version));
-            println!();
-        }
-        _ => {}
+    if output_format == OutputFormat::Table {
+        println!();
+        output::print_section(&format!("🧪 Testing Pack: {} v{}", pack_ref, pack_version));
+        println!();
     }
 
     // Execute tests
@@ -1688,7 +1670,7 @@ async fn handle_index_entry(
 
     if let Some(ref git) = git_url {
         let default_ref = format!("v{}", version);
-        let ref_value = git_ref.as_ref().map(|s| s.as_str()).unwrap_or(&default_ref);
+        let ref_value = git_ref.as_deref().unwrap_or(&default_ref);
         let git_source = serde_json::json!({
             "type": "git",
             "url": git,
@@ -1790,6 +1772,7 @@ async fn handle_index_entry(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_update(
     profile: &Option<String>,
     pack_ref: String,

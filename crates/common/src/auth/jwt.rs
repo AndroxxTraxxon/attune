@@ -45,19 +45,14 @@ pub struct Claims {
     pub metadata: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum TokenType {
+    #[default]
     Access,
     Refresh,
     Sensor,
     Execution,
-}
-
-impl Default for TokenType {
-    fn default() -> Self {
-        Self::Access
-    }
 }
 
 /// Configuration for JWT tokens
@@ -247,11 +242,7 @@ pub fn validate_token(token: &str, config: &JwtConfig) -> Result<Claims, JwtErro
 
 /// Extract token from Authorization header
 pub fn extract_token_from_header(auth_header: &str) -> Option<&str> {
-    if auth_header.starts_with("Bearer ") {
-        Some(&auth_header[7..])
-    } else {
-        None
-    }
+    auth_header.strip_prefix("Bearer ")
 }
 
 #[cfg(test)]

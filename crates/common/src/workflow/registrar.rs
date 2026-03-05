@@ -97,11 +97,11 @@ impl WorkflowRegistrar {
         debug!("Registering workflow: {}", loaded.file.ref_name);
 
         // Check for validation errors
-        if loaded.validation_error.is_some() {
+        if let Some(ref err) = loaded.validation_error {
             if self.options.skip_invalid {
                 return Err(Error::validation(format!(
                     "Workflow has validation errors: {}",
-                    loaded.validation_error.as_ref().unwrap()
+                    err
                 )));
             }
         }
@@ -252,6 +252,7 @@ impl WorkflowRegistrar {
     ///
     /// `effective_ref` and `effective_label` are the resolved values (which may
     /// have been derived from the filename when the workflow YAML omits them).
+    #[allow(clippy::too_many_arguments)]
     async fn create_companion_action(
         &self,
         workflow_def_id: i64,
@@ -298,6 +299,7 @@ impl WorkflowRegistrar {
     ///
     /// `effective_ref` and `effective_label` are the resolved values (which may
     /// have been derived from the filename when the workflow YAML omits them).
+    #[allow(clippy::too_many_arguments)]
     async fn ensure_companion_action(
         &self,
         workflow_def_id: i64,
@@ -425,8 +427,8 @@ mod tests {
     #[test]
     fn test_registration_options_default() {
         let options = RegistrationOptions::default();
-        assert_eq!(options.update_existing, true);
-        assert_eq!(options.skip_invalid, true);
+        assert!(options.update_existing);
+        assert!(options.skip_invalid);
     }
 
     #[test]
@@ -439,7 +441,7 @@ mod tests {
         };
 
         assert_eq!(result.ref_name, "test.workflow");
-        assert_eq!(result.created, true);
+        assert!(result.created);
         assert_eq!(result.workflow_def_id, 123);
         assert_eq!(result.warnings.len(), 0);
     }

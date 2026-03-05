@@ -272,11 +272,6 @@ impl Checksum {
 
         Ok(Self { algorithm, hash })
     }
-
-    /// Format as "algorithm:hash"
-    pub fn to_string(&self) -> String {
-        format!("{}:{}", self.algorithm, self.hash)
-    }
 }
 
 impl std::fmt::Display for Checksum {

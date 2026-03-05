@@ -171,7 +171,7 @@ impl PackInstaller {
             clone_cmd.arg("--depth").arg("1");
         }
 
-        clone_cmd.arg(&url).arg(&install_dir);
+        clone_cmd.arg(url).arg(&install_dir);
 
         let output = clone_cmd
             .output()
@@ -421,7 +421,11 @@ impl PackInstaller {
         }
 
         // Determine filename from URL
-        let filename = url.split('/').last().unwrap_or("archive.zip").to_string();
+        let filename = url
+            .split('/')
+            .next_back()
+            .unwrap_or("archive.zip")
+            .to_string();
 
         let archive_path = self.temp_dir.join(&filename);
 

@@ -107,7 +107,7 @@ impl HistoryQueryParams {
     pub fn to_repo_params(
         &self,
     ) -> attune_common::repositories::entity_history::HistoryQueryParams {
-        let limit = (self.page_size.min(1000).max(1)) as i64;
+        let limit = (self.page_size.clamp(1, 1000)) as i64;
         let offset = ((self.page.saturating_sub(1)) as i64) * limit;
 
         attune_common::repositories::entity_history::HistoryQueryParams {

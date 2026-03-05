@@ -781,7 +781,7 @@ async fn test_find_executions_by_enforcement() {
             config: None,
             env_vars: None,
             parent: None,
-            enforcement: if i == 2 { None } else { None }, // Can't reference non-existent enforcement
+            enforcement: None, // Can't reference non-existent enforcement
             executor: None,
             status: ExecutionStatus::Requested,
             result: None,

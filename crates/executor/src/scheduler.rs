@@ -78,11 +78,7 @@ fn apply_param_defaults(params: JsonValue, param_schema: &Option<JsonValue>) -> 
     if let Some(schema_obj) = schema.as_object() {
         for (key, prop) in schema_obj {
             // Only fill in missing / null parameters
-            let needs_default = match obj.get(key) {
-                None => true,
-                Some(JsonValue::Null) => true,
-                _ => false,
-            };
+            let needs_default = matches!(obj.get(key), None | Some(JsonValue::Null));
             if needs_default {
                 if let Some(default_val) = prop.get("default") {
                     debug!("Applying default for parameter '{}': {}", key, default_val);
@@ -411,6 +407,7 @@ impl ExecutionScheduler {
     /// `triggered_by` is the name of the predecessor task whose completion
     /// caused this task to be scheduled.  Pass `None` for entry-point tasks
     /// dispatched at workflow start.
+    #[allow(clippy::too_many_arguments)]
     async fn dispatch_workflow_task(
         pool: &PgPool,
         publisher: &Publisher,
@@ -496,10 +493,8 @@ impl ExecutionScheduler {
         let task_config: Option<JsonValue> =
             if rendered_input.is_object() && !rendered_input.as_object().unwrap().is_empty() {
                 Some(rendered_input.clone())
-            } else if let Some(parent_config) = &parent_execution.config {
-                Some(parent_config.clone())
             } else {
-                None
+                parent_execution.config.clone()
             };
 
         // Build workflow task metadata
@@ -660,10 +655,8 @@ impl ExecutionScheduler {
             let task_config: Option<JsonValue> =
                 if rendered_input.is_object() && !rendered_input.as_object().unwrap().is_empty() {
                     Some(rendered_input.clone())
-                } else if let Some(parent_config) = &parent_execution.config {
-                    Some(parent_config.clone())
                 } else {
-                    None
+                    parent_execution.config.clone()
                 };
 
             let workflow_task = WorkflowTaskMetadata {
@@ -1108,16 +1101,16 @@ impl ExecutionScheduler {
         let mut task_results_map: HashMap<String, JsonValue> = HashMap::new();
         for child in &child_executions {
             if let Some(ref wt) = child.workflow_task {
-                if wt.workflow_execution == workflow_execution_id {
-                    if matches!(
+                if wt.workflow_execution == workflow_execution_id
+                    && matches!(
                         child.status,
                         ExecutionStatus::Completed
                             | ExecutionStatus::Failed
                             | ExecutionStatus::Timeout
-                    ) {
-                        let result_val = child.result.clone().unwrap_or(serde_json::json!({}));
-                        task_results_map.insert(wt.task_name.clone(), result_val);
-                    }
+                    )
+                {
+                    let result_val = child.result.clone().unwrap_or(serde_json::json!({}));
+                    task_results_map.insert(wt.task_name.clone(), result_val);
                 }
             }
         }
@@ -1514,7 +1507,7 @@ impl ExecutionScheduler {
         // Filter by heartbeat freshness (only workers with recent heartbeats)
         let fresh_workers: Vec<_> = active_workers
             .into_iter()
-            .filter(|w| Self::is_worker_heartbeat_fresh(w))
+            .filter(Self::is_worker_heartbeat_fresh)
             .collect();
 
         if fresh_workers.is_empty() {
@@ -1749,27 +1742,23 @@ mod tests {
     fn test_scheduler_creation() {
         // This is a placeholder test
         // Real tests will require database and message queue setup
-        assert!(true);
     }
 
     #[test]
     fn test_concurrency_limit_dispatch_count() {
         // Verify the dispatch_count calculation used by dispatch_with_items_task
         let total = 20usize;
-        let concurrency: Option<usize> = Some(3);
-        let concurrency_limit = concurrency.unwrap_or(total);
+        let concurrency_limit = 3usize;
         let dispatch_count = total.min(concurrency_limit);
         assert_eq!(dispatch_count, 3);
 
         // No concurrency limit → default to serial (1 at a time)
-        let concurrency: Option<usize> = None;
-        let concurrency_limit = concurrency.unwrap_or(1);
+        let concurrency_limit = 1usize;
         let dispatch_count = total.min(concurrency_limit);
         assert_eq!(dispatch_count, 1);
 
         // Concurrency exceeds total → dispatch all
-        let concurrency: Option<usize> = Some(50);
-        let concurrency_limit = concurrency.unwrap_or(total);
+        let concurrency_limit = 50usize;
         let dispatch_count = total.min(concurrency_limit);
         assert_eq!(dispatch_count, 20);
     }

@@ -77,8 +77,7 @@ impl DeadLetterHandler {
                             info!("Dead letter handler stopping, rejecting message");
                             return Err(attune_common::mq::MqError::Consume(
                                 "Handler is shutting down".to_string(),
-                            )
-                            .into());
+                            ));
                         }
                     }
 

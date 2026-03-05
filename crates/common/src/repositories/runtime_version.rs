@@ -239,7 +239,7 @@ impl Update for RuntimeVersionRepository {
 
         query.push(" WHERE id = ");
         query.push_bind(id);
-        query.push(&format!(" RETURNING {}", SELECT_COLUMNS));
+        query.push(format!(" RETURNING {}", SELECT_COLUMNS));
 
         let row = query
             .build_query_as::<RuntimeVersion>()

@@ -408,6 +408,7 @@ impl PackRepository {
     }
 
     /// Update installation metadata for a pack
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_installation_metadata<'e, E>(
         executor: E,
         id: i64,

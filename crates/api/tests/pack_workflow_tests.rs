@@ -64,7 +64,7 @@ async fn test_sync_pack_workflows_endpoint() {
     // Use unique pack name to avoid conflicts in parallel tests
     let pack_name = format!(
         "test_pack_{}",
-        uuid::Uuid::new_v4().to_string().replace("-", "")[..8].to_string()
+        &uuid::Uuid::new_v4().to_string().replace("-", "")[..8]
     );
 
     // Create temporary directory for pack workflows
@@ -100,7 +100,7 @@ async fn test_validate_pack_workflows_endpoint() {
     // Use unique pack name to avoid conflicts in parallel tests
     let pack_name = format!(
         "test_pack_{}",
-        uuid::Uuid::new_v4().to_string().replace("-", "")[..8].to_string()
+        &uuid::Uuid::new_v4().to_string().replace("-", "")[..8]
     );
 
     // Create pack in database
@@ -158,7 +158,7 @@ async fn test_sync_workflows_requires_authentication() {
     // Use unique pack name to avoid conflicts in parallel tests
     let pack_name = format!(
         "test_pack_{}",
-        uuid::Uuid::new_v4().to_string().replace("-", "")[..8].to_string()
+        &uuid::Uuid::new_v4().to_string().replace("-", "")[..8]
     );
 
     // Create pack in database
@@ -185,7 +185,7 @@ async fn test_validate_workflows_requires_authentication() {
     // Use unique pack name to avoid conflicts in parallel tests
     let pack_name = format!(
         "test_pack_{}",
-        uuid::Uuid::new_v4().to_string().replace("-", "")[..8].to_string()
+        &uuid::Uuid::new_v4().to_string().replace("-", "")[..8]
     );
 
     // Create pack in database

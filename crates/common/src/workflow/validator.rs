@@ -308,7 +308,7 @@ impl WorkflowValidator {
         reachable
     }
 
-    /// Detect cycles using DFS
+    // Detect cycles using DFS
     // Cycle detection removed - cycles are now valid in workflow graphs
     // Workflows are directed graphs (not DAGs) and cycles are supported
     // for use cases like monitoring loops, retry patterns, etc.
@@ -328,7 +328,7 @@ impl WorkflowValidator {
         }
 
         // Validate variable names in vars
-        for (key, _) in &workflow.vars {
+        for key in workflow.vars.keys() {
             if !Self::is_valid_variable_name(key) {
                 return Err(ValidationError::SemanticError(format!(
                     "Invalid variable name: {}",

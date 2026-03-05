@@ -45,7 +45,7 @@ impl WorkerRegistration {
         let worker_type = config
             .worker
             .as_ref()
-            .and_then(|w| w.worker_type.clone())
+            .and_then(|w| w.worker_type)
             .unwrap_or(WorkerType::Local);
 
         let worker_role = WorkerRole::Action;
@@ -180,8 +180,8 @@ impl WorkerRegistration {
                 "#,
             )
             .bind(&self.worker_name)
-            .bind(&self.worker_type)
-            .bind(&self.worker_role)
+            .bind(self.worker_type)
+            .bind(self.worker_role)
             .bind(self.runtime_id)
             .bind(&self.host)
             .bind(self.port)

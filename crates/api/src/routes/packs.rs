@@ -585,10 +585,9 @@ pub async fn upload_pack(
         skip_tests,
     )
     .await
-    .map_err(|e| {
+    .inspect_err(|_e| {
         // Clean up permanent storage on failure
         let _ = std::fs::remove_dir_all(&final_path);
-        e
     })?;
 
     // Fetch the registered pack
@@ -947,8 +946,8 @@ async fn register_pack_internal(
                         // a best-effort optimisation for non-Docker (bare-metal) setups
                         // where the API host has the interpreter available.
                         if let Some(ref env_cfg) = exec_config.environment {
-                            if env_cfg.env_type != "none" {
-                                if !env_dir.exists() && !env_cfg.create_command.is_empty() {
+                            if env_cfg.env_type != "none"
+                                && !env_dir.exists() && !env_cfg.create_command.is_empty() {
                                     // Ensure parent directories exist
                                     if let Some(parent) = env_dir.parent() {
                                         let _ = std::fs::create_dir_all(parent);
@@ -1002,7 +1001,6 @@ async fn register_pack_internal(
                                         }
                                     }
                                 }
-                            }
                         }
 
                         // Attempt to install dependencies if manifest file exists.
@@ -1107,9 +1105,7 @@ async fn register_pack_internal(
                         if is_new_pack {
                             let _ = PackRepository::delete(&state.db, pack.id).await;
                         }
-                        return Err(ApiError::BadRequest(format!(
-                            "Pack registration failed: tests did not pass. Use force=true to register anyway."
-                        )));
+                        return Err(ApiError::BadRequest("Pack registration failed: tests did not pass. Use force=true to register anyway.".to_string()));
                     }
 
                     if !test_passed && force {
@@ -1359,10 +1355,9 @@ pub async fn install_pack(
         request.skip_tests,
     )
     .await
-    .map_err(|e| {
+    .inspect_err(|_e| {
         // Clean up the permanent storage if registration fails
         let _ = std::fs::remove_dir_all(&final_path);
-        e
     })?;
 
     // Fetch the registered pack

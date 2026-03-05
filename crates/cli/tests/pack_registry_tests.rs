@@ -192,7 +192,7 @@ fn test_pack_index_entry_generates_valid_json() {
     // Verify metadata
     assert_eq!(json["author"], "Test Author");
     assert_eq!(json["license"], "Apache-2.0");
-    assert!(json["keywords"].as_array().unwrap().len() > 0);
+    assert!(!json["keywords"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -212,7 +212,7 @@ fn test_pack_index_entry_with_archive_url() {
     let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
 
     let json: Value = serde_json::from_str(&stdout).unwrap();
-    assert!(json["install_sources"].as_array().unwrap().len() > 0);
+    assert!(!json["install_sources"].as_array().unwrap().is_empty());
 
     let archive_source = &json["install_sources"][0];
     assert_eq!(archive_source["type"], "archive");

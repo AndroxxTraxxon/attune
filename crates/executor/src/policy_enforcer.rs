@@ -21,6 +21,7 @@ use crate::queue_manager::ExecutionQueueManager;
 
 /// Policy violation type
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::enum_variant_names)]
 pub enum PolicyViolation {
     /// Rate limit exceeded
     RateLimitExceeded {
@@ -78,7 +79,7 @@ impl std::fmt::Display for PolicyViolation {
 }
 
 /// Execution policy configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExecutionPolicy {
     /// Rate limit: maximum executions per time window
     pub rate_limit: Option<RateLimit>,
@@ -86,16 +87,6 @@ pub struct ExecutionPolicy {
     pub concurrency_limit: Option<u32>,
     /// Resource quotas
     pub quotas: Option<HashMap<String, u64>>,
-}
-
-impl Default for ExecutionPolicy {
-    fn default() -> Self {
-        Self {
-            rate_limit: None,
-            concurrency_limit: None,
-            quotas: None,
-        }
-    }
 }
 
 /// Rate limit configuration

@@ -357,7 +357,7 @@ impl SensorManager {
         let mut child = cmd
             .env("ATTUNE_API_URL", &self.inner.api_url)
             .env("ATTUNE_API_TOKEN", &token_response.token)
-            .env("ATTUNE_SENSOR_ID", &sensor.id.to_string())
+            .env("ATTUNE_SENSOR_ID", sensor.id.to_string())
             .env("ATTUNE_SENSOR_REF", &sensor.r#ref)
             .env("ATTUNE_SENSOR_TRIGGERS", &trigger_instances_json)
             .env("ATTUNE_MQ_URL", &self.inner.mq_url)
@@ -731,6 +731,7 @@ impl SensorInstance {
 
 /// Sensor status information
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub struct SensorStatus {
     /// Whether the sensor is running
     pub running: bool,
@@ -745,16 +746,6 @@ pub struct SensorStatus {
     pub last_poll: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl Default for SensorStatus {
-    fn default() -> Self {
-        Self {
-            running: false,
-            failed: false,
-            failure_count: 0,
-            last_poll: None,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

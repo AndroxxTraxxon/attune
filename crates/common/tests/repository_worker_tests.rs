@@ -892,7 +892,7 @@ async fn test_port_range() {
 
         let worker = WorkerRepository::create(&pool, input)
             .await
-            .expect(&format!("Failed to create worker with port {}", port));
+            .unwrap_or_else(|_| panic!("Failed to create worker with port {}", port));
 
         assert_eq!(worker.port, Some(port));
     }

@@ -1877,7 +1877,7 @@ pub async fn stream_artifact(
                             Some((
                                 Ok(Event::default()
                                     .event("content")
-                                    .data(String::from_utf8_lossy(&buf).into_owned())),
+                                    .data(String::from_utf8_lossy(&buf))),
                                 TailState::Tailing {
                                     full_path,
                                     file_path,
@@ -1967,7 +1967,7 @@ pub async fn stream_artifact(
                             Some((
                                 Ok(Event::default()
                                     .event("append")
-                                    .data(String::from_utf8_lossy(&new_buf).into_owned())),
+                                    .data(String::from_utf8_lossy(&new_buf))),
                                 TailState::Tailing {
                                     full_path,
                                     file_path,

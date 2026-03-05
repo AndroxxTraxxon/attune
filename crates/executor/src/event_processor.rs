@@ -189,7 +189,7 @@ impl EventProcessor {
         let payload_dict = payload
             .as_object()
             .cloned()
-            .unwrap_or_else(|| serde_json::Map::new());
+            .unwrap_or_else(serde_json::Map::new);
 
         // Resolve action parameters using the template resolver
         let resolved_params = Self::resolve_action_params(pool, rule, event, &payload).await?;
@@ -248,7 +248,7 @@ impl EventProcessor {
         };
 
         // If rule has no conditions, it always matches
-        if rule.conditions.is_null() || rule.conditions.as_array().map_or(true, |a| a.is_empty()) {
+        if rule.conditions.is_null() || rule.conditions.as_array().is_none_or(|a| a.is_empty()) {
             debug!("Rule {} has no conditions, matching by default", rule.r#ref);
             return Ok(true);
         }
@@ -364,7 +364,7 @@ impl EventProcessor {
         let action_params = &rule.action_params;
 
         // If there are no action params, return empty
-        if action_params.is_null() || action_params.as_object().map_or(true, |o| o.is_empty()) {
+        if action_params.is_null() || action_params.as_object().is_none_or(|o| o.is_empty()) {
             return Ok(serde_json::Map::new());
         }
 

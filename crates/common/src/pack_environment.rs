@@ -41,7 +41,7 @@ impl PackEnvironmentStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_status(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(Self::Pending),
             "installing" => Some(Self::Installing),
@@ -194,7 +194,7 @@ impl PackEnvironmentManager {
 
         if let Some(row) = row {
             let status_str: String = row.try_get("status")?;
-            let status = PackEnvironmentStatus::from_str(&status_str)
+            let status = PackEnvironmentStatus::parse_status(&status_str)
                 .unwrap_or(PackEnvironmentStatus::Failed);
 
             Ok(Some(PackEnvironment {
@@ -343,7 +343,7 @@ impl PackEnvironmentManager {
         let mut environments = Vec::new();
         for row in rows {
             let status_str: String = row.try_get("status")?;
-            let status = PackEnvironmentStatus::from_str(&status_str)
+            let status = PackEnvironmentStatus::parse_status(&status_str)
                 .unwrap_or(PackEnvironmentStatus::Failed);
 
             environments.push(PackEnvironment {
@@ -452,8 +452,8 @@ impl PackEnvironmentManager {
         .await?;
 
         let status_str: String = row.try_get("status")?;
-        let status =
-            PackEnvironmentStatus::from_str(&status_str).unwrap_or(PackEnvironmentStatus::Pending);
+        let status = PackEnvironmentStatus::parse_status(&status_str)
+            .unwrap_or(PackEnvironmentStatus::Pending);
 
         Ok(PackEnvironment {
             id: row.try_get("id")?,
@@ -496,8 +496,8 @@ impl PackEnvironmentManager {
         .await?;
 
         let status_str: String = row.try_get("status")?;
-        let status =
-            PackEnvironmentStatus::from_str(&status_str).unwrap_or(PackEnvironmentStatus::Ready);
+        let status = PackEnvironmentStatus::parse_status(&status_str)
+            .unwrap_or(PackEnvironmentStatus::Ready);
 
         Ok(PackEnvironment {
             id: row.try_get("id")?,
@@ -580,7 +580,7 @@ impl PackEnvironmentManager {
                 Ok(output) => {
                     install_log.push_str(&format!("\n=== {} ===\n", action.name));
                     install_log.push_str(&output);
-                    install_log.push_str("\n");
+                    install_log.push('\n');
                 }
                 Err(e) => {
                     let error_msg = format!("Installer '{}' failed: {}", action.name, e);
@@ -701,20 +701,18 @@ impl PackEnvironmentManager {
                 .map(|obj| {
                     obj.iter()
                         .filter_map(|(k, v)| {
-                            v.as_str()
-                                .map(|s| {
-                                    let resolved = self
-                                        .resolve_template(
-                                            s,
-                                            pack_ref,
-                                            runtime_ref,
-                                            env_path,
-                                            &pack_path_str,
-                                        )
-                                        .ok()?;
-                                    Some((k.clone(), resolved))
-                                })
-                                .flatten()
+                            v.as_str().and_then(|s| {
+                                let resolved = self
+                                    .resolve_template(
+                                        s,
+                                        pack_ref,
+                                        runtime_ref,
+                                        env_path,
+                                        &pack_path_str,
+                                    )
+                                    .ok()?;
+                                Some((k.clone(), resolved))
+                            })
                         })
                         .collect::<HashMap<String, String>>()
                 })
@@ -877,9 +875,9 @@ mod tests {
     fn test_environment_status_conversion() {
         assert_eq!(PackEnvironmentStatus::Ready.as_str(), "ready");
         assert_eq!(
-            PackEnvironmentStatus::from_str("ready"),
+            PackEnvironmentStatus::parse_status("ready"),
             Some(PackEnvironmentStatus::Ready)
         );
-        assert_eq!(PackEnvironmentStatus::from_str("invalid"), None);
+        assert_eq!(PackEnvironmentStatus::parse_status("invalid"), None);
     }
 }

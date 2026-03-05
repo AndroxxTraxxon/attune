@@ -582,7 +582,7 @@ impl EnforcementRepository {
         }
 
         if let Some(status) = &filters.status {
-            push_condition!("status = ", status.clone());
+            push_condition!("status = ", *status);
         }
         if let Some(rule_id) = filters.rule {
             push_condition!("rule = ", rule_id);

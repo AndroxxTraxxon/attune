@@ -83,6 +83,7 @@ pub async fn execute_streaming(
 /// * `max_stderr_bytes` - Maximum stderr size before truncation
 /// * `output_format` - How to parse stdout (Text, Json, Yaml, Jsonl)
 /// * `cancel_token` - Optional cancellation token for graceful process termination
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_streaming_cancellable(
     mut cmd: Command,
     secrets: &HashMap<String, String>,

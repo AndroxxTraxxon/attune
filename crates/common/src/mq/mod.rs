@@ -69,18 +69,13 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Message delivery mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeliveryMode {
     /// Non-persistent messages (faster, but may be lost on broker restart)
     NonPersistent = 1,
     /// Persistent messages (slower, but survive broker restart)
+    #[default]
     Persistent = 2,
-}
-
-impl Default for DeliveryMode {
-    fn default() -> Self {
-        Self::Persistent
-    }
 }
 
 /// Message priority (0-9, higher is more urgent)
@@ -125,25 +120,21 @@ impl fmt::Display for Priority {
 }
 
 /// Message acknowledgment mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AckMode {
     /// Automatically acknowledge messages after delivery
     Auto,
     /// Manually acknowledge messages after processing
+    #[default]
     Manual,
 }
 
-impl Default for AckMode {
-    fn default() -> Self {
-        Self::Manual
-    }
-}
-
 /// Exchange type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ExchangeType {
     /// Direct exchange - routes messages with exact routing key match
+    #[default]
     Direct,
     /// Topic exchange - routes messages using pattern matching
     Topic,
@@ -162,12 +153,6 @@ impl ExchangeType {
             Self::Fanout => "fanout",
             Self::Headers => "headers",
         }
-    }
-}
-
-impl Default for ExchangeType {
-    fn default() -> Self {
-        Self::Direct
     }
 }
 

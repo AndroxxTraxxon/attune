@@ -218,7 +218,7 @@ impl KeyRepository {
         }
 
         if let Some(ref owner_type) = filters.owner_type {
-            push_condition!("owner_type = ", owner_type.clone());
+            push_condition!("owner_type = ", *owner_type);
         }
         if let Some(ref owner) = filters.owner {
             push_condition!("owner = ", owner.clone());

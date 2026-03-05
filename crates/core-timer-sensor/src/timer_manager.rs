@@ -546,7 +546,7 @@ mod tests {
         let manager = TimerManager::new(api_client).await.unwrap();
 
         // Test various valid cron expressions
-        let expressions = vec![
+        let expressions = [
             "0 0 * * * *",    // Every hour
             "0 */15 * * * *", // Every 15 minutes
             "0 0 0 * * *",    // Daily at midnight

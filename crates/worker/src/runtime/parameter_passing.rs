@@ -117,7 +117,7 @@ pub fn create_parameter_file(
 ) -> Result<NamedTempFile, RuntimeError> {
     let formatted = format_parameters(parameters, format)?;
 
-    let mut temp_file = NamedTempFile::new().map_err(|e| RuntimeError::IoError(e))?;
+    let mut temp_file = NamedTempFile::new().map_err(RuntimeError::IoError)?;
 
     // Set restrictive permissions (owner read-only)
     #[cfg(unix)]
@@ -126,20 +126,20 @@ pub fn create_parameter_file(
         let mut perms = temp_file
             .as_file()
             .metadata()
-            .map_err(|e| RuntimeError::IoError(e))?
+            .map_err(RuntimeError::IoError)?
             .permissions();
         perms.set_mode(0o400); // Read-only for owner
         temp_file
             .as_file()
             .set_permissions(perms)
-            .map_err(|e| RuntimeError::IoError(e))?;
+            .map_err(RuntimeError::IoError)?;
     }
 
     temp_file
         .write_all(formatted.as_bytes())
-        .map_err(|e| RuntimeError::IoError(e))?;
+        .map_err(RuntimeError::IoError)?;
 
-    temp_file.flush().map_err(|e| RuntimeError::IoError(e))?;
+    temp_file.flush().map_err(RuntimeError::IoError)?;
 
     debug!(
         "Created parameter file at {:?} with format {:?}",

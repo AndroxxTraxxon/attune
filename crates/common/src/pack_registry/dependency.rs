@@ -151,17 +151,15 @@ impl DependencyValidator {
         };
 
         let error = if !satisfied {
-            if detected_version.is_none() {
-                Some(format!("Runtime '{}' not found on system", runtime))
-            } else if let Some(ref constraint) = version_constraint {
-                Some(format!(
-                    "Runtime '{}' version {} does not satisfy constraint '{}'",
-                    runtime,
-                    detected_version.as_ref().unwrap(),
-                    constraint
-                ))
+            if let Some(ref detected) = detected_version {
+                version_constraint.as_ref().map(|constraint| {
+                    format!(
+                        "Runtime '{}' version {} does not satisfy constraint '{}'",
+                        runtime, detected, constraint
+                    )
+                })
             } else {
-                None
+                Some(format!("Runtime '{}' not found on system", runtime))
             }
         } else {
             None
@@ -192,15 +190,13 @@ impl DependencyValidator {
         };
 
         let error = if !satisfied {
-            if installed_version.is_none() {
-                Some(format!("Required pack '{}' is not installed", pack_ref))
-            } else {
+            if let Some(ref installed) = installed_version {
                 Some(format!(
                     "Pack '{}' version {} does not satisfy constraint '{}'",
-                    pack_ref,
-                    installed_version.as_ref().unwrap(),
-                    version_constraint
+                    pack_ref, installed, version_constraint
                 ))
+            } else {
+                Some(format!("Required pack '{}' is not installed", pack_ref))
             }
         } else {
             None
@@ -335,30 +331,30 @@ fn match_version_constraint(version: &str, constraint: &str) -> Result<bool> {
     }
 
     // Parse constraint
-    if constraint.starts_with(">=") {
-        let required = constraint[2..].trim();
+    if let Some(stripped) = constraint.strip_prefix(">=") {
+        let required = stripped.trim();
         Ok(compare_versions(version, required)? >= 0)
-    } else if constraint.starts_with("<=") {
-        let required = constraint[2..].trim();
+    } else if let Some(stripped) = constraint.strip_prefix("<=") {
+        let required = stripped.trim();
         Ok(compare_versions(version, required)? <= 0)
-    } else if constraint.starts_with('>') {
-        let required = constraint[1..].trim();
+    } else if let Some(stripped) = constraint.strip_prefix('>') {
+        let required = stripped.trim();
         Ok(compare_versions(version, required)? > 0)
-    } else if constraint.starts_with('<') {
-        let required = constraint[1..].trim();
+    } else if let Some(stripped) = constraint.strip_prefix('<') {
+        let required = stripped.trim();
         Ok(compare_versions(version, required)? < 0)
-    } else if constraint.starts_with('=') {
-        let required = constraint[1..].trim();
+    } else if let Some(stripped) = constraint.strip_prefix('=') {
+        let required = stripped.trim();
         Ok(compare_versions(version, required)? == 0)
-    } else if constraint.starts_with('^') {
+    } else if let Some(stripped) = constraint.strip_prefix('^') {
         // Caret: Compatible with version (major.minor.patch)
         // ^1.2.3 := >=1.2.3 <2.0.0
-        let required = constraint[1..].trim();
+        let required = stripped.trim();
         match_caret_constraint(version, required)
-    } else if constraint.starts_with('~') {
+    } else if let Some(stripped) = constraint.strip_prefix('~') {
         // Tilde: Approximately equivalent to version
         // ~1.2.3 := >=1.2.3 <1.3.0
-        let required = constraint[1..].trim();
+        let required = stripped.trim();
         match_tilde_constraint(version, required)
     } else {
         // Exact match

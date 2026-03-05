@@ -150,6 +150,7 @@ impl TimerConfig {
 /// Rule lifecycle event types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event_type", rename_all = "PascalCase")]
+#[allow(clippy::enum_variant_names)]
 pub enum RuleLifecycleEvent {
     RuleCreated {
         rule_id: i64,

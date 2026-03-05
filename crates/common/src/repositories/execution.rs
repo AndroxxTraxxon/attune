@@ -391,7 +391,7 @@ impl ExecutionRepository {
         }
 
         if let Some(status) = &filters.status {
-            push_condition!("e.status = ", status.clone());
+            push_condition!("e.status = ", *status);
         }
         if let Some(action_ref) = &filters.action_ref {
             push_condition!("e.action_ref = ", action_ref.clone());

@@ -211,7 +211,7 @@ impl InquiryRepository {
         }
 
         if let Some(status) = &filters.status {
-            push_condition!("status = ", status.clone());
+            push_condition!("status = ", *status);
         }
         if let Some(execution_id) = filters.execution {
             push_condition!("execution = ", execution_id);

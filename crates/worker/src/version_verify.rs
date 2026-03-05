@@ -90,7 +90,7 @@ pub async fn verify_all_runtime_versions(
         let rt_base_name = version
             .runtime_ref
             .split('.')
-            .last()
+            .next_back()
             .unwrap_or(&version.runtime_ref)
             .to_lowercase();
 

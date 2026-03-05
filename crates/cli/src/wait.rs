@@ -472,7 +472,7 @@ fn resolve_ws_url(opts: &WaitOptions<'_>) -> Option<String> {
     let api_url = opts.api_client.base_url();
 
     // Transform http(s)://host:PORT/... → ws(s)://host:8081
-    let ws_url = derive_notifier_url(&api_url)?;
+    let ws_url = derive_notifier_url(api_url)?;
     Some(ws_url)
 }
 

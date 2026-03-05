@@ -181,7 +181,10 @@ pub async fn create_workflow(
     request.validate()?;
 
     // Check if workflow with same ref already exists
-    if let Some(_) = WorkflowDefinitionRepository::find_by_ref(&state.db, &request.r#ref).await? {
+    if WorkflowDefinitionRepository::find_by_ref(&state.db, &request.r#ref)
+        .await?
+        .is_some()
+    {
         return Err(ApiError::Conflict(format!(
             "Workflow with ref '{}' already exists",
             request.r#ref
@@ -519,7 +522,7 @@ pub async fn update_workflow_file(
 
 /// Write a workflow definition to disk as YAML
 async fn write_workflow_yaml(
-    packs_base_dir: &PathBuf,
+    packs_base_dir: &std::path::Path,
     pack_ref: &str,
     request: &SaveWorkflowFileRequest,
 ) -> Result<(), ApiError> {
@@ -630,9 +633,7 @@ fn build_action_yaml(pack_ref: &str, request: &SaveWorkflowFileRequest) -> Strin
         "# Action definition for workflow {}.{}",
         pack_ref, request.name
     ));
-    lines.push(format!(
-        "# The workflow graph (tasks, transitions, variables) is in:"
-    ));
+    lines.push("# The workflow graph (tasks, transitions, variables) is in:".to_string());
     lines.push(format!(
         "#   actions/workflows/{}.workflow.yaml",
         request.name
@@ -646,7 +647,7 @@ fn build_action_yaml(pack_ref: &str, request: &SaveWorkflowFileRequest) -> Strin
             lines.push(format!("description: \"{}\"", desc.replace('"', "\\\"")));
         }
     }
-    lines.push(format!("enabled: true"));
+    lines.push("enabled: true".to_string());
     lines.push(format!(
         "workflow_file: workflows/{}.workflow.yaml",
         request.name
@@ -658,7 +659,7 @@ fn build_action_yaml(pack_ref: &str, request: &SaveWorkflowFileRequest) -> Strin
             if !obj.is_empty() {
                 lines.push(String::new());
                 let params_yaml = serde_yaml_ng::to_string(params).unwrap_or_default();
-                lines.push(format!("parameters:"));
+                lines.push("parameters:".to_string());
                 // Indent the YAML output under `parameters:`
                 for line in params_yaml.lines() {
                     lines.push(format!("  {}", line));
@@ -673,7 +674,7 @@ fn build_action_yaml(pack_ref: &str, request: &SaveWorkflowFileRequest) -> Strin
             if !obj.is_empty() {
                 lines.push(String::new());
                 let output_yaml = serde_yaml_ng::to_string(output).unwrap_or_default();
-                lines.push(format!("output:"));
+                lines.push("output:".to_string());
                 for line in output_yaml.lines() {
                     lines.push(format!("  {}", line));
                 }
@@ -685,7 +686,7 @@ fn build_action_yaml(pack_ref: &str, request: &SaveWorkflowFileRequest) -> Strin
     if let Some(ref tags) = request.tags {
         if !tags.is_empty() {
             lines.push(String::new());
-            lines.push(format!("tags:"));
+            lines.push("tags:".to_string());
             for tag in tags {
                 lines.push(format!("  - {}", tag));
             }
@@ -701,6 +702,7 @@ fn build_action_yaml(pack_ref: &str, request: &SaveWorkflowFileRequest) -> Strin
 /// This ensures the workflow appears in action lists and the action palette in the
 /// workflow builder. The action is linked to the workflow definition via the
 /// `workflow_def` FK.
+#[allow(clippy::too_many_arguments)]
 async fn create_companion_action(
     db: &sqlx::PgPool,
     workflow_ref: &str,
@@ -835,6 +837,7 @@ async fn update_companion_action(
 ///
 /// If the action already exists, update it. If it doesn't exist (e.g., for workflows
 /// created before the companion-action fix), create it.
+#[allow(clippy::too_many_arguments)]
 async fn ensure_companion_action(
     db: &sqlx::PgPool,
     workflow_def_id: i64,

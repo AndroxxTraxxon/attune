@@ -45,19 +45,14 @@ pub mod enums {
     use utoipa::ToSchema;
 
     /// How parameters should be delivered to an action
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
     #[serde(rename_all = "lowercase")]
     pub enum ParameterDelivery {
         /// Pass parameters via stdin (secure, recommended for most cases)
+        #[default]
         Stdin,
         /// Pass parameters via temporary file (secure, best for large payloads)
         File,
-    }
-
-    impl Default for ParameterDelivery {
-        fn default() -> Self {
-            Self::Stdin
-        }
     }
 
     impl fmt::Display for ParameterDelivery {
@@ -99,29 +94,21 @@ pub mod enums {
             &self,
             buf: &mut sqlx::postgres::PgArgumentBuffer,
         ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-            Ok(<String as sqlx::Encode<sqlx::Postgres>>::encode(
-                self.to_string(),
-                buf,
-            )?)
+            <String as sqlx::Encode<sqlx::Postgres>>::encode(self.to_string(), buf)
         }
     }
 
     /// Format for parameter serialization
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
     #[serde(rename_all = "lowercase")]
     pub enum ParameterFormat {
         /// KEY='VALUE' format (one per line)
         Dotenv,
         /// JSON object
+        #[default]
         Json,
         /// YAML format
         Yaml,
-    }
-
-    impl Default for ParameterFormat {
-        fn default() -> Self {
-            Self::Json
-        }
     }
 
     impl fmt::Display for ParameterFormat {
@@ -165,18 +152,16 @@ pub mod enums {
             &self,
             buf: &mut sqlx::postgres::PgArgumentBuffer,
         ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-            Ok(<String as sqlx::Encode<sqlx::Postgres>>::encode(
-                self.to_string(),
-                buf,
-            )?)
+            <String as sqlx::Encode<sqlx::Postgres>>::encode(self.to_string(), buf)
         }
     }
 
     /// Format for action output parsing
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
     #[serde(rename_all = "lowercase")]
     pub enum OutputFormat {
         /// Plain text (no parsing)
+        #[default]
         Text,
         /// Parse as JSON
         Json,
@@ -184,12 +169,6 @@ pub mod enums {
         Yaml,
         /// Parse as JSON Lines (each line is a separate JSON object/value)
         Jsonl,
-    }
-
-    impl Default for OutputFormat {
-        fn default() -> Self {
-            Self::Text
-        }
     }
 
     impl fmt::Display for OutputFormat {
@@ -235,10 +214,7 @@ pub mod enums {
             &self,
             buf: &mut sqlx::postgres::PgArgumentBuffer,
         ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-            Ok(<String as sqlx::Encode<sqlx::Postgres>>::encode(
-                self.to_string(),
-                buf,
-            )?)
+            <String as sqlx::Encode<sqlx::Postgres>>::encode(self.to_string(), buf)
         }
     }
 
@@ -371,18 +347,15 @@ pub mod enums {
     /// - `Public`: viewable by all authenticated users on the platform.
     /// - `Private`: restricted based on the artifact's `scope` and `owner` fields.
     ///   Full RBAC enforcement is deferred; for now the field enables filtering.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, ToSchema)]
+    #[derive(
+        Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type, ToSchema,
+    )]
     #[sqlx(type_name = "artifact_visibility_enum", rename_all = "lowercase")]
     #[serde(rename_all = "lowercase")]
     pub enum ArtifactVisibility {
         Public,
+        #[default]
         Private,
-    }
-
-    impl Default for ArtifactVisibility {
-        fn default() -> Self {
-            Self::Private
-        }
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, ToSchema)]

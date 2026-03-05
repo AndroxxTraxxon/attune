@@ -363,8 +363,8 @@ mod tests {
         let ctx = TestContext::new();
         assert_eq!(eval_expression("string(42)", &ctx).unwrap(), json!("42"));
         assert_eq!(
-            eval_expression("number(\"3.14\")", &ctx).unwrap(),
-            json!(3.14)
+            eval_expression("number(\"3.15\")", &ctx).unwrap(),
+            json!(3.15)
         );
         assert_eq!(eval_expression("int(3.9)", &ctx).unwrap(), json!(3));
         assert_eq!(eval_expression("int(\"42\")", &ctx).unwrap(), json!(42));

@@ -141,7 +141,7 @@ mod tests {
     fn test_message_queue_creation() {
         // This test just verifies the struct can be instantiated
         // Actual connection tests require a running RabbitMQ instance
-        assert!(true);
+        // (nothing to assert without a live broker)
     }
 
     #[tokio::test]

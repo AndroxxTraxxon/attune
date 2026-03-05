@@ -187,11 +187,13 @@ impl WorkflowLoader {
                 .map(|e| e.to_string())
         };
 
-        if validation_error.is_some() && !self.config.skip_validation {
-            return Err(Error::validation(format!(
-                "Workflow validation failed: {}",
-                validation_error.as_ref().unwrap()
-            )));
+        if let Some(ref err) = validation_error {
+            if !self.config.skip_validation {
+                return Err(Error::validation(format!(
+                    "Workflow validation failed: {}",
+                    err
+                )));
+            }
         }
 
         Ok(LoadedWorkflow {

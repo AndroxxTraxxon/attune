@@ -198,7 +198,10 @@ pub async fn create_trigger(
     request.validate()?;
 
     // Check if trigger with same ref already exists
-    if let Some(_) = TriggerRepository::find_by_ref(&state.db, &request.r#ref).await? {
+    if TriggerRepository::find_by_ref(&state.db, &request.r#ref)
+        .await?
+        .is_some()
+    {
         return Err(ApiError::Conflict(format!(
             "Trigger with ref '{}' already exists",
             request.r#ref
@@ -623,7 +626,10 @@ pub async fn create_sensor(
     request.validate()?;
 
     // Check if sensor with same ref already exists
-    if let Some(_) = SensorRepository::find_by_ref(&state.db, &request.r#ref).await? {
+    if SensorRepository::find_by_ref(&state.db, &request.r#ref)
+        .await?
+        .is_some()
+    {
         return Err(ApiError::Conflict(format!(
             "Sensor with ref '{}' already exists",
             request.r#ref

@@ -714,6 +714,7 @@ pub async fn receive_webhook(
 }
 
 // Helper function to log webhook events
+#[allow(clippy::too_many_arguments)]
 async fn log_webhook_event(
     state: &AppState,
     trigger: &attune_common::models::trigger::Trigger,
@@ -753,6 +754,7 @@ async fn log_webhook_event(
 }
 
 // Helper function to log failures when trigger is not found
+#[allow(clippy::too_many_arguments)]
 async fn log_webhook_failure(
     _state: &AppState,
     webhook_key: String,

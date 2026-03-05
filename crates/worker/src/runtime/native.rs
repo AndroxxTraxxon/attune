@@ -35,6 +35,7 @@ impl NativeRuntime {
     }
 
     /// Execute a native binary with parameters and environment variables
+    #[allow(clippy::too_many_arguments)]
     async fn execute_binary(
         &self,
         binary_path: PathBuf,

@@ -362,11 +362,11 @@ impl Drop for TestContext {
         let test_packs_dir = self.test_packs_dir.clone();
 
         // Spawn cleanup task in background
-        let _ = tokio::spawn(async move {
+        drop(tokio::spawn(async move {
             if let Err(e) = cleanup_test_schema(&schema).await {
                 eprintln!("Failed to cleanup test schema {}: {}", schema, e);
             }
-        });
+        }));
 
         // Cleanup the test packs directory synchronously
         let _ = std::fs::remove_dir_all(&test_packs_dir);

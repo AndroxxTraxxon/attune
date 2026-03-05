@@ -63,6 +63,7 @@ fn normalize_api_url(raw_url: &str) -> String {
 
 impl ActionExecutor {
     /// Create a new action executor
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: PgPool,
         runtime_registry: RuntimeRegistry,
@@ -359,18 +360,16 @@ impl ActionExecutor {
 
         // Add context data as environment variables from config
         if let Some(config) = &execution.config {
-            if let Some(context) = config.get("context") {
-                if let JsonValue::Object(map) = context {
-                    for (key, value) in map {
-                        let env_key = format!("ATTUNE_CONTEXT_{}", key.to_uppercase());
-                        let env_value = match value {
-                            JsonValue::String(s) => s.clone(),
-                            JsonValue::Number(n) => n.to_string(),
-                            JsonValue::Bool(b) => b.to_string(),
-                            _ => serde_json::to_string(value)?,
-                        };
-                        env.insert(env_key, env_value);
-                    }
+            if let Some(JsonValue::Object(map)) = config.get("context") {
+                for (key, value) in map {
+                    let env_key = format!("ATTUNE_CONTEXT_{}", key.to_uppercase());
+                    let env_value = match value {
+                        JsonValue::String(s) => s.clone(),
+                        JsonValue::Number(n) => n.to_string(),
+                        JsonValue::Bool(b) => b.to_string(),
+                        _ => serde_json::to_string(value)?,
+                    };
+                    env.insert(env_key, env_value);
                 }
             }
         }

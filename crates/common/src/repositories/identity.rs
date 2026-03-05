@@ -129,7 +129,7 @@ impl Update for IdentityRepository {
             .map_err(|e| {
                 // Convert RowNotFound to NotFound error
                 if matches!(e, sqlx::Error::RowNotFound) {
-                    return crate::Error::not_found("identity", "id", &id.to_string());
+                    return crate::Error::not_found("identity", "id", id.to_string());
                 }
                 e.into()
             })
