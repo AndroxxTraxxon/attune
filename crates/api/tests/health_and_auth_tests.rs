@@ -1,3 +1,4 @@
+#![cfg(feature = "integration-tests")]
 //! Integration tests for health check and authentication endpoints
 
 use axum::http::StatusCode;

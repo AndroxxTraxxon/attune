@@ -1,3 +1,4 @@
+#![cfg(feature = "integration-tests")]
 //! Integration tests for pack workflow sync and validation
 
 mod helpers;

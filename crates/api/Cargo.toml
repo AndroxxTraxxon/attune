@@ -6,6 +6,9 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+integration-tests = []
+
 [lib]
 name = "attune_api"
 path = "src/lib.rs"
@@ -77,7 +80,7 @@ tempfile = { workspace = true }
 
 # Authentication
 argon2 = { workspace = true }
-rand = "0.9"
+rand = "0.10"
 
 # HMAC and cryptography
 hmac = "0.12"

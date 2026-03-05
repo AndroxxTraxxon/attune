@@ -1,3 +1,4 @@
+#![cfg(feature = "integration-tests")]
 //! Integration tests for SSE execution stream endpoint
 //!
 //! These tests verify that:
@@ -86,7 +87,6 @@ async fn create_test_execution(pool: &PgPool, action_id: i64) -> Result<Executio
 /// Run with: cargo test test_sse_stream_receives_execution_updates -- --ignored --nocapture
 /// After starting: cargo run -p attune-api -- -c config.test.yaml
 #[tokio::test]
-#[ignore]
 async fn test_sse_stream_receives_execution_updates() -> Result<()> {
     // Set up test context with auth
     let ctx = TestContext::new().await?.with_auth().await?;
@@ -225,7 +225,6 @@ async fn test_sse_stream_receives_execution_updates() -> Result<()> {
 
 /// Test that SSE stream correctly filters by execution_id
 #[tokio::test]
-#[ignore]
 async fn test_sse_stream_filters_by_execution_id() -> Result<()> {
     // Set up test context with auth
     let ctx = TestContext::new().await?.with_auth().await?;
@@ -327,7 +326,6 @@ async fn test_sse_stream_filters_by_execution_id() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_sse_stream_requires_authentication() -> Result<()> {
     // Try to connect without token
     let sse_url = "http://localhost:8080/api/v1/executions/stream";
@@ -373,7 +371,6 @@ async fn test_sse_stream_requires_authentication() -> Result<()> {
 
 /// Test streaming all executions (no filter)
 #[tokio::test]
-#[ignore]
 async fn test_sse_stream_all_executions() -> Result<()> {
     // Set up test context with auth
     let ctx = TestContext::new().await?.with_auth().await?;
@@ -466,7 +463,6 @@ async fn test_sse_stream_all_executions() -> Result<()> {
 
 /// Test that PostgreSQL NOTIFY triggers actually fire
 #[tokio::test]
-#[ignore]
 async fn test_postgresql_notify_trigger_fires() -> Result<()> {
     let ctx = TestContext::new().await?;
 

@@ -19,7 +19,8 @@ help:
 	@echo "  make test           - Run all tests"
 	@echo "  make test-common    - Run tests for common library"
 	@echo "  make test-api       - Run tests for API service"
-	@echo "  make test-integration - Run integration tests"
+	@echo "  make test-integration     - Run integration tests (common + API)"
+	@echo "  make test-integration-api - Run API integration tests (requires DB)"
 	@echo "  make check          - Check code without building"
 	@echo ""
 	@echo "Code Quality:"
@@ -88,12 +89,17 @@ test-api:
 test-verbose:
 	cargo test -- --nocapture --test-threads=1
 
-test-integration:
+test-integration: test-integration-api
 	@echo "Setting up test database..."
 	@make db-test-setup
-	@echo "Running integration tests..."
+	@echo "Running common integration tests..."
 	cargo test --test '*' -p attune-common -- --test-threads=1
 	@echo "Integration tests complete"
+
+test-integration-api:
+	@echo "Running API integration tests..."
+	cargo test -p attune-api --features integration-tests -- --test-threads=1
+	@echo "API integration tests complete"
 
 test-with-db: db-test-setup test-integration
 	@echo "All tests with database complete"

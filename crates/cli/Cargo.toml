@@ -38,7 +38,7 @@ chrono = { workspace = true }
 
 # Configuration
 config = { workspace = true }
-dirs = "5.0"
+dirs = "6.0"
 
 # URL encoding
 urlencoding = "2.1"
@@ -52,9 +52,9 @@ flate2 = { workspace = true }
 tokio-tungstenite = { workspace = true }
 
 # Terminal UI
-colored = "2.1"
-comfy-table = "7.1"
-dialoguer = "0.11"
+colored = "3.1"
+comfy-table = "7.2"
+dialoguer = "0.12"
 
 # Authentication
 jsonwebtoken = { workspace = true }
@@ -66,7 +66,7 @@ tracing-subscriber = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 wiremock = "0.6"
-assert_cmd = "2.0"
-predicates = "3.0"
-mockito = "1.2"
+assert_cmd = "2.1"
+predicates = "3.1"
+mockito = "1.7"
 tokio-test = "0.4"

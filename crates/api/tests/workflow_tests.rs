@@ -1,3 +1,4 @@
+#![cfg(feature = "integration-tests")]
 //! Integration tests for workflow API endpoints
 
 use attune_common::repositories::{

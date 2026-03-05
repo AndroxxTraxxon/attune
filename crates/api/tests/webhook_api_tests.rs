@@ -1,3 +1,4 @@
+#![cfg(feature = "integration-tests")]
 //! Integration tests for webhook API endpoints
 
 use attune_api::{AppState, Server};
@@ -108,7 +109,6 @@ async fn get_auth_token(app: &axum::Router, username: &str, password: &str) -> S
 }
 
 #[tokio::test]
-#[ignore] // Run with --ignored flag when database is available
 async fn test_enable_webhook() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -151,7 +151,6 @@ async fn test_enable_webhook() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_disable_webhook() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -202,7 +201,6 @@ async fn test_disable_webhook() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_regenerate_webhook_key() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -254,7 +252,6 @@ async fn test_regenerate_webhook_key() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_regenerate_webhook_key_not_enabled() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -291,7 +288,6 @@ async fn test_regenerate_webhook_key_not_enabled() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_receive_webhook() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -362,7 +358,6 @@ async fn test_receive_webhook() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_receive_webhook_invalid_key() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state));
@@ -392,7 +387,6 @@ async fn test_receive_webhook_invalid_key() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_receive_webhook_disabled() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -442,7 +436,6 @@ async fn test_receive_webhook_disabled() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_webhook_requires_auth_for_management() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -475,7 +468,6 @@ async fn test_webhook_requires_auth_for_management() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_receive_webhook_minimal_payload() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));

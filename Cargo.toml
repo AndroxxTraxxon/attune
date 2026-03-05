@@ -20,7 +20,7 @@ repository = "https://git.rdrx.app/attune-system/attune"
 
 [workspace.dependencies]
 # Async runtime
-tokio = { version = "1.42", features = ["full"] }
+tokio = { version = "1.50", features = ["full"] }
 tokio-util = "0.7"
 tokio-stream = { version = "0.1", features = ["sync"] }
 
@@ -52,7 +52,7 @@ config = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
 
 # UUID
-uuid = { version = "1.11", features = ["v4", "serde"] }
+uuid = { version = "1.21", features = ["v4", "serde"] }
 
 # Validation
 validator = { version = "0.20", features = ["derive"] }
@@ -68,13 +68,13 @@ redis = { version = "1.0", features = ["tokio-comp", "connection-manager"] }
 
 # JSON Schema
 schemars = { version = "1.2", features = ["chrono04"] }
-jsonschema = "0.38"
+jsonschema = "0.44"
 
 # OpenAPI/Swagger
 utoipa = { version = "5.4", features = ["chrono", "uuid"] }
 
 # JWT
-jsonwebtoken = { version = "10.2", features = ["hmac", "sha2"] }
+jsonwebtoken = { version = "10.3", features = ["hmac", "sha2"] }
 
 # Encryption
 argon2 = "0.5"
@@ -84,22 +84,22 @@ aes-gcm = "0.10"
 sha2 = "0.10"
 
 # Regular expressions
-regex = "1.11"
+regex = "1.12"
 
 # HTTP client
 reqwest = { version = "0.13", features = ["json"] }
 reqwest-eventsource = "0.6"
-hyper = { version = "1.0", features = ["full"] }
+hyper = { version = "1.8", features = ["full"] }
 
 # File system utilities
-walkdir = "2.4"
+walkdir = "2.5"
 
 # Archive/compression
 tar = "0.4"
-flate2 = "1.0"
+flate2 = "1.1"
 
 # WebSocket client
-tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
 
 # URL parsing
 url = "2.5"
@@ -112,11 +112,11 @@ futures = "0.3"
 semver = { version = "1.0", features = ["serde"] }
 
 # Temp files
-tempfile = "3.8"
+tempfile = "3.26"
 
 # Testing
 mockall = "0.14"
-serial_test = "3.2"
+serial_test = "3.4"
 
 # Concurrent data structures
 dashmap = "6.1"
