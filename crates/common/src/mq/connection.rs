@@ -161,7 +161,7 @@ impl Connection {
     pub async fn close(&self) -> MqResult<()> {
         let mut conn_guard = self.connection.write().await;
         if let Some(conn) = conn_guard.take() {
-            conn.close(200, "Normal shutdown")
+            conn.close(200, "Normal shutdown".into())
                 .await
                 .map_err(|e| MqError::Connection(format!("Failed to close connection: {}", e)))?;
             info!("Connection closed");
@@ -187,7 +187,7 @@ impl Connection {
 
         channel
             .exchange_declare(
-                &config.name,
+                config.name.as_str().into(),
                 kind,
                 ExchangeDeclareOptions {
                     durable: config.durable,
@@ -216,7 +216,7 @@ impl Connection {
 
         channel
             .queue_declare(
-                &config.name,
+                config.name.as_str().into(),
                 QueueDeclareOptions {
                     durable: config.durable,
                     exclusive: config.exclusive,
@@ -248,9 +248,9 @@ impl Connection {
 
         channel
             .queue_bind(
-                queue,
-                exchange,
-                routing_key,
+                queue.into(),
+                exchange.into(),
+                routing_key.into(),
                 QueueBindOptions::default(),
                 FieldTable::default(),
             )
@@ -315,7 +315,7 @@ impl Connection {
 
         channel
             .queue_declare(
-                &config.name,
+                config.name.as_str().into(),
                 QueueDeclareOptions {
                     durable: config.durable,
                     exclusive: config.exclusive,

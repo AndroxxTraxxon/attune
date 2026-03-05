@@ -88,8 +88,8 @@ impl Publisher {
         let confirmation = self
             .channel
             .basic_publish(
-                exchange,
-                routing_key,
+                exchange.into(),
+                routing_key.into(),
                 BasicPublishOptions::default(),
                 &payload,
                 properties,
@@ -129,8 +129,8 @@ impl Publisher {
 
         self.channel
             .basic_publish(
-                exchange,
-                routing_key,
+                exchange.into(),
+                routing_key.into(),
                 BasicPublishOptions::default(),
                 payload,
                 properties,

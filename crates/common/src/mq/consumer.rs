@@ -59,8 +59,8 @@ impl Consumer {
         let consumer = self
             .channel
             .basic_consume(
-                &self.config.queue,
-                &self.config.tag,
+                self.config.queue.as_str().into(),
+                self.config.tag.as_str().into(),
                 BasicConsumeOptions {
                     no_ack: self.config.auto_ack,
                     exclusive: self.config.exclusive,

@@ -61,7 +61,7 @@ impl RuleLifecycleListener {
         // Declare exchange (idempotent)
         channel
             .exchange_declare(
-                &self.mq_exchange,
+                self.mq_exchange.as_str().into(),
                 lapin::ExchangeKind::Topic,
                 ExchangeDeclareOptions {
                     durable: true,
@@ -78,7 +78,7 @@ impl RuleLifecycleListener {
         let queue_name = format!("sensor.{}", self.sensor_ref);
         channel
             .queue_declare(
-                &queue_name,
+                queue_name.as_str().into(),
                 QueueDeclareOptions {
                     durable: true,
                     ..Default::default()
@@ -101,9 +101,9 @@ impl RuleLifecycleListener {
         for routing_key in &routing_keys {
             channel
                 .queue_bind(
-                    &queue_name,
-                    &self.mq_exchange,
-                    routing_key,
+                    queue_name.as_str().into(),
+                    self.mq_exchange.as_str().into(),
+                    (*routing_key).into(),
                     QueueBindOptions::default(),
                     FieldTable::default(),
                 )
@@ -147,8 +147,8 @@ impl RuleLifecycleListener {
         // Start consuming messages
         let consumer = channel
             .basic_consume(
-                &queue_name,
-                "sensor-timer-consumer",
+                queue_name.as_str().into(),
+                "sensor-timer-consumer".into(),
                 BasicConsumeOptions {
                     no_ack: false,
                     ..Default::default()

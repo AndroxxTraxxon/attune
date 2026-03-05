@@ -62,7 +62,7 @@ impl RuleLifecycleListener {
         consumer
             .channel()
             .queue_declare(
-                queue,
+                queue.into(),
                 lapin::options::QueueDeclareOptions {
                     durable: true,
                     exclusive: false,
@@ -78,9 +78,9 @@ impl RuleLifecycleListener {
             consumer
                 .channel()
                 .queue_bind(
-                    queue,
-                    exchange,
-                    routing_key,
+                    queue.into(),
+                    exchange.into(),
+                    (*routing_key).into(),
                     lapin::options::QueueBindOptions::default(),
                     lapin::types::FieldTable::default(),
                 )
