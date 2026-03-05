@@ -71,12 +71,12 @@ use serde_json::Value as JsonValue;
 /// This is the main entry point for the expression engine. It tokenizes the
 /// input, parses it into an AST, and evaluates it to produce a `JsonValue`.
 pub fn eval_expression(input: &str, ctx: &dyn EvalContext) -> EvalResult<JsonValue> {
-    let tokens = Tokenizer::new(input).tokenize().map_err(|e| {
-        EvalError::ParseError(format!("{}", e))
-    })?;
-    let ast = Parser::new(&tokens).parse().map_err(|e| {
-        EvalError::ParseError(format!("{}", e))
-    })?;
+    let tokens = Tokenizer::new(input)
+        .tokenize()
+        .map_err(|e| EvalError::ParseError(format!("{}", e)))?;
+    let ast = Parser::new(&tokens)
+        .parse()
+        .map_err(|e| EvalError::ParseError(format!("{}", e)))?;
     evaluator::eval(&ast, ctx)
 }
 
@@ -84,9 +84,9 @@ pub fn eval_expression(input: &str, ctx: &dyn EvalContext) -> EvalResult<JsonVal
 ///
 /// Useful for validation or inspection.
 pub fn parse_expression(input: &str) -> Result<Expr, ParseError> {
-    let tokens = Tokenizer::new(input).tokenize().map_err(|e| {
-        ParseError::TokenError(format!("{}", e))
-    })?;
+    let tokens = Tokenizer::new(input)
+        .tokenize()
+        .map_err(|e| ParseError::TokenError(format!("{}", e)))?;
     Parser::new(&tokens).parse()
 }
 
@@ -149,7 +149,10 @@ mod tests {
     fn test_float_arithmetic() {
         let ctx = TestContext::new();
         assert_eq!(eval_expression("2.5 + 1.5", &ctx).unwrap(), json!(4.0));
-        assert_eq!(eval_expression("10.0 / 3.0", &ctx).unwrap(), json!(10.0 / 3.0));
+        assert_eq!(
+            eval_expression("10.0 / 3.0", &ctx).unwrap(),
+            json!(10.0 / 3.0)
+        );
     }
 
     #[test]
@@ -214,9 +217,18 @@ mod tests {
     #[test]
     fn test_string_comparison() {
         let ctx = TestContext::new();
-        assert_eq!(eval_expression("\"abc\" == \"abc\"", &ctx).unwrap(), json!(true));
-        assert_eq!(eval_expression("\"abc\" < \"abd\"", &ctx).unwrap(), json!(true));
-        assert_eq!(eval_expression("\"abc\" > \"abb\"", &ctx).unwrap(), json!(true));
+        assert_eq!(
+            eval_expression("\"abc\" == \"abc\"", &ctx).unwrap(),
+            json!(true)
+        );
+        assert_eq!(
+            eval_expression("\"abc\" < \"abd\"", &ctx).unwrap(),
+            json!(true)
+        );
+        assert_eq!(
+            eval_expression("\"abc\" > \"abb\"", &ctx).unwrap(),
+            json!(true)
+        );
     }
 
     #[test]
@@ -225,7 +237,10 @@ mod tests {
         assert_eq!(eval_expression("null == null", &ctx).unwrap(), json!(true));
         assert_eq!(eval_expression("null != null", &ctx).unwrap(), json!(false));
         assert_eq!(eval_expression("null == 0", &ctx).unwrap(), json!(false));
-        assert_eq!(eval_expression("null == false", &ctx).unwrap(), json!(false));
+        assert_eq!(
+            eval_expression("null == false", &ctx).unwrap(),
+            json!(false)
+        );
     }
 
     #[test]
@@ -256,9 +271,15 @@ mod tests {
     fn test_boolean_operators() {
         let ctx = TestContext::new();
         assert_eq!(eval_expression("true and true", &ctx).unwrap(), json!(true));
-        assert_eq!(eval_expression("true and false", &ctx).unwrap(), json!(false));
+        assert_eq!(
+            eval_expression("true and false", &ctx).unwrap(),
+            json!(false)
+        );
         assert_eq!(eval_expression("false or true", &ctx).unwrap(), json!(true));
-        assert_eq!(eval_expression("false or false", &ctx).unwrap(), json!(false));
+        assert_eq!(
+            eval_expression("false or false", &ctx).unwrap(),
+            json!(false)
+        );
         assert_eq!(eval_expression("not true", &ctx).unwrap(), json!(false));
         assert_eq!(eval_expression("not false", &ctx).unwrap(), json!(true));
     }
@@ -283,8 +304,7 @@ mod tests {
 
     #[test]
     fn test_dot_access() {
-        let ctx = TestContext::new()
-            .with_var("obj", json!({"a": {"b": 42}}));
+        let ctx = TestContext::new().with_var("obj", json!({"a": {"b": 42}}));
         assert_eq!(eval_expression("obj.a.b", &ctx).unwrap(), json!(42));
     }
 
@@ -294,7 +314,10 @@ mod tests {
             .with_var("arr", json!([10, 20, 30]))
             .with_var("obj", json!({"key": "value"}));
         assert_eq!(eval_expression("arr[1]", &ctx).unwrap(), json!(20));
-        assert_eq!(eval_expression("obj[\"key\"]", &ctx).unwrap(), json!("value"));
+        assert_eq!(
+            eval_expression("obj[\"key\"]", &ctx).unwrap(),
+            json!("value")
+        );
     }
 
     #[test]
@@ -304,9 +327,18 @@ mod tests {
             .with_var("obj", json!({"key": "val"}));
         assert_eq!(eval_expression("2 in arr", &ctx).unwrap(), json!(true));
         assert_eq!(eval_expression("5 in arr", &ctx).unwrap(), json!(false));
-        assert_eq!(eval_expression("\"key\" in obj", &ctx).unwrap(), json!(true));
-        assert_eq!(eval_expression("\"nope\" in obj", &ctx).unwrap(), json!(false));
-        assert_eq!(eval_expression("\"ell\" in \"hello\"", &ctx).unwrap(), json!(true));
+        assert_eq!(
+            eval_expression("\"key\" in obj", &ctx).unwrap(),
+            json!(true)
+        );
+        assert_eq!(
+            eval_expression("\"nope\" in obj", &ctx).unwrap(),
+            json!(false)
+        );
+        assert_eq!(
+            eval_expression("\"ell\" in \"hello\"", &ctx).unwrap(),
+            json!(true)
+        );
     }
 
     // ---------------------------------------------------------------
@@ -319,7 +351,10 @@ mod tests {
             .with_var("arr", json!([1, 2, 3]))
             .with_var("obj", json!({"a": 1, "b": 2}));
         assert_eq!(eval_expression("length(arr)", &ctx).unwrap(), json!(3));
-        assert_eq!(eval_expression("length(\"hello\")", &ctx).unwrap(), json!(5));
+        assert_eq!(
+            eval_expression("length(\"hello\")", &ctx).unwrap(),
+            json!(5)
+        );
         assert_eq!(eval_expression("length(obj)", &ctx).unwrap(), json!(2));
     }
 
@@ -327,7 +362,10 @@ mod tests {
     fn test_type_conversions() {
         let ctx = TestContext::new();
         assert_eq!(eval_expression("string(42)", &ctx).unwrap(), json!("42"));
-        assert_eq!(eval_expression("number(\"3.14\")", &ctx).unwrap(), json!(3.14));
+        assert_eq!(
+            eval_expression("number(\"3.14\")", &ctx).unwrap(),
+            json!(3.14)
+        );
         assert_eq!(eval_expression("int(3.9)", &ctx).unwrap(), json!(3));
         assert_eq!(eval_expression("int(\"42\")", &ctx).unwrap(), json!(42));
         assert_eq!(eval_expression("bool(1)", &ctx).unwrap(), json!(true));
@@ -341,18 +379,35 @@ mod tests {
         let ctx = TestContext::new()
             .with_var("arr", json!([1]))
             .with_var("obj", json!({}));
-        assert_eq!(eval_expression("type_of(42)", &ctx).unwrap(), json!("number"));
-        assert_eq!(eval_expression("type_of(\"hi\")", &ctx).unwrap(), json!("string"));
-        assert_eq!(eval_expression("type_of(true)", &ctx).unwrap(), json!("bool"));
-        assert_eq!(eval_expression("type_of(null)", &ctx).unwrap(), json!("null"));
-        assert_eq!(eval_expression("type_of(arr)", &ctx).unwrap(), json!("array"));
-        assert_eq!(eval_expression("type_of(obj)", &ctx).unwrap(), json!("object"));
+        assert_eq!(
+            eval_expression("type_of(42)", &ctx).unwrap(),
+            json!("number")
+        );
+        assert_eq!(
+            eval_expression("type_of(\"hi\")", &ctx).unwrap(),
+            json!("string")
+        );
+        assert_eq!(
+            eval_expression("type_of(true)", &ctx).unwrap(),
+            json!("bool")
+        );
+        assert_eq!(
+            eval_expression("type_of(null)", &ctx).unwrap(),
+            json!("null")
+        );
+        assert_eq!(
+            eval_expression("type_of(arr)", &ctx).unwrap(),
+            json!("array")
+        );
+        assert_eq!(
+            eval_expression("type_of(obj)", &ctx).unwrap(),
+            json!("object")
+        );
     }
 
     #[test]
     fn test_keys_values() {
-        let ctx = TestContext::new()
-            .with_var("obj", json!({"b": 2, "a": 1}));
+        let ctx = TestContext::new().with_var("obj", json!({"b": 2, "a": 1}));
         let keys = eval_expression("sort(keys(obj))", &ctx).unwrap();
         assert_eq!(keys, json!(["a", "b"]));
         let values = eval_expression("sort(values(obj))", &ctx).unwrap();
@@ -368,15 +423,27 @@ mod tests {
         assert_eq!(eval_expression("round(3.5)", &ctx).unwrap(), json!(4));
         assert_eq!(eval_expression("min(3, 7)", &ctx).unwrap(), json!(3));
         assert_eq!(eval_expression("max(3, 7)", &ctx).unwrap(), json!(7));
-        assert_eq!(eval_expression("sum([1, 2, 3, 4])", &ctx).unwrap(), json!(10));
+        assert_eq!(
+            eval_expression("sum([1, 2, 3, 4])", &ctx).unwrap(),
+            json!(10)
+        );
     }
 
     #[test]
     fn test_string_functions() {
         let ctx = TestContext::new();
-        assert_eq!(eval_expression("lower(\"HELLO\")", &ctx).unwrap(), json!("hello"));
-        assert_eq!(eval_expression("upper(\"hello\")", &ctx).unwrap(), json!("HELLO"));
-        assert_eq!(eval_expression("trim(\"  hi  \")", &ctx).unwrap(), json!("hi"));
+        assert_eq!(
+            eval_expression("lower(\"HELLO\")", &ctx).unwrap(),
+            json!("hello")
+        );
+        assert_eq!(
+            eval_expression("upper(\"hello\")", &ctx).unwrap(),
+            json!("HELLO")
+        );
+        assert_eq!(
+            eval_expression("trim(\"  hi  \")", &ctx).unwrap(),
+            json!("hi")
+        );
         assert_eq!(
             eval_expression("replace(\"hello world\", \"world\", \"rust\")", &ctx).unwrap(),
             json!("hello rust")
@@ -414,10 +481,15 @@ mod tests {
 
     #[test]
     fn test_collection_functions() {
-        let ctx = TestContext::new()
-            .with_var("arr", json!([3, 1, 2]));
-        assert_eq!(eval_expression("sort(arr)", &ctx).unwrap(), json!([1, 2, 3]));
-        assert_eq!(eval_expression("reversed(arr)", &ctx).unwrap(), json!([2, 1, 3]));
+        let ctx = TestContext::new().with_var("arr", json!([3, 1, 2]));
+        assert_eq!(
+            eval_expression("sort(arr)", &ctx).unwrap(),
+            json!([1, 2, 3])
+        );
+        assert_eq!(
+            eval_expression("reversed(arr)", &ctx).unwrap(),
+            json!([2, 1, 3])
+        );
         assert_eq!(
             eval_expression("unique([1, 2, 2, 3, 1])", &ctx).unwrap(),
             json!([1, 2, 3])
@@ -435,14 +507,23 @@ mod tests {
     #[test]
     fn test_range() {
         let ctx = TestContext::new();
-        assert_eq!(eval_expression("range(5)", &ctx).unwrap(), json!([0, 1, 2, 3, 4]));
-        assert_eq!(eval_expression("range(2, 5)", &ctx).unwrap(), json!([2, 3, 4]));
+        assert_eq!(
+            eval_expression("range(5)", &ctx).unwrap(),
+            json!([0, 1, 2, 3, 4])
+        );
+        assert_eq!(
+            eval_expression("range(2, 5)", &ctx).unwrap(),
+            json!([2, 3, 4])
+        );
     }
 
     #[test]
     fn test_reversed_string() {
         let ctx = TestContext::new();
-        assert_eq!(eval_expression("reversed(\"abc\")", &ctx).unwrap(), json!("cba"));
+        assert_eq!(
+            eval_expression("reversed(\"abc\")", &ctx).unwrap(),
+            json!("cba")
+        );
     }
 
     #[test]
@@ -464,8 +545,7 @@ mod tests {
 
     #[test]
     fn test_complex_expression() {
-        let ctx = TestContext::new()
-            .with_var("items", json!([1, 2, 3, 4, 5]));
+        let ctx = TestContext::new().with_var("items", json!([1, 2, 3, 4, 5]));
         assert_eq!(
             eval_expression("length(items) > 3 and 5 in items", &ctx).unwrap(),
             json!(true)
@@ -474,8 +554,10 @@ mod tests {
 
     #[test]
     fn test_chained_access() {
-        let ctx = TestContext::new()
-            .with_var("data", json!({"users": [{"name": "Alice"}, {"name": "Bob"}]}));
+        let ctx = TestContext::new().with_var(
+            "data",
+            json!({"users": [{"name": "Alice"}, {"name": "Bob"}]}),
+        );
         assert_eq!(
             eval_expression("data.users[1].name", &ctx).unwrap(),
             json!("Bob")
@@ -484,8 +566,7 @@ mod tests {
 
     #[test]
     fn test_ternary_via_boolean() {
-        let ctx = TestContext::new()
-            .with_var("x", json!(10));
+        let ctx = TestContext::new().with_var("x", json!(10));
         // No ternary operator, but boolean expressions work for conditions
         assert_eq!(
             eval_expression("x > 5 and x < 20", &ctx).unwrap(),

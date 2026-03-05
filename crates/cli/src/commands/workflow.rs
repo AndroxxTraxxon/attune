@@ -219,10 +219,7 @@ async fn handle_upload(
              (resolved from workflow_file: '{}' relative to '{}')",
             workflow_path.display(),
             workflow_file_rel,
-            action_path
-                .parent()
-                .unwrap_or(Path::new("."))
-                .display()
+            action_path.parent().unwrap_or(Path::new(".")).display()
         );
     }
 
@@ -230,8 +227,8 @@ async fn handle_upload(
     let workflow_yaml_content =
         std::fs::read_to_string(&workflow_path).context("Failed to read workflow YAML file")?;
 
-    let workflow_definition: serde_json::Value =
-        serde_yaml_ng::from_str(&workflow_yaml_content).context(format!(
+    let workflow_definition: serde_json::Value = serde_yaml_ng::from_str(&workflow_yaml_content)
+        .context(format!(
             "Failed to parse workflow YAML file: {}",
             workflow_path.display()
         ))?;
@@ -411,7 +408,15 @@ async fn handle_list(
                 let mut table = output::create_table();
                 output::add_header(
                     &mut table,
-                    vec!["ID", "Reference", "Pack", "Label", "Version", "Enabled", "Tags"],
+                    vec![
+                        "ID",
+                        "Reference",
+                        "Pack",
+                        "Label",
+                        "Version",
+                        "Enabled",
+                        "Tags",
+                    ],
                 );
 
                 for wf in &workflows {
@@ -512,14 +517,8 @@ async fn handle_show(
                     output::add_header(&mut table, vec!["#", "Name", "Action", "Transitions"]);
 
                     for (i, task) in arr.iter().enumerate() {
-                        let name = task
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("?");
-                        let action = task
-                            .get("action")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("-");
+                        let name = task.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                        let action = task.get("action").and_then(|v| v.as_str()).unwrap_or("-");
 
                         let transition_count = task
                             .get("next")
@@ -589,7 +588,8 @@ async fn handle_delete(
 
     match output_format {
         OutputFormat::Json | OutputFormat::Yaml => {
-            let msg = serde_json::json!({"message": format!("Workflow '{}' deleted", workflow_ref)});
+            let msg =
+                serde_json::json!({"message": format!("Workflow '{}' deleted", workflow_ref)});
             output::print_output(&msg, output_format)?;
         }
         OutputFormat::Table => {
@@ -635,9 +635,7 @@ fn split_action_ref(action_ref: &str) -> Result<(String, String)> {
 /// YAML is typically at `<pack>/actions/<name>.yaml`, the workflow path is
 /// resolved relative to the action YAML's parent directory.
 fn resolve_workflow_path(action_yaml_path: &Path, workflow_file: &str) -> Result<PathBuf> {
-    let action_dir = action_yaml_path
-        .parent()
-        .unwrap_or(Path::new("."));
+    let action_dir = action_yaml_path.parent().unwrap_or(Path::new("."));
 
     let resolved = action_dir.join(workflow_file);
 

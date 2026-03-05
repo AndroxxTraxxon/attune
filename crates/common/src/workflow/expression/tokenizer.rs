@@ -320,14 +320,14 @@ impl Tokenizer {
         }
 
         if is_float {
-            let val: f64 = num_str.parse().map_err(|_| {
-                TokenError::InvalidNumber(start, num_str.clone())
-            })?;
+            let val: f64 = num_str
+                .parse()
+                .map_err(|_| TokenError::InvalidNumber(start, num_str.clone()))?;
             Ok(Token::new(TokenKind::Float(val), start, self.pos))
         } else {
-            let val: i64 = num_str.parse().map_err(|_| {
-                TokenError::InvalidNumber(start, num_str.clone())
-            })?;
+            let val: i64 = num_str
+                .parse()
+                .map_err(|_| TokenError::InvalidNumber(start, num_str.clone()))?;
             Ok(Token::new(TokenKind::Integer(val), start, self.pos))
         }
     }
@@ -365,11 +365,7 @@ mod tests {
 
     fn tokenize(input: &str) -> Vec<TokenKind> {
         let mut t = Tokenizer::new(input);
-        t.tokenize()
-            .unwrap()
-            .into_iter()
-            .map(|t| t.kind)
-            .collect()
+        t.tokenize().unwrap().into_iter().map(|t| t.kind).collect()
     }
 
     #[test]

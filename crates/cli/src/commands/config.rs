@@ -79,7 +79,7 @@ pub async fn handle_config_command(
 }
 
 async fn handle_list(output_format: OutputFormat) -> Result<()> {
-    let config = CliConfig::load()?;  // Config commands always use default profile
+    let config = CliConfig::load()?; // Config commands always use default profile
     let all_config = config.list_all();
 
     match output_format {
@@ -105,7 +105,7 @@ async fn handle_list(output_format: OutputFormat) -> Result<()> {
 }
 
 async fn handle_get(key: String, output_format: OutputFormat) -> Result<()> {
-    let config = CliConfig::load()?;  // Config commands always use default profile
+    let config = CliConfig::load()?; // Config commands always use default profile
     let value = config.get_value(&key)?;
 
     match output_format {
@@ -125,7 +125,7 @@ async fn handle_get(key: String, output_format: OutputFormat) -> Result<()> {
 }
 
 async fn handle_profiles(output_format: OutputFormat) -> Result<()> {
-    let config = CliConfig::load()?;  // Config commands always use default profile
+    let config = CliConfig::load()?; // Config commands always use default profile
     let profiles = config.list_profiles();
     let current = &config.current_profile;
 
@@ -170,7 +170,7 @@ async fn handle_profiles(output_format: OutputFormat) -> Result<()> {
 }
 
 async fn handle_current(output_format: OutputFormat) -> Result<()> {
-    let config = CliConfig::load()?;  // Config commands always use default profile
+    let config = CliConfig::load()?; // Config commands always use default profile
 
     match output_format {
         OutputFormat::Json | OutputFormat::Yaml => {
@@ -266,7 +266,7 @@ async fn handle_remove_profile(name: String, output_format: OutputFormat) -> Res
 }
 
 async fn handle_show_profile(name: String, output_format: OutputFormat) -> Result<()> {
-    let config = CliConfig::load()?;  // Config commands always use default profile
+    let config = CliConfig::load()?; // Config commands always use default profile
     let profile = config
         .get_profile(&name)
         .context(format!("Profile '{}' not found", name))?;

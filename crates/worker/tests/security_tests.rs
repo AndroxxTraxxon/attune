@@ -22,8 +22,16 @@ fn make_python_process_runtime(packs_base_dir: PathBuf) -> ProcessRuntime {
         dependencies: None,
         env_vars: std::collections::HashMap::new(),
     };
-    let runtime_envs_dir = packs_base_dir.parent().unwrap_or(&packs_base_dir).join("runtime_envs");
-    ProcessRuntime::new("python".to_string(), config, packs_base_dir, runtime_envs_dir)
+    let runtime_envs_dir = packs_base_dir
+        .parent()
+        .unwrap_or(&packs_base_dir)
+        .join("runtime_envs");
+    ProcessRuntime::new(
+        "python".to_string(),
+        config,
+        packs_base_dir,
+        runtime_envs_dir,
+    )
 }
 
 #[tokio::test]
@@ -436,7 +444,12 @@ echo "PASS: No secrets in environment"
         dependencies: None,
         env_vars: std::collections::HashMap::new(),
     };
-    let runtime = ProcessRuntime::new("shell".to_string(), config, tmp.path().to_path_buf(), tmp.path().join("runtime_envs"));
+    let runtime = ProcessRuntime::new(
+        "shell".to_string(),
+        config,
+        tmp.path().to_path_buf(),
+        tmp.path().join("runtime_envs"),
+    );
 
     let context = ExecutionContext {
         execution_id: 7,
@@ -508,7 +521,12 @@ print(json.dumps({"leaked": leaked}))
         dependencies: None,
         env_vars: std::collections::HashMap::new(),
     };
-    let runtime = ProcessRuntime::new("python".to_string(), config, tmp.path().to_path_buf(), tmp.path().join("runtime_envs"));
+    let runtime = ProcessRuntime::new(
+        "python".to_string(),
+        config,
+        tmp.path().to_path_buf(),
+        tmp.path().join("runtime_envs"),
+    );
 
     let context = ExecutionContext {
         execution_id: 8,

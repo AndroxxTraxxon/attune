@@ -1501,7 +1501,10 @@ tasks:
         let failure_transition = &task.next[1];
         assert_eq!(failure_transition.publish.len(), 1);
         if let PublishDirective::Simple(map) = &failure_transition.publish[0] {
-            assert_eq!(map.get("validation_passed"), Some(&serde_json::Value::Bool(false)));
+            assert_eq!(
+                map.get("validation_passed"),
+                Some(&serde_json::Value::Bool(false))
+            );
         } else {
             panic!("Expected Simple publish directive");
         }

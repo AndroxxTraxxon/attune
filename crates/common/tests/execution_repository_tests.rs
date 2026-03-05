@@ -43,7 +43,7 @@ async fn test_create_execution_basic() {
         executor: None,
         status: ExecutionStatus::Requested,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let execution = ExecutionRepository::create(&pool, input).await.unwrap();
@@ -76,7 +76,7 @@ async fn test_create_execution_without_action() {
         executor: None,
         status: ExecutionStatus::Requested,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let execution = ExecutionRepository::create(&pool, input).await.unwrap();
@@ -109,7 +109,7 @@ async fn test_create_execution_with_all_fields() {
         executor: None, // Don't reference non-existent identity
         status: ExecutionStatus::Scheduled,
         result: Some(json!({"status": "ok"})),
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let execution = ExecutionRepository::create(&pool, input).await.unwrap();
@@ -144,7 +144,7 @@ async fn test_create_execution_with_parent() {
         executor: None,
         status: ExecutionStatus::Running,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let parent = ExecutionRepository::create(&pool, parent_input)
@@ -162,7 +162,7 @@ async fn test_create_execution_with_parent() {
         executor: None,
         status: ExecutionStatus::Requested,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let child = ExecutionRepository::create(&pool, child_input)
@@ -200,7 +200,7 @@ async fn test_find_execution_by_id() {
         executor: None,
         status: ExecutionStatus::Requested,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let created = ExecutionRepository::create(&pool, input).await.unwrap();
@@ -252,7 +252,7 @@ async fn test_list_executions() {
             executor: None,
             status: ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         };
 
         ExecutionRepository::create(&pool, input).await.unwrap();
@@ -297,7 +297,7 @@ async fn test_list_executions_ordered_by_created_desc() {
             executor: None,
             status: ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         };
 
         let exec = ExecutionRepository::create(&pool, input).await.unwrap();
@@ -347,7 +347,7 @@ async fn test_update_execution_status() {
         executor: None,
         status: ExecutionStatus::Requested,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let created = ExecutionRepository::create(&pool, input).await.unwrap();
@@ -391,7 +391,7 @@ async fn test_update_execution_result() {
         executor: None,
         status: ExecutionStatus::Running,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let created = ExecutionRepository::create(&pool, input).await.unwrap();
@@ -436,7 +436,7 @@ async fn test_update_execution_executor() {
         executor: None,
         status: ExecutionStatus::Requested,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let created = ExecutionRepository::create(&pool, input).await.unwrap();
@@ -479,7 +479,7 @@ async fn test_update_execution_status_transitions() {
         executor: None,
         status: ExecutionStatus::Requested,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let exec = ExecutionRepository::create(&pool, input).await.unwrap();
@@ -569,7 +569,7 @@ async fn test_update_execution_failed_status() {
         executor: None,
         status: ExecutionStatus::Running,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let created = ExecutionRepository::create(&pool, input).await.unwrap();
@@ -613,7 +613,7 @@ async fn test_update_execution_no_changes() {
         executor: None,
         status: ExecutionStatus::Requested,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let created = ExecutionRepository::create(&pool, input).await.unwrap();
@@ -656,7 +656,7 @@ async fn test_delete_execution() {
         executor: None,
         status: ExecutionStatus::Completed,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let created = ExecutionRepository::create(&pool, input).await.unwrap();
@@ -721,7 +721,7 @@ async fn test_find_executions_by_status() {
             executor: None,
             status: *status,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         };
 
         ExecutionRepository::create(&pool, input).await.unwrap();
@@ -767,7 +767,7 @@ async fn test_find_executions_by_enforcement() {
         executor: None,
         status: ExecutionStatus::Requested,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
     let _exec1 = ExecutionRepository::create(&pool, exec1_input)
         .await
@@ -785,7 +785,7 @@ async fn test_find_executions_by_enforcement() {
             executor: None,
             status: ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         };
 
         ExecutionRepository::create(&pool, input).await.unwrap();
@@ -828,7 +828,7 @@ async fn test_parent_child_execution_hierarchy() {
         executor: None,
         status: ExecutionStatus::Running,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let parent = ExecutionRepository::create(&pool, parent_input)
@@ -848,7 +848,7 @@ async fn test_parent_child_execution_hierarchy() {
             executor: None,
             status: ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         };
 
         let child = ExecutionRepository::create(&pool, child_input)
@@ -891,7 +891,7 @@ async fn test_nested_execution_hierarchy() {
         executor: None,
         status: ExecutionStatus::Running,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let grandparent = ExecutionRepository::create(&pool, grandparent_input)
@@ -909,7 +909,7 @@ async fn test_nested_execution_hierarchy() {
         executor: None,
         status: ExecutionStatus::Running,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let parent = ExecutionRepository::create(&pool, parent_input)
@@ -927,7 +927,7 @@ async fn test_nested_execution_hierarchy() {
         executor: None,
         status: ExecutionStatus::Requested,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let child = ExecutionRepository::create(&pool, child_input)
@@ -968,7 +968,7 @@ async fn test_execution_timestamps() {
         executor: None,
         status: ExecutionStatus::Requested,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let created = ExecutionRepository::create(&pool, input).await.unwrap();
@@ -1038,7 +1038,7 @@ async fn test_execution_config_json() {
         executor: None,
         status: ExecutionStatus::Requested,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let execution = ExecutionRepository::create(&pool, input).await.unwrap();
@@ -1070,7 +1070,7 @@ async fn test_execution_result_json() {
         executor: None,
         status: ExecutionStatus::Running,
         result: None,
-    workflow_task: None,
+        workflow_task: None,
     };
 
     let created = ExecutionRepository::create(&pool, input).await.unwrap();

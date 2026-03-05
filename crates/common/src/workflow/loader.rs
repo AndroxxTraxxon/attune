@@ -307,9 +307,7 @@ impl WorkflowLoader {
                             // Strip `.workflow` suffix if present:
                             //   "deploy.workflow.yaml" -> stem "deploy.workflow" -> name "deploy"
                             //   "deploy.yaml"          -> stem "deploy"          -> name "deploy"
-                            let name = raw_stem
-                                .strip_suffix(".workflow")
-                                .unwrap_or(raw_stem);
+                            let name = raw_stem.strip_suffix(".workflow").unwrap_or(raw_stem);
 
                             let ref_name = format!("{}.{}", pack_name, name);
                             workflow_files.push(WorkflowFile {

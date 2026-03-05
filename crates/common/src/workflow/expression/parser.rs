@@ -368,8 +368,8 @@ impl<'a> Parser<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::tokenizer::Tokenizer;
+    use super::*;
 
     fn parse(input: &str) -> Expr {
         let tokens = Tokenizer::new(input).tokenize().unwrap();

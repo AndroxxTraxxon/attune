@@ -145,7 +145,8 @@ impl PackStorage {
         })?;
 
         for entry in entries {
-            let entry = entry.map_err(|e| Error::io(format!("Failed to read directory entry: {}", e)))?;
+            let entry =
+                entry.map_err(|e| Error::io(format!("Failed to read directory entry: {}", e)))?;
             let path = entry.path();
             if path.is_dir() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -209,13 +210,21 @@ pub fn calculate_directory_checksum<P: AsRef<Path>>(path: P) -> Result<String> {
 
         // Hash file contents
         let mut file = fs::File::open(&file_path).map_err(|e| {
-            Error::io(format!("Failed to open file {}: {}", file_path.display(), e))
+            Error::io(format!(
+                "Failed to open file {}: {}",
+                file_path.display(),
+                e
+            ))
         })?;
 
         let mut buffer = [0u8; 8192];
         loop {
             let n = file.read(&mut buffer).map_err(|e| {
-                Error::io(format!("Failed to read file {}: {}", file_path.display(), e))
+                Error::io(format!(
+                    "Failed to read file {}: {}",
+                    file_path.display(),
+                    e
+                ))
             })?;
             if n == 0 {
                 break;
@@ -255,15 +264,14 @@ pub fn calculate_file_checksum<P: AsRef<Path>>(path: P) -> Result<String> {
     }
 
     let mut hasher = Sha256::new();
-    let mut file = fs::File::open(path).map_err(|e| {
-        Error::io(format!("Failed to open file {}: {}", path.display(), e))
-    })?;
+    let mut file = fs::File::open(path)
+        .map_err(|e| Error::io(format!("Failed to open file {}: {}", path.display(), e)))?;
 
     let mut buffer = [0u8; 8192];
     loop {
-        let n = file.read(&mut buffer).map_err(|e| {
-            Error::io(format!("Failed to read file {}: {}", path.display(), e))
-        })?;
+        let n = file
+            .read(&mut buffer)
+            .map_err(|e| Error::io(format!("Failed to read file {}: {}", path.display(), e)))?;
         if n == 0 {
             break;
         }
@@ -291,7 +299,8 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
             e
         ))
     })? {
-        let entry = entry.map_err(|e| Error::io(format!("Failed to read directory entry: {}", e)))?;
+        let entry =
+            entry.map_err(|e| Error::io(format!("Failed to read directory entry: {}", e)))?;
         let path = entry.path();
         let file_name = entry.file_name();
         let dest_path = dst.join(&file_name);

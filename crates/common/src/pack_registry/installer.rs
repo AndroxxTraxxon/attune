@@ -23,15 +23,9 @@ pub type ProgressCallback = Arc<dyn Fn(ProgressEvent) + Send + Sync>;
 #[derive(Debug, Clone)]
 pub enum ProgressEvent {
     /// Started a new step
-    StepStarted {
-        step: String,
-        message: String,
-    },
+    StepStarted { step: String, message: String },
     /// Step completed
-    StepCompleted {
-        step: String,
-        message: String,
-    },
+    StepCompleted { step: String, message: String },
     /// Download progress
     Downloading {
         url: String,
@@ -39,21 +33,13 @@ pub enum ProgressEvent {
         total_bytes: Option<u64>,
     },
     /// Extraction progress
-    Extracting {
-        file: String,
-    },
+    Extracting { file: String },
     /// Verification progress
-    Verifying {
-        message: String,
-    },
+    Verifying { message: String },
     /// Warning message
-    Warning {
-        message: String,
-    },
+    Warning { message: String },
     /// Info message
-    Info {
-        message: String,
-    },
+    Info { message: String },
 }
 
 /// Pack installer for handling various installation sources
@@ -151,12 +137,15 @@ impl PackInstaller {
     /// Install a pack from the given source
     pub async fn install(&self, source: PackSource) -> Result<InstalledPack> {
         match source {
-            PackSource::Git { url, git_ref } => self.install_from_git(&url, git_ref.as_deref()).await,
+            PackSource::Git { url, git_ref } => {
+                self.install_from_git(&url, git_ref.as_deref()).await
+            }
             PackSource::Archive { url } => self.install_from_archive_url(&url, None).await,
             PackSource::LocalDirectory { path } => self.install_from_local_directory(&path).await,
             PackSource::LocalArchive { path } => self.install_from_local_archive(&path).await,
             PackSource::Registry { pack_ref, version } => {
-                self.install_from_registry(&pack_ref, version.as_deref()).await
+                self.install_from_registry(&pack_ref, version.as_deref())
+                    .await
             }
         }
     }
@@ -267,7 +256,11 @@ impl PackInstaller {
 
         // Verify source exists and is a directory
         if !source_path.exists() {
-            return Err(Error::not_found("directory", "path", source_path.display().to_string()));
+            return Err(Error::not_found(
+                "directory",
+                "path",
+                source_path.display().to_string(),
+            ));
         }
 
         if !source_path.is_dir() {
@@ -301,7 +294,11 @@ impl PackInstaller {
 
         // Verify file exists
         if !archive_path.exists() {
-            return Err(Error::not_found("file", "path", archive_path.display().to_string()));
+            return Err(Error::not_found(
+                "file",
+                "path",
+                archive_path.display().to_string(),
+            ));
         }
 
         if !archive_path.is_file() {
@@ -369,9 +366,7 @@ impl PackInstaller {
                 git_ref,
                 checksum,
             } => {
-                let mut installed = self
-                    .install_from_git(&url, git_ref.as_deref())
-                    .await?;
+                let mut installed = self.install_from_git(&url, git_ref.as_deref()).await?;
                 installed.checksum = Some(checksum);
                 Ok(installed)
             }
@@ -426,11 +421,7 @@ impl PackInstaller {
         }
 
         // Determine filename from URL
-        let filename = url
-            .split('/')
-            .last()
-            .unwrap_or("archive.zip")
-            .to_string();
+        let filename = url.split('/').last().unwrap_or("archive.zip").to_string();
 
         let archive_path = self.temp_dir.join(&filename);
 
@@ -483,7 +474,10 @@ impl PackInstaller {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::internal(format!("Failed to extract zip: {}", stderr)));
+            return Err(Error::internal(format!(
+                "Failed to extract zip: {}",
+                stderr
+            )));
         }
 
         Ok(())
@@ -502,22 +496,23 @@ impl PackInstaller {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::internal(format!("Failed to extract tar.gz: {}", stderr)));
+            return Err(Error::internal(format!(
+                "Failed to extract tar.gz: {}",
+                stderr
+            )));
         }
 
         Ok(())
     }
 
     /// Verify archive checksum
-    async fn verify_archive_checksum(
-        &self,
-        archive_path: &Path,
-        checksum_str: &str,
-    ) -> Result<()> {
+    async fn verify_archive_checksum(&self, archive_path: &Path, checksum_str: &str) -> Result<()> {
         let checksum = Checksum::parse(checksum_str)
             .map_err(|e| Error::validation(format!("Invalid checksum: {}", e)))?;
 
-        let computed = self.compute_checksum(archive_path, &checksum.algorithm).await?;
+        let computed = self
+            .compute_checksum(archive_path, &checksum.algorithm)
+            .await?;
 
         if computed != checksum.hash {
             return Err(Error::validation(format!(
@@ -553,7 +548,10 @@ impl PackInstaller {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::internal(format!("Checksum computation failed: {}", stderr)));
+            return Err(Error::internal(format!(
+                "Checksum computation failed: {}",
+                stderr
+            )));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -611,9 +609,9 @@ impl PackInstaller {
         use tokio::fs;
 
         // Create destination directory if it doesn't exist
-        fs::create_dir_all(dst)
-            .await
-            .map_err(|e| Error::internal(format!("Failed to create destination directory: {}", e)))?;
+        fs::create_dir_all(dst).await.map_err(|e| {
+            Error::internal(format!("Failed to create destination directory: {}", e))
+        })?;
 
         // Read source directory
         let mut entries = fs::read_dir(src)

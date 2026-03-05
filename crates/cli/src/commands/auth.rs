@@ -101,7 +101,9 @@ async fn handle_login(
 
     // If a URL was provided and the target profile doesn't exist yet, create it.
     if !config.profiles.contains_key(&target_profile_name) {
-        let url = api_url.clone().unwrap_or_else(|| "http://localhost:8080".to_string());
+        let url = api_url
+            .clone()
+            .unwrap_or_else(|| "http://localhost:8080".to_string());
         use crate::config::Profile;
         config.set_profile(
             target_profile_name.clone(),
@@ -155,7 +157,10 @@ async fn handle_login(
         config.save()?;
     } else {
         // Fallback: set_auth writes to the current profile.
-        config.set_auth(response.access_token.clone(), response.refresh_token.clone())?;
+        config.set_auth(
+            response.access_token.clone(),
+            response.refresh_token.clone(),
+        )?;
     }
 
     match output_format {

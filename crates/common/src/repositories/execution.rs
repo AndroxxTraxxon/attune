@@ -332,9 +332,8 @@ impl ExecutionRepository {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let select_clause = format!(
-            "{prefixed_select}, enf.rule_ref AS rule_ref, enf.trigger_ref AS trigger_ref"
-        );
+        let select_clause =
+            format!("{prefixed_select}, enf.rule_ref AS rule_ref, enf.trigger_ref AS trigger_ref");
 
         let from_clause = "FROM execution e LEFT JOIN enforcement enf ON e.enforcement = enf.id";
 
@@ -425,10 +424,7 @@ impl ExecutionRepository {
         }
 
         // ── COUNT query ──────────────────────────────────────────────────
-        let total: i64 = count_qb
-            .build_query_scalar()
-            .fetch_one(db)
-            .await?;
+        let total: i64 = count_qb.build_query_scalar().fetch_one(db).await?;
         let total = total.max(0) as u64;
 
         // ── Data query with ORDER BY + pagination ────────────────────────
@@ -438,10 +434,7 @@ impl ExecutionRepository {
         qb.push(" OFFSET ");
         qb.push_bind(filters.offset as i64);
 
-        let rows: Vec<ExecutionWithRefs> = qb
-            .build_query_as()
-            .fetch_all(db)
-            .await?;
+        let rows: Vec<ExecutionWithRefs> = qb.build_query_as().fetch_all(db).await?;
 
         Ok(ExecutionSearchResult { rows, total })
     }

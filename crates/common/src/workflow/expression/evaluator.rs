@@ -741,7 +741,9 @@ fn to_int(v: &JsonValue) -> EvalResult<JsonValue> {
             } else if let Some(f) = n.as_f64() {
                 Ok(json!(f as i64))
             } else {
-                Err(EvalError::TypeError("Cannot convert number to int".to_string()))
+                Err(EvalError::TypeError(
+                    "Cannot convert number to int".to_string(),
+                ))
             }
         }
         JsonValue::String(s) => {
@@ -958,9 +960,7 @@ fn fn_join(arr: &JsonValue, sep: &JsonValue) -> EvalResult<JsonValue> {
         ))
     })?;
     let sep = require_string("join", sep)?;
-    let strings: Result<Vec<String>, _> = arr.iter().map(|v| {
-        Ok(value_to_string(v))
-    }).collect();
+    let strings: Result<Vec<String>, _> = arr.iter().map(|v| Ok(value_to_string(v))).collect();
     Ok(json!(strings?.join(sep)))
 }
 
@@ -986,8 +986,7 @@ fn fn_ends_with(s: &JsonValue, suffix: &JsonValue) -> EvalResult<JsonValue> {
 fn fn_match(pattern: &JsonValue, s: &JsonValue) -> EvalResult<JsonValue> {
     let pattern = require_string("match", pattern)?;
     let s = require_string("match", s)?;
-    let re = Regex::new(pattern)
-        .map_err(|e| EvalError::RegexError(format!("{}", e)))?;
+    let re = Regex::new(pattern).map_err(|e| EvalError::RegexError(format!("{}", e)))?;
     Ok(json!(re.is_match(s)))
 }
 
@@ -1012,9 +1011,7 @@ fn fn_reversed(v: &JsonValue) -> EvalResult<JsonValue> {
             rev.reverse();
             Ok(JsonValue::Array(rev))
         }
-        JsonValue::String(s) => {
-            Ok(json!(s.chars().rev().collect::<String>()))
-        }
+        JsonValue::String(s) => Ok(json!(s.chars().rev().collect::<String>())),
         _ => Err(EvalError::TypeError(format!(
             "reversed() requires array or string, got {}",
             type_name(v)
@@ -1095,7 +1092,10 @@ fn fn_flat(v: &JsonValue) -> EvalResult<JsonValue> {
 
 fn fn_zip(a: &JsonValue, b: &JsonValue) -> EvalResult<JsonValue> {
     let a_arr = a.as_array().ok_or_else(|| {
-        EvalError::TypeError(format!("zip() first argument must be array, got {}", type_name(a)))
+        EvalError::TypeError(format!(
+            "zip() first argument must be array, got {}",
+            type_name(a)
+        ))
     })?;
     let b_arr = b.as_array().ok_or_else(|| {
         EvalError::TypeError(format!(
@@ -1114,37 +1114,38 @@ fn fn_zip(a: &JsonValue, b: &JsonValue) -> EvalResult<JsonValue> {
 }
 
 fn fn_range_1(end: &JsonValue) -> EvalResult<JsonValue> {
-    let n = end.as_i64().ok_or_else(|| {
-        EvalError::TypeError("range() requires integer argument".to_string())
-    })?;
+    let n = end
+        .as_i64()
+        .ok_or_else(|| EvalError::TypeError("range() requires integer argument".to_string()))?;
     let arr: Vec<JsonValue> = (0..n).map(|i| json!(i)).collect();
     Ok(JsonValue::Array(arr))
 }
 
 fn fn_range_2(start: &JsonValue, end: &JsonValue) -> EvalResult<JsonValue> {
-    let s = start.as_i64().ok_or_else(|| {
-        EvalError::TypeError("range() requires integer arguments".to_string())
-    })?;
-    let e = end.as_i64().ok_or_else(|| {
-        EvalError::TypeError("range() requires integer arguments".to_string())
-    })?;
+    let s = start
+        .as_i64()
+        .ok_or_else(|| EvalError::TypeError("range() requires integer arguments".to_string()))?;
+    let e = end
+        .as_i64()
+        .ok_or_else(|| EvalError::TypeError("range() requires integer arguments".to_string()))?;
     let arr: Vec<JsonValue> = (s..e).map(|i| json!(i)).collect();
     Ok(JsonValue::Array(arr))
 }
 
 fn fn_slice(v: &JsonValue, start: &JsonValue, end: &JsonValue) -> EvalResult<JsonValue> {
-    let s = start.as_i64().ok_or_else(|| {
-        EvalError::TypeError("slice() start must be integer".to_string())
-    })? as usize;
+    let s = start
+        .as_i64()
+        .ok_or_else(|| EvalError::TypeError("slice() start must be integer".to_string()))?
+        as usize;
 
     match v {
         JsonValue::Array(arr) => {
             let e = if end.is_null() {
                 arr.len()
             } else {
-                end.as_i64()
-                    .ok_or_else(|| EvalError::TypeError("slice() end must be integer".to_string()))?
-                    as usize
+                end.as_i64().ok_or_else(|| {
+                    EvalError::TypeError("slice() end must be integer".to_string())
+                })? as usize
             };
             let e = e.min(arr.len());
             let s = s.min(e);
@@ -1155,9 +1156,9 @@ fn fn_slice(v: &JsonValue, start: &JsonValue, end: &JsonValue) -> EvalResult<Jso
             let e = if end.is_null() {
                 chars.len()
             } else {
-                end.as_i64()
-                    .ok_or_else(|| EvalError::TypeError("slice() end must be integer".to_string()))?
-                    as usize
+                end.as_i64().ok_or_else(|| {
+                    EvalError::TypeError("slice() end must be integer".to_string())
+                })? as usize
             };
             let e = e.min(chars.len());
             let s = s.min(e);
@@ -1182,7 +1183,9 @@ fn fn_index_of(haystack: &JsonValue, needle: &JsonValue) -> EvalResult<JsonValue
         }
         JsonValue::String(s) => {
             let needle = needle.as_str().ok_or_else(|| {
-                EvalError::TypeError("index_of() needle must be string for string search".to_string())
+                EvalError::TypeError(
+                    "index_of() needle must be string for string search".to_string(),
+                )
             })?;
             match s.find(needle) {
                 Some(pos) => Ok(json!(pos as i64)),
@@ -1292,10 +1295,7 @@ mod tests {
             &json!({"a": [1, 2], "b": {"c": 3}}),
             &json!({"b": {"c": 3}, "a": [1, 2]})
         ));
-        assert!(!json_eq(
-            &json!({"a": [1, 2]}),
-            &json!({"a": [1, 3]})
-        ));
+        assert!(!json_eq(&json!({"a": [1, 2]}), &json!({"a": [1, 3]})));
     }
 
     #[test]

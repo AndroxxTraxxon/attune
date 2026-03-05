@@ -554,9 +554,7 @@ async fn handle_create(
             ("Label", label.clone()),
             (
                 "Description",
-                description
-                    .clone()
-                    .unwrap_or_else(|| "(none)".to_string()),
+                description.clone().unwrap_or_else(|| "(none)".to_string()),
             ),
             ("Version", version.clone()),
             (
@@ -873,8 +871,8 @@ async fn handle_upload(
     }
 
     // Read pack ref from pack.yaml so we can display it
-    let pack_yaml_content = std::fs::read_to_string(&pack_yaml_path)
-        .context("Failed to read pack.yaml")?;
+    let pack_yaml_content =
+        std::fs::read_to_string(&pack_yaml_path).context("Failed to read pack.yaml")?;
     let pack_yaml: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(&pack_yaml_content).context("Failed to parse pack.yaml")?;
     let pack_ref = pack_yaml
@@ -884,10 +882,7 @@ async fn handle_upload(
 
     match output_format {
         OutputFormat::Table => {
-            output::print_info(&format!(
-                "Uploading pack '{}' from: {}",
-                pack_ref, path
-            ));
+            output::print_info(&format!("Uploading pack '{}' from: {}", pack_ref, path));
             output::print_info("Creating archive...");
         }
         _ => {}
@@ -995,9 +990,7 @@ fn append_dir_to_tar<W: std::io::Write>(
             append_dir_to_tar(tar, base, &entry_path)?;
         } else if entry_path.is_file() {
             tar.append_path_with_name(&entry_path, relative_path)
-                .with_context(|| {
-                    format!("Failed to add {} to archive", entry_path.display())
-                })?;
+                .with_context(|| format!("Failed to add {} to archive", entry_path.display()))?;
         }
         // symlinks are intentionally skipped
     }

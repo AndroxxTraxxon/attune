@@ -87,26 +87,14 @@ pub enum Expr {
     },
 
     /// Unary operation: `op operand`
-    UnaryOp {
-        op: UnaryOp,
-        operand: Box<Expr>,
-    },
+    UnaryOp { op: UnaryOp, operand: Box<Expr> },
 
     /// Property access: `expr.field`
-    DotAccess {
-        object: Box<Expr>,
-        field: String,
-    },
+    DotAccess { object: Box<Expr>, field: String },
 
     /// Index/bracket access: `expr[index_expr]`
-    IndexAccess {
-        object: Box<Expr>,
-        index: Box<Expr>,
-    },
+    IndexAccess { object: Box<Expr>, index: Box<Expr> },
 
     /// Function call: `name(arg1, arg2, ...)`
-    FunctionCall {
-        name: String,
-        args: Vec<Expr>,
-    },
+    FunctionCall { name: String, args: Vec<Expr> },
 }

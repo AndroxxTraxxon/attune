@@ -56,7 +56,10 @@ impl RegistryClient {
 
         let http_client = reqwest::Client::builder()
             .timeout(timeout)
-            .user_agent(format!("attune-registry-client/{}", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!(
+                "attune-registry-client/{}",
+                env!("CARGO_PKG_VERSION")
+            ))
             .build()
             .map_err(|e| Error::Internal(format!("Failed to create HTTP client: {}", e)))?;
 
@@ -69,7 +72,9 @@ impl RegistryClient {
 
     /// Get all enabled registries sorted by priority (lower number = higher priority)
     pub fn get_registries(&self) -> Vec<RegistryIndexConfig> {
-        let mut registries: Vec<_> = self.config.indices
+        let mut registries: Vec<_> = self
+            .config
+            .indices
             .iter()
             .filter(|r| r.enabled)
             .cloned()
@@ -156,7 +161,8 @@ impl RegistryClient {
 
     /// Fetch index from file:// URL
     async fn fetch_index_from_file(&self, url: &str) -> Result<PackIndex> {
-        let path = url.strip_prefix("file://")
+        let path = url
+            .strip_prefix("file://")
             .ok_or_else(|| Error::Configuration(format!("Invalid file URL: {}", url)))?;
 
         let path = PathBuf::from(path);
@@ -209,11 +215,7 @@ impl RegistryClient {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to fetch registry {}: {}",
-                        registry.url,
-                        e
-                    );
+                    tracing::warn!("Failed to fetch registry {}: {}", registry.url, e);
                     continue;
                 }
             }
@@ -236,7 +238,10 @@ impl RegistryClient {
                         let matches = pack.pack_ref.to_lowercase().contains(&keyword_lower)
                             || pack.label.to_lowercase().contains(&keyword_lower)
                             || pack.description.to_lowercase().contains(&keyword_lower)
-                            || pack.keywords.iter().any(|k| k.to_lowercase().contains(&keyword_lower));
+                            || pack
+                                .keywords
+                                .iter()
+                                .any(|k| k.to_lowercase().contains(&keyword_lower));
 
                         if matches {
                             results.push((pack, registry.url.clone()));
@@ -244,11 +249,7 @@ impl RegistryClient {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to fetch registry {}: {}",
-                        registry.url,
-                        e
-                    );
+                    tracing::warn!("Failed to fetch registry {}: {}", registry.url, e);
                     continue;
                 }
             }
@@ -264,7 +265,9 @@ impl RegistryClient {
         registry_name: &str,
     ) -> Result<Option<PackIndexEntry>> {
         // Find registry by name
-        let registry = self.config.indices
+        let registry = self
+            .config
+            .indices
             .iter()
             .find(|r| r.name.as_deref() == Some(registry_name))
             .ok_or_else(|| Error::not_found("registry", "name", registry_name))?;

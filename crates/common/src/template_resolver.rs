@@ -556,11 +556,7 @@ mod tests {
     #[test]
     fn test_context_without_event_metadata() {
         // Context with only a payload — no id, trigger, or created
-        let context = TemplateContext::new(
-            json!({"service": "test"}),
-            json!({}),
-            json!({}),
-        );
+        let context = TemplateContext::new(json!({"service": "test"}), json!({}), json!({}));
 
         let template = json!({
             "service": "{{ event.payload.service }}",

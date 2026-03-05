@@ -546,8 +546,7 @@ async fn test_workflow_upload_success() {
     let fixture = TestFixture::new().await;
     fixture.write_authenticated_config("valid_token", "refresh_token");
 
-    let wf_fixture =
-        WorkflowFixture::new("mypack.deploy", "workflows/deploy.workflow.yaml");
+    let wf_fixture = WorkflowFixture::new("mypack.deploy", "workflows/deploy.workflow.yaml");
 
     mock_workflow_save(&fixture.mock_server, "mypack").await;
 
@@ -571,8 +570,7 @@ async fn test_workflow_upload_json_output() {
     let fixture = TestFixture::new().await;
     fixture.write_authenticated_config("valid_token", "refresh_token");
 
-    let wf_fixture =
-        WorkflowFixture::new("mypack.deploy", "workflows/deploy.workflow.yaml");
+    let wf_fixture = WorkflowFixture::new("mypack.deploy", "workflows/deploy.workflow.yaml");
 
     mock_workflow_save(&fixture.mock_server, "mypack").await;
 
@@ -597,8 +595,7 @@ async fn test_workflow_upload_conflict_without_force() {
     let fixture = TestFixture::new().await;
     fixture.write_authenticated_config("valid_token", "refresh_token");
 
-    let wf_fixture =
-        WorkflowFixture::new("mypack.deploy", "workflows/deploy.workflow.yaml");
+    let wf_fixture = WorkflowFixture::new("mypack.deploy", "workflows/deploy.workflow.yaml");
 
     mock_workflow_save_conflict(&fixture.mock_server, "mypack").await;
 
@@ -622,8 +619,7 @@ async fn test_workflow_upload_conflict_with_force() {
     let fixture = TestFixture::new().await;
     fixture.write_authenticated_config("valid_token", "refresh_token");
 
-    let wf_fixture =
-        WorkflowFixture::new("mypack.deploy", "workflows/deploy.workflow.yaml");
+    let wf_fixture = WorkflowFixture::new("mypack.deploy", "workflows/deploy.workflow.yaml");
 
     mock_workflow_save_conflict(&fixture.mock_server, "mypack").await;
     mock_workflow_update(&fixture.mock_server, "mypack.deploy").await;

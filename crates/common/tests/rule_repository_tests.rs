@@ -482,7 +482,7 @@ async fn test_list_rules() {
             action_params: json!({}),
             trigger_params: json!({}),
             enabled: true,
-        is_adhoc: false,
+            is_adhoc: false,
         };
 
         RuleRepository::create(&pool, input).await.unwrap();
@@ -535,7 +535,7 @@ async fn test_list_rules_ordered_by_ref() {
             action_params: json!({}),
             trigger_params: json!({}),
             enabled: true,
-        is_adhoc: false,
+            is_adhoc: false,
         };
 
         RuleRepository::create(&pool, input).await.unwrap();
@@ -983,7 +983,7 @@ async fn test_find_rules_by_pack() {
             action_params: json!({}),
             trigger_params: json!({}),
             enabled: true,
-        is_adhoc: false,
+            is_adhoc: false,
         };
 
         RuleRepository::create(&pool, input).await.unwrap();
@@ -1060,7 +1060,7 @@ async fn test_find_rules_by_action() {
             action_params: json!({}),
             trigger_params: json!({}),
             enabled: true,
-        is_adhoc: false,
+            is_adhoc: false,
         };
 
         RuleRepository::create(&pool, input).await.unwrap();
@@ -1141,7 +1141,7 @@ async fn test_find_rules_by_trigger() {
             action_params: json!({}),
             trigger_params: json!({}),
             enabled: true,
-        is_adhoc: false,
+            is_adhoc: false,
         };
 
         RuleRepository::create(&pool, input).await.unwrap();
@@ -1172,7 +1172,9 @@ async fn test_find_rules_by_trigger() {
         .unwrap();
 
     assert_eq!(trigger1_rules.len(), 2);
-    assert!(trigger1_rules.iter().all(|r| r.trigger == Some(trigger1.id)));
+    assert!(trigger1_rules
+        .iter()
+        .all(|r| r.trigger == Some(trigger1.id)));
 
     let trigger2_rules = RuleRepository::find_by_trigger(&pool, trigger2.id)
         .await
@@ -1217,7 +1219,7 @@ async fn test_find_enabled_rules() {
             action_params: json!({}),
             trigger_params: json!({}),
             enabled: true,
-        is_adhoc: false,
+            is_adhoc: false,
         };
 
         RuleRepository::create(&pool, input).await.unwrap();
@@ -1239,7 +1241,7 @@ async fn test_find_enabled_rules() {
             action_params: json!({}),
             trigger_params: json!({}),
             enabled: false,
-        is_adhoc: false,
+            is_adhoc: false,
         };
 
         RuleRepository::create(&pool, input).await.unwrap();

@@ -906,7 +906,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
-        cancel_token: None,
+            cancel_token: None,
         };
 
         assert!(runtime.can_execute(&context));
@@ -941,7 +941,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
-        cancel_token: None,
+            cancel_token: None,
         };
 
         assert!(runtime.can_execute(&context));
@@ -976,7 +976,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
-        cancel_token: None,
+            cancel_token: None,
         };
 
         assert!(!runtime.can_execute(&context));
@@ -1067,7 +1067,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
-        cancel_token: None,
+            cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -1125,7 +1125,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
-        cancel_token: None,
+            cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -1164,7 +1164,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
-        cancel_token: None,
+            cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -1215,7 +1215,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
-        cancel_token: None,
+            cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -1324,7 +1324,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
-        cancel_token: None,
+            cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();

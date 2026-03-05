@@ -70,8 +70,6 @@ ENV/
 
 # Node (if used for tooling)
 node_modules/
-package-lock.json
-yarn.lock
 tests/pids/*
 
 # Docker

@@ -21,7 +21,12 @@ fn make_python_process_runtime(packs_base_dir: PathBuf) -> ProcessRuntime {
         dependencies: None,
         env_vars: std::collections::HashMap::new(),
     };
-    ProcessRuntime::new("python".to_string(), config, packs_base_dir.clone(), packs_base_dir.join("../runtime_envs"))
+    ProcessRuntime::new(
+        "python".to_string(),
+        config,
+        packs_base_dir.clone(),
+        packs_base_dir.join("../runtime_envs"),
+    )
 }
 
 fn make_python_context(
@@ -269,7 +274,12 @@ async fn test_shell_process_runtime_truncation() {
         dependencies: None,
         env_vars: std::collections::HashMap::new(),
     };
-    let runtime = ProcessRuntime::new("shell".to_string(), config, tmp.path().to_path_buf(), tmp.path().join("runtime_envs"));
+    let runtime = ProcessRuntime::new(
+        "shell".to_string(),
+        config,
+        tmp.path().to_path_buf(),
+        tmp.path().join("runtime_envs"),
+    );
 
     let context = ExecutionContext {
         execution_id: 8,

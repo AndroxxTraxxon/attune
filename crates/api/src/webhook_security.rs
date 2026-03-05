@@ -1,8 +1,8 @@
 //! Webhook security helpers for HMAC verification and validation
 
 use hmac::{Hmac, Mac};
-use sha2::{Sha256, Sha512};
 use sha1::Sha1;
+use sha2::{Sha256, Sha512};
 
 /// Verify HMAC signature for webhook payload
 pub fn verify_hmac_signature(
@@ -33,8 +33,8 @@ pub fn verify_hmac_signature(
     }
 
     // Decode hex signature
-    let expected_signature = hex::decode(hex_signature)
-        .map_err(|e| format!("Invalid hex signature: {}", e))?;
+    let expected_signature =
+        hex::decode(hex_signature).map_err(|e| format!("Invalid hex signature: {}", e))?;
 
     // Compute HMAC based on algorithm
     let is_valid = match algorithm {
@@ -91,7 +91,11 @@ fn verify_hmac_sha1(payload: &[u8], expected: &[u8], secret: &str) -> bool {
 }
 
 /// Generate HMAC signature for testing
-pub fn generate_hmac_signature(payload: &[u8], secret: &str, algorithm: &str) -> Result<String, String> {
+pub fn generate_hmac_signature(
+    payload: &[u8],
+    secret: &str,
+    algorithm: &str,
+) -> Result<String, String> {
     let signature = match algorithm {
         "sha256" => {
             type HmacSha256 = Hmac<Sha256>;
@@ -127,12 +131,14 @@ pub fn generate_hmac_signature(payload: &[u8], secret: &str, algorithm: &str) ->
 pub fn check_ip_in_cidr(ip: &str, cidr: &str) -> Result<bool, String> {
     use std::net::IpAddr;
 
-    let ip_addr: IpAddr = ip.parse()
+    let ip_addr: IpAddr = ip
+        .parse()
         .map_err(|e| format!("Invalid IP address: {}", e))?;
 
     // If CIDR doesn't contain '/', treat it as a single IP
     if !cidr.contains('/') {
-        let cidr_addr: IpAddr = cidr.parse()
+        let cidr_addr: IpAddr = cidr
+            .parse()
             .map_err(|e| format!("Invalid CIDR notation: {}", e))?;
         return Ok(ip_addr == cidr_addr);
     }
@@ -143,9 +149,11 @@ pub fn check_ip_in_cidr(ip: &str, cidr: &str) -> Result<bool, String> {
         return Err("Invalid CIDR format".to_string());
     }
 
-    let network_addr: IpAddr = parts[0].parse()
+    let network_addr: IpAddr = parts[0]
+        .parse()
         .map_err(|e| format!("Invalid network address: {}", e))?;
-    let prefix_len: u8 = parts[1].parse()
+    let prefix_len: u8 = parts[1]
+        .parse()
         .map_err(|e| format!("Invalid prefix length: {}", e))?;
 
     // Convert to bytes for comparison
@@ -156,7 +164,11 @@ pub fn check_ip_in_cidr(ip: &str, cidr: &str) -> Result<bool, String> {
             }
             let ip_bits = u32::from(ip);
             let network_bits = u32::from(network);
-            let mask = if prefix_len == 0 { 0 } else { !0u32 << (32 - prefix_len) };
+            let mask = if prefix_len == 0 {
+                0
+            } else {
+                !0u32 << (32 - prefix_len)
+            };
             Ok((ip_bits & mask) == (network_bits & mask))
         }
         (IpAddr::V6(ip), IpAddr::V6(network)) => {
@@ -165,7 +177,11 @@ pub fn check_ip_in_cidr(ip: &str, cidr: &str) -> Result<bool, String> {
             }
             let ip_bits = u128::from(ip);
             let network_bits = u128::from(network);
-            let mask = if prefix_len == 0 { 0 } else { !0u128 << (128 - prefix_len) };
+            let mask = if prefix_len == 0 {
+                0
+            } else {
+                !0u128 << (128 - prefix_len)
+            };
             Ok((ip_bits & mask) == (network_bits & mask))
         }
         _ => Err("IP address and CIDR must be same version (IPv4 or IPv6)".to_string()),

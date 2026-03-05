@@ -691,7 +691,10 @@ tasks:
         assert_eq!(transitions.len(), 1);
         assert_eq!(transitions[0].publish.len(), 1);
         assert_eq!(transitions[0].publish[0].name, "msg");
-        assert_eq!(transitions[0].publish[0].value, JsonValue::String("task1 done".to_string()));
+        assert_eq!(
+            transitions[0].publish[0].value,
+            JsonValue::String("task1 done".to_string())
+        );
     }
 
     #[test]

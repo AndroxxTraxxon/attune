@@ -50,7 +50,7 @@ async fn test_create_inquiry_minimal() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -109,7 +109,7 @@ async fn test_create_inquiry_with_response_schema() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -166,7 +166,7 @@ async fn test_create_inquiry_with_timeout() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -219,7 +219,7 @@ async fn test_create_inquiry_with_assigned_user() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -306,7 +306,7 @@ async fn test_find_inquiry_by_id() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -366,7 +366,7 @@ async fn test_get_inquiry_by_id() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -434,7 +434,7 @@ async fn test_list_inquiries() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -494,7 +494,7 @@ async fn test_update_inquiry_status() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -549,7 +549,7 @@ async fn test_update_inquiry_status_transitions() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -633,7 +633,7 @@ async fn test_update_inquiry_response() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -690,7 +690,7 @@ async fn test_update_inquiry_with_response_and_status() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -747,7 +747,7 @@ async fn test_update_inquiry_assignment() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -813,7 +813,7 @@ async fn test_update_inquiry_no_changes() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -888,7 +888,7 @@ async fn test_delete_inquiry() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -946,7 +946,7 @@ async fn test_delete_execution_cascades_to_inquiries() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -1012,7 +1012,7 @@ async fn test_find_inquiries_by_status() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -1090,7 +1090,7 @@ async fn test_find_inquiries_by_execution() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -1108,7 +1108,7 @@ async fn test_find_inquiries_by_execution() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -1171,7 +1171,7 @@ async fn test_inquiry_timestamps_auto_managed() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
@@ -1237,7 +1237,7 @@ async fn test_inquiry_complex_response_schema() {
             executor: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
-        workflow_task: None,
+            workflow_task: None,
         },
     )
     .await
