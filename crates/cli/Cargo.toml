@@ -54,11 +54,10 @@ tokio-tungstenite = { workspace = true }
 # Terminal UI
 colored = "2.1"
 comfy-table = "7.1"
-indicatif = "0.17"
 dialoguer = "0.11"
 
 # Authentication
-jsonwebtoken = { version = "10.2", features = ["rust_crypto"] }
+jsonwebtoken = { workspace = true }
 
 # Logging
 tracing = { workspace = true }

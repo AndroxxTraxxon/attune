@@ -317,8 +317,13 @@ update:
 	cargo update
 
 # Audit dependencies for security issues
+# Ignored advisories:
+#   RUSTSEC-2023-0071: rsa via sqlx-mysql (we only use postgres, no upstream fix)
+#   RUSTSEC-2025-0134: rustls-pemfile via lapin TLS stack (no alternative)
+AUDIT_IGNORE = --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2025-0134
+
 audit:
-	cargo audit
+	cargo audit $(AUDIT_IGNORE)
 
 deny:
 	cargo deny check
@@ -327,7 +332,7 @@ ci-rust:
 	cargo fmt --all -- --check
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
 	cargo test --workspace --all-features
-	cargo audit
+	cargo audit $(AUDIT_IGNORE)
 	cargo deny check
 
 ci-web-blocking:
