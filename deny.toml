@@ -4,13 +4,12 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# Note: RUSTSEC-2023-0071 (rsa via sqlx-mysql) is in Cargo.lock but unreachable —
+# sqlx-macros-core unconditionally resolves sqlx-mysql; we only use postgres.
+# cargo deny's graph analysis correctly identifies it as unreachable, so no
+# ignore entry is needed here. If cargo audit is ever re-added, it will need
+# --ignore RUSTSEC-2023-0071 since it scans the lockfile without graph analysis.
 ignore = [
-    # rsa v0.9.10 - Marvin Attack timing sidechannel (medium severity)
-    # Pulled in transitively by sqlx-mysql, which sqlx compiles unconditionally
-    # for its macro system. We only use PostgreSQL — the rsa code is never
-    # executed. No upstream fix available.
-    { id = "RUSTSEC-2023-0071", reason = "transitive via sqlx-mysql; we only use postgres" },
-
     # rustls-pemfile v2.x - unmaintained
     # Transitive dependency via lapin → amq-protocol-tcp → tcp-stream.
     # No alternative available until lapin updates its TLS stack.

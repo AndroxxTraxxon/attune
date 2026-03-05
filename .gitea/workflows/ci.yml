@@ -124,9 +124,8 @@ jobs:
         with:
           path: |
             ~/.cargo/bin/cargo-binstall
-            ~/.cargo/bin/cargo-audit
             ~/.cargo/bin/cargo-deny
-          key: cargo-security-tools-v1
+          key: cargo-security-tools-v2
 
       - name: Install cargo-binstall
         run: |
@@ -136,11 +135,7 @@ jobs:
 
       - name: Install security tools (pre-built binaries)
         run: |
-          command -v cargo-audit  &> /dev/null || cargo binstall --no-confirm --locked cargo-audit
           command -v cargo-deny   &> /dev/null || cargo binstall --no-confirm --locked cargo-deny
-
-      - name: Cargo Audit
-        run: cargo audit
 
       - name: Cargo Deny
         run: cargo deny check
