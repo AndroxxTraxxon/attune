@@ -14,9 +14,9 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["Attune Team"]
-license = "MIT"
-repository = "https://github.com/yourusername/attune"
+authors = ["David Culbreth"]
+license = "Apache-2.0"
+repository = "https://git.rdrx.app/attune-system/attune"
 
 [workspace.dependencies]
 # Async runtime
