@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { TriggersService } from "@/api";
+import type { CreateTriggerRequest, UpdateTriggerRequest } from "@/api";
 
 interface TriggersQueryParams {
   page?: number;
@@ -69,7 +70,7 @@ export function useCreateTrigger() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (data: any) => {
+    mutationFn: async (data: CreateTriggerRequest) => {
       return await TriggersService.createTrigger({ requestBody: data });
     },
     onSuccess: () => {
@@ -83,7 +84,13 @@ export function useUpdateTrigger() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ ref, data }: { ref: string; data: any }) => {
+    mutationFn: async ({
+      ref,
+      data,
+    }: {
+      ref: string;
+      data: UpdateTriggerRequest;
+    }) => {
       return await TriggersService.updateTrigger({ ref, requestBody: data });
     },
     onSuccess: (_, variables) => {

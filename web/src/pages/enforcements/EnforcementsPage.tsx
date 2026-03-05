@@ -2,6 +2,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useEnforcements } from "@/hooks/useEvents";
 import { useEnforcementStream } from "@/hooks/useEnforcementStream";
 import { EnforcementStatus } from "@/api";
+import type { EnforcementSummary } from "@/api";
 import { useState, useMemo, memo, useCallback, useEffect } from "react";
 import { Search, X } from "lucide-react";
 import MultiSelect from "@/components/common/MultiSelect";
@@ -99,7 +100,7 @@ const EnforcementsResultsTable = memo(
     pageSize,
     total,
   }: {
-    enforcements: any[];
+    enforcements: EnforcementSummary[];
     isLoading: boolean;
     isFetching: boolean;
     error: Error | null;
@@ -195,7 +196,7 @@ const EnforcementsResultsTable = memo(
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {enforcements.map((enforcement: any) => (
+              {enforcements.map((enforcement: EnforcementSummary) => (
                 <tr key={enforcement.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 font-mono text-sm">
                     <Link
@@ -364,7 +365,13 @@ export default function EnforcementsPage() {
 
   // --- Build query params from debounced state ---
   const queryParams = useMemo(() => {
-    const params: any = { page, pageSize };
+    const params: {
+      page: number;
+      pageSize: number;
+      triggerRef?: string;
+      event?: number;
+      status?: EnforcementStatus;
+    } = { page, pageSize };
     if (debouncedFilters.trigger) params.triggerRef = debouncedFilters.trigger;
     if (debouncedFilters.event) {
       const eventId = parseInt(debouncedFilters.event, 10);
@@ -416,16 +423,16 @@ export default function EnforcementsPage() {
 
     // Filter by rule_ref (client-side since API doesn't support it)
     if (debouncedFilters.rule) {
-      filtered = filtered.filter((enf: any) =>
+      filtered = filtered.filter((enf: EnforcementSummary) =>
         enf.rule_ref
-          .toLowerCase()
+          ?.toLowerCase()
           .includes(debouncedFilters.rule.toLowerCase()),
       );
     }
 
     // If multiple statuses selected, filter client-side
     if (debouncedStatuses.length > 1) {
-      filtered = filtered.filter((enf: any) =>
+      filtered = filtered.filter((enf: EnforcementSummary) =>
         debouncedStatuses.includes(enf.status),
       );
     }

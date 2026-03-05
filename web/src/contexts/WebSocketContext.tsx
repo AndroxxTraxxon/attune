@@ -1,7 +1,9 @@
+/* eslint-disable react-refresh/only-export-components -- exporting hooks alongside WebSocketProvider is standard React pattern */
 import {
   createContext,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useCallback,
@@ -306,36 +308,33 @@ export function useEntityNotifications(
 ) {
   const { connected, subscribe, unsubscribe } = useWebSocketContext();
 
-  // Stable reference to the handler
+  // Stable reference to the handler — updated on every render via effect
   const handlerRef = useRef(onNotification);
-
-  // Stable reference to the wrapper function (created once, never changes)
-  const stableHandlerRef = useRef<NotificationHandler | null>(null);
-
-  // Initialize the stable handler once
-  if (stableHandlerRef.current === null) {
-    stableHandlerRef.current = (notification) => {
-      handlerRef.current(notification);
-    };
-  }
 
   // Update ref when handler changes (but don't cause re-subscription)
   useEffect(() => {
     handlerRef.current = onNotification;
   }, [onNotification]);
 
+  // Create a stable wrapper function once via useMemo (no ref access during render)
+  const stableHandler = useMemo<NotificationHandler>(
+    () => (notification) => {
+      handlerRef.current(notification);
+    },
+    [], // intentionally empty — handlerRef is stable
+  );
+
   useEffect(() => {
     if (!connected || !enabled) return;
 
     const filter = `entity_type:${entityType}`;
-    const stableHandler = stableHandlerRef.current!;
 
     subscribe(filter, stableHandler);
 
     return () => {
       unsubscribe(filter, stableHandler);
     };
-  }, [connected, enabled, entityType, subscribe, unsubscribe]);
+  }, [connected, enabled, entityType, subscribe, unsubscribe, stableHandler]);
 
   return { connected };
 }

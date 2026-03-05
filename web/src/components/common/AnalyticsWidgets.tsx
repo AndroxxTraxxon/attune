@@ -550,29 +550,34 @@ export default function AnalyticsDashboard({
   hours,
   onHoursChange,
 }: AnalyticsDashboardProps) {
+  // Extract sub-properties so useMemo deps match what the React Compiler infers
+  const executionThroughput = data?.execution_throughput;
+  const eventVolume = data?.event_volume;
+  const enforcementVolume = data?.enforcement_volume;
+
   const executionBuckets = useMemo(() => {
-    if (!data?.execution_throughput) return [];
-    const agg = aggregateByBucket(data.execution_throughput);
+    if (!executionThroughput) return [];
+    const agg = aggregateByBucket(executionThroughput);
     return Array.from(agg.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([bucket, v]) => ({ bucket, value: v.total }));
-  }, [data?.execution_throughput]);
+  }, [executionThroughput]);
 
   const eventBuckets = useMemo(() => {
-    if (!data?.event_volume) return [];
-    const agg = aggregateByBucket(data.event_volume);
+    if (!eventVolume) return [];
+    const agg = aggregateByBucket(eventVolume);
     return Array.from(agg.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([bucket, v]) => ({ bucket, value: v.total }));
-  }, [data?.event_volume]);
+  }, [eventVolume]);
 
   const enforcementBuckets = useMemo(() => {
-    if (!data?.enforcement_volume) return [];
-    const agg = aggregateByBucket(data.enforcement_volume);
+    if (!enforcementVolume) return [];
+    const agg = aggregateByBucket(enforcementVolume);
     return Array.from(agg.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([bucket, v]) => ({ bucket, value: v.total }));
-  }, [data?.enforcement_volume]);
+  }, [enforcementVolume]);
 
   const totalExecutions = useMemo(
     () => executionBuckets.reduce((s, b) => s + b.value, 0),

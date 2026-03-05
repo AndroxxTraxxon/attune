@@ -8,9 +8,13 @@ import type { ParamSchema } from "./ParamSchemaForm";
 export type { ParamSchema };
 import { extractProperties } from "./ParamSchemaForm";
 
+/** A JSON-compatible value that can appear in display data */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type JsonValue = any;
+
 interface ParamSchemaDisplayProps {
   schema: ParamSchema;
-  values: Record<string, any>;
+  values: Record<string, JsonValue>;
   className?: string;
   emptyMessage?: string;
 }
@@ -53,7 +57,7 @@ export default function ParamSchemaDisplay({
    * Returns both the formatted value and whether it should be displayed inline
    */
   const formatValue = (
-    value: any,
+    value: JsonValue,
     type?: string,
   ): { element: React.JSX.Element; isInline: boolean } => {
     if (value === undefined || value === null) {

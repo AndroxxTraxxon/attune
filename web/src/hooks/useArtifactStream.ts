@@ -16,6 +16,26 @@ interface UseArtifactStreamOptions {
   enabled?: boolean;
 }
 
+/** Shape of data coming from WebSocket notifications for artifacts */
+interface ArtifactNotification {
+  entity_id: number;
+  entity_type: string;
+  notification_type: string;
+  payload: ArtifactNotificationPayload;
+  timestamp: string;
+}
+
+/** The raw payload from the PostgreSQL trigger for artifact notifications */
+interface ArtifactNotificationPayload {
+  execution?: number;
+  type?: string;
+  name?: string | null;
+  progress_percent?: number | null;
+  progress_message?: string | null;
+  progress_entries?: number | null;
+  [key: string]: unknown;
+}
+
 /**
  * Hook to subscribe to real-time artifact updates via WebSocket.
  *
@@ -42,8 +62,8 @@ export function useArtifactStream(options: UseArtifactStreamOptions = {}) {
   const queryClient = useQueryClient();
 
   const handleNotification = useCallback(
-    (notification: any) => {
-      const payload = notification.payload as any;
+    (notification: ArtifactNotification) => {
+      const payload = notification.payload;
 
       // If we're filtering by execution ID, only process matching artifacts
       if (executionId && payload?.execution !== executionId) {
@@ -71,11 +91,11 @@ export function useArtifactStream(options: UseArtifactStreamOptions = {}) {
       if (payload?.type === "progress" && payload?.progress_percent != null) {
         queryClient.setQueryData(
           ["artifact_progress", artifactExecution],
-          (old: any) => ({
+          (old: ArtifactProgressSummary | undefined) => ({
             ...old,
             artifactId,
-            name: payload.name,
-            percent: payload.progress_percent,
+            name: payload.name ?? null,
+            percent: payload.progress_percent as number,
             message: payload.progress_message ?? null,
             entries: payload.progress_entries ?? 0,
             timestamp: notification.timestamp,

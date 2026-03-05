@@ -1,9 +1,15 @@
 import { QueryClient } from "@tanstack/react-query";
 
+interface HttpError extends Error {
+  response?: {
+    status: number;
+  };
+}
+
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: (failureCount, error: any) => {
+      retry: (failureCount, error: HttpError) => {
         // Don't retry on 401 (handled by interceptor) or 403 (permission denied)
         if (
           error?.response?.status === 401 ||

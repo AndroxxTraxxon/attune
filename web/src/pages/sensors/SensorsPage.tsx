@@ -1,12 +1,13 @@
 import { Link, useParams } from "react-router-dom";
 import { useSensors, useSensor, useDeleteSensor } from "@/hooks/useSensors";
 import { useState, useMemo } from "react";
+import type { SensorSummary } from "@/api";
 import { ChevronDown, ChevronRight, Search, X } from "lucide-react";
 
 export default function SensorsPage() {
   const { ref } = useParams<{ ref?: string }>();
   const { data, isLoading, error } = useSensors({});
-  const sensors = data?.data || [];
+  const sensors = useMemo(() => data?.data || [], [data?.data]);
   const [collapsedPacks, setCollapsedPacks] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -14,7 +15,7 @@ export default function SensorsPage() {
   const filteredSensors = useMemo(() => {
     if (!searchQuery.trim()) return sensors;
     const query = searchQuery.toLowerCase();
-    return sensors.filter((sensor: any) => {
+    return sensors.filter((sensor: SensorSummary) => {
       return (
         sensor.label?.toLowerCase().includes(query) ||
         sensor.ref?.toLowerCase().includes(query) ||
@@ -26,8 +27,8 @@ export default function SensorsPage() {
 
   // Group filtered sensors by pack
   const sensorsByPack = useMemo(() => {
-    const grouped = new Map<string, any[]>();
-    filteredSensors.forEach((sensor: any) => {
+    const grouped = new Map<string, SensorSummary[]>();
+    filteredSensors.forEach((sensor: SensorSummary) => {
       const packRef = sensor.pack_ref || "unknown";
       if (!grouped.has(packRef)) {
         grouped.set(packRef, []);
@@ -152,7 +153,7 @@ export default function SensorsPage() {
                       {/* Sensors List */}
                       {!isCollapsed && (
                         <div className="p-1">
-                          {packSensors.map((sensor: any) => (
+                          {packSensors.map((sensor: SensorSummary) => (
                             <Link
                               key={sensor.id}
                               to={`/sensors/${sensor.ref}`}

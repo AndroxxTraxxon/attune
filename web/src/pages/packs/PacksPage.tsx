@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router-dom";
 import { usePacks, usePack, useDeletePack } from "@/hooks/usePacks";
 import { usePackActions } from "@/hooks/useActions";
 import { useState, useMemo } from "react";
+import type { PackSummary, PackResponse, ActionSummary } from "@/api";
 import {
   Search,
   X,
@@ -12,10 +13,13 @@ import {
   Settings,
 } from "lucide-react";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type JsonValue = any;
+
 export default function PacksPage() {
   const { ref } = useParams<{ ref?: string }>();
   const { data, isLoading, error } = usePacks();
-  const packs = data?.data || [];
+  const packs = useMemo(() => data?.data || [], [data?.data]);
   const [searchQuery, setSearchQuery] = useState("");
   const [showPackMenu, setShowPackMenu] = useState(false);
 
@@ -23,7 +27,7 @@ export default function PacksPage() {
   const filteredPacks = useMemo(() => {
     if (!searchQuery.trim()) return packs;
     const query = searchQuery.toLowerCase();
-    return packs.filter((pack: any) => {
+    return packs.filter((pack: PackSummary) => {
       return (
         pack.label?.toLowerCase().includes(query) ||
         pack.ref?.toLowerCase().includes(query) ||
@@ -193,7 +197,7 @@ export default function PacksPage() {
             </div>
           ) : (
             <div className="space-y-1">
-              {filteredPacks.map((pack: any) => (
+              {filteredPacks.map((pack: PackSummary) => (
                 <Link
                   key={pack.id}
                   to={`/packs/${pack.ref}`}
@@ -405,7 +409,7 @@ function PackDetail({ packRef }: { packRef: string }) {
                 Actions ({packActions.length})
               </h2>
               <div className="space-y-2">
-                {packActions.map((action: any) => (
+                {packActions.map((action: ActionSummary) => (
                   <Link
                     key={action.id}
                     to={`/actions/${action.ref}`}
@@ -485,7 +489,7 @@ function PackDetail({ packRef }: { packRef: string }) {
 }
 
 // Helper component to display pack configuration
-function PackConfiguration({ pack }: { pack: any }) {
+function PackConfiguration({ pack }: { pack: PackResponse | undefined }) {
   if (!pack) return null;
 
   const confSchema = pack.conf_schema || {};
@@ -504,57 +508,60 @@ function PackConfiguration({ pack }: { pack: any }) {
         <h2 className="text-xl font-semibold">Configuration</h2>
       </div>
       <div className="space-y-4">
-        {Object.entries(properties).map(([key, schema]: [string, any]) => {
-          const value = config[key];
-          const hasValue = value !== undefined && value !== null;
-          const displayValue = hasValue ? value : schema.default;
-          const isUsingDefault = !hasValue && schema.default !== undefined;
+        {Object.entries(properties).map(
+          ([key, schema]: [string, JsonValue]) => {
+            const value = config[key];
+            const hasValue = value !== undefined && value !== null;
+            const displayValue = hasValue ? value : schema.default;
+            const isUsingDefault = !hasValue && schema.default !== undefined;
 
-          return (
-            <div
-              key={key}
-              className="border-b border-gray-200 pb-4 last:border-0 last:pb-0"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <dt className="text-sm font-medium text-gray-900 font-mono">
-                      {key}
-                    </dt>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
-                      {schema.type || "any"}
-                    </span>
-                    {isUsingDefault && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
-                        default
+            return (
+              <div
+                key={key}
+                className="border-b border-gray-200 pb-4 last:border-0 last:pb-0"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <dt className="text-sm font-medium text-gray-900 font-mono">
+                        {key}
+                      </dt>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
+                        {schema.type || "any"}
                       </span>
+                      {isUsingDefault && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                          default
+                        </span>
+                      )}
+                    </div>
+                    {schema.description && (
+                      <p className="mt-1 text-sm text-gray-600">
+                        {schema.description}
+                      </p>
                     )}
                   </div>
-                  {schema.description && (
-                    <p className="mt-1 text-sm text-gray-600">
-                      {schema.description}
+                  <dd className="ml-4 text-sm text-right">
+                    <ConfigValue value={displayValue} type={schema.type} />
+                  </dd>
+                </div>
+                {schema.minimum !== undefined &&
+                  schema.maximum !== undefined && (
+                    <p className="mt-1 text-xs text-gray-500">
+                      Range: {schema.minimum} - {schema.maximum}
                     </p>
                   )}
-                </div>
-                <dd className="ml-4 text-sm text-right">
-                  <ConfigValue value={displayValue} type={schema.type} />
-                </dd>
               </div>
-              {schema.minimum !== undefined && schema.maximum !== undefined && (
-                <p className="mt-1 text-xs text-gray-500">
-                  Range: {schema.minimum} - {schema.maximum}
-                </p>
-              )}
-            </div>
-          );
-        })}
+            );
+          },
+        )}
       </div>
     </div>
   );
 }
 
 // Helper component to render config values based on type
-function ConfigValue({ value, type }: { value: any; type?: string }) {
+function ConfigValue({ value, type }: { value: JsonValue; type?: string }) {
   if (value === undefined || value === null) {
     return <span className="text-gray-400 italic">not set</span>;
   }

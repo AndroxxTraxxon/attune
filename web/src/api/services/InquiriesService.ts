@@ -1,7 +1,7 @@
 /* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
-/* eslint-disable */
+ 
 import type { ApiResponse_InquiryResponse } from '../models/ApiResponse_InquiryResponse';
 import type { CreateInquiryRequest } from '../models/CreateInquiryRequest';
 import type { i64 } from '../models/i64';

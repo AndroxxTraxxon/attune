@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- exporting useAuth hook alongside AuthProvider is standard React pattern */
 import {
   createContext,
   useContext,

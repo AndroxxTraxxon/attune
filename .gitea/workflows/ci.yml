@@ -10,10 +10,13 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_MIN_STACK: 16777216
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
 
 jobs:
-  rust-blocking:
-    name: Rust Blocking Checks
+  rust-fmt:
+    name: Rustfmt
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -22,19 +25,119 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt
 
       - name: Rustfmt
         run: cargo fmt --all -- --check
 
+  rust-clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo registry + index
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-
+
+      - name: Cache Cargo build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: cargo-clippy-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}
+          restore-keys: |
+            cargo-clippy-${{ hashFiles('**/Cargo.lock') }}-
+            cargo-clippy-
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  rust-test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry + index
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-
+
+      - name: Cache Cargo build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: cargo-test-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}
+          restore-keys: |
+            cargo-test-${{ hashFiles('**/Cargo.lock') }}-
+            cargo-test-
 
       - name: Tests
         run: cargo test --workspace --all-features
 
-      - name: Install Rust security tooling
-        run: cargo install --locked cargo-audit cargo-deny
+  rust-audit:
+    name: Cargo Audit & Deny
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry + index
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-
+
+      - name: Cache cargo-binstall and installed binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-binstall
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/bin/cargo-deny
+          key: cargo-security-tools-v1
+
+      - name: Install cargo-binstall
+        run: |
+          if ! command -v cargo-binstall &> /dev/null; then
+            curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          fi
+
+      - name: Install security tools (pre-built binaries)
+        run: |
+          command -v cargo-audit  &> /dev/null || cargo binstall --no-confirm --locked cargo-audit
+          command -v cargo-deny   &> /dev/null || cargo binstall --no-confirm --locked cargo-deny
 
       - name: Cargo Audit
         run: cargo audit

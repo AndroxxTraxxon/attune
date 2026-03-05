@@ -7,7 +7,11 @@ import {
   useDisableTrigger,
 } from "@/hooks/useTriggers";
 import { useState, useMemo } from "react";
-import { extractProperties } from "@/components/common/ParamSchemaForm";
+import type { TriggerSummary } from "@/api";
+import {
+  extractProperties,
+  type ParamSchemaProperty,
+} from "@/components/common/ParamSchemaForm";
 import {
   ChevronDown,
   ChevronRight,
@@ -23,7 +27,7 @@ import { useAuth } from "@/contexts/AuthContext";
 export default function TriggersPage() {
   const { ref } = useParams<{ ref?: string }>();
   const { data, isLoading, error } = useTriggers({});
-  const triggers = data?.data || [];
+  const triggers = useMemo(() => data?.data || [], [data?.data]);
   const [collapsedPacks, setCollapsedPacks] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -31,7 +35,7 @@ export default function TriggersPage() {
   const filteredTriggers = useMemo(() => {
     if (!searchQuery.trim()) return triggers;
     const query = searchQuery.toLowerCase();
-    return triggers.filter((trigger: any) => {
+    return triggers.filter((trigger: TriggerSummary) => {
       return (
         trigger.label?.toLowerCase().includes(query) ||
         trigger.ref?.toLowerCase().includes(query) ||
@@ -43,8 +47,8 @@ export default function TriggersPage() {
 
   // Group filtered triggers by pack
   const triggersByPack = useMemo(() => {
-    const grouped = new Map<string, any[]>();
-    filteredTriggers.forEach((trigger: any) => {
+    const grouped = new Map<string, TriggerSummary[]>();
+    filteredTriggers.forEach((trigger: TriggerSummary) => {
       const packRef = trigger.pack_ref || "unknown";
       if (!grouped.has(packRef)) {
         grouped.set(packRef, []);
@@ -178,7 +182,7 @@ export default function TriggersPage() {
                       {/* Triggers List */}
                       {!isCollapsed && (
                         <div className="p-1">
-                          {packTriggers.map((trigger: any) => (
+                          {packTriggers.map((trigger: TriggerSummary) => (
                             <Link
                               key={trigger.id}
                               to={`/triggers/${trigger.ref}`}
@@ -484,7 +488,65 @@ function TriggerDetail({ triggerRef }: { triggerRef: string }) {
                   Parameters
                 </h3>
                 <div className="space-y-3">
-                  {paramEntries.map(([key, param]: [string, any]) => (
+                  {paramEntries.map(
+                    ([key, param]: [string, ParamSchemaProperty]) => (
+                      <div
+                        key={key}
+                        className="border border-gray-200 rounded p-3"
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono font-semibold text-sm">
+                                {key}
+                              </span>
+                              {param?.required && (
+                                <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded">
+                                  Required
+                                </span>
+                              )}
+                              {param?.secret && (
+                                <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded">
+                                  Secret
+                                </span>
+                              )}
+                              <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded">
+                                {param?.type || "any"}
+                              </span>
+                            </div>
+                            {param?.description && (
+                              <p className="text-sm text-gray-600 mt-1">
+                                {param.description}
+                              </p>
+                            )}
+                            {param?.default !== undefined && (
+                              <p className="text-xs text-gray-500 mt-1">
+                                Default:{" "}
+                                <code className="bg-gray-100 px-1 rounded">
+                                  {JSON.stringify(param.default)}
+                                </code>
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ),
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Payload Schema Card */}
+          {outEntries.length > 0 && (
+            <div className="bg-white shadow rounded-lg p-6">
+              <h2 className="text-xl font-semibold mb-2">Payload Schema</h2>
+              <p className="text-sm text-gray-500 mb-4">
+                Schema of the event payload generated when this trigger fires.
+              </p>
+              <div className="space-y-3">
+                {outEntries.map(
+                  ([key, param]: [string, ParamSchemaProperty]) => (
                     <div
                       key={key}
                       className="border border-gray-200 rounded p-3"
@@ -498,11 +560,6 @@ function TriggerDetail({ triggerRef }: { triggerRef: string }) {
                             {param?.required && (
                               <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded">
                                 Required
-                              </span>
-                            )}
-                            {param?.secret && (
-                              <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded">
-                                Secret
                               </span>
                             )}
                             <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded">
@@ -525,54 +582,8 @@ function TriggerDetail({ triggerRef }: { triggerRef: string }) {
                         </div>
                       </div>
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Payload Schema Card */}
-          {outEntries.length > 0 && (
-            <div className="bg-white shadow rounded-lg p-6">
-              <h2 className="text-xl font-semibold mb-2">Payload Schema</h2>
-              <p className="text-sm text-gray-500 mb-4">
-                Schema of the event payload generated when this trigger fires.
-              </p>
-              <div className="space-y-3">
-                {outEntries.map(([key, param]: [string, any]) => (
-                  <div key={key} className="border border-gray-200 rounded p-3">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-semibold text-sm">
-                            {key}
-                          </span>
-                          {param?.required && (
-                            <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded">
-                              Required
-                            </span>
-                          )}
-                          <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded">
-                            {param?.type || "any"}
-                          </span>
-                        </div>
-                        {param?.description && (
-                          <p className="text-sm text-gray-600 mt-1">
-                            {param.description}
-                          </p>
-                        )}
-                        {param?.default !== undefined && (
-                          <p className="text-xs text-gray-500 mt-1">
-                            Default:{" "}
-                            <code className="bg-gray-100 px-1 rounded">
-                              {JSON.stringify(param.default)}
-                            </code>
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                  ),
+                )}
               </div>
             </div>
           )}

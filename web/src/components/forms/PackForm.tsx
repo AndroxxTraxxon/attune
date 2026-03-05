@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useCreatePack, useUpdatePack } from "@/hooks/usePacks";
 import type { PackResponse } from "@/api";
@@ -6,6 +6,24 @@ import { labelToRef } from "@/lib/format-utils";
 import SchemaBuilder from "@/components/common/SchemaBuilder";
 import ParamSchemaForm from "@/components/common/ParamSchemaForm";
 import { RotateCcw } from "lucide-react";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type JsonValue = any;
+
+/** A single property definition within a flat schema object */
+interface SchemaPropertyDef {
+  type?: string;
+  description?: string;
+  required?: boolean;
+  secret?: boolean;
+  default?: JsonValue;
+  minimum?: number;
+  maximum?: number;
+  [key: string]: unknown;
+}
+
+/** The flat schema format: each key is a parameter name mapped to its definition */
+type FlatSchema = Record<string, SchemaPropertyDef>;
 
 interface PackFormProps {
   pack?: PackResponse;
@@ -31,9 +49,10 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
   const [isStandard, setIsStandard] = useState(pack?.is_standard ?? false);
 
   const [configValues, setConfigValues] =
-    useState<Record<string, any>>(initialConfig);
-  const [confSchema, setConfSchema] =
-    useState<Record<string, any>>(initialConfSchema);
+    useState<Record<string, JsonValue>>(initialConfig);
+  const [confSchema, setConfSchema] = useState<FlatSchema>(
+    initialConfSchema as FlatSchema,
+  );
   const [meta, setMeta] = useState(
     pack?.meta ? JSON.stringify(pack.meta, null, 2) : "{}",
   );
@@ -49,14 +68,22 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
     typeof confSchema === "object" &&
     Object.keys(confSchema).length > 0;
 
+  // Track previous confSchema to detect changes without re-running on every render
+  const prevConfSchemaRef = useRef(confSchema);
+
   // Sync config values when schema changes (for ad-hoc packs only)
+  /* eslint-disable react-hooks/set-state-in-effect -- intentional sync of dependent state */
   useEffect(() => {
+    // Only sync when confSchema actually changed
+    if (prevConfSchemaRef.current === confSchema) return;
+    prevConfSchemaRef.current = confSchema;
+
     if (!isStandard && hasSchemaProperties) {
       // Get current schema property names (flat format: keys are parameter names)
       const schemaKeys = Object.keys(confSchema);
 
       // Create new config with only keys that exist in schema
-      const syncedConfig: Record<string, any> = {};
+      const syncedConfig: Record<string, JsonValue> = {};
       schemaKeys.forEach((key) => {
         if (configValues[key] !== undefined) {
           // Preserve existing value
@@ -77,7 +104,8 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
         setConfigValues(syncedConfig);
       }
     }
-  }, [confSchema, isStandard]);
+  }, [confSchema, isStandard, hasSchemaProperties, configValues]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
@@ -111,7 +139,7 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
     if (meta.trim()) {
       try {
         JSON.parse(meta);
-      } catch (e) {
+      } catch {
         newErrors.meta = "Invalid JSON format";
       }
     }
@@ -179,12 +207,14 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
           onSuccess();
         }
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errMsg =
+        error instanceof Error ? error.message : "Failed to save pack";
+      const axiosErr = error as {
+        response?: { data?: { message?: string } };
+      };
       setErrors({
-        submit:
-          error.response?.data?.message ||
-          error.message ||
-          "Failed to save pack",
+        submit: axiosErr?.response?.data?.message || errMsg,
       });
     }
   };
@@ -203,7 +233,7 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
   };
 
   const insertSchemaExample = (type: "api" | "database" | "webhook") => {
-    let example: Record<string, any>;
+    let example: FlatSchema;
     switch (type) {
       case "api":
         example = {
@@ -280,8 +310,8 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
     setConfSchema(example);
 
     // Immediately sync config values with schema defaults
-    const syncedConfig: Record<string, any> = {};
-    Object.entries(example).forEach(([key, propDef]: [string, any]) => {
+    const syncedConfig: Record<string, JsonValue> = {};
+    Object.entries(example).forEach(([key, propDef]) => {
       if (propDef.default !== undefined) {
         syncedConfig[key] = propDef.default;
       }

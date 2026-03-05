@@ -1,5 +1,24 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Plus, Trash2, ChevronDown, ChevronRight, Code } from "lucide-react";
+
+/** A single property definition within a flat schema object */
+interface SchemaPropertyDef {
+  type?: string;
+  description?: string;
+  required?: boolean;
+  secret?: boolean;
+  default?: unknown;
+  minimum?: number;
+  maximum?: number;
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
+  enum?: string[];
+  [key: string]: unknown;
+}
+
+/** The flat schema format: each key is a parameter name mapped to its definition */
+type FlatSchema = Record<string, SchemaPropertyDef>;
 
 interface SchemaProperty {
   name: string;
@@ -17,8 +36,8 @@ interface SchemaProperty {
 }
 
 interface SchemaBuilderProps {
-  value: Record<string, any>;
-  onChange: (schema: Record<string, any>) => void;
+  value: FlatSchema;
+  onChange: (schema: FlatSchema) => void;
   label?: string;
   placeholder?: string;
   error?: string;
@@ -58,24 +77,23 @@ export default function SchemaBuilder({
     if (!value || typeof value !== "object") return;
     const props: SchemaProperty[] = [];
 
-    Object.entries(value).forEach(([name, propDef]: [string, any]) => {
+    Object.entries(value).forEach(([name, propDef]) => {
       if (propDef && typeof propDef === "object" && !Array.isArray(propDef)) {
+        const def = propDef as SchemaPropertyDef;
         props.push({
           name,
-          type: propDef.type || "string",
-          description: propDef.description || "",
-          required: propDef.required === true,
-          secret: propDef.secret === true,
+          type: def.type || "string",
+          description: def.description || "",
+          required: def.required === true,
+          secret: def.secret === true,
           default:
-            propDef.default !== undefined
-              ? JSON.stringify(propDef.default)
-              : undefined,
-          minimum: propDef.minimum,
-          maximum: propDef.maximum,
-          minLength: propDef.minLength,
-          maxLength: propDef.maxLength,
-          pattern: propDef.pattern,
-          enum: propDef.enum,
+            def.default !== undefined ? JSON.stringify(def.default) : undefined,
+          minimum: def.minimum,
+          maximum: def.maximum,
+          minLength: def.minLength,
+          maxLength: def.maxLength,
+          pattern: def.pattern,
+          enum: def.enum,
         });
       }
     });
@@ -83,26 +101,19 @@ export default function SchemaBuilder({
     if (props.length > 0) {
       setProperties(props);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Update raw JSON when switching to raw view
-  useEffect(() => {
-    if (showRawJson) {
-      setRawJson(JSON.stringify(buildSchema(), null, 2));
-      setRawJsonError("");
-    }
-  }, [showRawJson]);
-
   // Build StackStorm-style flat parameter schema
-  const buildSchema = (): Record<string, any> => {
+  const buildSchema = useCallback((): FlatSchema => {
     if (properties.length === 0) {
       return {};
     }
 
-    const schema: Record<string, any> = {};
+    const schema: FlatSchema = {};
 
     properties.forEach((prop) => {
-      const propSchema: Record<string, any> = {
+      const propSchema: SchemaPropertyDef = {
         type: prop.type,
       };
 
@@ -143,7 +154,15 @@ export default function SchemaBuilder({
     });
 
     return schema;
-  };
+  }, [properties]);
+
+  // Update raw JSON when switching to raw view
+  useEffect(() => {
+    if (showRawJson) {
+      setRawJson(JSON.stringify(buildSchema(), null, 2));
+      setRawJsonError("");
+    }
+  }, [showRawJson, buildSchema]);
 
   const handlePropertiesChange = (newProperties: SchemaProperty[]) => {
     setProperties(newProperties);
@@ -152,17 +171,15 @@ export default function SchemaBuilder({
   };
 
   // Build StackStorm-style flat parameter schema from properties array
-  const buildSchemaFromProperties = (
-    props: SchemaProperty[],
-  ): Record<string, any> => {
+  const buildSchemaFromProperties = (props: SchemaProperty[]): FlatSchema => {
     if (props.length === 0) {
       return {};
     }
 
-    const schema: Record<string, any> = {};
+    const schema: FlatSchema = {};
 
     props.forEach((prop) => {
-      const propSchema: Record<string, any> = {
+      const propSchema: SchemaPropertyDef = {
         type: prop.type,
       };
 
@@ -266,31 +283,32 @@ export default function SchemaBuilder({
       // Expects StackStorm-style flat format: { param_name: { type, required, secret, ... }, ... }
       const props: SchemaProperty[] = [];
 
-      Object.entries(parsed).forEach(([name, propDef]: [string, any]) => {
+      Object.entries(parsed).forEach(([name, propDef]) => {
         if (propDef && typeof propDef === "object" && !Array.isArray(propDef)) {
+          const def = propDef as SchemaPropertyDef;
           props.push({
             name,
-            type: propDef.type || "string",
-            description: propDef.description || "",
-            required: propDef.required === true,
-            secret: propDef.secret === true,
+            type: def.type || "string",
+            description: def.description || "",
+            required: def.required === true,
+            secret: def.secret === true,
             default:
-              propDef.default !== undefined
-                ? JSON.stringify(propDef.default)
+              def.default !== undefined
+                ? JSON.stringify(def.default)
                 : undefined,
-            minimum: propDef.minimum,
-            maximum: propDef.maximum,
-            minLength: propDef.minLength,
-            maxLength: propDef.maxLength,
-            pattern: propDef.pattern,
-            enum: propDef.enum,
+            minimum: def.minimum,
+            maximum: def.maximum,
+            minLength: def.minLength,
+            maxLength: def.maxLength,
+            pattern: def.pattern,
+            enum: def.enum,
           });
         }
       });
 
       setProperties(props);
-    } catch (e: any) {
-      setRawJsonError(e.message);
+    } catch (e: unknown) {
+      setRawJsonError(e instanceof Error ? e.message : "Invalid JSON");
     }
   };
 

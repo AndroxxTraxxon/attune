@@ -1,4 +1,4 @@
-import axios from "axios";
+import axios, { type InternalAxiosRequestConfig } from "axios";
 
 /**
  * This module configures the generated API client to properly handle token refresh
@@ -65,8 +65,7 @@ export function isTokenExpiringSoon(
 
     // Return true if token expires within threshold seconds (default 5 minutes)
     return timeUntilExpiry <= thresholdSeconds;
-  } catch (error) {
-    console.error("Failed to parse JWT:", error);
+  } catch {
     return true;
   }
 }
@@ -84,8 +83,7 @@ export function isTokenExpired(token: string): boolean {
 
     const now = Math.floor(Date.now() / 1000);
     return exp <= now;
-  } catch (error) {
-    console.error("Failed to parse JWT:", error);
+  } catch {
     return true;
   }
 }
@@ -114,7 +112,7 @@ async function attemptTokenRefresh(): Promise<boolean> {
     }
 
     return true;
-  } catch (error) {
+  } catch {
     console.error(
       "Token refresh failed, clearing session and redirecting to login",
     );
@@ -193,7 +191,9 @@ export function configureAxiosDefaults(): void {
   axios.interceptors.response.use(
     (response) => response,
     async (error) => {
-      const originalRequest = error.config as any;
+      const originalRequest = error.config as InternalAxiosRequestConfig & {
+        _retry?: boolean;
+      };
 
       // Handle 401 Unauthorized — token expired or invalid
       if (error.response?.status === 401 && !originalRequest._retry) {
@@ -215,13 +215,12 @@ export function configureAxiosDefaults(): void {
 
       // Handle 403 Forbidden — valid token but insufficient permissions
       if (error.response?.status === 403) {
-        const enhancedError = error as any;
-        enhancedError.isAuthorizationError = true;
+        error.isAuthorizationError = true;
 
         console.warn(
           "Access forbidden - insufficient permissions for this resource",
         );
-        return Promise.reject(enhancedError);
+        return Promise.reject(error);
       }
 
       return Promise.reject(error);

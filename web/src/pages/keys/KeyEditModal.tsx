@@ -19,6 +19,7 @@ export default function KeyEditModal({ keyRef, onClose }: KeyEditModalProps) {
 
   const updateKeyMutation = useUpdateKey();
 
+  /* eslint-disable react-hooks/set-state-in-effect -- sync local form state from fetched key data */
   useEffect(() => {
     if (key) {
       setName(key.name);
@@ -26,6 +27,7 @@ export default function KeyEditModal({ keyRef, onClose }: KeyEditModalProps) {
       setEncrypted(key.encrypted);
     }
   }, [key]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,8 +43,8 @@ export default function KeyEditModal({ keyRef, onClose }: KeyEditModalProps) {
         },
       });
       onClose();
-    } catch (err: any) {
-      setError(err.message || "Failed to update key");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to update key");
     }
   };
 
@@ -77,7 +79,9 @@ export default function KeyEditModal({ keyRef, onClose }: KeyEditModalProps) {
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
       <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
-          <h2 className="text-2xl font-bold text-gray-900">Edit Key: {keyRef}</h2>
+          <h2 className="text-2xl font-bold text-gray-900">
+            Edit Key: {keyRef}
+          </h2>
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 transition-colors"
@@ -95,7 +99,9 @@ export default function KeyEditModal({ keyRef, onClose }: KeyEditModalProps) {
 
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-gray-500">Reference:</span>
+              <span className="text-sm font-medium text-gray-500">
+                Reference:
+              </span>
               <span className="text-sm font-mono text-gray-900">{key.ref}</span>
             </div>
             <div className="flex items-center justify-between">
@@ -104,14 +110,19 @@ export default function KeyEditModal({ keyRef, onClose }: KeyEditModalProps) {
             </div>
             {key.owner && (
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-gray-500">Owner:</span>
+                <span className="text-sm font-medium text-gray-500">
+                  Owner:
+                </span>
                 <span className="text-sm text-gray-900">{key.owner}</span>
               </div>
             )}
           </div>
 
           <div>
-            <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
+            <label
+              htmlFor="name"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
               Name <span className="text-red-500">*</span>
             </label>
             <input
@@ -125,7 +136,10 @@ export default function KeyEditModal({ keyRef, onClose }: KeyEditModalProps) {
           </div>
 
           <div>
-            <label htmlFor="value" className="block text-sm font-medium text-gray-700 mb-1">
+            <label
+              htmlFor="value"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
               Value <span className="text-red-500">*</span>
             </label>
             <div className="relative">
@@ -145,7 +159,11 @@ export default function KeyEditModal({ keyRef, onClose }: KeyEditModalProps) {
                 className="absolute right-2 top-2 text-gray-400 hover:text-gray-600"
                 title={showValue ? "Hide value" : "Show value"}
               >
-                {showValue ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                {showValue ? (
+                  <EyeOff className="w-5 h-5" />
+                ) : (
+                  <Eye className="w-5 h-5" />
+                )}
               </button>
             </div>
             <p className="mt-1 text-xs text-gray-500">
@@ -163,7 +181,10 @@ export default function KeyEditModal({ keyRef, onClose }: KeyEditModalProps) {
               onChange={(e) => setEncrypted(e.target.checked)}
               className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
             />
-            <label htmlFor="encrypted" className="ml-2 block text-sm text-gray-900">
+            <label
+              htmlFor="encrypted"
+              className="ml-2 block text-sm text-gray-900"
+            >
               Encrypt value (recommended for secrets)
             </label>
           </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePacks } from "@/hooks/usePacks";
@@ -11,9 +11,14 @@ import {
 import SchemaBuilder from "@/components/common/SchemaBuilder";
 import SearchableSelect from "@/components/common/SearchableSelect";
 import { WebhooksService } from "@/api";
+import type { TriggerResponse, PackSummary } from "@/api";
+
+/** Flat schema format: each key is a parameter name mapped to its definition */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type FlatSchema = Record<string, any>;
 
 interface TriggerFormProps {
-  initialData?: any;
+  initialData?: TriggerResponse;
   isEditing?: boolean;
 }
 
@@ -31,14 +36,14 @@ export default function TriggerForm({
   const [description, setDescription] = useState("");
   const [webhookEnabled, setWebhookEnabled] = useState(false);
   const [enabled, setEnabled] = useState(true);
-  const [paramSchema, setParamSchema] = useState<Record<string, any>>({});
-  const [outSchema, setOutSchema] = useState<Record<string, any>>({});
+  const [paramSchema, setParamSchema] = useState<FlatSchema>({});
+  const [outSchema, setOutSchema] = useState<FlatSchema>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   // Fetch packs
   const { data: packsData } = usePacks({ page: 1, pageSize: 100 });
-  const packs = packsData?.data || [];
-  const selectedPack = packs.find((p: any) => p.id === packId);
+  const packs = useMemo(() => packsData?.data || [], [packsData?.data]);
+  const selectedPack = packs.find((p: PackSummary) => p.id === packId);
 
   // Mutations
   const createTrigger = useCreateTrigger();
@@ -56,7 +61,9 @@ export default function TriggerForm({
 
       if (isEditing) {
         // Find pack by pack_ref
-        const pack = packs.find((p: any) => p.ref === initialData.pack_ref);
+        const pack = packs.find(
+          (p: PackSummary) => p.ref === initialData.pack_ref,
+        );
         if (pack) {
           setPackId(pack.id);
         }
@@ -96,7 +103,7 @@ export default function TriggerForm({
     }
 
     try {
-      const selectedPackData = packs.find((p: any) => p.id === packId);
+      const selectedPackData = packs.find((p: PackSummary) => p.id === packId);
       if (!selectedPackData) {
         throw new Error("Selected pack not found");
       }
@@ -166,13 +173,15 @@ export default function TriggerForm({
       }
 
       navigate("/triggers");
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error submitting trigger:", error);
+      const errMsg =
+        error instanceof Error ? error.message : "Failed to save trigger";
+      const axiosErr = error as {
+        response?: { data?: { message?: string } };
+      };
       setErrors({
-        submit:
-          error.response?.data?.message ||
-          error.message ||
-          "Failed to save trigger",
+        submit: axiosErr?.response?.data?.message || errMsg,
       });
     }
   };
@@ -211,7 +220,7 @@ export default function TriggerForm({
             id="pack"
             value={packId}
             onChange={(v) => setPackId(Number(v))}
-            options={packs.map((pack: any) => ({
+            options={packs.map((pack: PackSummary) => ({
               value: pack.id,
               label: `${pack.label} (${pack.version})`,
             }))}

@@ -310,7 +310,12 @@ export default function EventsPage() {
 
   // --- Build query params from debounced state ---
   const queryParams = useMemo(() => {
-    const params: any = { page, pageSize };
+    const params: {
+      page: number;
+      pageSize: number;
+      triggerRef?: string;
+      ruleRef?: string;
+    } = { page, pageSize };
     if (debouncedFilters.trigger) params.triggerRef = debouncedFilters.trigger;
     if (debouncedFilters.rule) params.ruleRef = debouncedFilters.rule;
     return params;
@@ -320,19 +325,21 @@ export default function EventsPage() {
   const handleEventNotification = useCallback(
     (notification: Notification) => {
       if (notification.notification_type === "event_created") {
-        const payload = notification.payload as any;
+        const payload = notification.payload as Partial<EventSummary> & {
+          payload?: unknown;
+        };
 
         const newEvent: EventSummary = {
-          id: payload.id,
-          trigger: payload.trigger,
-          trigger_ref: payload.trigger_ref,
+          id: payload.id ?? 0,
+          trigger: payload.trigger ?? 0,
+          trigger_ref: payload.trigger_ref ?? "",
           rule: payload.rule,
           rule_ref: payload.rule_ref,
           source: payload.source,
           source_ref: payload.source_ref,
           has_payload:
             payload.payload !== null && payload.payload !== undefined,
-          created: payload.created,
+          created: payload.created ?? new Date().toISOString(),
         };
 
         // Augment autocomplete suggestions with new refs from notification
@@ -357,44 +364,54 @@ export default function EventsPage() {
           };
         });
 
-        queryClient.setQueryData(["events", queryParams], (oldData: any) => {
-          if (!oldData) return oldData;
+        queryClient.setQueryData(
+          ["events", queryParams],
+          (
+            oldData:
+              | {
+                  data: EventSummary[];
+                  pagination?: { total_items?: number };
+                }
+              | undefined,
+          ) => {
+            if (!oldData) return oldData;
 
-          // Check if filtering and event matches filter
-          if (
-            debouncedFilters.trigger &&
-            newEvent.trigger_ref !== debouncedFilters.trigger
-          ) {
-            return oldData;
-          }
-          if (
-            debouncedFilters.rule &&
-            newEvent.rule_ref !== debouncedFilters.rule
-          ) {
-            return oldData;
-          }
+            // Check if filtering and event matches filter
+            if (
+              debouncedFilters.trigger &&
+              newEvent.trigger_ref !== debouncedFilters.trigger
+            ) {
+              return oldData;
+            }
+            if (
+              debouncedFilters.rule &&
+              newEvent.rule_ref !== debouncedFilters.rule
+            ) {
+              return oldData;
+            }
 
-          // Add new event to the beginning of the list if on first page
-          if (page === 1) {
+            // Add new event to the beginning of the list if on first page
+            if (page === 1) {
+              return {
+                ...oldData,
+                data: [newEvent, ...oldData.data].slice(0, pageSize),
+                pagination: {
+                  ...oldData.pagination,
+                  total_items: (oldData.pagination?.total_items || 0) + 1,
+                },
+              };
+            }
+
+            // For other pages, just update the total count
             return {
               ...oldData,
-              data: [newEvent, ...oldData.data].slice(0, pageSize),
               pagination: {
                 ...oldData.pagination,
                 total_items: (oldData.pagination?.total_items || 0) + 1,
               },
             };
-          }
-
-          // For other pages, just update the total count
-          return {
-            ...oldData,
-            pagination: {
-              ...oldData.pagination,
-              total_items: (oldData.pagination?.total_items || 0) + 1,
-            },
-          };
-        });
+          },
+        );
       }
     },
     [queryClient, queryParams, page, pageSize, debouncedFilters],

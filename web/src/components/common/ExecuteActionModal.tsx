@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { OpenAPI } from "@/api";
+import type { ActionResponse } from "@/api";
 import { Play, X } from "lucide-react";
 import ParamSchemaForm, {
   validateParamSchema,
@@ -8,10 +9,13 @@ import ParamSchemaForm, {
   type ParamSchema,
 } from "@/components/common/ParamSchemaForm";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type JsonValue = any;
+
 interface ExecuteActionModalProps {
-  action: any;
+  action: ActionResponse;
   onClose: () => void;
-  initialParameters?: Record<string, any>;
+  initialParameters?: Record<string, JsonValue>;
 }
 
 /**
@@ -32,9 +36,9 @@ export default function ExecuteActionModal({
   const paramProperties = extractProperties(paramSchema);
 
   // If initialParameters are provided, use them (stripping out any keys not in the schema)
-  const buildInitialValues = (): Record<string, any> => {
+  const buildInitialValues = (): Record<string, JsonValue> => {
     if (!initialParameters) return {};
-    const values: Record<string, any> = {};
+    const values: Record<string, JsonValue> = {};
     // Include all initial parameters - even those not in the schema
     // so users can see exactly what was run before
     for (const [key, value] of Object.entries(initialParameters)) {
@@ -52,7 +56,7 @@ export default function ExecuteActionModal({
   };
 
   const [parameters, setParameters] =
-    useState<Record<string, any>>(buildInitialValues);
+    useState<Record<string, JsonValue>>(buildInitialValues);
   const [paramErrors, setParamErrors] = useState<Record<string, string>>({});
   const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>(
     [{ key: "", value: "" }],
@@ -60,12 +64,12 @@ export default function ExecuteActionModal({
 
   const executeAction = useMutation({
     mutationFn: async (params: {
-      parameters: Record<string, any>;
+      parameters: Record<string, JsonValue>;
       envVars: Array<{ key: string; value: string }>;
     }) => {
       const token =
         typeof OpenAPI.TOKEN === "function"
-          ? await OpenAPI.TOKEN({} as any)
+          ? await OpenAPI.TOKEN({} as Parameters<typeof OpenAPI.TOKEN>[0])
           : OpenAPI.TOKEN;
 
       const response = await fetch(

@@ -1,5 +1,17 @@
 import { AlertCircle, ShieldAlert } from "lucide-react";
 
+/** Shape of an axios-like error with a response property */
+interface AxiosLikeError {
+  response?: {
+    status?: number;
+    data?: {
+      message?: string;
+    };
+  };
+  isAuthorizationError?: boolean;
+  message?: string;
+}
+
 interface ErrorDisplayProps {
   error: Error | unknown;
   title?: string;
@@ -21,30 +33,39 @@ export default function ErrorDisplay({
   showRetry = false,
   onRetry,
 }: ErrorDisplayProps) {
+  const asAxios = (err: unknown): AxiosLikeError | null => {
+    if (err && typeof err === "object") return err as AxiosLikeError;
+    return null;
+  };
+
   // Type guard for axios errors
-  const isAxiosError = (err: any): boolean => {
-    return err?.response?.status !== undefined;
+  const isAxiosError = (err: unknown): boolean => {
+    const e = asAxios(err);
+    return e?.response?.status !== undefined;
   };
 
   // Check if this is a 403 (Forbidden) error
-  const is403Error = (err: any): boolean => {
-    return (
-      err?.response?.status === 403 ||
-      err?.isAuthorizationError === true
-    );
+  const is403Error = (err: unknown): boolean => {
+    const e = asAxios(err);
+    return e?.response?.status === 403 || e?.isAuthorizationError === true;
   };
 
   // Check if this is a 401 (Unauthorized) error
-  const is401Error = (err: any): boolean => {
-    return err?.response?.status === 401;
+  const is401Error = (err: unknown): boolean => {
+    const e = asAxios(err);
+    return e?.response?.status === 401;
   };
 
   // Extract error message
-  const getErrorMessage = (err: any): string => {
-    if (err?.response?.data?.message) {
-      return err.response.data.message;
+  const getErrorMessage = (err: unknown): string => {
+    const e = asAxios(err);
+    if (e?.response?.data?.message) {
+      return e.response.data.message;
     }
-    if (err?.message) {
+    if (e?.message) {
+      return e.message;
+    }
+    if (err instanceof Error) {
       return err.message;
     }
     return "An unexpected error occurred";
@@ -67,8 +88,8 @@ export default function ErrorDisplay({
               role or permissions do not allow this action.
             </p>
             <p className="mt-2 text-sm text-amber-700">
-              If you believe you should have access, please contact your
-              system administrator.
+              If you believe you should have access, please contact your system
+              administrator.
             </p>
           </div>
         </div>
@@ -110,12 +131,10 @@ export default function ErrorDisplay({
           <h3 className="text-lg font-semibold text-red-900">
             {title || "Error"}
           </h3>
-          <p className="mt-2 text-sm text-red-800">
-            {getErrorMessage(error)}
-          </p>
-          {isAxiosError(error) && (error as any)?.response?.status && (
+          <p className="mt-2 text-sm text-red-800">{getErrorMessage(error)}</p>
+          {isAxiosError(error) && asAxios(error)?.response?.status && (
             <p className="mt-1 text-xs text-red-600">
-              Status Code: {(error as any).response.status}
+              Status Code: {asAxios(error)?.response?.status}
             </p>
           )}
           {showRetry && onRetry && (

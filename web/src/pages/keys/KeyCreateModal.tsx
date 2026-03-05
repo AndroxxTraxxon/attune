@@ -22,7 +22,8 @@ export default function KeyCreateModal({ onClose }: KeyCreateModalProps) {
   const createKeyMutation = useCreateKey();
 
   // Determine if encryption is allowed based on format
-  const canEncrypt = format === "text" || format === "json" || format === "yaml";
+  const canEncrypt =
+    format === "text" || format === "json" || format === "yaml";
 
   // Auto-disable encryption for non-encryptable formats
   const isEncrypted = canEncrypt && encrypted;
@@ -33,12 +34,13 @@ export default function KeyCreateModal({ onClose }: KeyCreateModalProps) {
 
     // Validate ref format
     if (!/^[a-zA-Z0-9_.-]+$/.test(ref)) {
-      setError("Reference must contain only letters, numbers, underscores, hyphens, and dots");
+      setError(
+        "Reference must contain only letters, numbers, underscores, hyphens, and dots",
+      );
       return;
     }
 
     // Validate value based on format
-    let validatedValue = value;
     try {
       if (format === "json") {
         JSON.parse(value);
@@ -70,14 +72,14 @@ export default function KeyCreateModal({ onClose }: KeyCreateModalProps) {
       await createKeyMutation.mutateAsync({
         ref,
         name,
-        value: validatedValue,
+        value,
         encrypted: isEncrypted,
         owner_type: ownerType,
         owner: owner || undefined,
       });
       onClose();
-    } catch (err: any) {
-      setError(err.message || "Failed to create key");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to create key");
     }
   };
 
@@ -102,7 +104,10 @@ export default function KeyCreateModal({ onClose }: KeyCreateModalProps) {
           )}
 
           <div>
-            <label htmlFor="ref" className="block text-sm font-medium text-gray-700 mb-1">
+            <label
+              htmlFor="ref"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
               Reference <span className="text-red-500">*</span>
             </label>
             <input
@@ -120,7 +125,10 @@ export default function KeyCreateModal({ onClose }: KeyCreateModalProps) {
           </div>
 
           <div>
-            <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
+            <label
+              htmlFor="name"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
               Name <span className="text-red-500">*</span>
             </label>
             <input
@@ -136,7 +144,10 @@ export default function KeyCreateModal({ onClose }: KeyCreateModalProps) {
           </div>
 
           <div>
-            <label htmlFor="format" className="block text-sm font-medium text-gray-700 mb-1">
+            <label
+              htmlFor="format"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
               Value Format <span className="text-red-500">*</span>
             </label>
             <select
@@ -160,7 +171,10 @@ export default function KeyCreateModal({ onClose }: KeyCreateModalProps) {
           </div>
 
           <div>
-            <label htmlFor="value" className="block text-sm font-medium text-gray-700 mb-1">
+            <label
+              htmlFor="value"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
               Value <span className="text-red-500">*</span>
             </label>
             <textarea
@@ -193,13 +207,19 @@ export default function KeyCreateModal({ onClose }: KeyCreateModalProps) {
               disabled={!canEncrypt}
               className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded disabled:opacity-50"
             />
-            <label htmlFor="encrypted" className="ml-2 block text-sm text-gray-900">
+            <label
+              htmlFor="encrypted"
+              className="ml-2 block text-sm text-gray-900"
+            >
               Encrypt value (recommended for secrets)
             </label>
           </div>
 
           <div>
-            <label htmlFor="ownerType" className="block text-sm font-medium text-gray-700 mb-1">
+            <label
+              htmlFor="ownerType"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
               Scope <span className="text-red-500">*</span>
             </label>
             <select
@@ -218,7 +238,10 @@ export default function KeyCreateModal({ onClose }: KeyCreateModalProps) {
 
           {ownerType !== OwnerType.SYSTEM && (
             <div>
-              <label htmlFor="owner" className="block text-sm font-medium text-gray-700 mb-1">
+              <label
+                htmlFor="owner"
+                className="block text-sm font-medium text-gray-700 mb-1"
+              >
                 Owner Identifier
               </label>
               <input

@@ -2,6 +2,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useExecutions } from "@/hooks/useExecutions";
 import { useExecutionStream } from "@/hooks/useExecutionStream";
 import { ExecutionStatus } from "@/api";
+import type { ExecutionSummary } from "@/api";
 import { useState, useMemo, memo, useCallback, useEffect } from "react";
 import { Search, X, List, GitBranch } from "lucide-react";
 import MultiSelect from "@/components/common/MultiSelect";
@@ -96,7 +97,7 @@ const ExecutionsResultsTable = memo(
     selectedExecutionId,
     onSelectExecution,
   }: {
-    executions: any[];
+    executions: ExecutionSummary[];
     isLoading: boolean;
     isFetching: boolean;
     error: Error | null;
@@ -191,7 +192,7 @@ const ExecutionsResultsTable = memo(
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {executions.map((exec: any) => (
+              {executions.map((exec: ExecutionSummary) => (
                 <tr
                   key={exec.id}
                   data-execution-id={exec.id}
@@ -361,7 +362,17 @@ export default function ExecutionsPage() {
 
   // --- Build query params from debounced state ---
   const queryParams = useMemo(() => {
-    const params: any = { page, pageSize };
+    const params: {
+      page: number;
+      pageSize: number;
+      packName?: string;
+      ruleRef?: string;
+      actionRef?: string;
+      triggerRef?: string;
+      executor?: number;
+      status?: ExecutionStatus;
+      topLevelOnly?: boolean;
+    } = { page, pageSize };
     if (debouncedFilters.pack) params.packName = debouncedFilters.pack;
     if (debouncedFilters.rule) params.ruleRef = debouncedFilters.rule;
     if (debouncedFilters.action) params.actionRef = debouncedFilters.action;
@@ -429,7 +440,7 @@ export default function ExecutionsPage() {
   // Client-side filtering for multiple status selection (when > 1 selected)
   const filteredExecutions = useMemo(() => {
     if (debouncedStatuses.length <= 1) return executions;
-    return executions.filter((exec: any) =>
+    return executions.filter((exec: ExecutionSummary) =>
       debouncedStatuses.includes(exec.status),
     );
   }, [executions, debouncedStatuses]);
@@ -500,7 +511,9 @@ export default function ExecutionsPage() {
           return nextId;
         }
 
-        const currentIndex = list.findIndex((ex: any) => ex.id === prevId);
+        const currentIndex = list.findIndex(
+          (ex: ExecutionSummary) => ex.id === prevId,
+        );
         if (currentIndex === -1) {
           const nextId = list[0].id;
           requestAnimationFrame(() => {

@@ -1,7 +1,7 @@
 /* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
-/* eslint-disable */
+ 
 import type { ApiResponse_RuleResponse } from '../models/ApiResponse_RuleResponse';
 import type { CreateRuleRequest } from '../models/CreateRuleRequest';
 import type { PaginatedResponse_RuleSummary } from '../models/PaginatedResponse_RuleSummary';

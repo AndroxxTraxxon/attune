@@ -9,6 +9,7 @@ import {
 import { useTrigger } from "@/hooks/useTriggers";
 import { useAction } from "@/hooks/useActions";
 import { useState, useMemo } from "react";
+import type { RuleSummary } from "@/api";
 import { ChevronDown, ChevronRight, Search, X } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import ParamSchemaDisplay, {
@@ -18,7 +19,7 @@ import ParamSchemaDisplay, {
 export default function RulesPage() {
   const { ref } = useParams<{ ref?: string }>();
   const { data, isLoading, error } = useRules({});
-  const rules = data?.data || [];
+  const rules = useMemo(() => data?.data || [], [data?.data]);
   const [collapsedPacks, setCollapsedPacks] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -26,7 +27,7 @@ export default function RulesPage() {
   const filteredRules = useMemo(() => {
     if (!searchQuery.trim()) return rules;
     const query = searchQuery.toLowerCase();
-    return rules.filter((rule: any) => {
+    return rules.filter((rule: RuleSummary) => {
       return (
         rule.label?.toLowerCase().includes(query) ||
         rule.ref?.toLowerCase().includes(query) ||
@@ -40,8 +41,8 @@ export default function RulesPage() {
 
   // Group filtered rules by pack
   const rulesByPack = useMemo(() => {
-    const grouped = new Map<string, any[]>();
-    filteredRules.forEach((rule: any) => {
+    const grouped = new Map<string, RuleSummary[]>();
+    filteredRules.forEach((rule: RuleSummary) => {
       const packRef = rule.pack_ref || "unknown";
       if (!grouped.has(packRef)) {
         grouped.set(packRef, []);
@@ -179,7 +180,7 @@ export default function RulesPage() {
                     {/* Rules List */}
                     {!isCollapsed && (
                       <div className="p-1">
-                        {packRules.map((rule: any) => (
+                        {packRules.map((rule: RuleSummary) => (
                           <Link
                             key={rule.id}
                             to={`/rules/${rule.ref}`}
@@ -269,9 +270,9 @@ function RuleDetail({ ruleRef }: { ruleRef: string }) {
   const { data: actionData } = useAction(rule?.data?.action_ref || "");
 
   const triggerParamSchema: ParamSchema =
-    (triggerData?.data as any)?.param_schema || {};
+    (triggerData?.data as { param_schema?: ParamSchema })?.param_schema || {};
   const actionParamSchema: ParamSchema =
-    (actionData?.data as any)?.param_schema || {};
+    (actionData?.data as { param_schema?: ParamSchema })?.param_schema || {};
 
   const handleToggleEnabled = async () => {
     if (!rule?.data) return;

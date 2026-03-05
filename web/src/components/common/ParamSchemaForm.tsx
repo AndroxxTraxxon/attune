@@ -1,4 +1,9 @@
+/* eslint-disable react-refresh/only-export-components -- extractProperties and validateParamSchema are shared utilities co-located with the form component */
 import { useState, useEffect } from "react";
+
+/** A JSON-compatible value that can appear in form data */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type JsonValue = any;
 
 /**
  * StackStorm-style parameter schema format.
@@ -14,7 +19,7 @@ import { useState, useEffect } from "react";
 export interface ParamSchemaProperty {
   type?: "string" | "number" | "integer" | "boolean" | "array" | "object";
   description?: string;
-  default?: any;
+  default?: JsonValue;
   enum?: string[];
   minimum?: number;
   maximum?: number;
@@ -23,7 +28,7 @@ export interface ParamSchemaProperty {
   secret?: boolean;
   required?: boolean;
   position?: number;
-  items?: any;
+  items?: Record<string, unknown>;
 }
 
 export interface ParamSchema {
@@ -40,7 +45,7 @@ export interface ParamSchema {
  * { param_name: { type, description, required, secret, ... }, ... }
  */
 export function extractProperties(
-  schema: ParamSchema | any,
+  schema: ParamSchema | Record<string, unknown> | null | undefined,
 ): Record<string, ParamSchemaProperty> {
   if (!schema || typeof schema !== "object") return {};
   // StackStorm-style flat format: { param_name: { type, description, required, ... }, ... }
@@ -56,8 +61,8 @@ export function extractProperties(
 
 interface ParamSchemaFormProps {
   schema: ParamSchema;
-  values: Record<string, any>;
-  onChange: (values: Record<string, any>) => void;
+  values: Record<string, JsonValue>;
+  onChange: (values: Record<string, JsonValue>) => void;
   errors?: Record<string, string>;
   disabled?: boolean;
   className?: string;
@@ -79,7 +84,7 @@ interface ParamSchemaFormProps {
 /**
  * Check if a string value contains a template expression ({{ ... }})
  */
-function isTemplateExpression(value: any): boolean {
+function isTemplateExpression(value: JsonValue): boolean {
   return typeof value === "string" && /\{\{.*\}\}/.test(value);
 }
 
@@ -88,7 +93,7 @@ function isTemplateExpression(value: any): boolean {
  * Non-string values (booleans, numbers, objects, arrays) are JSON-stringified
  * so the user can edit them as text.
  */
-function valueToString(value: any): string {
+function valueToString(value: JsonValue): string {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return value;
   return JSON.stringify(value);
@@ -99,7 +104,7 @@ function valueToString(value: any): string {
  * Template expressions are always kept as strings.
  * Plain values are coerced to the schema type when possible.
  */
-function parseTemplateValue(raw: string, type: string): any {
+function parseTemplateValue(raw: string, type: string): JsonValue {
   if (raw === "") return "";
   // Template expressions stay as strings - resolved server-side
   if (isTemplateExpression(raw)) return raw;
@@ -164,19 +169,20 @@ export default function ParamSchemaForm({
         }
         return acc;
       },
-      { ...values } as Record<string, any>,
+      { ...values } as Record<string, JsonValue>,
     );
 
     // Only update if there are new defaults
     if (JSON.stringify(initialValues) !== JSON.stringify(values)) {
       onChange(initialValues);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schema]); // Only run when schema changes
 
   /**
    * Handle input change for a specific field
    */
-  const handleInputChange = (key: string, value: any) => {
+  const handleInputChange = (key: string, value: JsonValue) => {
     const newValues = { ...values, [key]: value };
     onChange(newValues);
 
@@ -200,7 +206,10 @@ export default function ParamSchemaForm({
   /**
    * Get a placeholder hint for template-mode inputs
    */
-  const getTemplatePlaceholder = (key: string, param: any): string => {
+  const getTemplatePlaceholder = (
+    key: string,
+    param: ParamSchemaProperty | undefined,
+  ) => {
     const type = param?.type || "string";
     switch (type) {
       case "boolean":
@@ -225,7 +234,10 @@ export default function ParamSchemaForm({
   /**
    * Render a template-mode text input for any parameter type
    */
-  const renderTemplateInput = (key: string, param: any) => {
+  const renderTemplateInput = (
+    key: string,
+    param: ParamSchemaProperty | undefined,
+  ) => {
     const type = param?.type || "string";
     const rawValue = values[key] ?? param?.default ?? "";
     const isDisabled = disabled;
@@ -264,7 +276,7 @@ export default function ParamSchemaForm({
   /**
    * Render input field based on parameter type (standard mode)
    */
-  const renderInput = (key: string, param: any) => {
+  const renderInput = (key: string, param: ParamSchemaProperty | undefined) => {
     const type = param?.type || "string";
     const value = values[key] ?? param?.default ?? "";
     const isDisabled = disabled;
@@ -388,7 +400,7 @@ export default function ParamSchemaForm({
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
             >
               <option value="">Select...</option>
-              {param.enum.map((option: any) => (
+              {param.enum.map((option: string) => (
                 <option key={option} value={option}>
                   {option}
                 </option>
@@ -416,7 +428,10 @@ export default function ParamSchemaForm({
   /**
    * Render type hint badge and additional context for template-mode fields
    */
-  const renderTemplateHints = (_key: string, param: any) => {
+  const renderTemplateHints = (
+    _key: string,
+    param: ParamSchemaProperty | undefined,
+  ) => {
     const type = param?.type || "string";
     const hints: string[] = [];
 
@@ -537,7 +552,7 @@ export default function ParamSchemaForm({
  */
 export function validateParamSchema(
   schema: ParamSchema,
-  values: Record<string, any>,
+  values: Record<string, JsonValue>,
   allowTemplates: boolean = false,
 ): Record<string, string> {
   const errors: Record<string, string> = {};

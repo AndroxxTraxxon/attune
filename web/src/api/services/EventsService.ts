@@ -1,7 +1,7 @@
 /* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
-/* eslint-disable */
+ 
 import type { ApiResponse_EventResponse } from '../models/ApiResponse_EventResponse';
 import type { i64 } from '../models/i64';
 import type { PaginatedResponse_EventSummary } from '../models/PaginatedResponse_EventSummary';

@@ -2,6 +2,8 @@ import { Link, useParams, useNavigate } from "react-router-dom";
 import { useActions, useAction, useDeleteAction } from "@/hooks/useActions";
 import { useExecutions } from "@/hooks/useExecutions";
 import { useState, useMemo } from "react";
+import type { ActionSummary, ExecutionSummary } from "@/api";
+import type { ParamSchemaProperty } from "@/components/common/ParamSchemaForm";
 import {
   ChevronDown,
   ChevronRight,
@@ -20,7 +22,7 @@ export default function ActionsPage() {
   const { ref } = useParams<{ ref?: string }>();
   const navigate = useNavigate();
   const { data, isLoading, error } = useActions();
-  const actions = data?.data || [];
+  const actions = useMemo(() => data?.data || [], [data?.data]);
   const [collapsedPacks, setCollapsedPacks] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -28,7 +30,7 @@ export default function ActionsPage() {
   const filteredActions = useMemo(() => {
     if (!searchQuery.trim()) return actions;
     const query = searchQuery.toLowerCase();
-    return actions.filter((action: any) => {
+    return actions.filter((action: ActionSummary) => {
       return (
         action.label?.toLowerCase().includes(query) ||
         action.ref?.toLowerCase().includes(query) ||
@@ -40,8 +42,8 @@ export default function ActionsPage() {
 
   // Group filtered actions by pack
   const actionsByPack = useMemo(() => {
-    const grouped = new Map<string, any[]>();
-    filteredActions.forEach((action: any) => {
+    const grouped = new Map<string, ActionSummary[]>();
+    filteredActions.forEach((action: ActionSummary) => {
       const packRef = action.pack_ref;
       if (!grouped.has(packRef)) {
         grouped.set(packRef, []);
@@ -176,7 +178,7 @@ export default function ActionsPage() {
                       {/* Actions List */}
                       {!isCollapsed && (
                         <div className="p-1">
-                          {packActions.map((action: any) => (
+                          {packActions.map((action: ActionSummary) => (
                             <Link
                               key={action.id}
                               to={`/actions/${action.ref}`}
@@ -448,54 +450,58 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
                   Parameters
                 </h3>
                 <div className="space-y-3">
-                  {paramEntries.map(([key, param]: [string, any]) => (
-                    <div
-                      key={key}
-                      className="border border-gray-200 rounded p-3"
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono font-semibold text-sm">
-                              {key}
-                            </span>
-                            {param?.required && (
-                              <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded">
-                                Required
+                  {paramEntries.map(
+                    ([key, param]: [string, ParamSchemaProperty]) => (
+                      <div
+                        key={key}
+                        className="border border-gray-200 rounded p-3"
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono font-semibold text-sm">
+                                {key}
                               </span>
-                            )}
-                            {param?.secret && (
-                              <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded">
-                                Secret
+                              {param?.required && (
+                                <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded">
+                                  Required
+                                </span>
+                              )}
+                              {param?.secret && (
+                                <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded">
+                                  Secret
+                                </span>
+                              )}
+                              <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded">
+                                {param?.type || "any"}
                               </span>
+                            </div>
+                            {param?.description && (
+                              <p className="text-sm text-gray-600 mt-1">
+                                {param.description}
+                              </p>
                             )}
-                            <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded">
-                              {param?.type || "any"}
-                            </span>
+                            {param?.default !== undefined && (
+                              <p className="text-xs text-gray-500 mt-1">
+                                Default:{" "}
+                                <code className="bg-gray-100 px-1 rounded">
+                                  {JSON.stringify(param.default)}
+                                </code>
+                              </p>
+                            )}
+                            {param?.enum && param.enum.length > 0 && (
+                              <p className="text-xs text-gray-500 mt-1">
+                                Values:{" "}
+                                {param.enum
+                                  .map((v: string) => `"${v}"`)
+                                  .join(", ")}
+                              </p>
+                            )}
                           </div>
-                          {param?.description && (
-                            <p className="text-sm text-gray-600 mt-1">
-                              {param.description}
-                            </p>
-                          )}
-                          {param?.default !== undefined && (
-                            <p className="text-xs text-gray-500 mt-1">
-                              Default:{" "}
-                              <code className="bg-gray-100 px-1 rounded">
-                                {JSON.stringify(param.default)}
-                              </code>
-                            </p>
-                          )}
-                          {param?.enum && param.enum.length > 0 && (
-                            <p className="text-xs text-gray-500 mt-1">
-                              Values:{" "}
-                              {param.enum.map((v: any) => `"${v}"`).join(", ")}
-                            </p>
-                          )}
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    ),
+                  )}
                 </div>
               </div>
             )}
@@ -532,7 +538,7 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
               </p>
             ) : (
               <div className="space-y-2">
-                {executions.map((execution: any) => (
+                {executions.map((execution: ExecutionSummary) => (
                   <Link
                     key={execution.id}
                     to={`/executions/${execution.id}`}

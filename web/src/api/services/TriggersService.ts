@@ -1,7 +1,7 @@
 /* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
-/* eslint-disable */
+ 
 import type { ApiResponse_TriggerResponse } from '../models/ApiResponse_TriggerResponse';
 import type { CreateTriggerRequest } from '../models/CreateTriggerRequest';
 import type { PaginatedResponse_TriggerSummary } from '../models/PaginatedResponse_TriggerSummary';

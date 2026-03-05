@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { SensorsService } from "@/api";
+import type { CreateSensorRequest, UpdateSensorRequest } from "@/api";
 
 interface SensorsQueryParams {
   page?: number;
@@ -69,7 +70,7 @@ export function useCreateSensor() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (data: any) => {
+    mutationFn: async (data: CreateSensorRequest) => {
       return await SensorsService.createSensor({ requestBody: data });
     },
     onSuccess: () => {
@@ -83,7 +84,13 @@ export function useUpdateSensor() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ ref, data }: { ref: string; data: any }) => {
+    mutationFn: async ({
+      ref,
+      data,
+    }: {
+      ref: string;
+      data: UpdateSensorRequest;
+    }) => {
       return await SensorsService.updateSensor({ ref, requestBody: data });
     },
     onSuccess: (_, variables) => {

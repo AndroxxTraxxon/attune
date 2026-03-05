@@ -1,7 +1,7 @@
 /* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
-/* eslint-disable */
+ 
 import type { i64 } from './i64';
 import type { OwnerType } from './OwnerType';
 import type { PaginationMeta } from './PaginationMeta';

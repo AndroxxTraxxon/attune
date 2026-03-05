@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePacks } from "@/hooks/usePacks";
 import { useTriggers, useTrigger } from "@/hooks/useTriggers";
@@ -9,8 +9,16 @@ import ParamSchemaForm, {
   type ParamSchema,
 } from "@/components/common/ParamSchemaForm";
 import SearchableSelect from "@/components/common/SearchableSelect";
-import type { RuleResponse } from "@/types/api";
+import type {
+  RuleResponse,
+  ActionSummary,
+  TriggerResponse,
+  ActionResponse,
+} from "@/types/api";
 import { labelToRef, extractLocalRef, combineRefs } from "@/lib/format-utils";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type JsonValue = any;
 
 interface RuleFormProps {
   rule?: RuleResponse;
@@ -35,11 +43,11 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
     rule?.conditions ? JSON.stringify(rule.conditions, null, 2) : "",
   );
   const [triggerParameters, setTriggerParameters] = useState<
-    Record<string, any>
+    Record<string, JsonValue>
   >(rule?.trigger_params || {});
-  const [actionParameters, setActionParameters] = useState<Record<string, any>>(
-    rule?.action_params || {},
-  );
+  const [actionParameters, setActionParameters] = useState<
+    Record<string, JsonValue>
+  >(rule?.action_params || {});
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [triggerParamErrors, setTriggerParamErrors] = useState<
@@ -51,7 +59,7 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
 
   // Data fetching
   const { data: packsData } = usePacks({ pageSize: 1000 });
-  const packs = packsData?.data || [];
+  const packs = useMemo(() => packsData?.data || [], [packsData?.data]);
 
   const selectedPack = packs.find((p) => p.id === packId);
 
@@ -65,7 +73,9 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
 
   // Get selected trigger and action refs for detail fetching
   const selectedTriggerSummary = triggers.find((t) => t.id === triggerId);
-  const selectedActionSummary = actions.find((a: any) => a.id === actionId);
+  const selectedActionSummary = actions.find(
+    (a: ActionSummary) => a.id === actionId,
+  );
 
   // Fetch full trigger details (including param_schema) when a trigger is selected
   const { data: triggerDetailsData } = useTrigger(
@@ -81,15 +91,18 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
 
   // Extract param schemas from full details
   const triggerParamSchema: ParamSchema =
-    ((selectedTrigger as any)?.param_schema as ParamSchema) || {};
+    ((selectedTrigger as TriggerResponse | undefined)
+      ?.param_schema as ParamSchema) || {};
   const actionParamSchema: ParamSchema =
-    ((selectedAction as any)?.param_schema as ParamSchema) || {};
+    ((selectedAction as ActionResponse | undefined)
+      ?.param_schema as ParamSchema) || {};
 
   // Mutations
   const createRule = useCreateRule();
   const updateRule = useUpdateRule();
 
   // Reset triggers, actions, and parameters when pack changes
+  /* eslint-disable react-hooks/set-state-in-effect -- intentional dependent-state reset */
   useEffect(() => {
     if (!isEditing) {
       setTriggerId(0);
@@ -98,20 +111,25 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
       setActionParameters({});
     }
   }, [packId, isEditing]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Reset trigger parameters when trigger changes
+  /* eslint-disable react-hooks/set-state-in-effect -- intentional dependent-state reset */
   useEffect(() => {
     if (!isEditing) {
       setTriggerParameters({});
     }
   }, [triggerId, isEditing]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Reset action parameters when action changes
+  /* eslint-disable react-hooks/set-state-in-effect -- intentional dependent-state reset */
   useEffect(() => {
     if (!isEditing) {
       setActionParameters({});
     }
   }, [actionId, isEditing]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
@@ -144,7 +162,7 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
     if (conditions.trim()) {
       try {
         JSON.parse(conditions);
-      } catch (e) {
+      } catch {
         newErrors.conditions = "Invalid JSON format";
       }
     }
@@ -187,7 +205,7 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
     // Combine pack ref and local ref to create full ref
     const fullRef = combineRefs(selectedPackData?.ref || "", localRef.trim());
 
-    const formData: any = {
+    const formData: Record<string, JsonValue> = {
       pack_ref: selectedPackData?.ref || "",
       ref: fullRef,
       label: label.trim(),
@@ -267,7 +285,7 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
             id="pack"
             value={packId}
             onChange={(v) => setPackId(Number(v))}
-            options={packs.map((pack: any) => ({
+            options={packs.map((pack) => ({
               value: pack.id,
               label: `${pack.label} (${pack.version})`,
             }))}
@@ -408,7 +426,7 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
                 id="trigger"
                 value={triggerId}
                 onChange={(v) => setTriggerId(Number(v))}
-                options={triggers.map((trigger: any) => ({
+                options={triggers.map((trigger) => ({
                   value: trigger.id,
                   label: `${trigger.ref} - ${trigger.label}`,
                 }))}
@@ -494,7 +512,7 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
                 id="action"
                 value={actionId}
                 onChange={(v) => setActionId(Number(v))}
-                options={actions.map((action: any) => ({
+                options={actions.map((action) => ({
                   value: action.id,
                   label: `${action.ref} - ${action.label}`,
                 }))}

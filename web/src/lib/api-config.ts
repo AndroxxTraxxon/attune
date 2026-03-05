@@ -1,13 +1,22 @@
 import { OpenAPI } from "../api";
 import { apiClient } from "./api-client";
 
+declare global {
+  interface Window {
+    __ATTUNE_CONFIG__?: {
+      API_BASE_URL: string;
+      WITH_CREDENTIALS: boolean;
+    };
+  }
+}
+
 // Configure the OpenAPI client
 // Use empty string to make requests relative to current origin (uses Vite proxy)
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
 // API configuration (silent - check window.__ATTUNE_CONFIG__ for debug info)
 if (import.meta.env.DEV) {
-  (window as any).__ATTUNE_CONFIG__ = {
+  window.__ATTUNE_CONFIG__ = {
     API_BASE_URL,
     WITH_CREDENTIALS: true,
   };

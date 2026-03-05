@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEntityNotifications } from "@/contexts/WebSocketContext";
+import type { EnforcementSummary } from "@/api";
 
 interface UseEnforcementStreamOptions {
   /**
@@ -16,11 +17,47 @@ interface UseEnforcementStreamOptions {
   enabled?: boolean;
 }
 
+/** Shape of data coming from WebSocket notifications for enforcements */
+interface EnforcementNotification {
+  entity_id: number;
+  entity_type: string;
+  notification_type: string;
+  payload: Partial<EnforcementSummary> & Record<string, unknown>;
+  timestamp: string;
+}
+
+/** Query params shape used in enforcement list query keys */
+interface EnforcementQueryParams {
+  status?: string;
+  event?: number;
+  rule?: number;
+  triggerRef?: string;
+  ruleRef?: string;
+}
+
+/** Shape of the paginated API response stored in React Query cache */
+interface EnforcementListCache {
+  data: EnforcementSummary[];
+  pagination?: {
+    total_items?: number;
+    page?: number;
+    page_size?: number;
+  };
+}
+
+/** Shape of a single enforcement detail response stored in React Query cache */
+interface EnforcementDetailCache {
+  data: EnforcementSummary;
+}
+
 /**
  * Check if an enforcement matches the given query parameters
  * Only checks fields that are reliably present in WebSocket payloads
  */
-function enforcementMatchesParams(enforcement: any, params: any): boolean {
+function enforcementMatchesParams(
+  enforcement: Partial<EnforcementSummary>,
+  params: EnforcementQueryParams | undefined,
+): boolean {
   if (!params) return true;
 
   // Check status filter
@@ -53,8 +90,10 @@ function enforcementMatchesParams(enforcement: any, params: any): boolean {
 /**
  * Check if query params include filters not present in WebSocket payloads
  */
-function hasUnsupportedFilters(params: any): boolean {
-  if (!params) return false;
+function hasUnsupportedFilters(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _params: EnforcementQueryParams | undefined,
+): boolean {
   // Currently all enforcement filters are supported in WebSocket payloads
   return false;
 }
@@ -81,19 +120,20 @@ export function useEnforcementStream(
   const queryClient = useQueryClient();
 
   const handleNotification = useCallback(
-    (notification: any) => {
+    (notification: EnforcementNotification) => {
       // Filter by enforcement ID if specified
       if (enforcementId && notification.entity_id !== enforcementId) {
         return;
       }
 
       // Extract enforcement data from notification payload (flat structure)
-      const enforcementData = notification.payload as any;
+      const enforcementData =
+        notification.payload as Partial<EnforcementSummary>;
 
       // Update specific enforcement query if it exists
       queryClient.setQueryData(
         ["enforcements", notification.entity_id],
-        (old: any) => {
+        (old: EnforcementDetailCache | undefined) => {
           if (!old) return old;
           return {
             ...old,
@@ -108,21 +148,24 @@ export function useEnforcementStream(
       // Update enforcement list queries by modifying existing data
       // We need to iterate manually to access query keys for filtering
       const queries = queryClient
-        .getQueriesData({ queryKey: ["enforcements"], exact: false })
-        .filter(([, data]) => data && Array.isArray((data as any)?.data));
+        .getQueriesData<EnforcementListCache>({
+          queryKey: ["enforcements"],
+          exact: false,
+        })
+        .filter(([, data]) => data && Array.isArray(data?.data));
 
       queries.forEach(([queryKey, oldData]) => {
         // Extract query params from the query key (format: ["enforcements", params])
-        const queryParams = queryKey[1];
+        const queryParams = queryKey[1] as EnforcementQueryParams | undefined;
 
-        const old = oldData as any;
+        const old = oldData as EnforcementListCache;
 
         // Check if enforcement already exists in the list
         const existingIndex = old.data.findIndex(
-          (enf: any) => enf.id === notification.entity_id,
+          (enf) => enf.id === notification.entity_id,
         );
 
-        let updatedData;
+        let updatedData: EnforcementSummary[];
         if (existingIndex >= 0) {
           // Always update existing enforcement in the list
           updatedData = [...old.data];
@@ -144,7 +187,10 @@ export function useEnforcementStream(
           // Only add new enforcement if it matches the query parameters
           if (enforcementMatchesParams(enforcementData, queryParams)) {
             // Add to beginning and cap at 50 items to prevent performance issues
-            updatedData = [enforcementData, ...old.data].slice(0, 50);
+            updatedData = [
+              enforcementData as EnforcementSummary,
+              ...old.data,
+            ].slice(0, 50);
           } else {
             // Don't modify the list if the new enforcement doesn't match the query
             return;
