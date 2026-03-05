@@ -77,6 +77,7 @@ print(json.dumps(result))
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
         parameter_format: attune_worker::runtime::ParameterFormat::default(),
         output_format: attune_worker::runtime::OutputFormat::Json,
+        cancel_token: None,
     };
 
     let result = runtime.execute(context).await.unwrap();
@@ -170,6 +171,7 @@ echo "SECURITY_PASS: Secrets not in environment but accessible via get_secret"
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
         parameter_format: attune_worker::runtime::ParameterFormat::default(),
         output_format: attune_worker::runtime::OutputFormat::default(),
+        cancel_token: None,
     };
 
     let result = runtime.execute(context).await.unwrap();
@@ -234,6 +236,7 @@ print(json.dumps({'secret_a': secrets.get('secret_a')}))
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
         parameter_format: attune_worker::runtime::ParameterFormat::default(),
         output_format: attune_worker::runtime::OutputFormat::Json,
+        cancel_token: None,
     };
 
     let result1 = runtime.execute(context1).await.unwrap();
@@ -279,6 +282,7 @@ print(json.dumps({
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
         parameter_format: attune_worker::runtime::ParameterFormat::default(),
         output_format: attune_worker::runtime::OutputFormat::Json,
+        cancel_token: None,
     };
 
     let result2 = runtime.execute(context2).await.unwrap();
@@ -333,6 +337,7 @@ print("ok")
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
         parameter_format: attune_worker::runtime::ParameterFormat::default(),
         output_format: attune_worker::runtime::OutputFormat::default(),
+        cancel_token: None,
     };
 
     let result = runtime.execute(context).await.unwrap();
@@ -384,6 +389,7 @@ fi
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
         parameter_format: attune_worker::runtime::ParameterFormat::default(),
         output_format: attune_worker::runtime::OutputFormat::default(),
+        cancel_token: None,
     };
 
     let result = runtime.execute(context).await.unwrap();
@@ -456,6 +462,7 @@ echo "PASS: No secrets in environment"
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
         parameter_format: attune_worker::runtime::ParameterFormat::default(),
         output_format: attune_worker::runtime::OutputFormat::default(),
+        cancel_token: None,
     };
 
     let result = runtime.execute(context).await.unwrap();
@@ -527,6 +534,7 @@ print(json.dumps({"leaked": leaked}))
         parameter_delivery: attune_worker::runtime::ParameterDelivery::default(),
         parameter_format: attune_worker::runtime::ParameterFormat::default(),
         output_format: attune_worker::runtime::OutputFormat::Json,
+        cancel_token: None,
     };
 
     let result = runtime.execute(context).await.unwrap();

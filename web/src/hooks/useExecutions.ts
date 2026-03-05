@@ -8,6 +8,7 @@ import { ExecutionsService } from "@/api";
 import type { ExecutionStatus } from "@/api";
 import { OpenAPI } from "@/api/core/OpenAPI";
 import { request as __request } from "@/api/core/request";
+import type { ExecutionResponse } from "@/api";
 
 interface ExecutionsQueryParams {
   page?: number;
@@ -107,6 +108,33 @@ export function useRequestExecution() {
       };
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["executions"] });
+    },
+  });
+}
+
+/**
+ * Cancel a running or pending execution.
+ *
+ * Calls POST /api/v1/executions/{id}/cancel. For workflow executions this
+ * cascades to all incomplete child task executions on the server side.
+ */
+export function useCancelExecution() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (executionId: number) => {
+      const response = await __request(OpenAPI, {
+        method: "POST",
+        url: "/api/v1/executions/{id}/cancel",
+        path: { id: executionId },
+        mediaType: "application/json",
+      });
+      return response as { data: ExecutionResponse };
+    },
+    onSuccess: (_data, executionId) => {
+      // Invalidate the specific execution and the list
+      queryClient.invalidateQueries({ queryKey: ["executions", executionId] });
       queryClient.invalidateQueries({ queryKey: ["executions"] });
     },
   });

@@ -48,6 +48,8 @@ pub struct ActionExecutor {
     jwt_config: JwtConfig,
 }
 
+use tokio_util::sync::CancellationToken;
+
 /// Normalize a server bind address into a connectable URL.
 ///
 /// When the server binds to `0.0.0.0` (all interfaces) or `::` (IPv6 any),
@@ -90,6 +92,19 @@ impl ActionExecutor {
 
     /// Execute an action for the given execution
     pub async fn execute(&self, execution_id: i64) -> Result<ExecutionResult> {
+        self.execute_with_cancel(execution_id, CancellationToken::new())
+            .await
+    }
+
+    /// Execute an action for the given execution, with cancellation support.
+    ///
+    /// When the `cancel_token` is triggered, the running process receives
+    /// SIGINT → SIGTERM → SIGKILL with escalating grace periods.
+    pub async fn execute_with_cancel(
+        &self,
+        execution_id: i64,
+        cancel_token: CancellationToken,
+    ) -> Result<ExecutionResult> {
         info!("Starting execution: {}", execution_id);
 
         // Update execution status to running
@@ -108,7 +123,7 @@ impl ActionExecutor {
         let action = self.load_action(&execution).await?;
 
         // Prepare execution context
-        let context = match self.prepare_execution_context(&execution, &action).await {
+        let mut context = match self.prepare_execution_context(&execution, &action).await {
             Ok(ctx) => ctx,
             Err(e) => {
                 error!("Failed to prepare execution context: {}", e);
@@ -121,6 +136,9 @@ impl ActionExecutor {
                 return Err(e);
             }
         };
+
+        // Attach the cancellation token so the process executor can monitor it
+        context.cancel_token = Some(cancel_token);
 
         // Execute the action
         // Note: execute_action should rarely return Err - most failures should be
@@ -520,6 +538,7 @@ impl ActionExecutor {
             parameter_delivery: action.parameter_delivery,
             parameter_format: action.parameter_format,
             output_format: action.output_format,
+            cancel_token: None,
         };
 
         Ok(context)

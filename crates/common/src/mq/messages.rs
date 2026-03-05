@@ -67,6 +67,8 @@ pub enum MessageType {
     RuleDisabled,
     /// Pack registered or installed (triggers runtime environment setup in workers)
     PackRegistered,
+    /// Execution cancel requested (sent to worker to gracefully stop a running execution)
+    ExecutionCancelRequested,
 }
 
 impl MessageType {
@@ -85,6 +87,7 @@ impl MessageType {
             Self::RuleEnabled => "rule.enabled".to_string(),
             Self::RuleDisabled => "rule.disabled".to_string(),
             Self::PackRegistered => "pack.registered".to_string(),
+            Self::ExecutionCancelRequested => "execution.cancel".to_string(),
         }
     }
 
@@ -102,6 +105,7 @@ impl MessageType {
                 "attune.events".to_string()
             }
             Self::PackRegistered => "attune.events".to_string(),
+            Self::ExecutionCancelRequested => "attune.executions".to_string(),
         }
     }
 
@@ -120,6 +124,7 @@ impl MessageType {
             Self::RuleEnabled => "RuleEnabled",
             Self::RuleDisabled => "RuleDisabled",
             Self::PackRegistered => "PackRegistered",
+            Self::ExecutionCancelRequested => "ExecutionCancelRequested",
         }
     }
 }
@@ -472,6 +477,19 @@ pub struct PackRegisteredPayload {
     pub version: String,
     /// Runtime names that require environment setup (lowercase, e.g., ["python"])
     pub runtime_names: Vec<String>,
+}
+
+/// Payload for ExecutionCancelRequested message
+///
+/// Sent by the API to the worker that is running a specific execution,
+/// instructing it to gracefully terminate the process (SIGINT, then SIGTERM
+/// after a grace period).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionCancelRequestedPayload {
+    /// Execution ID to cancel
+    pub execution_id: Id,
+    /// Worker ID that should handle this cancel (used for routing)
+    pub worker_id: Id,
 }
 
 #[cfg(test)]

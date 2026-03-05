@@ -15,11 +15,17 @@ use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
 
 use attune_common::models::enums::ExecutionStatus;
-use attune_common::mq::{ExecutionRequestedPayload, MessageEnvelope, MessageType};
+use attune_common::mq::{
+    ExecutionCancelRequestedPayload, ExecutionRequestedPayload, MessageEnvelope, MessageType,
+    Publisher,
+};
 use attune_common::repositories::{
     action::ActionRepository,
-    execution::{CreateExecutionInput, ExecutionRepository, ExecutionSearchFilters},
-    Create, FindById, FindByRef,
+    execution::{
+        CreateExecutionInput, ExecutionRepository, ExecutionSearchFilters, UpdateExecutionInput,
+    },
+    workflow::WorkflowExecutionRepository,
+    Create, FindById, FindByRef, Update,
 };
 use sqlx::Row;
 
@@ -357,6 +363,279 @@ pub async fn get_execution_stats(
     Ok((StatusCode::OK, Json(response)))
 }
 
+/// Cancel a running execution
+///
+/// This endpoint requests cancellation of an execution. The execution must be in a
+/// cancellable state (requested, scheduling, scheduled, running, or canceling).
+/// For running executions, the worker will send SIGINT to the process, then SIGTERM
+/// after a 10-second grace period if it hasn't stopped.
+///
+/// **Workflow cascading**: When a workflow (parent) execution is cancelled, all of
+/// its incomplete child task executions are also cancelled. Children that haven't
+/// reached a worker yet are set to Cancelled immediately; children that are running
+/// receive a cancel MQ message so their worker can gracefully stop the process.
+/// The workflow_execution record is also marked as Cancelled to prevent the
+/// scheduler from dispatching any further tasks.
+#[utoipa::path(
+    post,
+    path = "/api/v1/executions/{id}/cancel",
+    tag = "executions",
+    params(
+        ("id" = i64, Path, description = "Execution ID")
+    ),
+    responses(
+        (status = 200, description = "Cancellation requested", body = inline(ApiResponse<ExecutionResponse>)),
+        (status = 404, description = "Execution not found"),
+        (status = 409, description = "Execution is not in a cancellable state"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn cancel_execution(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(_user): RequireAuth,
+    Path(id): Path<i64>,
+) -> ApiResult<impl IntoResponse> {
+    // Load the execution
+    let execution = ExecutionRepository::find_by_id(&state.db, id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Execution with ID {} not found", id)))?;
+
+    // Check if the execution is in a cancellable state
+    let cancellable = matches!(
+        execution.status,
+        ExecutionStatus::Requested
+            | ExecutionStatus::Scheduling
+            | ExecutionStatus::Scheduled
+            | ExecutionStatus::Running
+            | ExecutionStatus::Canceling
+    );
+
+    if !cancellable {
+        return Err(ApiError::Conflict(format!(
+            "Execution {} is in status '{}' and cannot be cancelled",
+            id,
+            format!("{:?}", execution.status).to_lowercase()
+        )));
+    }
+
+    // If already canceling, just return the current state
+    if execution.status == ExecutionStatus::Canceling {
+        let response = ApiResponse::new(ExecutionResponse::from(execution));
+        return Ok((StatusCode::OK, Json(response)));
+    }
+
+    let publisher = state.get_publisher().await;
+
+    // For executions that haven't reached a worker yet, cancel immediately
+    if matches!(
+        execution.status,
+        ExecutionStatus::Requested | ExecutionStatus::Scheduling | ExecutionStatus::Scheduled
+    ) {
+        let update = UpdateExecutionInput {
+            status: Some(ExecutionStatus::Cancelled),
+            result: Some(
+                serde_json::json!({"error": "Cancelled by user before execution started"}),
+            ),
+            ..Default::default()
+        };
+        let updated = ExecutionRepository::update(&state.db, id, update).await?;
+
+        // Cascade to workflow children if this is a workflow execution
+        cancel_workflow_children(&state.db, publisher.as_deref(), id).await;
+
+        let response = ApiResponse::new(ExecutionResponse::from(updated));
+        return Ok((StatusCode::OK, Json(response)));
+    }
+
+    // For running executions, set status to Canceling and send cancel message to the worker
+    let update = UpdateExecutionInput {
+        status: Some(ExecutionStatus::Canceling),
+        ..Default::default()
+    };
+    let updated = ExecutionRepository::update(&state.db, id, update).await?;
+
+    // Send cancel request to the worker via MQ
+    if let Some(worker_id) = execution.executor {
+        send_cancel_to_worker(publisher.as_deref(), id, worker_id).await;
+    } else {
+        tracing::warn!(
+            "Execution {} has no executor/worker assigned; marked as canceling but no MQ message sent",
+            id
+        );
+    }
+
+    // Cascade to workflow children if this is a workflow execution
+    cancel_workflow_children(&state.db, publisher.as_deref(), id).await;
+
+    let response = ApiResponse::new(ExecutionResponse::from(updated));
+    Ok((StatusCode::OK, Json(response)))
+}
+
+/// Send a cancel MQ message to a specific worker for a specific execution.
+async fn send_cancel_to_worker(publisher: Option<&Publisher>, execution_id: i64, worker_id: i64) {
+    let payload = ExecutionCancelRequestedPayload {
+        execution_id,
+        worker_id,
+    };
+
+    let envelope = MessageEnvelope::new(MessageType::ExecutionCancelRequested, payload)
+        .with_source("api-service")
+        .with_correlation_id(uuid::Uuid::new_v4());
+
+    if let Some(publisher) = publisher {
+        let routing_key = format!("execution.cancel.worker.{}", worker_id);
+        let exchange = "attune.executions";
+        if let Err(e) = publisher
+            .publish_envelope_with_routing(&envelope, exchange, &routing_key)
+            .await
+        {
+            tracing::error!(
+                "Failed to publish cancel request for execution {}: {}",
+                execution_id,
+                e
+            );
+        }
+    } else {
+        tracing::warn!(
+            "No MQ publisher available to send cancel request for execution {}",
+            execution_id
+        );
+    }
+}
+
+/// Cancel all incomplete child executions of a workflow parent execution.
+///
+/// This handles the workflow cascade: when a workflow execution is cancelled,
+/// its child task executions must also be cancelled to prevent further work.
+/// Additionally, the `workflow_execution` record is marked Cancelled so the
+/// scheduler's `advance_workflow` will short-circuit and not dispatch new tasks.
+///
+/// Children in pre-running states (Requested, Scheduling, Scheduled) are set
+/// to Cancelled immediately. Children that are Running receive a cancel MQ
+/// message so their worker can gracefully stop the process.
+async fn cancel_workflow_children(
+    db: &sqlx::PgPool,
+    publisher: Option<&Publisher>,
+    parent_execution_id: i64,
+) {
+    // Find all child executions that are still incomplete
+    let children: Vec<attune_common::models::Execution> = match sqlx::query_as::<
+        _,
+        attune_common::models::Execution,
+    >(&format!(
+        "SELECT {} FROM execution WHERE parent = $1 AND status NOT IN ('completed', 'failed', 'timeout', 'cancelled', 'abandoned')",
+        attune_common::repositories::execution::SELECT_COLUMNS
+    ))
+    .bind(parent_execution_id)
+    .fetch_all(db)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!(
+                "Failed to fetch child executions for parent {}: {}",
+                parent_execution_id,
+                e
+            );
+            return;
+        }
+    };
+
+    if children.is_empty() {
+        return;
+    }
+
+    tracing::info!(
+        "Cascading cancellation from execution {} to {} child execution(s)",
+        parent_execution_id,
+        children.len()
+    );
+
+    for child in &children {
+        let child_id = child.id;
+
+        if matches!(
+            child.status,
+            ExecutionStatus::Requested | ExecutionStatus::Scheduling | ExecutionStatus::Scheduled
+        ) {
+            // Pre-running: cancel immediately in DB
+            let update = UpdateExecutionInput {
+                status: Some(ExecutionStatus::Cancelled),
+                result: Some(serde_json::json!({
+                    "error": "Cancelled: parent workflow execution was cancelled"
+                })),
+                ..Default::default()
+            };
+            if let Err(e) = ExecutionRepository::update(db, child_id, update).await {
+                tracing::error!("Failed to cancel child execution {}: {}", child_id, e);
+            } else {
+                tracing::info!("Cancelled pre-running child execution {}", child_id);
+            }
+        } else if matches!(
+            child.status,
+            ExecutionStatus::Running | ExecutionStatus::Canceling
+        ) {
+            // Running: set to Canceling and send MQ message to the worker
+            if child.status != ExecutionStatus::Canceling {
+                let update = UpdateExecutionInput {
+                    status: Some(ExecutionStatus::Canceling),
+                    ..Default::default()
+                };
+                if let Err(e) = ExecutionRepository::update(db, child_id, update).await {
+                    tracing::error!(
+                        "Failed to set child execution {} to canceling: {}",
+                        child_id,
+                        e
+                    );
+                }
+            }
+
+            if let Some(worker_id) = child.executor {
+                send_cancel_to_worker(publisher, child_id, worker_id).await;
+            }
+        }
+
+        // Recursively cancel grandchildren (nested workflows)
+        // Use Box::pin to allow the recursive async call
+        Box::pin(cancel_workflow_children(db, publisher, child_id)).await;
+    }
+
+    // Also mark any associated workflow_execution record as Cancelled so that
+    // advance_workflow short-circuits and does not dispatch new tasks.
+    // A workflow_execution is linked to the parent execution via its `execution` column.
+    if let Ok(Some(wf_exec)) =
+        WorkflowExecutionRepository::find_by_execution(db, parent_execution_id).await
+    {
+        if !matches!(
+            wf_exec.status,
+            ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Cancelled
+        ) {
+            let wf_update = attune_common::repositories::workflow::UpdateWorkflowExecutionInput {
+                status: Some(ExecutionStatus::Cancelled),
+                error_message: Some(
+                    "Cancelled: parent workflow execution was cancelled".to_string(),
+                ),
+                current_tasks: Some(vec![]),
+                completed_tasks: None,
+                failed_tasks: None,
+                skipped_tasks: None,
+                variables: None,
+                paused: None,
+                pause_reason: None,
+            };
+            if let Err(e) = WorkflowExecutionRepository::update(db, wf_exec.id, wf_update).await {
+                tracing::error!("Failed to cancel workflow_execution {}: {}", wf_exec.id, e);
+            } else {
+                tracing::info!(
+                    "Cancelled workflow_execution {} for parent execution {}",
+                    wf_exec.id,
+                    parent_execution_id
+                );
+            }
+        }
+    }
+}
+
 /// Create execution routes
 /// Stream execution updates via Server-Sent Events
 ///
@@ -443,6 +722,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/executions/stats", get(get_execution_stats))
         .route("/executions/stream", get(stream_execution_updates))
         .route("/executions/{id}", get(get_execution))
+        .route(
+            "/executions/{id}/cancel",
+            axum::routing::post(cancel_execution),
+        )
         .route(
             "/executions/status/{status}",
             get(list_executions_by_status),

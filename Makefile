@@ -2,7 +2,8 @@
         check fmt clippy install-tools db-create db-migrate db-reset docker-build \
         docker-up docker-down docker-cache-warm docker-stop-system-services dev watch generate-agents-index \
         docker-build-workers docker-build-worker-base docker-build-worker-python \
-        docker-build-worker-node docker-build-worker-full
+        docker-build-worker-node docker-build-worker-full deny ci-rust ci-web-blocking ci-web-advisory \
+        ci-security-blocking ci-security-advisory ci-blocking ci-advisory
 
 # Default target
 help:
@@ -319,6 +320,42 @@ update:
 audit:
 	cargo audit
 
+deny:
+	cargo deny check
+
+ci-rust:
+	cargo fmt --all -- --check
+	cargo clippy --workspace --all-targets --all-features -- -D warnings
+	cargo test --workspace --all-features
+	cargo audit
+	cargo deny check
+
+ci-web-blocking:
+	cd web && npm ci
+	cd web && npm run lint
+	cd web && npm run typecheck
+	cd web && npm run build
+
+ci-web-advisory:
+	cd web && npm ci
+	cd web && npm run knip
+	cd web && npm audit --omit=dev
+
+ci-security-blocking:
+	mkdir -p $$HOME/bin
+	curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/install.sh | sh -s -- -b $$HOME/bin v8.24.2
+	$$HOME/bin/gitleaks git --report-format sarif --report-path gitleaks.sarif --config .gitleaks.toml
+
+ci-security-advisory:
+	pip install semgrep
+	semgrep scan --config p/default --error
+
+ci-blocking: ci-rust ci-web-blocking ci-security-blocking
+	@echo "✅ Blocking CI checks passed!"
+
+ci-advisory: ci-web-advisory ci-security-advisory
+	@echo "Advisory CI checks complete."
+
 # Check dependency tree
 tree:
 	cargo tree
@@ -333,5 +370,5 @@ pre-commit: fmt clippy test
 	@echo "✅ All checks passed! Ready to commit."
 
 # CI simulation
-ci: check clippy test
+ci: ci-blocking ci-advisory
 	@echo "✅ CI checks passed!"

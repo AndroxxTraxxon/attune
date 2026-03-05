@@ -4,6 +4,14 @@
 //! implementations. Handles streaming stdout/stderr capture, bounded log
 //! collection, timeout management, stdin parameter/secret delivery, and
 //! output format parsing.
+//!
+//! ## Cancellation Support
+//!
+//! When a `CancellationToken` is provided, the executor monitors it alongside
+//! the running process. On cancellation:
+//! 1. SIGINT is sent to the process (allows graceful shutdown)
+//! 2. After a 10-second grace period, SIGTERM is sent if the process hasn't exited
+//! 3. After another 5-second grace period, SIGKILL is sent as a last resort
 
 use super::{BoundedLogWriter, ExecutionResult, OutputFormat, RuntimeResult};
 use std::collections::HashMap;
@@ -12,7 +20,8 @@ use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::time::timeout;
-use tracing::{debug, warn};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, info, warn};
 
 /// Execute a subprocess command with streaming output capture.
 ///
@@ -33,6 +42,48 @@ use tracing::{debug, warn};
 /// * `max_stderr_bytes` - Maximum stderr size before truncation
 /// * `output_format` - How to parse stdout (Text, Json, Yaml, Jsonl)
 pub async fn execute_streaming(
+    cmd: Command,
+    secrets: &HashMap<String, String>,
+    parameters_stdin: Option<&str>,
+    timeout_secs: Option<u64>,
+    max_stdout_bytes: usize,
+    max_stderr_bytes: usize,
+    output_format: OutputFormat,
+) -> RuntimeResult<ExecutionResult> {
+    execute_streaming_cancellable(
+        cmd,
+        secrets,
+        parameters_stdin,
+        timeout_secs,
+        max_stdout_bytes,
+        max_stderr_bytes,
+        output_format,
+        None,
+    )
+    .await
+}
+
+/// Execute a subprocess command with streaming output capture and optional cancellation.
+///
+/// This is the core execution function used by all runtime implementations.
+/// It handles:
+/// - Spawning the process with piped I/O
+/// - Writing parameters and secrets to stdin
+/// - Streaming stdout/stderr with bounded log collection
+/// - Timeout management
+/// - Graceful cancellation via SIGINT → SIGTERM → SIGKILL escalation
+/// - Output format parsing (JSON, YAML, JSONL, text)
+///
+/// # Arguments
+/// * `cmd` - Pre-configured `Command` (interpreter, args, env vars, working dir already set)
+/// * `secrets` - Secrets to pass via stdin (as JSON)
+/// * `parameters_stdin` - Optional parameter data to write to stdin before secrets
+/// * `timeout_secs` - Optional execution timeout in seconds
+/// * `max_stdout_bytes` - Maximum stdout size before truncation
+/// * `max_stderr_bytes` - Maximum stderr size before truncation
+/// * `output_format` - How to parse stdout (Text, Json, Yaml, Jsonl)
+/// * `cancel_token` - Optional cancellation token for graceful process termination
+pub async fn execute_streaming_cancellable(
     mut cmd: Command,
     secrets: &HashMap<String, String>,
     parameters_stdin: Option<&str>,
@@ -40,6 +91,7 @@ pub async fn execute_streaming(
     max_stdout_bytes: usize,
     max_stderr_bytes: usize,
     output_format: OutputFormat,
+    cancel_token: Option<CancellationToken>,
 ) -> RuntimeResult<ExecutionResult> {
     let start = Instant::now();
 
@@ -134,15 +186,74 @@ pub async fn execute_streaming(
         stderr_writer
     };
 
-    // Wait for both streams and the process
-    let (stdout_writer, stderr_writer, wait_result) =
-        tokio::join!(stdout_task, stderr_task, async {
+    // Determine the process ID for signal-based cancellation.
+    // Must be read before we move `child` into the wait future.
+    let child_pid = child.id();
+
+    // Build the wait future that handles timeout, cancellation, and normal completion.
+    //
+    // The result is a tuple: (wait_result, was_cancelled)
+    //   - wait_result mirrors the original type: Result<Result<ExitStatus, io::Error>, Elapsed>
+    //   - was_cancelled indicates the process was stopped by a cancel request
+    let wait_future = async {
+        // Inner future: wait for the child process to exit
+        let wait_child = child.wait();
+
+        // Apply optional timeout wrapping
+        let timed_wait = async {
             if let Some(timeout_secs) = timeout_secs {
-                timeout(std::time::Duration::from_secs(timeout_secs), child.wait()).await
+                timeout(std::time::Duration::from_secs(timeout_secs), wait_child).await
             } else {
-                Ok(child.wait().await)
+                Ok(wait_child.await)
             }
-        });
+        };
+
+        // If we have a cancel token, race it against the (possibly-timed) wait
+        if let Some(ref token) = cancel_token {
+            tokio::select! {
+                result = timed_wait => (result, false),
+                _ = token.cancelled() => {
+                    // Cancellation requested — escalate signals to the child process.
+                    info!("Cancel signal received, sending SIGINT to process");
+                    if let Some(pid) = child_pid {
+                        send_signal(pid, libc::SIGINT);
+                    }
+
+                    // Grace period: wait up to 10s for the process to exit after SIGINT.
+                    match timeout(std::time::Duration::from_secs(10), child.wait()).await {
+                        Ok(status) => (Ok(status), true),
+                        Err(_) => {
+                            // Still alive — escalate to SIGTERM
+                            warn!("Process did not exit after SIGINT + 10s grace period, sending SIGTERM");
+                            if let Some(pid) = child_pid {
+                                send_signal(pid, libc::SIGTERM);
+                            }
+
+                            // Final grace period: wait up to 5s for SIGTERM
+                            match timeout(std::time::Duration::from_secs(5), child.wait()).await {
+                                Ok(status) => (Ok(status), true),
+                                Err(_) => {
+                                    // Last resort — SIGKILL
+                                    warn!("Process did not exit after SIGTERM + 5s, sending SIGKILL");
+                                    if let Some(pid) = child_pid {
+                                        send_signal(pid, libc::SIGKILL);
+                                    }
+                                    // Wait indefinitely for the SIGKILL to take effect
+                                    (Ok(child.wait().await), true)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            (timed_wait.await, false)
+        }
+    };
+
+    // Wait for both streams and the process
+    let (stdout_writer, stderr_writer, (wait_result, was_cancelled)) =
+        tokio::join!(stdout_task, stderr_task, wait_future);
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -176,6 +287,22 @@ pub async fn execute_streaming(
             });
         }
     };
+
+    // If the process was cancelled, return a specific result
+    if was_cancelled {
+        return Ok(ExecutionResult {
+            exit_code,
+            stdout: stdout_result.content.clone(),
+            stderr: stderr_result.content.clone(),
+            result: None,
+            duration_ms,
+            error: Some("Execution cancelled by user".to_string()),
+            stdout_truncated: stdout_result.truncated,
+            stderr_truncated: stderr_result.truncated,
+            stdout_bytes_truncated: stdout_result.bytes_truncated,
+            stderr_bytes_truncated: stderr_result.bytes_truncated,
+        });
+    }
 
     debug!(
         "Process execution completed: exit_code={}, duration={}ms, stdout_truncated={}, stderr_truncated={}",
@@ -248,6 +375,19 @@ pub async fn execute_streaming(
 }
 
 /// Parse stdout content according to the specified output format.
+/// Send a Unix signal to a process by PID.
+///
+/// Uses raw `libc::kill()` to deliver signals for graceful process termination.
+/// This is safe because we only send signals to child processes we spawned.
+fn send_signal(pid: u32, signal: i32) {
+    // Safety: we're sending a signal to a known child process PID.
+    // The PID is valid because we obtained it from `child.id()` before the
+    // child exited.
+    unsafe {
+        libc::kill(pid as i32, signal);
+    }
+}
+
 fn parse_output(stdout: &str, format: OutputFormat) -> Option<serde_json::Value> {
     let trimmed = stdout.trim();
     if trimmed.is_empty() {

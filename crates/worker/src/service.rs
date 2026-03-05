@@ -11,7 +11,7 @@
 //! 4. **Verify runtime versions** — run verification commands for each registered
 //!    `RuntimeVersion` to determine which are available on this host/container
 //! 5. **Set up runtime environments** — create per-version environments for packs
-//! 6. Start heartbeat, execution consumer, and pack registration consumer
+//! 6. Start heartbeat, execution consumer, pack registration consumer, and cancel consumer
 
 use attune_common::config::Config;
 use attune_common::db::Database;
@@ -19,19 +19,21 @@ use attune_common::error::{Error, Result};
 use attune_common::models::ExecutionStatus;
 use attune_common::mq::{
     config::MessageQueueConfig as MqConfig, Connection, Consumer, ConsumerConfig,
-    ExecutionCompletedPayload, ExecutionStatusChangedPayload, MessageEnvelope, MessageType,
-    PackRegisteredPayload, Publisher, PublisherConfig,
+    ExecutionCancelRequestedPayload, ExecutionCompletedPayload, ExecutionStatusChangedPayload,
+    MessageEnvelope, MessageType, PackRegisteredPayload, Publisher, PublisherConfig,
 };
 use attune_common::repositories::{execution::ExecutionRepository, FindById};
 use attune_common::runtime_detection::runtime_in_filter;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::artifacts::ArtifactManager;
@@ -72,6 +74,8 @@ pub struct WorkerService {
     consumer_handle: Option<JoinHandle<()>>,
     pack_consumer: Option<Arc<Consumer>>,
     pack_consumer_handle: Option<JoinHandle<()>>,
+    cancel_consumer: Option<Arc<Consumer>>,
+    cancel_consumer_handle: Option<JoinHandle<()>>,
     worker_id: Option<i64>,
     /// Runtime filter derived from ATTUNE_WORKER_RUNTIMES
     runtime_filter: Option<Vec<String>>,
@@ -83,6 +87,10 @@ pub struct WorkerService {
     execution_semaphore: Arc<Semaphore>,
     /// Tracks in-flight execution tasks for graceful shutdown
     in_flight_tasks: Arc<Mutex<JoinSet<()>>>,
+    /// Maps execution ID → CancellationToken for running processes.
+    /// When a cancel request arrives, the token is triggered, causing
+    /// the process executor to send SIGINT → SIGTERM → SIGKILL.
+    cancel_tokens: Arc<Mutex<HashMap<i64, CancellationToken>>>,
 }
 
 impl WorkerService {
@@ -362,12 +370,15 @@ impl WorkerService {
             consumer_handle: None,
             pack_consumer: None,
             pack_consumer_handle: None,
+            cancel_consumer: None,
+            cancel_consumer_handle: None,
             worker_id: None,
             runtime_filter: runtime_filter_for_service,
             packs_base_dir,
             runtime_envs_dir,
             execution_semaphore: Arc::new(Semaphore::new(max_concurrent_tasks)),
             in_flight_tasks: Arc::new(Mutex::new(JoinSet::new())),
+            cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -415,6 +426,9 @@ impl WorkerService {
 
         // Start consuming pack registration events
         self.start_pack_consumer().await?;
+
+        // Start consuming cancel requests
+        self.start_cancel_consumer().await?;
 
         info!("Worker Service started successfully");
 
@@ -640,6 +654,12 @@ impl WorkerService {
             let _ = handle.await;
         }
 
+        if let Some(handle) = self.cancel_consumer_handle.take() {
+            info!("Stopping cancel consumer task...");
+            handle.abort();
+            let _ = handle.await;
+        }
+
         info!("Closing message queue connection...");
         if let Err(e) = self.mq_connection.close().await {
             warn!("Error closing message queue: {}", e);
@@ -733,6 +753,7 @@ impl WorkerService {
         let queue_name_for_log = queue_name.clone();
         let semaphore = self.execution_semaphore.clone();
         let in_flight = self.in_flight_tasks.clone();
+        let cancel_tokens = self.cancel_tokens.clone();
 
         // Spawn the consumer loop as a background task so start() can return
         let handle = tokio::spawn(async move {
@@ -745,6 +766,7 @@ impl WorkerService {
                         let db_pool = db_pool.clone();
                         let semaphore = semaphore.clone();
                         let in_flight = in_flight.clone();
+                        let cancel_tokens = cancel_tokens.clone();
 
                         async move {
                             let execution_id = envelope.payload.execution_id;
@@ -765,6 +787,13 @@ impl WorkerService {
                                 semaphore.available_permits()
                             );
 
+                            // Create a cancellation token for this execution
+                            let cancel_token = CancellationToken::new();
+                            {
+                                let mut tokens = cancel_tokens.lock().await;
+                                tokens.insert(execution_id, cancel_token.clone());
+                            }
+
                             // Spawn the actual execution as a background task so this
                             // handler returns immediately, acking the message and freeing
                             // the consumer loop to process the next delivery.
@@ -775,12 +804,20 @@ impl WorkerService {
                                 let _permit = permit;
 
                                 if let Err(e) = Self::handle_execution_scheduled(
-                                    executor, publisher, db_pool, envelope,
+                                    executor,
+                                    publisher,
+                                    db_pool,
+                                    envelope,
+                                    cancel_token,
                                 )
                                 .await
                                 {
                                     error!("Execution {} handler error: {}", execution_id, e);
                                 }
+
+                                // Remove the cancel token now that execution is done
+                                let mut tokens = cancel_tokens.lock().await;
+                                tokens.remove(&execution_id);
                             });
 
                             Ok(())
@@ -813,6 +850,7 @@ impl WorkerService {
         publisher: Arc<Publisher>,
         db_pool: PgPool,
         envelope: MessageEnvelope<ExecutionScheduledPayload>,
+        cancel_token: CancellationToken,
     ) -> Result<()> {
         let execution_id = envelope.payload.execution_id;
 
@@ -820,6 +858,42 @@ impl WorkerService {
             "Processing execution.scheduled for execution: {}",
             execution_id
         );
+
+        // Check if the execution was already cancelled before we started
+        // (e.g. pre-running cancellation via the API).
+        {
+            if let Ok(Some(exec)) = ExecutionRepository::find_by_id(&db_pool, execution_id).await {
+                if matches!(
+                    exec.status,
+                    ExecutionStatus::Cancelled | ExecutionStatus::Canceling
+                ) {
+                    info!(
+                        "Execution {} already in {:?} state, skipping",
+                        execution_id, exec.status
+                    );
+                    // If it was Canceling, finalize to Cancelled
+                    if exec.status == ExecutionStatus::Canceling {
+                        let _ = Self::publish_status_update(
+                            &db_pool,
+                            &publisher,
+                            execution_id,
+                            ExecutionStatus::Cancelled,
+                            None,
+                            Some("Cancelled before execution started".to_string()),
+                        )
+                        .await;
+                        let _ = Self::publish_completion_notification(
+                            &db_pool,
+                            &publisher,
+                            execution_id,
+                            ExecutionStatus::Cancelled,
+                        )
+                        .await;
+                    }
+                    return Ok(());
+                }
+            }
+        }
 
         // Publish status: running
         if let Err(e) = Self::publish_status_update(
@@ -836,42 +910,88 @@ impl WorkerService {
             // Continue anyway - we'll update the database directly
         }
 
-        // Execute the action
-        match executor.execute(execution_id).await {
+        // Execute the action (with cancellation support)
+        match executor
+            .execute_with_cancel(execution_id, cancel_token.clone())
+            .await
+        {
             Ok(result) => {
-                info!(
-                    "Execution {} completed successfully in {}ms",
-                    execution_id, result.duration_ms
-                );
+                // Check if this was a cancellation
+                let was_cancelled = cancel_token.is_cancelled()
+                    || result
+                        .error
+                        .as_deref()
+                        .is_some_and(|e| e.contains("cancelled"));
 
-                // Publish status: completed
-                if let Err(e) = Self::publish_status_update(
-                    &db_pool,
-                    &publisher,
-                    execution_id,
-                    ExecutionStatus::Completed,
-                    result.result.clone(),
-                    None,
-                )
-                .await
-                {
-                    error!("Failed to publish success status: {}", e);
-                }
-
-                // Publish completion notification for queue management
-                if let Err(e) = Self::publish_completion_notification(
-                    &db_pool,
-                    &publisher,
-                    execution_id,
-                    ExecutionStatus::Completed,
-                )
-                .await
-                {
-                    error!(
-                        "Failed to publish completion notification for execution {}: {}",
-                        execution_id, e
+                if was_cancelled {
+                    info!(
+                        "Execution {} was cancelled in {}ms",
+                        execution_id, result.duration_ms
                     );
-                    // Continue - this is important for queue management but not fatal
+
+                    // Publish status: cancelled
+                    if let Err(e) = Self::publish_status_update(
+                        &db_pool,
+                        &publisher,
+                        execution_id,
+                        ExecutionStatus::Cancelled,
+                        None,
+                        Some("Cancelled by user".to_string()),
+                    )
+                    .await
+                    {
+                        error!("Failed to publish cancelled status: {}", e);
+                    }
+
+                    // Publish completion notification for queue management
+                    if let Err(e) = Self::publish_completion_notification(
+                        &db_pool,
+                        &publisher,
+                        execution_id,
+                        ExecutionStatus::Cancelled,
+                    )
+                    .await
+                    {
+                        error!(
+                            "Failed to publish completion notification for cancelled execution {}: {}",
+                            execution_id, e
+                        );
+                    }
+                } else {
+                    info!(
+                        "Execution {} completed successfully in {}ms",
+                        execution_id, result.duration_ms
+                    );
+
+                    // Publish status: completed
+                    if let Err(e) = Self::publish_status_update(
+                        &db_pool,
+                        &publisher,
+                        execution_id,
+                        ExecutionStatus::Completed,
+                        result.result.clone(),
+                        None,
+                    )
+                    .await
+                    {
+                        error!("Failed to publish success status: {}", e);
+                    }
+
+                    // Publish completion notification for queue management
+                    if let Err(e) = Self::publish_completion_notification(
+                        &db_pool,
+                        &publisher,
+                        execution_id,
+                        ExecutionStatus::Completed,
+                    )
+                    .await
+                    {
+                        error!(
+                            "Failed to publish completion notification for execution {}: {}",
+                            execution_id, e
+                        );
+                        // Continue - this is important for queue management but not fatal
+                    }
                 }
             }
             Err(e) => {
@@ -912,6 +1032,87 @@ impl WorkerService {
         Ok(())
     }
 
+    /// Start consuming execution cancel requests from the per-worker cancel queue.
+    async fn start_cancel_consumer(&mut self) -> Result<()> {
+        let worker_id = self
+            .worker_id
+            .ok_or_else(|| Error::Internal("Worker not registered".to_string()))?;
+
+        let queue_name = format!("worker.{}.cancel", worker_id);
+
+        info!("Starting cancel consumer for queue: {}", queue_name);
+
+        let consumer = Arc::new(
+            Consumer::new(
+                &self.mq_connection,
+                ConsumerConfig {
+                    queue: queue_name.clone(),
+                    tag: format!("worker-{}-cancel", worker_id),
+                    prefetch_count: 10,
+                    auto_ack: false,
+                    exclusive: false,
+                },
+            )
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to create cancel consumer: {}", e)))?,
+        );
+
+        let consumer_for_task = consumer.clone();
+        let cancel_tokens = self.cancel_tokens.clone();
+        let queue_name_for_log = queue_name.clone();
+
+        let handle = tokio::spawn(async move {
+            info!(
+                "Cancel consumer loop started for queue '{}'",
+                queue_name_for_log
+            );
+            let result = consumer_for_task
+                .consume_with_handler(
+                    move |envelope: MessageEnvelope<ExecutionCancelRequestedPayload>| {
+                        let cancel_tokens = cancel_tokens.clone();
+
+                        async move {
+                            let execution_id = envelope.payload.execution_id;
+                            info!("Received cancel request for execution {}", execution_id);
+
+                            let tokens = cancel_tokens.lock().await;
+                            if let Some(token) = tokens.get(&execution_id) {
+                                info!("Triggering cancellation for execution {}", execution_id);
+                                token.cancel();
+                            } else {
+                                warn!(
+                                    "No cancel token found for execution {} \
+                                     (may have already completed or not yet started)",
+                                    execution_id
+                                );
+                            }
+
+                            Ok(())
+                        }
+                    },
+                )
+                .await;
+
+            match result {
+                Ok(()) => info!(
+                    "Cancel consumer loop for queue '{}' ended",
+                    queue_name_for_log
+                ),
+                Err(e) => error!(
+                    "Cancel consumer loop for queue '{}' failed: {}",
+                    queue_name_for_log, e
+                ),
+            }
+        });
+
+        self.cancel_consumer = Some(consumer);
+        self.cancel_consumer_handle = Some(handle);
+
+        info!("Cancel consumer initialized for queue: {}", queue_name);
+
+        Ok(())
+    }
+
     /// Publish execution status update
     async fn publish_status_update(
         db_pool: &PgPool,
@@ -935,6 +1136,7 @@ impl WorkerService {
             ExecutionStatus::Running => "running",
             ExecutionStatus::Completed => "completed",
             ExecutionStatus::Failed => "failed",
+            ExecutionStatus::Canceling => "canceling",
             ExecutionStatus::Cancelled => "cancelled",
             ExecutionStatus::Timeout => "timeout",
             _ => "unknown",

@@ -43,6 +43,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 
 // Re-export dependency management types
 pub use dependency::{
@@ -90,7 +91,7 @@ pub enum RuntimeError {
 }
 
 /// Action execution context
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ExecutionContext {
     /// Execution ID
     pub execution_id: i64,
@@ -130,7 +131,6 @@ pub struct ExecutionContext {
     /// "Python" runtime). When present, `ProcessRuntime` uses this config
     /// instead of its built-in one for interpreter resolution, environment
     /// setup, and dependency management.
-    #[serde(skip)]
     pub runtime_config_override: Option<RuntimeExecutionConfig>,
 
     /// Optional override of the environment directory suffix. When a specific
@@ -144,28 +144,24 @@ pub struct ExecutionContext {
     pub selected_runtime_version: Option<String>,
 
     /// Maximum stdout size in bytes (for log truncation)
-    #[serde(default = "default_max_log_bytes")]
     pub max_stdout_bytes: usize,
 
     /// Maximum stderr size in bytes (for log truncation)
-    #[serde(default = "default_max_log_bytes")]
     pub max_stderr_bytes: usize,
 
     /// How parameters should be delivered to the action
-    #[serde(default)]
     pub parameter_delivery: ParameterDelivery,
 
     /// Format for parameter serialization
-    #[serde(default)]
     pub parameter_format: ParameterFormat,
 
     /// Format for output parsing
-    #[serde(default)]
     pub output_format: OutputFormat,
-}
 
-fn default_max_log_bytes() -> usize {
-    10 * 1024 * 1024 // 10MB
+    /// Optional cancellation token for graceful process termination.
+    /// When triggered, the executor sends SIGINT → SIGTERM → SIGKILL
+    /// with escalating grace periods.
+    pub cancel_token: Option<CancellationToken>,
 }
 
 impl ExecutionContext {
@@ -193,6 +189,7 @@ impl ExecutionContext {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
+            cancel_token: None,
         }
     }
 }

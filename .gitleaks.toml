@@ -1,0 +1,16 @@
+title = "attune-gitleaks-config"
+
+[allowlist]
+description = "Known development credentials and examples"
+regexes = [
+  '''test@attune\.local''',
+  '''TestPass123!''',
+  '''JWT_SECRET''',
+  '''ENCRYPTION_KEY''',
+]
+paths = [
+  '''^docs/''',
+  '''^reference/''',
+  '''^web/openapi\.json$''',
+  '''^work-summary/''',
+]

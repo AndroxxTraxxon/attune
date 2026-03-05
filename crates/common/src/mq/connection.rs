@@ -525,6 +525,28 @@ impl Connection {
         )
         .await?;
 
+        // --- Cancel queue ---
+        // Each worker gets its own queue for execution cancel requests so that
+        // the API can target a specific worker to gracefully stop a running process.
+        let cancel_queue_name = format!("worker.{}.cancel", worker_id);
+        let cancel_queue_config = QueueConfig {
+            name: cancel_queue_name.clone(),
+            durable: true,
+            exclusive: false,
+            auto_delete: false,
+        };
+
+        self.declare_queue_with_optional_dlx(&cancel_queue_config, dlx)
+            .await?;
+
+        // Bind to worker-specific cancel routing key on the executions exchange
+        self.bind_queue(
+            &cancel_queue_name,
+            &config.rabbitmq.exchanges.executions.name,
+            &format!("execution.cancel.worker.{}", worker_id),
+        )
+        .await?;
+
         info!(
             "Worker infrastructure setup complete for worker ID {}",
             worker_id

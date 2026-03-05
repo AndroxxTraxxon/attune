@@ -725,8 +725,8 @@ impl Runtime for ProcessRuntime {
                 .unwrap_or_else(|| "<none>".to_string()),
         );
 
-        // Execute with streaming output capture
-        process_executor::execute_streaming(
+        // Execute with streaming output capture (with optional cancellation support)
+        process_executor::execute_streaming_cancellable(
             cmd,
             &context.secrets,
             parameters_stdin,
@@ -734,6 +734,7 @@ impl Runtime for ProcessRuntime {
             context.max_stdout_bytes,
             context.max_stderr_bytes,
             context.output_format,
+            context.cancel_token.clone(),
         )
         .await
     }
@@ -905,6 +906,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
+        cancel_token: None,
         };
 
         assert!(runtime.can_execute(&context));
@@ -939,6 +941,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
+        cancel_token: None,
         };
 
         assert!(runtime.can_execute(&context));
@@ -973,6 +976,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
+        cancel_token: None,
         };
 
         assert!(!runtime.can_execute(&context));
@@ -1063,6 +1067,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
+        cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -1120,6 +1125,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
+        cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -1158,6 +1164,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
+        cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -1208,6 +1215,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
+        cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -1316,6 +1324,7 @@ mod tests {
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),
+        cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();

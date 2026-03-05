@@ -57,10 +57,11 @@ pub use consumer::{Consumer, ConsumerConfig};
 pub use error::{MqError, MqResult};
 pub use message_queue::MessageQueue;
 pub use messages::{
-    EnforcementCreatedPayload, EventCreatedPayload, ExecutionCompletedPayload,
-    ExecutionRequestedPayload, ExecutionStatusChangedPayload, InquiryCreatedPayload,
-    InquiryRespondedPayload, Message, MessageEnvelope, MessageType, NotificationCreatedPayload,
-    PackRegisteredPayload, RuleCreatedPayload, RuleDisabledPayload, RuleEnabledPayload,
+    EnforcementCreatedPayload, EventCreatedPayload, ExecutionCancelRequestedPayload,
+    ExecutionCompletedPayload, ExecutionRequestedPayload, ExecutionStatusChangedPayload,
+    InquiryCreatedPayload, InquiryRespondedPayload, Message, MessageEnvelope, MessageType,
+    NotificationCreatedPayload, PackRegisteredPayload, RuleCreatedPayload, RuleDisabledPayload,
+    RuleEnabledPayload,
 };
 pub use publisher::{Publisher, PublisherConfig};
 
@@ -224,6 +225,8 @@ pub mod routing_keys {
     pub const NOTIFICATION_CREATED: &str = "notification.created";
     /// Pack registered routing key
     pub const PACK_REGISTERED: &str = "pack.registered";
+    /// Execution cancel requested routing key
+    pub const EXECUTION_CANCEL: &str = "execution.cancel";
 }
 
 #[cfg(test)]

@@ -623,6 +623,7 @@ mod tests {
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
             output_format: attune_common::models::OutputFormat::default(),
+        cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -659,6 +660,7 @@ mod tests {
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
             output_format: attune_common::models::OutputFormat::default(),
+        cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -690,6 +692,7 @@ mod tests {
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
             output_format: attune_common::models::OutputFormat::default(),
+        cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -723,6 +726,7 @@ mod tests {
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
             output_format: attune_common::models::OutputFormat::default(),
+        cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -771,6 +775,7 @@ echo "missing=$missing"
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
             output_format: attune_common::models::OutputFormat::default(),
+        cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -814,6 +819,7 @@ echo '{"id": 3, "name": "Charlie"}'
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
             output_format: attune_common::models::OutputFormat::Jsonl,
+        cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -880,6 +886,7 @@ printf '{"status_code":200,"body":"hello","json":{\n  "args": {\n    "hello": "w
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
             output_format: attune_common::models::OutputFormat::Json,
+        cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();
@@ -935,6 +942,7 @@ echo '{"result": "success", "count": 42}'
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
             output_format: attune_common::models::OutputFormat::Json,
+        cancel_token: None,
         };
 
         let result = runtime.execute(context).await.unwrap();

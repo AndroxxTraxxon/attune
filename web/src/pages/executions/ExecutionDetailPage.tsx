@@ -12,14 +12,14 @@ function formatDuration(ms: number): string {
   const remainMins = mins % 60;
   return `${hrs}h ${remainMins}m`;
 }
-import { useExecution } from "@/hooks/useExecutions";
+import { useExecution, useCancelExecution } from "@/hooks/useExecutions";
 import { useAction } from "@/hooks/useActions";
 import { useExecutionStream } from "@/hooks/useExecutionStream";
 import { useExecutionHistory } from "@/hooks/useHistory";
 import { formatDistanceToNow } from "date-fns";
 import { ExecutionStatus } from "@/api";
 import { useState, useMemo } from "react";
-import { RotateCcw, Loader2 } from "lucide-react";
+import { RotateCcw, Loader2, XCircle } from "lucide-react";
 import ExecuteActionModal from "@/components/common/ExecuteActionModal";
 import EntityHistoryPanel from "@/components/common/EntityHistoryPanel";
 import ExecutionArtifactsPanel from "@/components/executions/ExecutionArtifactsPanel";
@@ -123,6 +123,7 @@ export default function ExecutionDetailPage() {
   const isWorkflow = !!actionData?.data?.workflow_def;
 
   const [showRerunModal, setShowRerunModal] = useState(false);
+  const cancelExecution = useCancelExecution();
 
   // Fetch status history for the timeline
   const { data: historyData, isLoading: historyLoading } = useExecutionHistory(
@@ -200,6 +201,9 @@ export default function ExecutionDetailPage() {
     execution.status === ExecutionStatus.SCHEDULED ||
     execution.status === ExecutionStatus.REQUESTED;
 
+  const isCancellable =
+    isRunning || execution.status === ExecutionStatus.CANCELING;
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -236,19 +240,44 @@ export default function ExecutionDetailPage() {
               </div>
             )}
           </div>
-          <button
-            onClick={() => setShowRerunModal(true)}
-            disabled={!actionData?.data}
-            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            title={
-              !actionData?.data
-                ? "Loading action details..."
-                : "Re-run this action with the same parameters"
-            }
-          >
-            <RotateCcw className="h-4 w-4" />
-            Re-Run
-          </button>
+          <div className="flex items-center gap-2">
+            {isCancellable && (
+              <button
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      `Are you sure you want to cancel execution #${execution.id}?`,
+                    )
+                  ) {
+                    cancelExecution.mutate(execution.id);
+                  }
+                }}
+                disabled={cancelExecution.isPending}
+                className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                title="Cancel this execution"
+              >
+                {cancelExecution.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <XCircle className="h-4 w-4" />
+                )}
+                Cancel
+              </button>
+            )}
+            <button
+              onClick={() => setShowRerunModal(true)}
+              disabled={!actionData?.data}
+              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              title={
+                !actionData?.data
+                  ? "Loading action details..."
+                  : "Re-run this action with the same parameters"
+              }
+            >
+              <RotateCcw className="h-4 w-4" />
+              Re-Run
+            </button>
+          </div>
         </div>
         <p className="text-gray-600 mt-2">
           <Link

@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "typecheck": "tsc -b --pretty false",
     "lint": "eslint .",
+    "knip": "npx --yes knip --config knip.json --production",
     "preview": "vite preview",
     "generate:api": "curl -s http://localhost:8080/api-spec/openapi.json > openapi.json && npx openapi-typescript-codegen --input ./openapi.json --output ./src/api --client axios --useOptions"
   },

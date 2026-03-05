@@ -1,7 +1,7 @@
 import { memo, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { X, ExternalLink, Loader2 } from "lucide-react";
-import { useExecution } from "@/hooks/useExecutions";
+import { X, ExternalLink, Loader2, XCircle } from "lucide-react";
+import { useExecution, useCancelExecution } from "@/hooks/useExecutions";
 import { useExecutionStream } from "@/hooks/useExecutionStream";
 import { formatDistanceToNow } from "date-fns";
 import type { ExecutionStatus } from "@/api";
@@ -51,6 +51,7 @@ const ExecutionPreviewPanel = memo(function ExecutionPreviewPanel({
 }: ExecutionPreviewPanelProps) {
   const { data, isLoading, error } = useExecution(executionId);
   const execution = data?.data;
+  const cancelExecution = useCancelExecution();
 
   // Subscribe to real-time updates for this execution
   useExecutionStream({ executionId, enabled: true });
@@ -69,6 +70,8 @@ const ExecutionPreviewPanel = memo(function ExecutionPreviewPanel({
     execution?.status === "scheduling" ||
     execution?.status === "scheduled" ||
     execution?.status === "requested";
+
+  const isCancellable = isRunning || execution?.status === "canceling";
 
   const startedAt = execution?.started_at
     ? new Date(execution.started_at)
@@ -100,6 +103,28 @@ const ExecutionPreviewPanel = memo(function ExecutionPreviewPanel({
           )}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
+          {isCancellable && (
+            <button
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Are you sure you want to cancel execution #${executionId}?`,
+                  )
+                ) {
+                  cancelExecution.mutate(executionId);
+                }
+              }}
+              disabled={cancelExecution.isPending}
+              className="p-1.5 text-gray-400 hover:text-red-600 rounded hover:bg-red-50 transition-colors"
+              title="Cancel execution"
+            >
+              {cancelExecution.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <XCircle className="h-4 w-4" />
+              )}
+            </button>
+          )}
           <Link
             to={`/executions/${executionId}`}
             className="p-1.5 text-gray-400 hover:text-blue-600 rounded hover:bg-gray-100 transition-colors"

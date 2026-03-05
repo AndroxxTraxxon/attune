@@ -1,0 +1,7 @@
+target/
+web/dist/
+web/node_modules/
+web/src/api/
+packs/
+packs.dev/
+packs.external/
