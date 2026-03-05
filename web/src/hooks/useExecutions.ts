@@ -116,11 +116,34 @@ export function useChildExecutions(parentId: number | undefined) {
   return useQuery({
     queryKey: ["executions", { parent: parentId }],
     queryFn: async () => {
-      const response = await ExecutionsService.listExecutions({
+      // Fetch page 1 with max page size (API caps at 100)
+      const first = await ExecutionsService.listExecutions({
         parent: parentId,
         perPage: 100,
+        page: 1,
       });
-      return response;
+
+      const { total_pages } = first.pagination;
+      if (total_pages <= 1) return first;
+
+      // Fetch remaining pages in parallel
+      const remaining = await Promise.all(
+        Array.from({ length: total_pages - 1 }, (_, i) =>
+          ExecutionsService.listExecutions({
+            parent: parentId,
+            perPage: 100,
+            page: i + 2,
+          }),
+        ),
+      );
+
+      // Merge all pages into the first response
+      for (const page of remaining) {
+        first.data.push(...page.data);
+      }
+      first.pagination.total_pages = 1;
+      first.pagination.page_size = first.data.length;
+      return first;
     },
     enabled: !!parentId,
     staleTime: 5000,

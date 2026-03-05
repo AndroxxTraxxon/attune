@@ -9,17 +9,24 @@
 //! - Listing artifacts by execution
 //! - Version history and retrieval
 //! - Upsert-and-upload: create-or-reuse an artifact by ref and upload a version in one call
+//! - Upsert-and-allocate: create-or-reuse an artifact by ref and allocate a file-backed version path in one call
+//! - SSE streaming for file-backed artifacts (live tail while execution is running)
 
 use axum::{
     body::Body,
     extract::{Multipart, Path, Query, State},
     http::{header, StatusCode},
-    response::IntoResponse,
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse,
+    },
     routing::{get, post},
     Json, Router,
 };
+use futures::stream::Stream;
 use std::sync::Arc;
-use tracing::warn;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tracing::{debug, warn};
 
 use attune_common::models::enums::{
     ArtifactType, ArtifactVisibility, OwnerType, RetentionPolicyType,
@@ -36,10 +43,10 @@ use crate::{
     auth::middleware::RequireAuth,
     dto::{
         artifact::{
-            AppendProgressRequest, ArtifactQueryParams, ArtifactResponse, ArtifactSummary,
-            ArtifactVersionResponse, ArtifactVersionSummary, CreateArtifactRequest,
-            CreateFileVersionRequest, CreateVersionJsonRequest, SetDataRequest,
-            UpdateArtifactRequest,
+            AllocateFileVersionByRefRequest, AppendProgressRequest, ArtifactQueryParams,
+            ArtifactResponse, ArtifactSummary, ArtifactVersionResponse, ArtifactVersionSummary,
+            CreateArtifactRequest, CreateFileVersionRequest, CreateVersionJsonRequest,
+            SetDataRequest, UpdateArtifactRequest,
         },
         common::{PaginatedResponse, PaginationParams},
         ApiResponse, SuccessResponse,
@@ -659,6 +666,7 @@ pub async fn create_version_file(
     // Update the version row with the computed file_path
     sqlx::query("UPDATE artifact_version SET file_path = $1 WHERE id = $2")
         .bind(&file_path)
+        .bind(version.id)
         .execute(&state.db)
         .await
         .map_err(|e| {
@@ -1250,6 +1258,165 @@ pub async fn upload_version_by_ref(
     ))
 }
 
+/// Upsert an artifact by ref and allocate a file-backed version in one call.
+///
+/// If the artifact doesn't exist, it is created using the supplied metadata.
+/// If it already exists, the execution link is updated (if provided).
+/// Then a new file-backed version is allocated and the `file_path` is returned.
+///
+/// The caller writes the file to `$ATTUNE_ARTIFACTS_DIR/{file_path}` on the
+/// shared volume — no HTTP upload needed.
+#[utoipa::path(
+    post,
+    path = "/api/v1/artifacts/ref/{ref}/versions/file",
+    tag = "artifacts",
+    params(
+        ("ref" = String, Path, description = "Artifact reference (e.g. 'mypack.build_log')")
+    ),
+    request_body = AllocateFileVersionByRefRequest,
+    responses(
+        (status = 201, description = "File version allocated", body = inline(ApiResponse<ArtifactVersionResponse>)),
+        (status = 400, description = "Invalid request (non-file-backed artifact type)"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn allocate_file_version_by_ref(
+    RequireAuth(_user): RequireAuth,
+    State(state): State<Arc<AppState>>,
+    Path(artifact_ref): Path<String>,
+    Json(request): Json<AllocateFileVersionByRefRequest>,
+) -> ApiResult<impl IntoResponse> {
+    // Upsert: find existing artifact or create a new one
+    let artifact = match ArtifactRepository::find_by_ref(&state.db, &artifact_ref).await? {
+        Some(existing) => {
+            // Update execution link if a new execution ID was provided
+            if request.execution.is_some() && request.execution != existing.execution {
+                let update_input = UpdateArtifactInput {
+                    r#ref: None,
+                    scope: None,
+                    owner: None,
+                    r#type: None,
+                    visibility: None,
+                    retention_policy: None,
+                    retention_limit: None,
+                    name: None,
+                    description: None,
+                    content_type: None,
+                    size_bytes: None,
+                    execution: request.execution.map(Some),
+                    data: None,
+                };
+                ArtifactRepository::update(&state.db, existing.id, update_input).await?
+            } else {
+                existing
+            }
+        }
+        None => {
+            // Parse artifact type (default to FileText)
+            let a_type = request.r#type.unwrap_or(ArtifactType::FileText);
+
+            // Validate it's a file-backed type
+            if !is_file_backed_type(a_type) {
+                return Err(ApiError::BadRequest(format!(
+                    "Artifact type {:?} is not file-backed. \
+                     Use POST /artifacts/ref/{{ref}}/versions/upload for DB-stored artifacts.",
+                    a_type,
+                )));
+            }
+
+            let a_scope = request.scope.unwrap_or(OwnerType::Action);
+            let a_visibility = request.visibility.unwrap_or(ArtifactVisibility::Private);
+            let a_retention_policy = request
+                .retention_policy
+                .unwrap_or(RetentionPolicyType::Versions);
+            let a_retention_limit = request.retention_limit.unwrap_or(10);
+
+            let create_input = CreateArtifactInput {
+                r#ref: artifact_ref.clone(),
+                scope: a_scope,
+                owner: request.owner.unwrap_or_default(),
+                r#type: a_type,
+                visibility: a_visibility,
+                retention_policy: a_retention_policy,
+                retention_limit: a_retention_limit,
+                name: request.name,
+                description: request.description,
+                content_type: request.content_type.clone(),
+                execution: request.execution,
+                data: None,
+            };
+
+            ArtifactRepository::create(&state.db, create_input).await?
+        }
+    };
+
+    // Validate the existing artifact is file-backed
+    if !is_file_backed_type(artifact.r#type) {
+        return Err(ApiError::BadRequest(format!(
+            "Artifact '{}' is type {:?}, which does not support file-backed versions.",
+            artifact.r#ref, artifact.r#type,
+        )));
+    }
+
+    let content_type = request
+        .content_type
+        .unwrap_or_else(|| default_content_type_for_artifact(artifact.r#type));
+
+    // Create version row (file_path computed after we know the version number)
+    let input = CreateArtifactVersionInput {
+        artifact: artifact.id,
+        content_type: Some(content_type.clone()),
+        content: None,
+        content_json: None,
+        file_path: None,
+        meta: request.meta,
+        created_by: request.created_by,
+    };
+
+    let version = ArtifactVersionRepository::create(&state.db, input).await?;
+
+    // Compute the file path from the artifact ref and version number
+    let file_path = compute_file_path(&artifact.r#ref, version.version, &content_type);
+
+    // Create the parent directory on disk
+    let artifacts_dir = &state.config.artifacts_dir;
+    let full_path = std::path::Path::new(artifacts_dir).join(&file_path);
+    if let Some(parent) = full_path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            ApiError::InternalServerError(format!(
+                "Failed to create artifact directory '{}': {}",
+                parent.display(),
+                e,
+            ))
+        })?;
+    }
+
+    // Update the version row with the computed file_path
+    sqlx::query("UPDATE artifact_version SET file_path = $1 WHERE id = $2")
+        .bind(&file_path)
+        .bind(version.id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| {
+            ApiError::InternalServerError(format!(
+                "Failed to set file_path on version {}: {}",
+                version.id, e,
+            ))
+        })?;
+
+    // Return the version with file_path populated
+    let mut response = ArtifactVersionResponse::from(version);
+    response.file_path = Some(file_path);
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ApiResponse::with_message(
+            response,
+            "File version allocated — write content to $ATTUNE_ARTIFACTS_DIR/<file_path>",
+        )),
+    ))
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -1459,8 +1626,434 @@ fn cleanup_empty_parents(dir: &std::path::Path, stop_at: &str) {
         }
     }
 }
+// ============================================================================
+// SSE file streaming
+// ============================================================================
 
-/// Derive a simple file extension from a MIME content type
+/// Query parameters for the artifact stream endpoint.
+#[derive(serde::Deserialize)]
+pub struct StreamArtifactParams {
+    /// JWT access token (SSE/EventSource cannot set Authorization header).
+    pub token: Option<String>,
+}
+
+/// Internal state machine for the `stream_artifact` SSE generator.
+///
+/// We use `futures::stream::unfold` instead of `async_stream::stream!` to avoid
+/// adding an external dependency.
+enum TailState {
+    /// Waiting for the file to appear on disk.
+    WaitingForFile {
+        full_path: std::path::PathBuf,
+        file_path: String,
+        execution_id: Option<i64>,
+        db: sqlx::PgPool,
+        started: tokio::time::Instant,
+    },
+    /// File exists — send initial content.
+    SendInitial {
+        full_path: std::path::PathBuf,
+        file_path: String,
+        execution_id: Option<i64>,
+        db: sqlx::PgPool,
+    },
+    /// Tailing the file for new bytes.
+    Tailing {
+        full_path: std::path::PathBuf,
+        file_path: String,
+        execution_id: Option<i64>,
+        db: sqlx::PgPool,
+        offset: u64,
+        idle_count: u32,
+    },
+    /// Emit the final `done` SSE event and close.
+    SendDone,
+    /// Stream has ended — return `None` to close.
+    Finished,
+}
+
+/// How long to wait for the file to appear on disk.
+const STREAM_MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How often to poll for new bytes / file existence.
+const STREAM_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+/// After this many consecutive empty polls we check whether the execution
+/// is done and, if so, terminate the stream.
+const STREAM_IDLE_CHECKS_BEFORE_DONE: u32 = 6; // 3 seconds of no new data
+
+/// Check whether the given execution has reached a terminal status.
+async fn is_execution_terminal(db: &sqlx::PgPool, execution_id: Option<i64>) -> bool {
+    let Some(exec_id) = execution_id else {
+        return false;
+    };
+    match sqlx::query_scalar::<_, String>("SELECT status::text FROM execution WHERE id = $1")
+        .bind(exec_id)
+        .fetch_optional(db)
+        .await
+    {
+        Ok(Some(status)) => matches!(
+            status.as_str(),
+            "succeeded" | "failed" | "timeout" | "canceled" | "abandoned"
+        ),
+        Ok(None) => true, // execution deleted — treat as done
+        Err(_) => false,  // DB error — keep tailing
+    }
+}
+
+/// Do one final read from `offset` to EOF and return the new bytes (if any).
+async fn final_read_bytes(full_path: &std::path::Path, offset: u64) -> Option<String> {
+    let mut f = tokio::fs::File::open(full_path).await.ok()?;
+    let meta = f.metadata().await.ok()?;
+    if meta.len() <= offset {
+        return None;
+    }
+    f.seek(std::io::SeekFrom::Start(offset)).await.ok()?;
+    let mut tail = Vec::new();
+    f.read_to_end(&mut tail).await.ok()?;
+    if tail.is_empty() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&tail).into_owned())
+}
+
+/// Stream the latest file-backed artifact version as Server-Sent Events.
+///
+/// The endpoint:
+/// 1. Waits (up to ~30 s) for the file to appear on disk if it has been
+///    allocated but not yet written by the worker.
+/// 2. Once the file exists it sends the current content as an initial `content`
+///    event, then tails the file every 500 ms, sending `append` events with new
+///    bytes.
+/// 3. When no new bytes have appeared for several consecutive checks **and** the
+///    linked execution (if any) has reached a terminal status, it sends a `done`
+///    event and the stream ends.
+/// 4. If the client disconnects the stream is cleaned up automatically.
+///
+/// **Event types** (SSE `event:` field):
+/// - `content`  – full file content up to the current offset (sent once)
+/// - `append`   – incremental bytes appended since the last event
+/// - `waiting`  – file does not exist yet; sent periodically while waiting
+/// - `done`     – no more data expected; stream will close
+/// - `error`    – something went wrong; `data` contains a human-readable message
+#[utoipa::path(
+    get,
+    path = "/api/v1/artifacts/{id}/stream",
+    tag = "artifacts",
+    params(
+        ("id" = i64, Path, description = "Artifact ID"),
+        ("token" = String, Query, description = "JWT access token for authentication"),
+    ),
+    responses(
+        (status = 200, description = "SSE stream of file content", content_type = "text/event-stream"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Artifact not found or not file-backed"),
+    ),
+)]
+pub async fn stream_artifact(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Query(params): Query<StreamArtifactParams>,
+) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, ApiError> {
+    // --- auth (EventSource can't send headers, so token comes via query) ----
+    use crate::auth::jwt::validate_token;
+
+    let token = params.token.as_ref().ok_or(ApiError::Unauthorized(
+        "Missing authentication token".to_string(),
+    ))?;
+    validate_token(token, &state.jwt_config)
+        .map_err(|_| ApiError::Unauthorized("Invalid authentication token".to_string()))?;
+
+    // --- resolve artifact + latest version ---------------------------------
+    let artifact = ArtifactRepository::find_by_id(&state.db, id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    if !is_file_backed_type(artifact.r#type) {
+        return Err(ApiError::BadRequest(format!(
+            "Artifact '{}' is type {:?} which is not file-backed. \
+             Use the download endpoint instead.",
+            artifact.r#ref, artifact.r#type,
+        )));
+    }
+
+    let ver = ArtifactVersionRepository::find_latest(&state.db, id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("No versions found for artifact {}", id)))?;
+
+    let file_path = ver.file_path.ok_or_else(|| {
+        ApiError::NotFound(format!(
+            "Latest version of artifact '{}' has no file_path allocated",
+            artifact.r#ref,
+        ))
+    })?;
+
+    let artifacts_dir = state.config.artifacts_dir.clone();
+    let full_path = std::path::PathBuf::from(&artifacts_dir).join(&file_path);
+    let execution_id = artifact.execution;
+    let db = state.db.clone();
+
+    // --- build the SSE stream via unfold -----------------------------------
+    let initial_state = TailState::WaitingForFile {
+        full_path,
+        file_path,
+        execution_id,
+        db,
+        started: tokio::time::Instant::now(),
+    };
+
+    let stream = futures::stream::unfold(initial_state, |state| async move {
+        match state {
+            TailState::Finished => None,
+
+            // ---- Drain state for clean shutdown ----
+            TailState::SendDone => Some((
+                Ok(Event::default()
+                    .event("done")
+                    .data("Execution complete — stream closed")),
+                TailState::Finished,
+            )),
+
+            // ---- Phase 1: wait for the file to appear ----
+            TailState::WaitingForFile {
+                full_path,
+                file_path,
+                execution_id,
+                db,
+                started,
+            } => {
+                if full_path.exists() {
+                    let next = TailState::SendInitial {
+                        full_path,
+                        file_path,
+                        execution_id,
+                        db,
+                    };
+                    Some((
+                        Ok(Event::default()
+                            .event("waiting")
+                            .data("File found — loading content")),
+                        next,
+                    ))
+                } else if started.elapsed() > STREAM_MAX_WAIT {
+                    Some((
+                        Ok(Event::default().event("error").data(format!(
+                            "Timed out waiting for file to appear at '{}'",
+                            file_path,
+                        ))),
+                        TailState::Finished,
+                    ))
+                } else {
+                    tokio::time::sleep(STREAM_POLL_INTERVAL).await;
+                    Some((
+                        Ok(Event::default()
+                            .event("waiting")
+                            .data("File not yet available — waiting for worker to create it")),
+                        TailState::WaitingForFile {
+                            full_path,
+                            file_path,
+                            execution_id,
+                            db,
+                            started,
+                        },
+                    ))
+                }
+            }
+
+            // ---- Phase 2: read and send current file content ----
+            TailState::SendInitial {
+                full_path,
+                file_path,
+                execution_id,
+                db,
+            } => match tokio::fs::File::open(&full_path).await {
+                Ok(mut file) => {
+                    let mut buf = Vec::new();
+                    match file.read_to_end(&mut buf).await {
+                        Ok(_) => {
+                            let offset = buf.len() as u64;
+                            debug!(
+                                "artifact stream: sent initial {} bytes for '{}'",
+                                offset, file_path,
+                            );
+                            Some((
+                                Ok(Event::default()
+                                    .event("content")
+                                    .data(String::from_utf8_lossy(&buf).into_owned())),
+                                TailState::Tailing {
+                                    full_path,
+                                    file_path,
+                                    execution_id,
+                                    db,
+                                    offset,
+                                    idle_count: 0,
+                                },
+                            ))
+                        }
+                        Err(e) => Some((
+                            Ok(Event::default()
+                                .event("error")
+                                .data(format!("Failed to read file: {}", e))),
+                            TailState::Finished,
+                        )),
+                    }
+                }
+                Err(e) => Some((
+                    Ok(Event::default()
+                        .event("error")
+                        .data(format!("Failed to open file: {}", e))),
+                    TailState::Finished,
+                )),
+            },
+
+            // ---- Phase 3: tail the file for new bytes ----
+            TailState::Tailing {
+                full_path,
+                file_path,
+                execution_id,
+                db,
+                mut offset,
+                mut idle_count,
+            } => {
+                tokio::time::sleep(STREAM_POLL_INTERVAL).await;
+
+                // Re-open the file each iteration so we pick up content that
+                // was written by a different process (the worker).
+                let mut file = match tokio::fs::File::open(&full_path).await {
+                    Ok(f) => f,
+                    Err(e) => {
+                        return Some((
+                            Ok(Event::default()
+                                .event("error")
+                                .data(format!("File disappeared: {}", e))),
+                            TailState::Finished,
+                        ));
+                    }
+                };
+
+                let meta = match file.metadata().await {
+                    Ok(m) => m,
+                    Err(_) => {
+                        // Transient metadata error — keep going.
+                        return Some((
+                            Ok(Event::default().comment("metadata-retry")),
+                            TailState::Tailing {
+                                full_path,
+                                file_path,
+                                execution_id,
+                                db,
+                                offset,
+                                idle_count,
+                            },
+                        ));
+                    }
+                };
+
+                let file_len = meta.len();
+
+                if file_len > offset {
+                    // New data available — seek and read.
+                    if let Err(e) = file.seek(std::io::SeekFrom::Start(offset)).await {
+                        return Some((
+                            Ok(Event::default()
+                                .event("error")
+                                .data(format!("Seek error: {}", e))),
+                            TailState::Finished,
+                        ));
+                    }
+                    let mut new_buf = Vec::with_capacity((file_len - offset) as usize);
+                    match file.read_to_end(&mut new_buf).await {
+                        Ok(n) => {
+                            offset += n as u64;
+                            idle_count = 0;
+                            Some((
+                                Ok(Event::default()
+                                    .event("append")
+                                    .data(String::from_utf8_lossy(&new_buf).into_owned())),
+                                TailState::Tailing {
+                                    full_path,
+                                    file_path,
+                                    execution_id,
+                                    db,
+                                    offset,
+                                    idle_count,
+                                },
+                            ))
+                        }
+                        Err(e) => Some((
+                            Ok(Event::default()
+                                .event("error")
+                                .data(format!("Read error: {}", e))),
+                            TailState::Finished,
+                        )),
+                    }
+                } else if file_len < offset {
+                    // File truncated — resend from scratch.
+                    drop(file);
+                    Some((
+                        Ok(Event::default()
+                            .event("waiting")
+                            .data("File was truncated — resending content")),
+                        TailState::SendInitial {
+                            full_path,
+                            file_path,
+                            execution_id,
+                            db,
+                        },
+                    ))
+                } else {
+                    // No change.
+                    idle_count += 1;
+
+                    if idle_count >= STREAM_IDLE_CHECKS_BEFORE_DONE {
+                        let done = is_execution_terminal(&db, execution_id).await
+                            || (execution_id.is_none()
+                                && idle_count >= STREAM_IDLE_CHECKS_BEFORE_DONE * 4);
+
+                        if done {
+                            // One final read to catch trailing bytes.
+                            return if let Some(trailing) =
+                                final_read_bytes(&full_path, offset).await
+                            {
+                                Some((
+                                    Ok(Event::default().event("append").data(trailing)),
+                                    TailState::SendDone,
+                                ))
+                            } else {
+                                Some((
+                                    Ok(Event::default()
+                                        .event("done")
+                                        .data("Execution complete — stream closed")),
+                                    TailState::Finished,
+                                ))
+                            };
+                        }
+
+                        // Reset so we don't hit the DB every poll.
+                        idle_count = 0;
+                    }
+
+                    Some((
+                        Ok(Event::default().comment("no-change")),
+                        TailState::Tailing {
+                            full_path,
+                            file_path,
+                            execution_id,
+                            db,
+                            offset,
+                            idle_count,
+                        },
+                    ))
+                }
+            }
+        }
+    });
+
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(std::time::Duration::from_secs(15))
+            .text("keepalive"),
+    ))
+}
+
 fn extension_from_content_type(ct: &str) -> &str {
     match ct {
         "text/plain" => "txt",
@@ -1503,6 +2096,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/artifacts/ref/{ref}/versions/upload",
             post(upload_version_by_ref),
         )
+        .route(
+            "/artifacts/ref/{ref}/versions/file",
+            post(allocate_file_version_by_ref),
+        )
         // Progress / data
         .route("/artifacts/{id}/progress", post(append_progress))
         .route(
@@ -1511,6 +2108,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         // Download (latest)
         .route("/artifacts/{id}/download", get(download_latest))
+        // SSE streaming for file-backed artifacts
+        .route("/artifacts/{id}/stream", get(stream_artifact))
         // Version management
         .route(
             "/artifacts/{id}/versions",

@@ -523,12 +523,11 @@ async fn write_workflow_yaml(
     pack_ref: &str,
     request: &SaveWorkflowFileRequest,
 ) -> Result<(), ApiError> {
-    let workflows_dir = packs_base_dir
-        .join(pack_ref)
-        .join("actions")
-        .join("workflows");
+    let pack_dir = packs_base_dir.join(pack_ref);
+    let actions_dir = pack_dir.join("actions");
+    let workflows_dir = actions_dir.join("workflows");
 
-    // Ensure the directory exists
+    // Ensure both directories exist
     tokio::fs::create_dir_all(&workflows_dir)
         .await
         .map_err(|e| {
@@ -539,32 +538,162 @@ async fn write_workflow_yaml(
             ))
         })?;
 
-    let filename = format!("{}.workflow.yaml", request.name);
-    let filepath = workflows_dir.join(&filename);
+    // ── 1. Write the workflow file (graph-only: version, vars, tasks, output_map) ──
+    let workflow_filename = format!("{}.workflow.yaml", request.name);
+    let workflow_filepath = workflows_dir.join(&workflow_filename);
 
-    // Serialize definition to YAML
-    let yaml_content = serde_yaml_ng::to_string(&request.definition).map_err(|e| {
+    // Strip action-level fields from the definition — the workflow file should
+    // contain only the execution graph. The action YAML is authoritative for
+    // ref, label, description, parameters, output, and tags.
+    let graph_only = strip_action_level_fields(&request.definition);
+
+    let workflow_yaml = serde_yaml_ng::to_string(&graph_only).map_err(|e| {
         ApiError::BadRequest(format!("Failed to serialize workflow to YAML: {}", e))
     })?;
 
-    // Write file
-    tokio::fs::write(&filepath, yaml_content)
+    let workflow_yaml_with_header = format!(
+        "# Workflow execution graph for {}.{}\n\
+         # Action-level metadata (ref, label, parameters, output, tags) is defined\n\
+         # in the companion action YAML: actions/{}.yaml\n\n{}",
+        pack_ref, request.name, request.name, workflow_yaml
+    );
+
+    tokio::fs::write(&workflow_filepath, &workflow_yaml_with_header)
         .await
         .map_err(|e| {
             ApiError::InternalServerError(format!(
                 "Failed to write workflow file '{}': {}",
-                filepath.display(),
+                workflow_filepath.display(),
                 e
             ))
         })?;
 
     tracing::info!(
         "Wrote workflow file: {} ({} bytes)",
-        filepath.display(),
-        filepath.metadata().map(|m| m.len()).unwrap_or(0)
+        workflow_filepath.display(),
+        workflow_yaml_with_header.len()
+    );
+
+    // ── 2. Write the companion action YAML ──
+    let action_filename = format!("{}.yaml", request.name);
+    let action_filepath = actions_dir.join(&action_filename);
+
+    let action_yaml = build_action_yaml(pack_ref, request);
+
+    tokio::fs::write(&action_filepath, &action_yaml)
+        .await
+        .map_err(|e| {
+            ApiError::InternalServerError(format!(
+                "Failed to write action YAML '{}': {}",
+                action_filepath.display(),
+                e
+            ))
+        })?;
+
+    tracing::info!(
+        "Wrote action YAML: {} ({} bytes)",
+        action_filepath.display(),
+        action_yaml.len()
     );
 
     Ok(())
+}
+
+/// Strip action-level fields from a workflow definition JSON, keeping only
+/// the execution graph: `version`, `vars`, `tasks`, `output_map`.
+///
+/// Fields removed: `ref`, `label`, `description`, `parameters`, `output`, `tags`.
+fn strip_action_level_fields(definition: &serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = definition.as_object() {
+        let mut graph = serde_json::Map::new();
+        // Keep only graph-level fields
+        for key in &["version", "vars", "tasks", "output_map"] {
+            if let Some(val) = obj.get(*key) {
+                graph.insert((*key).to_string(), val.clone());
+            }
+        }
+        serde_json::Value::Object(graph)
+    } else {
+        // Shouldn't happen, but pass through if not an object
+        definition.clone()
+    }
+}
+
+/// Build the companion action YAML content for a workflow action.
+///
+/// This file defines the action-level metadata (ref, label, parameters, etc.)
+/// and references the workflow file via `workflow_file`.
+fn build_action_yaml(pack_ref: &str, request: &SaveWorkflowFileRequest) -> String {
+    let mut lines = Vec::new();
+
+    lines.push(format!(
+        "# Action definition for workflow {}.{}",
+        pack_ref, request.name
+    ));
+    lines.push(format!(
+        "# The workflow graph (tasks, transitions, variables) is in:"
+    ));
+    lines.push(format!(
+        "#   actions/workflows/{}.workflow.yaml",
+        request.name
+    ));
+    lines.push(String::new());
+
+    lines.push(format!("ref: {}.{}", pack_ref, request.name));
+    lines.push(format!("label: \"{}\"", request.label.replace('"', "\\\"")));
+    if let Some(ref desc) = request.description {
+        if !desc.is_empty() {
+            lines.push(format!("description: \"{}\"", desc.replace('"', "\\\"")));
+        }
+    }
+    lines.push(format!("enabled: true"));
+    lines.push(format!(
+        "workflow_file: workflows/{}.workflow.yaml",
+        request.name
+    ));
+
+    // Parameters
+    if let Some(ref params) = request.param_schema {
+        if let Some(obj) = params.as_object() {
+            if !obj.is_empty() {
+                lines.push(String::new());
+                let params_yaml = serde_yaml_ng::to_string(params).unwrap_or_default();
+                lines.push(format!("parameters:"));
+                // Indent the YAML output under `parameters:`
+                for line in params_yaml.lines() {
+                    lines.push(format!("  {}", line));
+                }
+            }
+        }
+    }
+
+    // Output schema
+    if let Some(ref output) = request.out_schema {
+        if let Some(obj) = output.as_object() {
+            if !obj.is_empty() {
+                lines.push(String::new());
+                let output_yaml = serde_yaml_ng::to_string(output).unwrap_or_default();
+                lines.push(format!("output:"));
+                for line in output_yaml.lines() {
+                    lines.push(format!("  {}", line));
+                }
+            }
+        }
+    }
+
+    // Tags
+    if let Some(ref tags) = request.tags {
+        if !tags.is_empty() {
+            lines.push(String::new());
+            lines.push(format!("tags:"));
+            for tag in tags {
+                lines.push(format!("  - {}", tag));
+            }
+        }
+    }
+
+    lines.push(String::new()); // trailing newline
+    lines.join("\n")
 }
 
 /// Create a companion action record for a workflow definition.

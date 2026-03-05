@@ -4,6 +4,11 @@
 //! Workflows are stored in the `workflow_definition` table with their full YAML definition
 //! as JSON. A companion action record is also created so that workflows appear in
 //! action lists and the workflow builder's action palette.
+//!
+//! Standalone workflow files (in `workflows/`) carry their own `ref` and `label`.
+//! Action-linked workflow files (in `actions/workflows/`, referenced via
+//! `workflow_file`) may omit those fields — the registrar falls back to
+//! `WorkflowFile.ref_name` / `WorkflowFile.name` derived from the filename.
 
 use attune_common::error::{Error, Result};
 use attune_common::repositories::action::{ActionRepository, CreateActionInput, UpdateActionInput};
@@ -63,6 +68,32 @@ impl WorkflowRegistrar {
         Self { pool, options }
     }
 
+    /// Resolve the effective ref for a workflow.
+    ///
+    /// Prefers the value declared in the YAML; falls back to the
+    /// `WorkflowFile.ref_name` derived from the filename when the YAML
+    /// omits it (action-linked workflow files).
+    fn effective_ref(loaded: &LoadedWorkflow) -> String {
+        if loaded.workflow.r#ref.is_empty() {
+            loaded.file.ref_name.clone()
+        } else {
+            loaded.workflow.r#ref.clone()
+        }
+    }
+
+    /// Resolve the effective label for a workflow.
+    ///
+    /// Prefers the value declared in the YAML; falls back to the
+    /// `WorkflowFile.name` (human-readable filename stem) when the YAML
+    /// omits it.
+    fn effective_label(loaded: &LoadedWorkflow) -> String {
+        if loaded.workflow.label.is_empty() {
+            loaded.file.name.clone()
+        } else {
+            loaded.workflow.label.clone()
+        }
+    }
+
     /// Register a single workflow
     pub async fn register_workflow(&self, loaded: &LoadedWorkflow) -> Result<RegistrationResult> {
         debug!("Registering workflow: {}", loaded.file.ref_name);
@@ -93,6 +124,12 @@ impl WorkflowRegistrar {
             warnings.push(err.clone());
         }
 
+        // Resolve effective ref/label — prefer workflow YAML values, fall
+        // back to filename-derived values for action-linked workflow files
+        // that omit action-level metadata.
+        let effective_ref = Self::effective_ref(loaded);
+        let effective_label = Self::effective_label(loaded);
+
         let (workflow_def_id, created) = if let Some(existing) = existing_workflow {
             if !self.options.update_existing {
                 return Err(Error::already_exists(
@@ -104,7 +141,13 @@ impl WorkflowRegistrar {
 
             info!("Updating existing workflow: {}", loaded.file.ref_name);
             let workflow_def_id = self
-                .update_workflow(&existing.id, &loaded.workflow, &pack.r#ref)
+                .update_workflow(
+                    &existing.id,
+                    &loaded.workflow,
+                    &pack.r#ref,
+                    &effective_ref,
+                    &effective_label,
+                )
                 .await?;
 
             // Update or create the companion action record
@@ -114,6 +157,8 @@ impl WorkflowRegistrar {
                 pack.id,
                 &pack.r#ref,
                 &loaded.file.name,
+                &effective_ref,
+                &effective_label,
             )
             .await?;
 
@@ -121,7 +166,14 @@ impl WorkflowRegistrar {
         } else {
             info!("Creating new workflow: {}", loaded.file.ref_name);
             let workflow_def_id = self
-                .create_workflow(&loaded.workflow, &loaded.file.pack, pack.id, &pack.r#ref)
+                .create_workflow(
+                    &loaded.workflow,
+                    &loaded.file.pack,
+                    pack.id,
+                    &pack.r#ref,
+                    &effective_ref,
+                    &effective_label,
+                )
                 .await?;
 
             // Create a companion action record so the workflow appears in action lists
@@ -131,6 +183,8 @@ impl WorkflowRegistrar {
                 pack.id,
                 &pack.r#ref,
                 &loaded.file.name,
+                &effective_ref,
+                &effective_label,
             )
             .await?;
 
@@ -197,6 +251,9 @@ impl WorkflowRegistrar {
     /// This ensures the workflow appears in action lists and the action palette
     /// in the workflow builder. The action is linked to the workflow definition
     /// via the `workflow_def` FK.
+    ///
+    /// `effective_ref` and `effective_label` are the resolved values (which may
+    /// have been derived from the filename when the workflow YAML omits them).
     async fn create_companion_action(
         &self,
         workflow_def_id: i64,
@@ -204,14 +261,16 @@ impl WorkflowRegistrar {
         pack_id: i64,
         pack_ref: &str,
         workflow_name: &str,
+        effective_ref: &str,
+        effective_label: &str,
     ) -> Result<()> {
         let entrypoint = format!("workflows/{}.workflow.yaml", workflow_name);
 
         let action_input = CreateActionInput {
-            r#ref: workflow.r#ref.clone(),
+            r#ref: effective_ref.to_string(),
             pack: pack_id,
             pack_ref: pack_ref.to_string(),
-            label: workflow.label.clone(),
+            label: effective_label.to_string(),
             description: workflow.description.clone().unwrap_or_default(),
             entrypoint,
             runtime: None,
@@ -228,7 +287,7 @@ impl WorkflowRegistrar {
 
         info!(
             "Created companion action '{}' (ID: {}) for workflow definition (ID: {})",
-            workflow.r#ref, action.id, workflow_def_id
+            effective_ref, action.id, workflow_def_id
         );
 
         Ok(())
@@ -238,6 +297,9 @@ impl WorkflowRegistrar {
     ///
     /// If the action already exists, update it. If it doesn't exist (e.g., for
     /// workflows registered before the companion-action fix), create it.
+    ///
+    /// `effective_ref` and `effective_label` are the resolved values (which may
+    /// have been derived from the filename when the workflow YAML omits them).
     async fn ensure_companion_action(
         &self,
         workflow_def_id: i64,
@@ -245,6 +307,8 @@ impl WorkflowRegistrar {
         pack_id: i64,
         pack_ref: &str,
         workflow_name: &str,
+        effective_ref: &str,
+        effective_label: &str,
     ) -> Result<()> {
         let existing_action =
             ActionRepository::find_by_workflow_def(&self.pool, workflow_def_id).await?;
@@ -252,7 +316,7 @@ impl WorkflowRegistrar {
         if let Some(action) = existing_action {
             // Update the existing companion action to stay in sync
             let update_input = UpdateActionInput {
-                label: Some(workflow.label.clone()),
+                label: Some(effective_label.to_string()),
                 description: workflow.description.clone(),
                 entrypoint: Some(format!("workflows/{}.workflow.yaml", workflow_name)),
                 runtime: None,
@@ -278,6 +342,8 @@ impl WorkflowRegistrar {
                 pack_id,
                 pack_ref,
                 workflow_name,
+                effective_ref,
+                effective_label,
             )
             .await?;
         }
@@ -286,27 +352,32 @@ impl WorkflowRegistrar {
     }
 
     /// Create a new workflow definition
+    ///
+    /// `effective_ref` and `effective_label` are the resolved values (which may
+    /// have been derived from the filename when the workflow YAML omits them).
     async fn create_workflow(
         &self,
         workflow: &WorkflowYaml,
         _pack_name: &str,
         pack_id: i64,
         pack_ref: &str,
+        effective_ref: &str,
+        effective_label: &str,
     ) -> Result<i64> {
         // Convert the parsed workflow back to JSON for storage
         let definition = serde_json::to_value(workflow)
             .map_err(|e| Error::validation(format!("Failed to serialize workflow: {}", e)))?;
 
         let input = CreateWorkflowDefinitionInput {
-            r#ref: workflow.r#ref.clone(),
+            r#ref: effective_ref.to_string(),
             pack: pack_id,
             pack_ref: pack_ref.to_string(),
-            label: workflow.label.clone(),
+            label: effective_label.to_string(),
             description: workflow.description.clone(),
             version: workflow.version.clone(),
             param_schema: workflow.parameters.clone(),
             out_schema: workflow.output.clone(),
-            definition: definition,
+            definition,
             tags: workflow.tags.clone(),
             enabled: true,
         };
@@ -317,18 +388,23 @@ impl WorkflowRegistrar {
     }
 
     /// Update an existing workflow definition
+    ///
+    /// `effective_ref` and `effective_label` are the resolved values (which may
+    /// have been derived from the filename when the workflow YAML omits them).
     async fn update_workflow(
         &self,
         workflow_id: &i64,
         workflow: &WorkflowYaml,
         _pack_ref: &str,
+        _effective_ref: &str,
+        effective_label: &str,
     ) -> Result<i64> {
         // Convert the parsed workflow back to JSON for storage
         let definition = serde_json::to_value(workflow)
             .map_err(|e| Error::validation(format!("Failed to serialize workflow: {}", e)))?;
 
         let input = UpdateWorkflowDefinitionInput {
-            label: Some(workflow.label.clone()),
+            label: Some(effective_label.to_string()),
             description: workflow.description.clone(),
             version: Some(workflow.version.clone()),
             param_schema: workflow.parameters.clone(),

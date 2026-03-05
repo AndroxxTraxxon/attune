@@ -62,6 +62,7 @@ export type ExecutionResponse = {
   workflow_task?: {
     workflow_execution: number;
     task_name: string;
+    triggered_by?: string | null;
     task_index?: number | null;
     task_batch?: number | null;
     retry_count: number;

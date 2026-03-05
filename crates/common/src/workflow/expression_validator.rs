@@ -115,12 +115,17 @@ pub fn validate_workflow_expressions(
                 match directive {
                     PublishDirective::Simple(map) => {
                         for (pk, pv) in map {
-                            validate_template(
-                                pv,
-                                &format!("{task_loc} next[{ti}].publish.{pk}"),
-                                &known_names,
-                                &mut warnings,
-                            );
+                            // Only validate string values as templates;
+                            // non-string literals (booleans, numbers, etc.)
+                            // pass through unchanged and have no expressions.
+                            if let Some(s) = pv.as_str() {
+                                validate_template(
+                                    s,
+                                    &format!("{task_loc} next[{ti}].publish.{pk}"),
+                                    &known_names,
+                                    &mut warnings,
+                                );
+                            }
                         }
                     }
                     PublishDirective::Key(_) => { /* nothing to validate */ }
@@ -132,12 +137,16 @@ pub fn validate_workflow_expressions(
         for directive in &task.publish {
             if let PublishDirective::Simple(map) = directive {
                 for (pk, pv) in map {
-                    validate_template(
-                        pv,
-                        &format!("{task_loc} publish.{pk}"),
-                        &known_names,
-                        &mut warnings,
-                    );
+                    // Only validate string values as templates;
+                    // non-string literals pass through unchanged.
+                    if let Some(s) = pv.as_str() {
+                        validate_template(
+                            s,
+                            &format!("{task_loc} publish.{pk}"),
+                            &known_names,
+                            &mut warnings,
+                        );
+                    }
                 }
             }
         }
@@ -567,7 +576,7 @@ mod tests {
     fn test_transition_publish_validated() {
         let mut task = action_task("step1");
         let mut publish_map = HashMap::new();
-        publish_map.insert("out".to_string(), "{{ unknown_thing }}".to_string());
+        publish_map.insert("out".to_string(), serde_json::Value::String("{{ unknown_thing }}".to_string()));
         task.next = vec![super::super::parser::TaskTransition {
             when: Some("{{ succeeded() }}".to_string()),
             publish: vec![PublishDirective::Simple(publish_map)],

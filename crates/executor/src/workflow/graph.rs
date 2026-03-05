@@ -11,6 +11,7 @@
 //!   - `do` — next tasks to invoke when the condition is met
 
 use attune_common::workflow::{Task, TaskType, WorkflowDefinition};
+use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 
 /// Result type for graph operations
@@ -101,11 +102,23 @@ pub struct GraphTransition {
     pub do_tasks: Vec<String>,
 }
 
-/// A single publish variable (key = expression)
+/// A single publish variable (key = value).
+///
+/// The `value` field holds either a template expression (as a `JsonValue::String`
+/// containing `{{ }}`), a literal string, or any other JSON-compatible type
+/// (boolean, number, array, object, null).  The workflow context's `render_json`
+/// method handles all of these: strings are template-rendered (with type
+/// preservation for pure expressions), while non-string values pass through
+/// unchanged.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PublishVar {
     pub name: String,
-    pub expression: String,
+    /// The publish value — may be a template string, literal boolean, number,
+    /// array, object, or null.  Renamed from `expression` (which only supported
+    /// strings); the serde alias ensures existing serialized task graphs that
+    /// use the old field name still deserialize correctly.
+    #[serde(alias = "expression")]
+    pub value: JsonValue,
 }
 
 /// Retry configuration
@@ -463,14 +476,14 @@ fn extract_publish_vars(publish: &[attune_common::workflow::PublishDirective]) -
                 for (key, value) in map {
                     vars.push(PublishVar {
                         name: key.clone(),
-                        expression: value.clone(),
+                        value: value.clone(),
                     });
                 }
             }
             PublishDirective::Key(key) => {
                 vars.push(PublishVar {
                     name: key.clone(),
-                    expression: "{{ result() }}".to_string(),
+                    value: JsonValue::String("{{ result() }}".to_string()),
                 });
             }
         }
@@ -678,7 +691,7 @@ tasks:
         assert_eq!(transitions.len(), 1);
         assert_eq!(transitions[0].publish.len(), 1);
         assert_eq!(transitions[0].publish[0].name, "msg");
-        assert_eq!(transitions[0].publish[0].expression, "task1 done");
+        assert_eq!(transitions[0].publish[0].value, JsonValue::String("task1 done".to_string()));
     }
 
     #[test]
@@ -931,5 +944,83 @@ tasks:
         assert_eq!(next.len(), 2);
         assert!(next.contains(&"failure_task".to_string()));
         assert!(next.contains(&"always_task".to_string()));
+    }
+
+    #[test]
+    fn test_typed_publish_values() {
+        // Verify that non-string publish values (booleans, numbers, null)
+        // are preserved through parsing and graph construction.
+        let yaml = r#"
+ref: test.typed_publish
+label: Typed Publish Test
+version: 1.0.0
+tasks:
+  - name: task1
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        publish:
+          - validation_passed: true
+          - count: 42
+          - ratio: 3.14
+          - label: "hello"
+          - template_val: "{{ result().data }}"
+          - nothing: null
+        do:
+          - task2
+      - when: "{{ failed() }}"
+        publish:
+          - validation_passed: false
+        do:
+          - task2
+  - name: task2
+    action: core.echo
+"#;
+
+        let workflow = workflow::parse_workflow_yaml(yaml).unwrap();
+        let graph = TaskGraph::from_workflow(&workflow).unwrap();
+
+        let task1 = graph.get_task("task1").unwrap();
+        assert_eq!(task1.transitions.len(), 2);
+
+        // Success transition should have 6 publish vars
+        let success_publish = &task1.transitions[0].publish;
+        assert_eq!(success_publish.len(), 6);
+
+        // Build a lookup map for easier assertions
+        let publish_map: HashMap<&str, &JsonValue> = success_publish
+            .iter()
+            .map(|p| (p.name.as_str(), &p.value))
+            .collect();
+
+        // Boolean true is preserved as a JSON boolean
+        assert_eq!(publish_map["validation_passed"], &JsonValue::Bool(true));
+
+        // Integer is preserved as a JSON number
+        assert_eq!(publish_map["count"], &serde_json::json!(42));
+
+        // Float is preserved as a JSON number
+        assert_eq!(publish_map["ratio"], &serde_json::json!(3.14));
+
+        // Plain string stays as a string
+        assert_eq!(
+            publish_map["label"],
+            &JsonValue::String("hello".to_string())
+        );
+
+        // Template expression stays as a string (rendered later by context)
+        assert_eq!(
+            publish_map["template_val"],
+            &JsonValue::String("{{ result().data }}".to_string())
+        );
+
+        // Null is preserved
+        assert_eq!(publish_map["nothing"], &JsonValue::Null);
+
+        // Failure transition should have boolean false
+        let failure_publish = &task1.transitions[1].publish;
+        assert_eq!(failure_publish.len(), 1);
+        assert_eq!(failure_publish[0].name, "validation_passed");
+        assert_eq!(failure_publish[0].value, JsonValue::Bool(false));
     }
 }

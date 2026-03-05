@@ -314,8 +314,117 @@ class PackLoader:
         print(f"  ⚠ Could not resolve runtime for runner_type '{runner_type}'")
         return None
 
+    def upsert_workflow_definition(
+        self,
+        cursor,
+        workflow_file_path: str,
+        action_ref: str,
+        action_data: Dict[str, Any],
+    ) -> Optional[int]:
+        """Load a workflow definition file and upsert it in the database.
+
+        When an action YAML contains a `workflow_file` field, this method reads
+        the referenced workflow YAML, creates or updates the corresponding
+        `workflow_definition` row, and returns its ID so the action can be linked
+        via the `workflow_def` FK.
+
+        The action YAML's `parameters` and `output` fields take precedence over
+        the workflow file's own schemas (allowing the action to customise the
+        exposed interface without touching the workflow graph).
+
+        Args:
+            cursor: Database cursor.
+            workflow_file_path: Path to the workflow file relative to the
+                ``actions/`` directory (e.g. ``workflows/deploy.workflow.yaml``).
+            action_ref: The ref of the action that references this workflow.
+            action_data: The parsed action YAML dict (used for schema overrides).
+
+        Returns:
+            The database ID of the workflow_definition row, or None on failure.
+        """
+        actions_dir = self.pack_dir / "actions"
+        full_path = actions_dir / workflow_file_path
+        if not full_path.exists():
+            print(f"  ⚠ Workflow file '{workflow_file_path}' not found at {full_path}")
+            return None
+
+        try:
+            workflow_data = self.load_yaml(full_path)
+        except Exception as e:
+            print(f"  ⚠ Failed to parse workflow file '{workflow_file_path}': {e}")
+            return None
+
+        # The action YAML is authoritative for action-level metadata.
+        # Fall back to the workflow file's own values only when present
+        # (standalone workflow files in workflows/ still carry them).
+        workflow_ref = workflow_data.get("ref") or action_ref
+        label = workflow_data.get("label") or action_data.get("label", "")
+        description = workflow_data.get("description") or action_data.get(
+            "description", ""
+        )
+        version = workflow_data.get("version", "1.0.0")
+        tags = workflow_data.get("tags") or action_data.get("tags", [])
+
+        # The action YAML is authoritative for param_schema / out_schema.
+        # Fall back to the workflow file's own schemas only if the action
+        # YAML doesn't define them.
+        param_schema = action_data.get("parameters") or workflow_data.get("parameters")
+        out_schema = action_data.get("output") or workflow_data.get("output")
+
+        param_schema_json = json.dumps(param_schema) if param_schema else None
+        out_schema_json = json.dumps(out_schema) if out_schema else None
+
+        # Store the full workflow definition as JSON
+        definition_json = json.dumps(workflow_data)
+        tags_list = tags if isinstance(tags, list) else []
+
+        cursor.execute(
+            """
+            INSERT INTO workflow_definition (
+                ref, pack, pack_ref, label, description, version,
+                param_schema, out_schema, definition, tags, enabled
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (ref) DO UPDATE SET
+                label = EXCLUDED.label,
+                description = EXCLUDED.description,
+                version = EXCLUDED.version,
+                param_schema = EXCLUDED.param_schema,
+                out_schema = EXCLUDED.out_schema,
+                definition = EXCLUDED.definition,
+                tags = EXCLUDED.tags,
+                enabled = EXCLUDED.enabled,
+                updated = NOW()
+            RETURNING id
+        """,
+            (
+                workflow_ref,
+                self.pack_id,
+                self.pack_ref,
+                label,
+                description,
+                version,
+                param_schema_json,
+                out_schema_json,
+                definition_json,
+                tags_list,
+                True,
+            ),
+        )
+
+        workflow_def_id = cursor.fetchone()[0]
+        print(f"    ✓ Workflow definition '{workflow_ref}' (ID: {workflow_def_id})")
+        return workflow_def_id
+
     def upsert_actions(self, runtime_ids: Dict[str, int]) -> Dict[str, int]:
-        """Load action definitions"""
+        """Load action definitions.
+
+        When an action YAML contains a ``workflow_file`` field, the loader reads
+        the referenced workflow definition, upserts a ``workflow_definition``
+        record, and links the action to it via ``action.workflow_def``.  This
+        allows the action YAML to control action-level metadata independently
+        of the workflow graph, and lets multiple actions share a workflow file.
+        """
         print("\n→ Loading actions...")
 
         actions_dir = self.pack_dir / "actions"
@@ -324,6 +433,7 @@ class PackLoader:
             return {}
 
         action_ids = {}
+        workflow_count = 0
         cursor = self.conn.cursor()
 
         for yaml_file in sorted(actions_dir.glob("*.yaml")):
@@ -340,18 +450,36 @@ class PackLoader:
             label = action_data.get("label") or generate_label(name)
             description = action_data.get("description", "")
 
-            # Determine entrypoint
-            entrypoint = action_data.get("entry_point", "")
-            if not entrypoint:
-                # Try to find corresponding script file
-                for ext in [".sh", ".py"]:
-                    script_path = actions_dir / f"{name}{ext}"
-                    if script_path.exists():
-                        entrypoint = str(script_path.relative_to(self.packs_dir))
-                        break
+            # ── Workflow file handling ───────────────────────────────────
+            workflow_file = action_data.get("workflow_file")
+            workflow_def_id: Optional[int] = None
 
-            # Resolve runtime ID for this action
-            runtime_id = self.resolve_action_runtime(action_data, runtime_ids)
+            if workflow_file:
+                workflow_def_id = self.upsert_workflow_definition(
+                    cursor, workflow_file, ref, action_data
+                )
+                if workflow_def_id is not None:
+                    workflow_count += 1
+
+            # For workflow actions the entrypoint is the workflow file path;
+            # for regular actions it comes from entry_point in the YAML.
+            if workflow_file:
+                entrypoint = workflow_file
+            else:
+                entrypoint = action_data.get("entry_point", "")
+                if not entrypoint:
+                    # Try to find corresponding script file
+                    for ext in [".sh", ".py"]:
+                        script_path = actions_dir / f"{name}{ext}"
+                        if script_path.exists():
+                            entrypoint = str(script_path.relative_to(self.packs_dir))
+                            break
+
+            # Resolve runtime ID (workflow actions have no runtime)
+            if workflow_file:
+                runtime_id = None
+            else:
+                runtime_id = self.resolve_action_runtime(action_data, runtime_ids)
 
             param_schema = json.dumps(action_data.get("parameters", {}))
             out_schema = json.dumps(action_data.get("output", {}))
@@ -423,9 +551,25 @@ class PackLoader:
 
             action_id = cursor.fetchone()[0]
             action_ids[ref] = action_id
-            print(f"  ✓ Action '{ref}' (ID: {action_id})")
+
+            # Link action to workflow definition if present
+            if workflow_def_id is not None:
+                cursor.execute(
+                    """
+                    UPDATE action SET workflow_def = %s, updated = NOW()
+                    WHERE id = %s
+                """,
+                    (workflow_def_id, action_id),
+                )
+                print(
+                    f"  ✓ Action '{ref}' (ID: {action_id}) → workflow def {workflow_def_id}"
+                )
+            else:
+                print(f"  ✓ Action '{ref}' (ID: {action_id})")
 
         cursor.close()
+        if workflow_count > 0:
+            print(f"  ({workflow_count} workflow definition(s) registered)")
         return action_ids
 
     def upsert_sensors(
@@ -561,7 +705,15 @@ class PackLoader:
         return sensor_ids
 
     def load_pack(self):
-        """Main loading process"""
+        """Main loading process.
+
+        Components are loaded in dependency order:
+        1. Runtimes (no dependencies)
+        2. Triggers (no dependencies)
+        3. Actions (depend on runtime; workflow actions also create
+           workflow_definition records)
+        4. Sensors (depend on triggers and runtime)
+        """
         print("=" * 60)
         print(f"Pack Loader - {self.pack_name}")
         print("=" * 60)
@@ -581,7 +733,7 @@ class PackLoader:
             # Load triggers
             trigger_ids = self.upsert_triggers()
 
-            # Load actions (with runtime resolution)
+            # Load actions (with runtime resolution + workflow definitions)
             action_ids = self.upsert_actions(runtime_ids)
 
             # Load sensors

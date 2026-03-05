@@ -109,30 +109,47 @@ impl WorkflowLoader {
     }
 
     /// Load all workflows from a specific pack
+    ///
+    /// Scans two directories in order:
+    /// 1. `{pack_dir}/workflows/` — legacy/standalone workflow files
+    /// 2. `{pack_dir}/actions/workflows/` — visual-builder and action-linked workflow files
+    ///
+    /// If the same workflow ref appears in both directories, the version from
+    /// `actions/workflows/` wins (it is scanned second and overwrites the map entry).
     pub async fn load_pack_workflows(
         &self,
         pack_name: &str,
         pack_dir: &Path,
     ) -> Result<HashMap<String, LoadedWorkflow>> {
-        let workflows_dir = pack_dir.join("workflows");
-
-        if !workflows_dir.exists() {
-            debug!("No workflows directory in pack '{}'", pack_name);
-            return Ok(HashMap::new());
-        }
-
-        let workflow_files = self.scan_workflow_files(&workflows_dir, pack_name).await?;
         let mut workflows = HashMap::new();
 
-        for file in workflow_files {
-            match self.load_workflow_file(&file).await {
-                Ok(loaded) => {
-                    workflows.insert(loaded.file.ref_name.clone(), loaded);
-                }
-                Err(e) => {
-                    warn!("Failed to load workflow '{}': {}", file.path.display(), e);
+        // Scan both workflow directories
+        let scan_dirs: Vec<std::path::PathBuf> = vec![
+            pack_dir.join("workflows"),
+            pack_dir.join("actions").join("workflows"),
+        ];
+
+        for workflows_dir in &scan_dirs {
+            if !workflows_dir.exists() {
+                continue;
+            }
+
+            let workflow_files = self.scan_workflow_files(workflows_dir, pack_name).await?;
+
+            for file in workflow_files {
+                match self.load_workflow_file(&file).await {
+                    Ok(loaded) => {
+                        workflows.insert(loaded.file.ref_name.clone(), loaded);
+                    }
+                    Err(e) => {
+                        warn!("Failed to load workflow '{}': {}", file.path.display(), e);
+                    }
                 }
             }
+        }
+
+        if workflows.is_empty() {
+            debug!("No workflows found in pack '{}'", pack_name);
         }
 
         Ok(workflows)
@@ -185,6 +202,10 @@ impl WorkflowLoader {
     }
 
     /// Reload a specific workflow by reference
+    ///
+    /// Searches for the workflow file in both `workflows/` and
+    /// `actions/workflows/` directories, trying `.yaml`, `.yml`, and
+    /// `.workflow.yaml` extensions.
     pub async fn reload_workflow(&self, ref_name: &str) -> Result<LoadedWorkflow> {
         let parts: Vec<&str> = ref_name.split('.').collect();
         if parts.len() != 2 {
@@ -198,36 +219,35 @@ impl WorkflowLoader {
         let workflow_name = parts[1];
 
         let pack_dir = self.config.packs_base_dir.join(pack_name);
-        let workflow_path = pack_dir
-            .join("workflows")
-            .join(format!("{}.yaml", workflow_name));
 
-        if !workflow_path.exists() {
-            // Try .yml extension
-            let workflow_path_yml = pack_dir
-                .join("workflows")
-                .join(format!("{}.yml", workflow_name));
-            if workflow_path_yml.exists() {
-                let file = WorkflowFile {
-                    path: workflow_path_yml,
-                    pack: pack_name.to_string(),
-                    name: workflow_name.to_string(),
-                    ref_name: ref_name.to_string(),
-                };
-                return self.load_workflow_file(&file).await;
+        // Candidate directories and filename patterns to search
+        let dirs = [
+            pack_dir.join("actions").join("workflows"),
+            pack_dir.join("workflows"),
+        ];
+        let extensions = [
+            format!("{}.workflow.yaml", workflow_name),
+            format!("{}.yaml", workflow_name),
+            format!("{}.workflow.yml", workflow_name),
+            format!("{}.yml", workflow_name),
+        ];
+
+        for dir in &dirs {
+            for filename in &extensions {
+                let candidate = dir.join(filename);
+                if candidate.exists() {
+                    let file = WorkflowFile {
+                        path: candidate,
+                        pack: pack_name.to_string(),
+                        name: workflow_name.to_string(),
+                        ref_name: ref_name.to_string(),
+                    };
+                    return self.load_workflow_file(&file).await;
+                }
             }
-
-            return Err(Error::not_found("workflow", "ref", ref_name));
         }
 
-        let file = WorkflowFile {
-            path: workflow_path,
-            pack: pack_name.to_string(),
-            name: workflow_name.to_string(),
-            ref_name: ref_name.to_string(),
-        };
-
-        self.load_workflow_file(&file).await
+        Err(Error::not_found("workflow", "ref", ref_name))
     }
 
     /// Scan pack directories
@@ -259,6 +279,11 @@ impl WorkflowLoader {
     }
 
     /// Scan workflow files in a directory
+    ///
+    /// Handles both `{name}.yaml` and `{name}.workflow.yaml` naming
+    /// conventions. For files with a `.workflow.yaml` suffix (produced by
+    /// the visual workflow builder), the `.workflow` portion is stripped
+    /// when deriving the workflow name and ref.
     async fn scan_workflow_files(
         &self,
         workflows_dir: &Path,
@@ -278,7 +303,14 @@ impl WorkflowLoader {
             if path.is_file() {
                 if let Some(ext) = path.extension() {
                     if ext == "yaml" || ext == "yml" {
-                        if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
+                        if let Some(raw_stem) = path.file_stem().and_then(|n| n.to_str()) {
+                            // Strip `.workflow` suffix if present:
+                            //   "deploy.workflow.yaml" -> stem "deploy.workflow" -> name "deploy"
+                            //   "deploy.yaml"          -> stem "deploy"          -> name "deploy"
+                            let name = raw_stem
+                                .strip_suffix(".workflow")
+                                .unwrap_or(raw_stem);
+
                             let ref_name = format!("{}.{}", pack_name, name);
                             workflow_files.push(WorkflowFile {
                                 path: path.clone(),
@@ -474,5 +506,162 @@ tasks:
             .unwrap_err()
             .to_string()
             .contains("exceeds maximum size"));
+    }
+
+    /// Verify that `scan_workflow_files` strips the `.workflow` suffix from
+    /// filenames like `deploy.workflow.yaml`, yielding name `deploy` and
+    /// ref `pack.deploy` instead of `pack.deploy.workflow`.
+    #[tokio::test]
+    async fn test_scan_workflow_files_strips_workflow_suffix() {
+        let temp_dir = TempDir::new().unwrap();
+        let packs_dir = temp_dir.path().to_path_buf();
+        let pack_dir = packs_dir.join("my_pack");
+        let workflows_dir = pack_dir.join("actions").join("workflows");
+        fs::create_dir_all(&workflows_dir).await.unwrap();
+
+        let workflow_yaml = r#"
+ref: my_pack.deploy
+label: Deploy
+version: "1.0.0"
+tasks:
+  - name: step1
+    action: core.noop
+"#;
+        fs::write(workflows_dir.join("deploy.workflow.yaml"), workflow_yaml)
+            .await
+            .unwrap();
+
+        let config = LoaderConfig {
+            packs_base_dir: packs_dir,
+            skip_validation: true,
+            max_file_size: 1024 * 1024,
+        };
+
+        let loader = WorkflowLoader::new(config);
+        let files = loader
+            .scan_workflow_files(&workflows_dir, "my_pack")
+            .await
+            .unwrap();
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].name, "deploy");
+        assert_eq!(files[0].ref_name, "my_pack.deploy");
+    }
+
+    /// Verify that `load_pack_workflows` discovers workflow files in both
+    /// `workflows/` (legacy) and `actions/workflows/` (visual builder)
+    /// directories, and that `actions/workflows/` wins on ref collision.
+    #[tokio::test]
+    async fn test_load_pack_workflows_scans_both_directories() {
+        let temp_dir = TempDir::new().unwrap();
+        let packs_dir = temp_dir.path().to_path_buf();
+        let pack_dir = packs_dir.join("dual_pack");
+
+        // Legacy directory: workflows/
+        let legacy_dir = pack_dir.join("workflows");
+        fs::create_dir_all(&legacy_dir).await.unwrap();
+
+        let legacy_yaml = r#"
+ref: dual_pack.alpha
+label: Alpha (legacy)
+version: "1.0.0"
+tasks:
+  - name: t1
+    action: core.noop
+"#;
+        fs::write(legacy_dir.join("alpha.yaml"), legacy_yaml)
+            .await
+            .unwrap();
+
+        // Also put a workflow that only exists in the legacy dir
+        let beta_yaml = r#"
+ref: dual_pack.beta
+label: Beta
+version: "1.0.0"
+tasks:
+  - name: t1
+    action: core.noop
+"#;
+        fs::write(legacy_dir.join("beta.yaml"), beta_yaml)
+            .await
+            .unwrap();
+
+        // Visual builder directory: actions/workflows/
+        let builder_dir = pack_dir.join("actions").join("workflows");
+        fs::create_dir_all(&builder_dir).await.unwrap();
+
+        let builder_yaml = r#"
+ref: dual_pack.alpha
+label: Alpha (builder)
+version: "2.0.0"
+tasks:
+  - name: t1
+    action: core.noop
+"#;
+        fs::write(builder_dir.join("alpha.workflow.yaml"), builder_yaml)
+            .await
+            .unwrap();
+
+        let config = LoaderConfig {
+            packs_base_dir: packs_dir,
+            skip_validation: true,
+            max_file_size: 1024 * 1024,
+        };
+
+        let loader = WorkflowLoader::new(config);
+        let workflows = loader
+            .load_pack_workflows("dual_pack", &pack_dir)
+            .await
+            .unwrap();
+
+        // Both alpha and beta should be present
+        assert_eq!(workflows.len(), 2);
+        assert!(workflows.contains_key("dual_pack.alpha"));
+        assert!(workflows.contains_key("dual_pack.beta"));
+
+        // Alpha should come from actions/workflows/ (scanned second, overwrites)
+        let alpha = &workflows["dual_pack.alpha"];
+        assert_eq!(alpha.workflow.label, "Alpha (builder)");
+        assert_eq!(alpha.workflow.version, "2.0.0");
+
+        // Beta only exists in legacy dir
+        let beta = &workflows["dual_pack.beta"];
+        assert_eq!(beta.workflow.label, "Beta");
+    }
+
+    /// Verify that `reload_workflow` finds files in `actions/workflows/`
+    /// with the `.workflow.yaml` extension.
+    #[tokio::test]
+    async fn test_reload_workflow_finds_actions_workflows_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let packs_dir = temp_dir.path().to_path_buf();
+        let pack_dir = packs_dir.join("rp");
+        let builder_dir = pack_dir.join("actions").join("workflows");
+        fs::create_dir_all(&builder_dir).await.unwrap();
+
+        let yaml = r#"
+ref: rp.deploy
+label: Deploy
+version: "1.0.0"
+tasks:
+  - name: step1
+    action: core.noop
+"#;
+        fs::write(builder_dir.join("deploy.workflow.yaml"), yaml)
+            .await
+            .unwrap();
+
+        let config = LoaderConfig {
+            packs_base_dir: packs_dir,
+            skip_validation: true,
+            max_file_size: 1024 * 1024,
+        };
+
+        let loader = WorkflowLoader::new(config);
+        let loaded = loader.reload_workflow("rp.deploy").await.unwrap();
+
+        assert_eq!(loaded.workflow.r#ref, "rp.deploy");
+        assert_eq!(loaded.file.name, "deploy");
+        assert_eq!(loaded.file.ref_name, "rp.deploy");
     }
 }

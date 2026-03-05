@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { formatDistanceToNow } from "date-fns";
 import {
   ChevronDown,
@@ -14,6 +14,7 @@ import {
   Download,
   Eye,
   X,
+  Radio,
 } from "lucide-react";
 import {
   useExecutionArtifacts,
@@ -136,7 +137,110 @@ function TextFileDetail({
   const [content, setContent] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoadingContent, setIsLoadingContent] = useState(true);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [streamDone, setStreamDone] = useState(false);
+  const preRef = useRef<HTMLPreElement>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  // Track whether the user has scrolled away from the bottom so we can
+  // auto-scroll only when they're already at the end.
+  const userScrolledAwayRef = useRef(false);
 
+  // Auto-scroll the <pre> to the bottom when new content arrives,
+  // unless the user has deliberately scrolled up.
+  const scrollToBottom = useCallback(() => {
+    const el = preRef.current;
+    if (el && !userScrolledAwayRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, []);
+
+  // Detect whether the user has scrolled away from the bottom.
+  const handleScroll = useCallback(() => {
+    const el = preRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    userScrolledAwayRef.current = !atBottom;
+  }, []);
+
+  // ---- SSE streaming path (used when execution is running) ----
+  useEffect(() => {
+    if (!isRunning) return;
+
+    const token = localStorage.getItem("access_token");
+    if (!token) {
+      setLoadError("No authentication token available");
+      setIsLoadingContent(false);
+      return;
+    }
+
+    const url = `${OpenAPI.BASE}/api/v1/artifacts/${artifactId}/stream?token=${encodeURIComponent(token)}`;
+    const es = new EventSource(url);
+    eventSourceRef.current = es;
+    setIsStreaming(true);
+    setStreamDone(false);
+
+    es.addEventListener("waiting", (e: MessageEvent) => {
+      setIsWaiting(true);
+      setIsLoadingContent(false);
+      // If the message says "File found", the next event will be content
+      if (e.data?.includes("File found")) {
+        setIsWaiting(false);
+      }
+    });
+
+    es.addEventListener("content", (e: MessageEvent) => {
+      setContent(e.data);
+      setLoadError(null);
+      setIsLoadingContent(false);
+      setIsWaiting(false);
+      // Scroll after React renders the new content
+      requestAnimationFrame(scrollToBottom);
+    });
+
+    es.addEventListener("append", (e: MessageEvent) => {
+      setContent((prev) => (prev ?? "") + e.data);
+      setLoadError(null);
+      requestAnimationFrame(scrollToBottom);
+    });
+
+    es.addEventListener("done", () => {
+      setStreamDone(true);
+      setIsStreaming(false);
+      es.close();
+    });
+
+    es.addEventListener("error", (e: MessageEvent) => {
+      // SSE spec fires generic error events on connection close.
+      // Only show user-facing errors if the server sent an explicit event.
+      if (e.data) {
+        setLoadError(e.data);
+      }
+    });
+
+    es.onerror = () => {
+      // Connection dropped — EventSource will auto-reconnect, but if it
+      // reaches CLOSED state we fall back to the download endpoint.
+      if (es.readyState === EventSource.CLOSED) {
+        setIsStreaming(false);
+        // If we never got any content via SSE, fall back to download
+        setContent((prev) => {
+          if (prev === null) {
+            // Will be handled by the fetch fallback below
+          }
+          return prev;
+        });
+      }
+    };
+
+    return () => {
+      es.close();
+      eventSourceRef.current = null;
+      setIsStreaming(false);
+    };
+  }, [artifactId, isRunning, scrollToBottom]);
+
+  // ---- Fetch fallback (used when not running, or SSE never connected) ----
   const fetchContent = useCallback(async () => {
     const token = localStorage.getItem("access_token");
     const url = `${OpenAPI.BASE}/api/v1/artifacts/${artifactId}/download`;
@@ -159,16 +263,10 @@ function TextFileDetail({
     }
   }, [artifactId]);
 
-  // Initial load
+  // When NOT running (execution completed), use download endpoint once.
   useEffect(() => {
+    if (isRunning) return;
     fetchContent();
-  }, [fetchContent]);
-
-  // Poll while running to pick up new file versions
-  useEffect(() => {
-    if (!isRunning) return;
-    const interval = setInterval(fetchContent, 3000);
-    return () => clearInterval(interval);
   }, [isRunning, fetchContent]);
 
   return (
@@ -179,10 +277,19 @@ function TextFileDetail({
           {artifactName ?? "Text File"}
         </h4>
         <div className="flex items-center gap-2">
-          {isRunning && (
-            <div className="flex items-center gap-1 text-xs text-blue-600">
+          {isStreaming && !streamDone && (
+            <div className="flex items-center gap-1 text-xs text-green-600">
+              <Radio className="h-3 w-3 animate-pulse" />
+              <span>Streaming</span>
+            </div>
+          )}
+          {streamDone && (
+            <span className="text-xs text-gray-500">Stream complete</span>
+          )}
+          {isWaiting && (
+            <div className="flex items-center gap-1 text-xs text-amber-600">
               <Loader2 className="h-3 w-3 animate-spin" />
-              <span>Live</span>
+              <span>Waiting for file…</span>
             </div>
           )}
           <button
@@ -194,7 +301,7 @@ function TextFileDetail({
         </div>
       </div>
 
-      {isLoadingContent && (
+      {isLoadingContent && !isWaiting && (
         <div className="flex items-center gap-2 py-2 text-sm text-gray-500">
           <Loader2 className="h-4 w-4 animate-spin" />
           Loading content…
@@ -206,9 +313,19 @@ function TextFileDetail({
       )}
 
       {!isLoadingContent && !loadError && content !== null && (
-        <pre className="max-h-64 overflow-y-auto bg-gray-900 text-gray-100 rounded p-3 text-xs font-mono whitespace-pre-wrap break-all">
+        <pre
+          ref={preRef}
+          onScroll={handleScroll}
+          className="max-h-64 overflow-y-auto bg-gray-900 text-gray-100 rounded p-3 text-xs font-mono whitespace-pre-wrap break-all"
+        >
           {content || <span className="text-gray-500 italic">(empty)</span>}
         </pre>
+      )}
+
+      {isWaiting && content === null && !loadError && (
+        <div className="bg-gray-900 rounded p-3 text-xs text-gray-500 italic">
+          Waiting for the worker to write the file…
+        </div>
       )}
     </div>
   );

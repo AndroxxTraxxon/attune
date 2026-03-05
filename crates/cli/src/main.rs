@@ -16,6 +16,7 @@ use commands::{
     rule::RuleCommands,
     sensor::SensorCommands,
     trigger::TriggerCommands,
+    workflow::WorkflowCommands,
 };
 
 #[derive(Parser)]
@@ -77,6 +78,11 @@ enum Commands {
     Execution {
         #[command(subcommand)]
         command: ExecutionCommands,
+    },
+    /// Workflow management
+    Workflow {
+        #[command(subcommand)]
+        command: WorkflowCommands,
     },
     /// Trigger management
     Trigger {
@@ -165,6 +171,15 @@ async fn main() {
         }
         Commands::Execution { command } => {
             commands::execution::handle_execution_command(
+                &cli.profile,
+                command,
+                &cli.api_url,
+                output_format,
+            )
+            .await
+        }
+        Commands::Workflow { command } => {
+            commands::workflow::handle_workflow_command(
                 &cli.profile,
                 command,
                 &cli.api_url,

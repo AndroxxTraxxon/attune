@@ -42,7 +42,7 @@ pub enum TriggerCommands {
         trigger_ref: String,
 
         /// Skip confirmation prompt
-        #[arg(short, long)]
+        #[arg(long)]
         yes: bool,
     },
 }

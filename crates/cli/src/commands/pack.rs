@@ -11,6 +11,37 @@ use crate::output::{self, OutputFormat};
 
 #[derive(Subcommand)]
 pub enum PackCommands {
+    /// Create an empty pack
+    ///
+    /// Creates a new pack with no actions, triggers, rules, or sensors.
+    /// Use --interactive (-i) to be prompted for each field, or provide
+    /// fields via flags. Only --ref is required in non-interactive mode
+    /// (--label defaults to a title-cased ref, version defaults to 0.1.0).
+    Create {
+        /// Unique reference identifier (e.g., "my_pack", "slack")
+        #[arg(long, short = 'r')]
+        r#ref: Option<String>,
+
+        /// Human-readable label (defaults to title-cased ref)
+        #[arg(long, short)]
+        label: Option<String>,
+
+        /// Pack description
+        #[arg(long, short)]
+        description: Option<String>,
+
+        /// Pack version (semver format recommended)
+        #[arg(long = "pack-version", default_value = "0.1.0")]
+        pack_version: String,
+
+        /// Tags for categorization (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+
+        /// Interactive mode — prompt for each field
+        #[arg(long, short)]
+        interactive: bool,
+    },
     /// List all installed packs
     List {
         /// Filter by pack name
@@ -75,7 +106,7 @@ pub enum PackCommands {
         pack_ref: String,
 
         /// Skip confirmation prompt
-        #[arg(short = 'y', long)]
+        #[arg(long)]
         yes: bool,
     },
     /// Register a pack from a local directory (path must be accessible by the API server)
@@ -282,6 +313,17 @@ struct UploadPackResponse {
     tests_skipped: bool,
 }
 
+#[derive(Debug, Serialize)]
+struct CreatePackBody {
+    r#ref: String,
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    version: String,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
 pub async fn handle_pack_command(
     profile: &Option<String>,
     command: PackCommands,
@@ -289,6 +331,27 @@ pub async fn handle_pack_command(
     output_format: OutputFormat,
 ) -> Result<()> {
     match command {
+        PackCommands::Create {
+            r#ref,
+            label,
+            description,
+            pack_version,
+            tags,
+            interactive,
+        } => {
+            handle_create(
+                profile,
+                r#ref,
+                label,
+                description,
+                pack_version,
+                tags,
+                interactive,
+                api_url,
+                output_format,
+            )
+            .await
+        }
         PackCommands::List { name } => handle_list(profile, name, api_url, output_format).await,
         PackCommands::Show { pack_ref } => {
             handle_show(profile, pack_ref, api_url, output_format).await
@@ -399,6 +462,169 @@ pub async fn handle_pack_command(
             force,
         } => pack_index::handle_index_merge(file, inputs, force, output_format).await,
     }
+}
+
+/// Derive a human-readable label from a pack ref.
+///
+/// Splits on `_`, `-`, or `.` and title-cases each word.
+fn label_from_ref(r: &str) -> String {
+    r.split(|c| c == '_' || c == '-' || c == '.')
+        .filter(|s| !s.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => {
+                    let upper: String = first.to_uppercase().collect();
+                    format!("{}{}", upper, chars.as_str())
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+async fn handle_create(
+    profile: &Option<String>,
+    ref_flag: Option<String>,
+    label_flag: Option<String>,
+    description_flag: Option<String>,
+    version_flag: String,
+    tags_flag: Vec<String>,
+    interactive: bool,
+    api_url: &Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    // ── Collect field values ────────────────────────────────────────
+    let (pack_ref, label, description, version, tags) = if interactive {
+        // Interactive prompts
+        let pack_ref: String = match ref_flag {
+            Some(r) => r,
+            None => dialoguer::Input::new()
+                .with_prompt("Pack ref (unique identifier, e.g. \"my_pack\")")
+                .interact_text()?,
+        };
+
+        let default_label = label_flag
+            .clone()
+            .unwrap_or_else(|| label_from_ref(&pack_ref));
+        let label: String = dialoguer::Input::new()
+            .with_prompt("Label")
+            .default(default_label)
+            .interact_text()?;
+
+        let default_desc = description_flag.clone().unwrap_or_default();
+        let description: String = dialoguer::Input::new()
+            .with_prompt("Description (optional, Enter to skip)")
+            .default(default_desc)
+            .allow_empty(true)
+            .interact_text()?;
+        let description = if description.is_empty() {
+            None
+        } else {
+            Some(description)
+        };
+
+        let version: String = dialoguer::Input::new()
+            .with_prompt("Version")
+            .default(version_flag)
+            .interact_text()?;
+
+        let default_tags = if tags_flag.is_empty() {
+            String::new()
+        } else {
+            tags_flag.join(", ")
+        };
+        let tags_input: String = dialoguer::Input::new()
+            .with_prompt("Tags (comma-separated, optional)")
+            .default(default_tags)
+            .allow_empty(true)
+            .interact_text()?;
+        let tags: Vec<String> = tags_input
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        // Show summary and confirm
+        println!();
+        output::print_section("New Pack Summary");
+        output::print_key_value_table(vec![
+            ("Ref", pack_ref.clone()),
+            ("Label", label.clone()),
+            (
+                "Description",
+                description
+                    .clone()
+                    .unwrap_or_else(|| "(none)".to_string()),
+            ),
+            ("Version", version.clone()),
+            (
+                "Tags",
+                if tags.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    tags.join(", ")
+                },
+            ),
+        ]);
+        println!();
+
+        let confirm = dialoguer::Confirm::new()
+            .with_prompt("Create this pack?")
+            .default(true)
+            .interact()?;
+
+        if !confirm {
+            output::print_info("Pack creation cancelled");
+            return Ok(());
+        }
+
+        (pack_ref, label, description, version, tags)
+    } else {
+        // Non-interactive: ref is required
+        let pack_ref = ref_flag.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Pack ref is required. Provide --ref <value> or use --interactive mode."
+            )
+        })?;
+
+        let label = label_flag.unwrap_or_else(|| label_from_ref(&pack_ref));
+        let description = description_flag;
+        let version = version_flag;
+        let tags = tags_flag;
+
+        (pack_ref, label, description, version, tags)
+    };
+
+    // ── Send request ────────────────────────────────────────────────
+    let config = CliConfig::load_with_profile(profile.as_deref())?;
+    let mut client = ApiClient::from_config(&config, api_url);
+
+    let body = CreatePackBody {
+        r#ref: pack_ref,
+        label,
+        description,
+        version,
+        tags,
+    };
+
+    let pack: Pack = client.post("/packs", &body).await?;
+
+    // ── Output ──────────────────────────────────────────────────────
+    match output_format {
+        OutputFormat::Json | OutputFormat::Yaml => {
+            output::print_output(&pack, output_format)?;
+        }
+        OutputFormat::Table => {
+            output::print_success(&format!(
+                "Pack '{}' created successfully (id: {})",
+                pack.pack_ref, pack.id
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 async fn handle_list(
@@ -1629,4 +1855,49 @@ async fn handle_update(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_label_from_ref_underscores() {
+        assert_eq!(label_from_ref("my_cool_pack"), "My Cool Pack");
+    }
+
+    #[test]
+    fn test_label_from_ref_hyphens() {
+        assert_eq!(label_from_ref("my-cool-pack"), "My Cool Pack");
+    }
+
+    #[test]
+    fn test_label_from_ref_dots() {
+        assert_eq!(label_from_ref("my.cool.pack"), "My Cool Pack");
+    }
+
+    #[test]
+    fn test_label_from_ref_mixed_separators() {
+        assert_eq!(label_from_ref("my_cool-pack.v2"), "My Cool Pack V2");
+    }
+
+    #[test]
+    fn test_label_from_ref_single_word() {
+        assert_eq!(label_from_ref("slack"), "Slack");
+    }
+
+    #[test]
+    fn test_label_from_ref_already_capitalized() {
+        assert_eq!(label_from_ref("AWS"), "AWS");
+    }
+
+    #[test]
+    fn test_label_from_ref_empty() {
+        assert_eq!(label_from_ref(""), "");
+    }
+
+    #[test]
+    fn test_label_from_ref_consecutive_separators() {
+        assert_eq!(label_from_ref("my__pack"), "My Pack");
+    }
 }

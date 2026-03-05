@@ -160,6 +160,10 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
         // Extract query params from the query key (format: ["executions", params])
         const queryParams = queryKey[1];
 
+        // Child execution queries (keyed by { parent: id }) fetch all pages
+        // and must not be capped — the timeline DAG needs every child.
+        const isChildQuery = !!(queryParams as any)?.parent;
+
         const old = oldData as any;
 
         // Check if execution already exists in the list
@@ -224,7 +228,9 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
               if (hasUnsupportedFilters(queryParams)) {
                 return;
               }
-              updatedData = [executionData, ...old.data].slice(0, 50);
+              updatedData = isChildQuery
+                ? [...old.data, executionData]
+                : [executionData, ...old.data].slice(0, 50);
               totalItemsDelta = 1;
             } else {
               // No boundary crossing: either both match (execution was
@@ -240,8 +246,11 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
             }
 
             if (matchesQuery) {
-              // Add to beginning and cap at 50 items to prevent unbounded growth
-              updatedData = [executionData, ...old.data].slice(0, 50);
+              // Add to the list. Child queries keep all items (no cap);
+              // other lists cap at 50 to prevent unbounded growth.
+              updatedData = isChildQuery
+                ? [...old.data, executionData]
+                : [executionData, ...old.data].slice(0, 50);
               totalItemsDelta = 1;
             } else {
               return;

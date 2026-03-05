@@ -7,3 +7,4 @@ pub mod pack_index;
 pub mod rule;
 pub mod sensor;
 pub mod trigger;
+pub mod workflow;

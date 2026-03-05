@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use reqwest::{multipart, Client as HttpClient, Method, RequestBuilder, Response, StatusCode};
+use reqwest::{multipart, Client as HttpClient, Method, RequestBuilder, StatusCode};
 use serde::{de::DeserializeOwned, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -83,13 +83,14 @@ impl ApiClient {
         self.auth_token = None;
     }
 
-    /// Refresh the authentication token using the refresh token
+    /// Refresh the authentication token using the refresh token.
     ///
-    /// Returns Ok(true) if refresh succeeded, Ok(false) if no refresh token available
+    /// Returns `Ok(true)` if refresh succeeded, `Ok(false)` if no refresh token
+    /// is available or the server rejected it.
     async fn refresh_auth_token(&mut self) -> Result<bool> {
         let refresh_token = match &self.refresh_token {
             Some(token) => token.clone(),
-            None => return Ok(false), // No refresh token available
+            None => return Ok(false),
         };
 
         #[derive(Serialize)]
@@ -103,7 +104,6 @@ impl ApiClient {
             refresh_token: String,
         }
 
-        // Build refresh request without auth token
         let url = format!("{}/auth/refresh", self.base_url);
         let req = self
             .client
@@ -113,7 +113,7 @@ impl ApiClient {
         let response = req.send().await.context("Failed to refresh token")?;
 
         if !response.status().is_success() {
-            // Refresh failed - clear tokens
+            // Refresh failed — clear tokens so we don't keep retrying
             self.auth_token = None;
             self.refresh_token = None;
             return Ok(false);
@@ -128,7 +128,7 @@ impl ApiClient {
         self.auth_token = Some(api_response.data.access_token.clone());
         self.refresh_token = Some(api_response.data.refresh_token.clone());
 
-        // Persist to config file if we have the path
+        // Persist to config file
         if self.config_path.is_some() {
             if let Ok(mut config) = CliConfig::load() {
                 let _ = config.set_auth(
@@ -141,45 +141,96 @@ impl ApiClient {
         Ok(true)
     }
 
-    /// Build a request with common headers
-    fn build_request(&self, method: Method, path: &str) -> RequestBuilder {
-        // Auth endpoints are at /auth, not /auth
-        let url = if path.starts_with("/auth") {
+    // ── Request building helpers ────────────────────────────────────────
+
+    /// Build a full URL from a path.
+    fn url_for(&self, path: &str) -> String {
+        if path.starts_with("/auth") {
             format!("{}{}", self.base_url, path)
         } else {
             format!("{}/api/v1{}", self.base_url, path)
-        };
-        let mut req = self.client.request(method, &url);
+        }
+    }
 
+    /// Build a `RequestBuilder` with auth header applied.
+    fn build_request(&self, method: Method, path: &str) -> RequestBuilder {
+        let url = self.url_for(path);
+        let mut req = self.client.request(method, &url);
         if let Some(token) = &self.auth_token {
             req = req.bearer_auth(token);
         }
-
         req
     }
 
-    /// Execute a request and handle the response with automatic token refresh
-    async fn execute<T: DeserializeOwned>(&mut self, req: RequestBuilder) -> Result<T> {
+    // ── Core execute-with-retry machinery ──────────────────────────────
+
+    /// Send a request that carries a JSON body.  On a 401 response the token
+    /// is refreshed and the request is rebuilt & retried exactly once.
+    async fn execute_json<T, B>(
+        &mut self,
+        method: Method,
+        path: &str,
+        body: Option<&B>,
+    ) -> Result<T>
+    where
+        T: DeserializeOwned,
+        B: Serialize,
+    {
+        // First attempt
+        let req = self.attach_body(self.build_request(method.clone(), path), body);
         let response = req.send().await.context("Failed to send request to API")?;
 
-        // If 401 and we have a refresh token, try to refresh once
         if response.status() == StatusCode::UNAUTHORIZED && self.refresh_token.is_some() {
-            // Try to refresh the token
             if self.refresh_auth_token().await? {
-                // Rebuild and retry the original request with new token
-                // Note: This is a simplified retry - the original request body is already consumed
-                // For a production implementation, we'd need to clone the request or store the body
-                return Err(anyhow::anyhow!(
-                    "Token expired and was refreshed. Please retry your command."
-                ));
+                // Retry with new token
+                let req = self.attach_body(self.build_request(method, path), body);
+                let response = req
+                    .send()
+                    .await
+                    .context("Failed to send request to API (retry)")?;
+                return self.handle_response(response).await;
             }
         }
 
         self.handle_response(response).await
     }
 
-    /// Handle API response and extract data
-    async fn handle_response<T: DeserializeOwned>(&self, response: Response) -> Result<T> {
+    /// Send a request that carries a JSON body and expects no response body.
+    async fn execute_json_no_response<B: Serialize>(
+        &mut self,
+        method: Method,
+        path: &str,
+        body: Option<&B>,
+    ) -> Result<()> {
+        let req = self.attach_body(self.build_request(method.clone(), path), body);
+        let response = req.send().await.context("Failed to send request to API")?;
+
+        if response.status() == StatusCode::UNAUTHORIZED && self.refresh_token.is_some() {
+            if self.refresh_auth_token().await? {
+                let req = self.attach_body(self.build_request(method, path), body);
+                let response = req
+                    .send()
+                    .await
+                    .context("Failed to send request to API (retry)")?;
+                return self.handle_empty_response(response).await;
+            }
+        }
+
+        self.handle_empty_response(response).await
+    }
+
+    /// Optionally attach a JSON body to a request builder.
+    fn attach_body<B: Serialize>(&self, req: RequestBuilder, body: Option<&B>) -> RequestBuilder {
+        match body {
+            Some(b) => req.json(b),
+            None => req,
+        }
+    }
+
+    // ── Response handling ──────────────────────────────────────────────
+
+    /// Parse a successful API response or return a descriptive error.
+    async fn handle_response<T: DeserializeOwned>(&self, response: reqwest::Response) -> Result<T> {
         let status = response.status();
 
         if status.is_success() {
@@ -194,7 +245,6 @@ impl ApiClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
 
-            // Try to parse as API error
             if let Ok(api_error) = serde_json::from_str::<ApiError>(&error_text) {
                 anyhow::bail!("API error ({}): {}", status, api_error.error);
             } else {
@@ -203,10 +253,30 @@ impl ApiClient {
         }
     }
 
+    /// Handle a response where we only care about success/failure, not a body.
+    async fn handle_empty_response(&self, response: reqwest::Response) -> Result<()> {
+        let status = response.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+
+            if let Ok(api_error) = serde_json::from_str::<ApiError>(&error_text) {
+                anyhow::bail!("API error ({}): {}", status, api_error.error);
+            } else {
+                anyhow::bail!("API error ({}): {}", status, error_text);
+            }
+        }
+    }
+
+    // ── Public convenience methods ─────────────────────────────────────
+
     /// GET request
     pub async fn get<T: DeserializeOwned>(&mut self, path: &str) -> Result<T> {
-        let req = self.build_request(Method::GET, path);
-        self.execute(req).await
+        self.execute_json::<T, ()>(Method::GET, path, None).await
     }
 
     /// GET request with query parameters (query string must be in path)
@@ -215,8 +285,7 @@ impl ApiClient {
     /// Example: `client.get_with_query("/actions?enabled=true&pack=core").await`
     #[allow(dead_code)]
     pub async fn get_with_query<T: DeserializeOwned>(&mut self, path: &str) -> Result<T> {
-        let req = self.build_request(Method::GET, path);
-        self.execute(req).await
+        self.execute_json::<T, ()>(Method::GET, path, None).await
     }
 
     /// POST request with JSON body
@@ -225,8 +294,7 @@ impl ApiClient {
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let req = self.build_request(Method::POST, path).json(body);
-        self.execute(req).await
+        self.execute_json(Method::POST, path, Some(body)).await
     }
 
     /// PUT request with JSON body
@@ -237,8 +305,7 @@ impl ApiClient {
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let req = self.build_request(Method::PUT, path).json(body);
-        self.execute(req).await
+        self.execute_json(Method::PUT, path, Some(body)).await
     }
 
     /// PATCH request with JSON body
@@ -247,8 +314,7 @@ impl ApiClient {
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let req = self.build_request(Method::PATCH, path).json(body);
-        self.execute(req).await
+        self.execute_json(Method::PATCH, path, Some(body)).await
     }
 
     /// DELETE request with response parsing
@@ -259,8 +325,7 @@ impl ApiClient {
     /// delete operations return metadata (e.g., cascade deletion summaries).
     #[allow(dead_code)]
     pub async fn delete<T: DeserializeOwned>(&mut self, path: &str) -> Result<T> {
-        let req = self.build_request(Method::DELETE, path);
-        self.execute(req).await
+        self.execute_json::<T, ()>(Method::DELETE, path, None).await
     }
 
     /// POST request without expecting response body
@@ -270,36 +335,14 @@ impl ApiClient {
     /// Kept for API completeness even though not currently used.
     #[allow(dead_code)]
     pub async fn post_no_response<B: Serialize>(&mut self, path: &str, body: &B) -> Result<()> {
-        let req = self.build_request(Method::POST, path).json(body);
-        let response = req.send().await.context("Failed to send request to API")?;
-
-        let status = response.status();
-        if status.is_success() {
-            Ok(())
-        } else {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            anyhow::bail!("API error ({}): {}", status, error_text);
-        }
+        self.execute_json_no_response(Method::POST, path, Some(body))
+            .await
     }
 
     /// DELETE request without expecting response body
     pub async fn delete_no_response(&mut self, path: &str) -> Result<()> {
-        let req = self.build_request(Method::DELETE, path);
-        let response = req.send().await.context("Failed to send request to API")?;
-
-        let status = response.status();
-        if status.is_success() {
-            Ok(())
-        } else {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            anyhow::bail!("API error ({}): {}", status, error_text);
-        }
+        self.execute_json_no_response::<()>(Method::DELETE, path, None)
+            .await
     }
 
     /// POST a multipart/form-data request with a file field and optional text fields.
@@ -318,33 +361,47 @@ impl ApiClient {
         mime_type: &str,
         extra_fields: Vec<(&str, String)>,
     ) -> Result<T> {
-        let url = format!("{}/api/v1{}", self.base_url, path);
+        // Closure-like helper to build the multipart request from scratch.
+        // We need this because reqwest::multipart::Form is not Clone, so we
+        // must rebuild it for the retry attempt.
+        let build_multipart_request =
+            |client: &ApiClient, bytes: &[u8]| -> Result<reqwest::RequestBuilder> {
+                let url = format!("{}/api/v1{}", client.base_url, path);
 
-        let file_part = multipart::Part::bytes(file_bytes)
-            .file_name(file_name.to_string())
-            .mime_str(mime_type)
-            .context("Invalid MIME type")?;
+                let file_part = multipart::Part::bytes(bytes.to_vec())
+                    .file_name(file_name.to_string())
+                    .mime_str(mime_type)
+                    .context("Invalid MIME type")?;
 
-        let mut form = multipart::Form::new().part(file_field_name.to_string(), file_part);
+                let mut form = multipart::Form::new().part(file_field_name.to_string(), file_part);
 
-        for (key, value) in extra_fields {
-            form = form.text(key.to_string(), value);
-        }
+                for (key, value) in &extra_fields {
+                    form = form.text(key.to_string(), value.clone());
+                }
 
-        let mut req = self.client.post(&url).multipart(form);
+                let mut req = client.client.post(&url).multipart(form);
+                if let Some(token) = &client.auth_token {
+                    req = req.bearer_auth(token);
+                }
+                Ok(req)
+            };
 
-        if let Some(token) = &self.auth_token {
-            req = req.bearer_auth(token);
-        }
+        // First attempt
+        let req = build_multipart_request(self, &file_bytes)?;
+        let response = req
+            .send()
+            .await
+            .context("Failed to send multipart request to API")?;
 
-        let response = req.send().await.context("Failed to send multipart request to API")?;
-
-        // Handle 401 + refresh (same pattern as execute())
         if response.status() == StatusCode::UNAUTHORIZED && self.refresh_token.is_some() {
             if self.refresh_auth_token().await? {
-                return Err(anyhow::anyhow!(
-                    "Token expired and was refreshed. Please retry your command."
-                ));
+                // Retry with new token
+                let req = build_multipart_request(self, &file_bytes)?;
+                let response = req
+                    .send()
+                    .await
+                    .context("Failed to send multipart request to API (retry)")?;
+                return self.handle_response(response).await;
             }
         }
 
@@ -373,5 +430,23 @@ mod tests {
 
         client.clear_auth_token();
         assert!(client.auth_token.is_none());
+    }
+
+    #[test]
+    fn test_url_for_api_path() {
+        let client = ApiClient::new("http://localhost:8080".to_string(), None);
+        assert_eq!(
+            client.url_for("/actions"),
+            "http://localhost:8080/api/v1/actions"
+        );
+    }
+
+    #[test]
+    fn test_url_for_auth_path() {
+        let client = ApiClient::new("http://localhost:8080".to_string(), None);
+        assert_eq!(
+            client.url_for("/auth/login"),
+            "http://localhost:8080/auth/login"
+        );
     }
 }

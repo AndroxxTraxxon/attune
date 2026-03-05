@@ -78,14 +78,26 @@ impl From<ParseError> for crate::error::Error {
 }
 
 /// Complete workflow definition parsed from YAML
+///
+/// When loaded via an action's `workflow_file` field, the `ref` and `label`
+/// fields are optional — the action YAML is authoritative for those values.
+/// For standalone workflow files (in `workflows/`), they should be present.
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct WorkflowDefinition {
-    /// Unique reference (e.g., "my_pack.deploy_app")
-    #[validate(length(min = 1, max = 255))]
+    /// Unique reference (e.g., "my_pack.deploy_app").
+    ///
+    /// Optional for action-linked workflow files (supplied by the action YAML).
+    /// Required for standalone workflow files.
+    #[serde(default)]
+    #[validate(length(max = 255))]
     pub r#ref: String,
 
-    /// Human-readable label
-    #[validate(length(min = 1, max = 255))]
+    /// Human-readable label.
+    ///
+    /// Optional for action-linked workflow files (supplied by the action YAML).
+    /// Required for standalone workflow files.
+    #[serde(default)]
+    #[validate(length(max = 255))]
     pub label: String,
 
     /// Optional description
@@ -412,11 +424,19 @@ pub enum TaskType {
 }
 
 /// Variable publishing directive
+///
+/// Publish directives map variable names to values.  Values may be template
+/// expressions (strings containing `{{ }}`), literal strings, or any other
+/// JSON-compatible type (booleans, numbers, arrays, objects).  Non-string
+/// literals are preserved through the rendering pipeline so that, for example,
+/// `validation_passed: true` publishes the boolean `true`, not the string
+/// `"true"`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PublishDirective {
-    /// Simple key-value pair
-    Simple(HashMap<String, String>),
+    /// Key-value pair where the value can be any JSON-compatible type
+    /// (string template, boolean, number, array, object, null).
+    Simple(HashMap<String, serde_json::Value>),
     /// Just a key (publishes entire result under that key)
     Key(String),
 }
@@ -1314,5 +1334,176 @@ tasks:
         assert_eq!(workflow.tasks[0].next.len(), 2);
         assert!(workflow.tasks[0].next[0].chart_meta.is_none());
         assert!(workflow.tasks[0].next[1].chart_meta.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Action-linked workflow file (no ref/label)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_action_linked_workflow_without_ref_and_label() {
+        // Action-linked workflow files (in actions/workflows/) omit ref and
+        // label — those are supplied by the companion action YAML.  The
+        // parser must accept such files and default the fields to empty
+        // strings.
+        let yaml = r#"
+version: 1.0.0
+
+vars:
+  counter: 0
+
+tasks:
+  - name: step1
+    action: core.echo
+    input:
+      message: "hello"
+    next:
+      - when: "{{ succeeded() }}"
+        do:
+          - step2
+  - name: step2
+    action: core.echo
+    input:
+      message: "world"
+
+output_map:
+  result: "{{ task.step2.result }}"
+"#;
+
+        let result = parse_workflow_yaml(yaml);
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+        let workflow = result.unwrap();
+
+        // ref and label default to empty strings
+        assert_eq!(workflow.r#ref, "");
+        assert_eq!(workflow.label, "");
+
+        // Graph fields are parsed normally
+        assert_eq!(workflow.version, "1.0.0");
+        assert_eq!(workflow.tasks.len(), 2);
+        assert_eq!(workflow.tasks[0].name, "step1");
+        assert!(workflow.vars.contains_key("counter"));
+        assert!(workflow.output_map.is_some());
+
+        // No parameters or output schema (those come from the action YAML)
+        assert!(workflow.parameters.is_none());
+        assert!(workflow.output.is_none());
+        assert!(workflow.tags.is_empty());
+    }
+
+    #[test]
+    fn test_parse_standalone_workflow_still_works_with_ref_and_label() {
+        // Standalone workflow files (in workflows/) still carry ref and label.
+        // Verify they continue to parse correctly.
+        let yaml = r#"
+ref: mypack.deploy
+label: Deploy Workflow
+description: Deploys the application
+version: 2.0.0
+
+parameters:
+  target:
+    type: string
+    required: true
+
+tags:
+  - deploy
+  - production
+
+tasks:
+  - name: deploy
+    action: core.run
+    input:
+      target: "{{ parameters.target }}"
+"#;
+
+        let result = parse_workflow_yaml(yaml);
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+        let workflow = result.unwrap();
+
+        assert_eq!(workflow.r#ref, "mypack.deploy");
+        assert_eq!(workflow.label, "Deploy Workflow");
+        assert_eq!(
+            workflow.description.as_deref(),
+            Some("Deploys the application")
+        );
+        assert_eq!(workflow.version, "2.0.0");
+        assert!(workflow.parameters.is_some());
+        assert_eq!(workflow.tags, vec!["deploy", "production"]);
+    }
+
+    #[test]
+    fn test_typed_publish_values_in_transitions() {
+        // Regression test: publish directive values that are booleans, numbers,
+        // or null must parse successfully (not just strings).  Previously
+        // `PublishDirective::Simple(HashMap<String, String>)` rejected them.
+        let yaml = r#"
+ref: test.typed_publish
+label: Typed Publish
+version: 1.0.0
+tasks:
+  - name: validate
+    action: core.echo
+    next:
+      - when: "{{ succeeded() }}"
+        publish:
+          - validation_passed: true
+          - count: 42
+          - ratio: 3.14
+          - label: "hello"
+          - template_val: "{{ result().data }}"
+          - nothing: null
+        do:
+          - finalize
+      - when: "{{ failed() }}"
+        publish:
+          - validation_passed: false
+        do:
+          - handle_error
+  - name: finalize
+    action: core.echo
+  - name: handle_error
+    action: core.echo
+"#;
+
+        let result = parse_workflow_yaml(yaml);
+        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+        let workflow = result.unwrap();
+
+        let task = &workflow.tasks[0];
+        assert_eq!(task.name, "validate");
+        assert_eq!(task.next.len(), 2);
+
+        // Success transition: 6 publish directives with mixed types
+        let success_transition = &task.next[0];
+        assert_eq!(success_transition.publish.len(), 6);
+
+        // Verify each typed value survived parsing
+        for directive in &success_transition.publish {
+            if let PublishDirective::Simple(map) = directive {
+                if let Some(val) = map.get("validation_passed") {
+                    assert_eq!(val, &serde_json::Value::Bool(true), "boolean true");
+                } else if let Some(val) = map.get("count") {
+                    assert_eq!(val, &serde_json::json!(42), "integer");
+                } else if let Some(val) = map.get("ratio") {
+                    assert_eq!(val, &serde_json::json!(3.14), "float");
+                } else if let Some(val) = map.get("label") {
+                    assert_eq!(val, &serde_json::json!("hello"), "string");
+                } else if let Some(val) = map.get("template_val") {
+                    assert_eq!(val, &serde_json::json!("{{ result().data }}"), "template");
+                } else if let Some(val) = map.get("nothing") {
+                    assert!(val.is_null(), "null");
+                }
+            }
+        }
+
+        // Failure transition: boolean false
+        let failure_transition = &task.next[1];
+        assert_eq!(failure_transition.publish.len(), 1);
+        if let PublishDirective::Simple(map) = &failure_transition.publish[0] {
+            assert_eq!(map.get("validation_passed"), Some(&serde_json::Value::Bool(false)));
+        } else {
+            panic!("Expected Simple publish directive");
+        }
     }
 }

@@ -7,19 +7,33 @@
 //! Components are loaded in dependency order:
 //! 1. Runtimes (no dependencies)
 //! 2. Triggers (no dependencies)
-//! 3. Actions (depend on runtime)
+//! 3. Actions (depend on runtime; workflow actions also create workflow_definition records)
 //! 4. Sensors (depend on triggers and runtime)
 //!
 //! All loaders use **upsert** semantics: if an entity with the same ref already
 //! exists it is updated in place (preserving its database ID); otherwise a new
 //! row is created. After loading, entities that belong to the pack but whose
 //! refs are no longer present in the YAML files are deleted.
+//!
+//! ## Workflow Actions
+//!
+//! An action YAML may include a `workflow_file` field pointing to a workflow
+//! definition file relative to the `actions/` directory (e.g.,
+//! `workflow_file: workflows/deploy.workflow.yaml`). When present the loader:
+//!
+//! 1. Reads and parses the referenced workflow YAML file.
+//! 2. Creates or updates a `workflow_definition` record in the database.
+//! 3. Creates the action record with `workflow_def` linked to the definition.
+//!
+//! This allows the action YAML to control action-level metadata (ref, label,
+//! parameters, policies) independently of the workflow graph. Multiple actions
+//! can reference the same workflow file with different configurations.
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use sqlx::PgPool;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::error::{Error, Result};
 use crate::models::Id;
@@ -32,8 +46,12 @@ use crate::repositories::trigger::{
     CreateSensorInput, CreateTriggerInput, SensorRepository, TriggerRepository, UpdateSensorInput,
     UpdateTriggerInput,
 };
+use crate::repositories::workflow::{
+    CreateWorkflowDefinitionInput, UpdateWorkflowDefinitionInput, WorkflowDefinitionRepository,
+};
 use crate::repositories::{Create, Delete, FindById, FindByRef, Update};
 use crate::version_matching::extract_version_components;
+use crate::workflow::parser::parse_workflow_yaml;
 
 /// Result of loading pack components into the database.
 #[derive(Debug, Default)]
@@ -588,6 +606,13 @@ impl<'a> PackComponentLoader<'a> {
     /// Load action definitions from `pack_dir/actions/*.yaml`.
     ///
     /// Returns the list of loaded action refs for cleanup.
+    ///
+    /// When an action YAML contains a `workflow_file` field, the loader reads
+    /// the referenced workflow definition, creates/updates a
+    /// `workflow_definition` record, and links the action to it via the
+    /// `action.workflow_def` FK. This enables the action YAML to control
+    /// action-level metadata independently of the workflow graph, and allows
+    /// multiple actions to share the same workflow file.
     async fn load_actions(
         &self,
         pack_dir: &Path,
@@ -636,19 +661,64 @@ impl<'a> PackComponentLoader<'a> {
                 .unwrap_or("")
                 .to_string();
 
-            let entrypoint = data
-                .get("entry_point")
+            // ── Workflow file handling ──────────────────────────────────
+            // If the action declares `workflow_file`, load the referenced
+            // workflow definition and link the action to it.
+            let workflow_file_field = data
+                .get("workflow_file")
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+                .map(|s| s.to_string());
 
-            // Resolve runtime ID from runner_type
-            let runner_type = data
-                .get("runner_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("shell");
+            let workflow_def_id: Option<Id> = if let Some(ref wf_path) = workflow_file_field {
+                match self
+                    .load_workflow_for_action(
+                        &actions_dir,
+                        wf_path,
+                        &action_ref,
+                        &label,
+                        &description,
+                        &data,
+                    )
+                    .await
+                {
+                    Ok(id) => Some(id),
+                    Err(e) => {
+                        let msg = format!(
+                            "Failed to load workflow file '{}' for action '{}': {}",
+                            wf_path, action_ref, e
+                        );
+                        warn!("{}", msg);
+                        result.warnings.push(msg);
+                        // Continue creating the action without workflow link
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
-            let runtime_id = self.resolve_runtime_id(runner_type).await?;
+            // For workflow actions the entrypoint is the workflow file path;
+            // for regular actions it comes from entry_point in the YAML.
+            let entrypoint = if let Some(ref wf_path) = workflow_file_field {
+                wf_path.clone()
+            } else {
+                data.get("entry_point")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            };
+
+            // Resolve runtime ID from runner_type (workflow actions have no
+            // runner_type and get runtime = None).
+            let runtime_id = if workflow_file_field.is_some() {
+                None
+            } else {
+                let runner_type = data
+                    .get("runner_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("shell");
+                self.resolve_runtime_id(runner_type).await?
+            };
 
             let param_schema = data
                 .get("parameters")
@@ -701,6 +771,19 @@ impl<'a> PackComponentLoader<'a> {
                     Ok(_) => {
                         info!("Updated action '{}' (ID: {})", action_ref, existing.id);
                         result.actions_updated += 1;
+
+                        // Re-link workflow definition if present
+                        if let Some(wf_id) = workflow_def_id {
+                            if let Err(e) =
+                                ActionRepository::link_workflow_def(self.pool, existing.id, wf_id)
+                                    .await
+                            {
+                                warn!(
+                                    "Failed to link workflow def {} to action '{}': {}",
+                                    wf_id, action_ref, e
+                                );
+                            }
+                        }
                     }
                     Err(e) => {
                         let msg = format!("Failed to update action '{}': {}", action_ref, e);
@@ -745,8 +828,25 @@ impl<'a> PackComponentLoader<'a> {
             match create_result {
                 Ok(id) => {
                     info!("Created action '{}' (ID: {})", action_ref, id);
-                    loaded_refs.push(action_ref);
+                    loaded_refs.push(action_ref.clone());
                     result.actions_loaded += 1;
+
+                    // Link workflow definition if present
+                    if let Some(wf_id) = workflow_def_id {
+                        if let Err(e) =
+                            ActionRepository::link_workflow_def(self.pool, id, wf_id).await
+                        {
+                            warn!(
+                                "Failed to link workflow def {} to new action '{}': {}",
+                                wf_id, action_ref, e
+                            );
+                        } else {
+                            info!(
+                                "Linked action '{}' (ID: {}) to workflow definition (ID: {})",
+                                action_ref, id, wf_id
+                            );
+                        }
+                    }
                 }
                 Err(e) => {
                     // Check for unique constraint violation (already exists race condition)
@@ -769,6 +869,146 @@ impl<'a> PackComponentLoader<'a> {
         }
 
         Ok(loaded_refs)
+    }
+
+    /// Load a workflow definition file referenced by an action's `workflow_file`
+    /// field and create/update the corresponding `workflow_definition` record.
+    ///
+    /// Returns the database ID of the workflow definition.
+    async fn load_workflow_for_action(
+        &self,
+        actions_dir: &Path,
+        workflow_file_path: &str,
+        action_ref: &str,
+        action_label: &str,
+        action_description: &str,
+        action_data: &serde_yaml_ng::Value,
+    ) -> Result<Id> {
+        let full_path = actions_dir.join(workflow_file_path);
+        if !full_path.exists() {
+            return Err(Error::validation(format!(
+                "Workflow file '{}' not found at '{}'",
+                workflow_file_path,
+                full_path.display()
+            )));
+        }
+
+        let content = std::fs::read_to_string(&full_path).map_err(|e| {
+            Error::io(format!(
+                "Failed to read workflow file '{}': {}",
+                full_path.display(),
+                e
+            ))
+        })?;
+
+        let mut workflow_yaml = parse_workflow_yaml(&content)?;
+
+        // The action YAML is authoritative for action-level metadata.
+        // Fill in ref/label/description/tags from the action when the
+        // workflow file omits them (action-linked workflow files should
+        // contain only the execution graph).
+        if workflow_yaml.r#ref.is_empty() {
+            workflow_yaml.r#ref = action_ref.to_string();
+        }
+        if workflow_yaml.label.is_empty() {
+            workflow_yaml.label = action_label.to_string();
+        }
+        if workflow_yaml.description.is_none() {
+            workflow_yaml.description = Some(action_description.to_string());
+        }
+        if workflow_yaml.tags.is_empty() {
+            if let Some(tags_val) = action_data.get("tags") {
+                if let Some(tags_seq) = tags_val.as_sequence() {
+                    workflow_yaml.tags = tags_seq
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect();
+                }
+            }
+        }
+
+        let workflow_ref = workflow_yaml.r#ref.clone();
+
+        // The action YAML is authoritative for param_schema / out_schema.
+        // Fall back to the workflow file's own schemas only if the action
+        // YAML doesn't define them.
+        let param_schema = action_data
+            .get("parameters")
+            .and_then(|v| serde_json::to_value(v).ok())
+            .or_else(|| workflow_yaml.parameters.clone());
+
+        let out_schema = action_data
+            .get("output")
+            .and_then(|v| serde_json::to_value(v).ok())
+            .or_else(|| workflow_yaml.output.clone());
+
+        let definition_json = serde_json::to_value(&workflow_yaml)
+            .map_err(|e| Error::validation(format!("Failed to serialize workflow: {}", e)))?;
+
+        // Derive label/description for the DB record from the action YAML,
+        // since it is authoritative. The workflow file values were already
+        // used as fallback above when populating workflow_yaml.
+        let label = workflow_yaml.label.clone();
+        let description = workflow_yaml.description.clone();
+        let tags = workflow_yaml.tags.clone();
+
+        // Check if this workflow definition already exists
+        if let Some(existing) =
+            WorkflowDefinitionRepository::find_by_ref(self.pool, &workflow_ref).await?
+        {
+            debug!(
+                "Updating existing workflow definition '{}' (ID: {})",
+                workflow_ref, existing.id
+            );
+
+            let update_input = UpdateWorkflowDefinitionInput {
+                label: Some(label),
+                description,
+                version: Some(workflow_yaml.version.clone()),
+                param_schema,
+                out_schema,
+                definition: Some(definition_json),
+                tags: Some(tags),
+                enabled: Some(true),
+            };
+
+            WorkflowDefinitionRepository::update(self.pool, existing.id, update_input).await?;
+
+            info!(
+                "Updated workflow definition '{}' (ID: {}) for action '{}'",
+                workflow_ref, existing.id, action_ref
+            );
+
+            Ok(existing.id)
+        } else {
+            debug!(
+                "Creating new workflow definition '{}' for action '{}'",
+                workflow_ref, action_ref
+            );
+
+            let create_input = CreateWorkflowDefinitionInput {
+                r#ref: workflow_ref.clone(),
+                pack: self.pack_id,
+                pack_ref: self.pack_ref.clone(),
+                label,
+                description,
+                version: workflow_yaml.version.clone(),
+                param_schema,
+                out_schema,
+                definition: definition_json,
+                tags,
+                enabled: true,
+            };
+
+            let created = WorkflowDefinitionRepository::create(self.pool, create_input).await?;
+
+            info!(
+                "Created workflow definition '{}' (ID: {}) for action '{}'",
+                workflow_ref, created.id, action_ref
+            );
+
+            Ok(created.id)
+        }
     }
 
     /// Load sensor definitions from `pack_dir/sensors/*.yaml`.

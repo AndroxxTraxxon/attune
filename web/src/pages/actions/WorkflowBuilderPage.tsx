@@ -45,6 +45,8 @@ import {
   generateUniqueTaskName,
   generateTaskId,
   builderStateToDefinition,
+  builderStateToGraph,
+  builderStateToActionYaml,
   definitionToBuilderState,
   validateWorkflow,
   addTransitionTarget,
@@ -585,12 +587,14 @@ export default function WorkflowBuilderPage() {
     doSave();
   }, [startNodeWarning, doSave]);
 
-  // YAML preview — generate proper YAML from builder state
-  const yamlPreview = useMemo(() => {
+  // YAML previews — two separate panels for the two-file model:
+  // 1. Action YAML (ref, label, parameters, output, tags, workflow_file)
+  // 2. Workflow YAML (version, vars, tasks, output_map — graph only)
+  const actionYamlPreview = useMemo(() => {
     if (!showYamlPreview) return "";
     try {
-      const definition = builderStateToDefinition(state, actionSchemaMap);
-      return yaml.dump(definition, {
+      const actionDef = builderStateToActionYaml(state);
+      return yaml.dump(actionDef, {
         indent: 2,
         lineWidth: 120,
         noRefs: true,
@@ -599,7 +603,24 @@ export default function WorkflowBuilderPage() {
         forceQuotes: false,
       });
     } catch {
-      return "# Error generating YAML preview";
+      return "# Error generating action YAML preview";
+    }
+  }, [state, showYamlPreview]);
+
+  const workflowYamlPreview = useMemo(() => {
+    if (!showYamlPreview) return "";
+    try {
+      const graphDef = builderStateToGraph(state, actionSchemaMap);
+      return yaml.dump(graphDef, {
+        indent: 2,
+        lineWidth: 120,
+        noRefs: true,
+        sortKeys: false,
+        quotingType: '"',
+        forceQuotes: false,
+      });
+    } catch {
+      return "# Error generating workflow YAML preview";
     }
   }, [state, showYamlPreview, actionSchemaMap]);
 
@@ -854,26 +875,64 @@ export default function WorkflowBuilderPage() {
       {/* Main content area */}
       <div className="flex-1 flex overflow-hidden">
         {showYamlPreview ? (
-          /* Raw YAML mode — full-width YAML view */
-          <div className="flex-1 flex flex-col overflow-hidden bg-gray-900">
-            <div className="flex items-center gap-2 px-4 py-2 bg-gray-800 border-b border-gray-700 flex-shrink-0">
-              <FileCode className="w-4 h-4 text-gray-400" />
-              <span className="text-sm font-medium text-gray-300">
-                Workflow Definition
-              </span>
-              <span className="text-[10px] text-gray-500 ml-1">
-                (read-only preview of the generated YAML)
-              </span>
-              <div className="ml-auto">
+          /* Raw YAML mode — two-panel view: Action YAML + Workflow YAML */
+          <div className="flex-1 flex overflow-hidden">
+            {/* Left panel: Action YAML */}
+            <div className="w-2/5 flex flex-col overflow-hidden bg-gray-900 border-r border-gray-700">
+              <div className="flex items-center gap-2 px-4 py-2 bg-gray-800 border-b border-gray-700 flex-shrink-0">
+                <FileCode className="w-4 h-4 text-blue-400" />
+                <span className="text-sm font-medium text-gray-300">
+                  Action YAML
+                </span>
+                <span className="text-[10px] text-gray-500 ml-1">
+                  actions/{state.name}.yaml
+                </span>
+                <div className="flex-1" />
                 <button
                   onClick={() => {
-                    navigator.clipboard.writeText(yamlPreview).then(() => {
-                      setYamlCopied(true);
-                      setTimeout(() => setYamlCopied(false), 2000);
-                    });
+                    navigator.clipboard.writeText(actionYamlPreview);
                   }}
-                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded transition-colors text-gray-400 hover:text-gray-200 hover:bg-gray-700"
-                  title="Copy YAML to clipboard"
+                  className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-gray-200 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
+                  title="Copy action YAML to clipboard"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Copy</span>
+                </button>
+              </div>
+              <div className="px-4 py-2 bg-gray-800/50 border-b border-gray-700/50 flex-shrink-0">
+                <p className="text-[10px] text-gray-500 leading-relaxed">
+                  Defines the action identity, parameters, and output schema.
+                  References the workflow file via{" "}
+                  <code className="text-gray-400">workflow_file</code>.
+                </p>
+              </div>
+              <pre className="flex-1 overflow-auto p-4 text-sm font-mono text-blue-300 whitespace-pre leading-relaxed">
+                {actionYamlPreview}
+              </pre>
+            </div>
+
+            {/* Right panel: Workflow YAML (graph only) */}
+            <div className="flex-1 flex flex-col overflow-hidden bg-gray-900">
+              <div className="flex items-center gap-2 px-4 py-2 bg-gray-800 border-b border-gray-700 flex-shrink-0">
+                <FileCode className="w-4 h-4 text-green-400" />
+                <span className="text-sm font-medium text-gray-300">
+                  Workflow YAML
+                </span>
+                <span className="text-[10px] text-gray-500 ml-1">
+                  actions/workflows/{state.name}.workflow.yaml
+                </span>
+                <div className="flex-1" />
+                <button
+                  onClick={() => {
+                    navigator.clipboard
+                      .writeText(workflowYamlPreview)
+                      .then(() => {
+                        setYamlCopied(true);
+                        setTimeout(() => setYamlCopied(false), 2000);
+                      });
+                  }}
+                  className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-gray-200 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
+                  title="Copy workflow YAML to clipboard"
                 >
                   {yamlCopied ? (
                     <>
@@ -883,15 +942,21 @@ export default function WorkflowBuilderPage() {
                   ) : (
                     <>
                       <Copy className="w-3.5 h-3.5" />
-                      Copy
+                      <span>Copy</span>
                     </>
                   )}
                 </button>
               </div>
+              <div className="px-4 py-2 bg-gray-800/50 border-b border-gray-700/50 flex-shrink-0">
+                <p className="text-[10px] text-gray-500 leading-relaxed">
+                  Execution graph only — tasks, transitions, variables. No
+                  action-level metadata (those are in the action YAML).
+                </p>
+              </div>
+              <pre className="flex-1 overflow-auto p-4 text-sm font-mono text-green-400 whitespace-pre leading-relaxed">
+                {workflowYamlPreview}
+              </pre>
             </div>
-            <pre className="flex-1 overflow-auto p-6 text-sm font-mono text-green-400 whitespace-pre leading-relaxed">
-              {yamlPreview}
-            </pre>
           </div>
         ) : (
           <>

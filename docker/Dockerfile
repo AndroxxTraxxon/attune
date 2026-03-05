@@ -25,6 +25,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /build
 
+# Increase rustc stack size to prevent SIGSEGV during release builds
+ENV RUST_MIN_STACK=16777216
+
 # Copy workspace manifests and source code
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
@@ -64,6 +67,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
+
+# Increase rustc stack size to prevent SIGSEGV during release builds
+ENV RUST_MIN_STACK=16777216
 
 # Copy workspace files
 COPY Cargo.toml Cargo.lock ./

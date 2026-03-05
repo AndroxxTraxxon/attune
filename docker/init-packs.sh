@@ -78,6 +78,17 @@ else
     echo -e "${YELLOW}⚠${NC} Runtime environments directory not mounted, skipping"
 fi
 
+# Initialise artifacts volume with correct ownership.
+# The API service (creates directories for file-backed artifact versions) and
+# workers (write artifact files during execution) both run as attune uid 1000.
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-/opt/attune/artifacts}"
+if [ -d "$ARTIFACTS_DIR" ] || mkdir -p "$ARTIFACTS_DIR" 2>/dev/null; then
+    chown -R 1000:1000 "$ARTIFACTS_DIR"
+    echo -e "${GREEN}✓${NC} Artifacts directory ready at: $ARTIFACTS_DIR"
+else
+    echo -e "${YELLOW}⚠${NC} Artifacts directory not mounted, skipping"
+fi
+
 # Check if source packs directory exists
 if [ ! -d "$SOURCE_PACKS_DIR" ]; then
     echo -e "${RED}✗${NC} Source packs directory not found: $SOURCE_PACKS_DIR"

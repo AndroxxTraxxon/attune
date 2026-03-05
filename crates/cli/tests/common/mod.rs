@@ -438,3 +438,38 @@ pub async fn mock_not_found(server: &MockServer, path_pattern: &str) {
         .mount(server)
         .await;
 }
+
+/// Mock a successful pack create response (POST /api/v1/packs)
+#[allow(dead_code)]
+pub async fn mock_pack_create(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/api/v1/packs"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "data": {
+                "id": 42,
+                "ref": "my_pack",
+                "label": "My Pack",
+                "description": "A test pack",
+                "version": "0.1.0",
+                "author": null,
+                "enabled": true,
+                "tags": ["test"],
+                "created": "2024-01-01T00:00:00Z",
+                "updated": "2024-01-01T00:00:00Z"
+            }
+        })))
+        .mount(server)
+        .await;
+}
+
+/// Mock a 409 conflict response for pack create
+#[allow(dead_code)]
+pub async fn mock_pack_create_conflict(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/api/v1/packs"))
+        .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+            "error": "Pack with ref 'my_pack' already exists"
+        })))
+        .mount(server)
+        .await;
+}

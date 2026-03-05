@@ -22,9 +22,9 @@ import { useState, useMemo } from "react";
 import { RotateCcw, Loader2 } from "lucide-react";
 import ExecuteActionModal from "@/components/common/ExecuteActionModal";
 import EntityHistoryPanel from "@/components/common/EntityHistoryPanel";
-import WorkflowTasksPanel from "@/components/common/WorkflowTasksPanel";
 import ExecutionArtifactsPanel from "@/components/executions/ExecutionArtifactsPanel";
 import ExecutionProgressBar from "@/components/executions/ExecutionProgressBar";
+import WorkflowDetailsPanel from "@/components/executions/WorkflowDetailsPanel";
 
 const getStatusColor = (status: string) => {
   switch (status) {
@@ -278,6 +278,16 @@ export default function ExecutionDetailPage() {
           </p>
         )}
       </div>
+
+      {/* Workflow Details — combined timeline + tasks panel (top of page for workflows) */}
+      {isWorkflow && (
+        <div className="mb-6">
+          <WorkflowDetailsPanel
+            parentExecution={execution}
+            actionRef={execution.action_ref}
+          />
+        </div>
+      )}
 
       {/* Re-Run Modal */}
       {showRerunModal && actionData?.data && (
@@ -541,13 +551,6 @@ export default function ExecutionDetailPage() {
           </div>
         </div>
       </div>
-
-      {/* Workflow Tasks (shown only for workflow executions) */}
-      {isWorkflow && (
-        <div className="mt-6">
-          <WorkflowTasksPanel parentExecutionId={execution.id} />
-        </div>
-      )}
 
       {/* Artifacts */}
       <div className="mt-6">

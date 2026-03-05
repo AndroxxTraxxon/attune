@@ -162,11 +162,16 @@ pub enum TaskType {
 }
 
 /// Variable publishing directive
+///
+/// Values may be template expressions (strings containing `{{ }}`), literal
+/// strings, or any other JSON-compatible type (booleans, numbers, arrays,
+/// objects).  Non-string literals are preserved through the rendering pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PublishDirective {
-    /// Simple key-value pair
-    Simple(HashMap<String, String>),
+    /// Key-value pair where the value can be any JSON-compatible type
+    /// (string template, boolean, number, array, object, null).
+    Simple(HashMap<String, serde_json::Value>),
     /// Just a key (publishes entire result under that key)
     Key(String),
 }

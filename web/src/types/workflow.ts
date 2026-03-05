@@ -222,6 +222,10 @@ export interface ParamDefinition {
 }
 
 /** Workflow definition as stored in the YAML file / API */
+/**
+ * Full workflow definition — used for DB storage and the save API payload.
+ * Contains both action-level metadata AND the execution graph.
+ */
 export interface WorkflowYamlDefinition {
   ref: string;
   label: string;
@@ -232,6 +236,37 @@ export interface WorkflowYamlDefinition {
   vars?: Record<string, unknown>;
   tasks: WorkflowYamlTask[];
   output_map?: Record<string, string>;
+  tags?: string[];
+}
+
+/**
+ * Graph-only workflow definition — written to the `.workflow.yaml` file on disk.
+ *
+ * Action-linked workflow files contain only the execution graph. The companion
+ * action YAML (`actions/{name}.yaml`) is authoritative for `ref`, `label`,
+ * `description`, `parameters`, `output`, and `tags`.
+ */
+export interface WorkflowGraphDefinition {
+  version: string;
+  vars?: Record<string, unknown>;
+  tasks: WorkflowYamlTask[];
+  output_map?: Record<string, string>;
+}
+
+/**
+ * Action YAML definition — written to the companion `actions/{name}.yaml` file.
+ *
+ * Controls the action's identity and exposed interface. References the workflow
+ * file via `workflow_file`.
+ */
+export interface ActionYamlDefinition {
+  ref: string;
+  label: string;
+  description?: string;
+  enabled: boolean;
+  workflow_file: string;
+  parameters?: Record<string, unknown>;
+  output?: Record<string, unknown>;
   tags?: string[];
 }
 
@@ -382,6 +417,52 @@ export function builderStateToDefinition(
   state: WorkflowBuilderState,
   actionSchemas?: Map<string, Record<string, unknown> | null>,
 ): WorkflowYamlDefinition {
+  const graph = builderStateToGraph(state, actionSchemas);
+  const definition: WorkflowYamlDefinition = {
+    ref: `${state.packRef}.${state.name}`,
+    label: state.label,
+    version: state.version,
+    tasks: graph.tasks,
+  };
+
+  if (state.description) {
+    definition.description = state.description;
+  }
+
+  if (Object.keys(state.parameters).length > 0) {
+    definition.parameters = state.parameters;
+  }
+
+  if (Object.keys(state.output).length > 0) {
+    definition.output = state.output;
+  }
+
+  if (graph.vars && Object.keys(graph.vars).length > 0) {
+    definition.vars = graph.vars;
+  }
+
+  if (graph.output_map) {
+    definition.output_map = graph.output_map;
+  }
+
+  if (state.tags.length > 0) {
+    definition.tags = state.tags;
+  }
+
+  return definition;
+}
+
+/**
+ * Extract the graph-only workflow definition from builder state.
+ *
+ * This produces the content that should be written to the `.workflow.yaml`
+ * file on disk — no `ref`, `label`, `description`, `parameters`, `output`,
+ * or `tags`. Those belong in the companion action YAML.
+ */
+export function builderStateToGraph(
+  state: WorkflowBuilderState,
+  actionSchemas?: Map<string, Record<string, unknown> | null>,
+): WorkflowGraphDefinition {
   const tasks: WorkflowYamlTask[] = state.tasks.map((task) => {
     const yamlTask: WorkflowYamlTask = {
       name: task.name,
@@ -446,34 +527,51 @@ export function builderStateToDefinition(
     return yamlTask;
   });
 
-  const definition: WorkflowYamlDefinition = {
-    ref: `${state.packRef}.${state.name}`,
-    label: state.label,
+  const graph: WorkflowGraphDefinition = {
     version: state.version,
     tasks,
   };
 
+  if (Object.keys(state.vars).length > 0) {
+    graph.vars = state.vars;
+  }
+
+  return graph;
+}
+
+/**
+ * Extract the action YAML definition from builder state.
+ *
+ * This produces the content for the companion `actions/{name}.yaml` file
+ * that owns action-level metadata and references the workflow file.
+ */
+export function builderStateToActionYaml(
+  state: WorkflowBuilderState,
+): ActionYamlDefinition {
+  const action: ActionYamlDefinition = {
+    ref: `${state.packRef}.${state.name}`,
+    label: state.label,
+    enabled: state.enabled,
+    workflow_file: `workflows/${state.name}.workflow.yaml`,
+  };
+
   if (state.description) {
-    definition.description = state.description;
+    action.description = state.description;
   }
 
   if (Object.keys(state.parameters).length > 0) {
-    definition.parameters = state.parameters;
+    action.parameters = state.parameters;
   }
 
   if (Object.keys(state.output).length > 0) {
-    definition.output = state.output;
-  }
-
-  if (Object.keys(state.vars).length > 0) {
-    definition.vars = state.vars;
+    action.output = state.output;
   }
 
   if (state.tags.length > 0) {
-    definition.tags = state.tags;
+    action.tags = state.tags;
   }
 
-  return definition;
+  return action;
 }
 
 // ---------------------------------------------------------------------------

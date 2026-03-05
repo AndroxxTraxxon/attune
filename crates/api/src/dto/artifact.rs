@@ -317,6 +317,62 @@ pub struct CreateFileVersionRequest {
     pub created_by: Option<String>,
 }
 
+/// Request DTO for the upsert-and-allocate endpoint.
+///
+/// Looks up an artifact by ref (creating it if it doesn't exist), then
+/// allocates a new file-backed version and returns the `file_path` where
+/// the caller should write the file on the shared artifact volume.
+///
+/// This replaces the multi-step create → 409-handling → allocate dance
+/// with a single API call.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct AllocateFileVersionByRefRequest {
+    // -- Artifact metadata (used only when creating a new artifact) ----------
+    /// Owner scope type (default: action)
+    #[schema(example = "action")]
+    pub scope: Option<OwnerType>,
+
+    /// Owner identifier (ref string of the owning entity)
+    #[schema(example = "python_example.artifact_demo")]
+    pub owner: Option<String>,
+
+    /// Artifact type (must be a file-backed type; default: file_text)
+    #[schema(example = "file_text")]
+    pub r#type: Option<ArtifactType>,
+
+    /// Visibility level. If omitted, uses type-aware default.
+    pub visibility: Option<ArtifactVisibility>,
+
+    /// Retention policy type (default: versions)
+    pub retention_policy: Option<RetentionPolicyType>,
+
+    /// Retention limit (default: 10)
+    pub retention_limit: Option<i32>,
+
+    /// Human-readable name
+    #[schema(example = "Demo Log")]
+    pub name: Option<String>,
+
+    /// Optional description
+    pub description: Option<String>,
+
+    /// Execution ID to link this artifact to
+    #[schema(example = 42)]
+    pub execution: Option<i64>,
+
+    // -- Version metadata ----------------------------------------------------
+    /// MIME content type for this version (e.g. "text/plain")
+    #[schema(example = "text/plain")]
+    pub content_type: Option<String>,
+
+    /// Free-form metadata about this version
+    #[schema(value_type = Option<Object>)]
+    pub meta: Option<JsonValue>,
+
+    /// Who created this version (e.g. action ref, identity, "system")
+    pub created_by: Option<String>,
+}
+
 /// Response DTO for an artifact version (without binary content)
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct ArtifactVersionResponse {

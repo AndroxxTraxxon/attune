@@ -56,19 +56,14 @@ pub async fn execute_streaming(
         let mut error = None;
 
         // Write parameters first if using stdin delivery.
-        // Skip empty/trivial content ("{}","","[]") to avoid polluting stdin
-        // before secrets — scripts that read secrets via readline() expect
-        // the secrets JSON as the first line.
-        let has_real_params = parameters_stdin
-            .map(|s| !matches!(s.trim(), "" | "{}" | "[]"))
-            .unwrap_or(false);
+        // When the caller provides parameters_stdin (i.e. the action uses
+        // stdin delivery), always write the content — even if it's "{}" —
+        // because the script expects to read valid JSON from stdin.
         if let Some(params_data) = parameters_stdin {
-            if has_real_params {
-                if let Err(e) = stdin.write_all(params_data.as_bytes()).await {
-                    error = Some(format!("Failed to write parameters to stdin: {}", e));
-                } else if let Err(e) = stdin.write_all(b"\n---ATTUNE_PARAMS_END---\n").await {
-                    error = Some(format!("Failed to write parameter delimiter: {}", e));
-                }
+            if let Err(e) = stdin.write_all(params_data.as_bytes()).await {
+                error = Some(format!("Failed to write parameters to stdin: {}", e));
+            } else if let Err(e) = stdin.write_all(b"\n---ATTUNE_PARAMS_END---\n").await {
+                error = Some(format!("Failed to write parameter delimiter: {}", e));
             }
         }
 

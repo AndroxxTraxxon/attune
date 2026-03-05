@@ -35,6 +35,7 @@ BEGIN
         'parent', NEW.parent,
         'result', NEW.result,
         'started_at', NEW.started_at,
+        'workflow_task', NEW.workflow_task,
         'created', NEW.created,
         'updated', NEW.updated
     );
@@ -77,6 +78,7 @@ BEGIN
             'parent', NEW.parent,
             'result', NEW.result,
             'started_at', NEW.started_at,
+            'workflow_task', NEW.workflow_task,
             'created', NEW.created,
             'updated', NEW.updated
         );

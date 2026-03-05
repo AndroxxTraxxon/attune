@@ -257,41 +257,27 @@ impl ActionExecutor {
             execution.id
         );
 
-        // Extract parameters from execution config
+        // Extract parameters from execution config.
+        // Config is always stored in flat format: the config object itself
+        // is the parameters map (e.g. {"url": "...", "method": "GET"}).
         let mut parameters = HashMap::new();
 
         if let Some(config) = &execution.config {
-            info!("Execution config present: {:?}", config);
+            debug!("Execution config present: {:?}", config);
 
-            // Try to get parameters from config.parameters first
-            if let Some(params) = config.get("parameters") {
-                info!("Found config.parameters key");
-                if let JsonValue::Object(map) = params {
-                    for (key, value) in map {
-                        parameters.insert(key.clone(), value.clone());
-                    }
-                }
-            } else if let JsonValue::Object(map) = config {
-                info!("No config.parameters key, treating entire config as parameters");
-                // If no parameters key, treat entire config as parameters
-                // (this handles rule action_params being placed at root level)
+            if let JsonValue::Object(map) = config {
                 for (key, value) in map {
-                    // Skip special keys that aren't action parameters
-                    if key != "context" && key != "env" {
-                        info!("Adding parameter: {} = {:?}", key, value);
-                        parameters.insert(key.clone(), value.clone());
-                    } else {
-                        info!("Skipping special key: {}", key);
-                    }
+                    debug!("Adding parameter: {} = {:?}", key, value);
+                    parameters.insert(key.clone(), value.clone());
                 }
             } else {
                 info!("Config is not an Object, cannot extract parameters");
             }
         } else {
-            info!("No execution config present");
+            debug!("No execution config present");
         }
 
-        info!(
+        debug!(
             "Extracted {} parameters: {:?}",
             parameters.len(),
             parameters

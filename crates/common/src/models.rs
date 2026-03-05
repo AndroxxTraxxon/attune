@@ -1052,6 +1052,14 @@ pub mod execution {
         /// Task name within the workflow
         pub task_name: String,
 
+        /// Name of the predecessor task whose completion triggered this task's
+        /// dispatch.  `None` for entry-point tasks (dispatched at workflow
+        /// start).  Used by the timeline UI to draw only the transitions that
+        /// actually fired rather than every possible transition from the
+        /// workflow definition.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub triggered_by: Option<String>,
+
         /// Index for with-items iteration (0-based)
         pub task_index: Option<i32>,
 

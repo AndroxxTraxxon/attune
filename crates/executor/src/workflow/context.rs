@@ -412,24 +412,26 @@ impl WorkflowContext {
 
     /// Publish variables from a task result.
     ///
-    /// Each publish directive is a `(name, expression)` pair where the
-    /// expression is a template string like `"{{ result().data.items }}"`.
-    /// The expression is rendered with `render_json`-style type preservation
-    /// so that non-string values (arrays, numbers, booleans) keep their type.
+    /// Each publish directive is a `(name, value)` pair where the value is
+    /// any JSON-compatible type.  String values are treated as template
+    /// expressions (e.g. `"{{ result().data.items }}"`) and rendered with
+    /// type preservation.  Non-string values (booleans, numbers, arrays,
+    /// objects, null) pass through `render_json` unchanged, preserving
+    /// their original type.
     pub fn publish_from_result(
         &mut self,
         result: &JsonValue,
         publish_vars: &[String],
-        publish_map: Option<&HashMap<String, String>>,
+        publish_map: Option<&HashMap<String, JsonValue>>,
     ) -> ContextResult<()> {
         // If publish map is provided, use it
         if let Some(map) = publish_map {
-            for (var_name, template) in map {
-                // Use type-preserving rendering: if the entire template is a
-                // single expression like `{{ result().data.items }}`, preserve
-                // the underlying JsonValue type (e.g. an array stays an array).
-                let json_value = JsonValue::String(template.clone());
-                let value = self.render_json(&json_value)?;
+            for (var_name, json_value) in map {
+                // render_json handles all types: strings are template-rendered
+                // (with type preservation for pure `{{ }}` expressions), while
+                // booleans, numbers, arrays, objects, and null pass through
+                // unchanged.
+                let value = self.render_json(json_value)?;
                 self.set_var(var_name, value);
             }
         } else {
@@ -1095,7 +1097,7 @@ mod tests {
         let mut publish_map = HashMap::new();
         publish_map.insert(
             "number_list".to_string(),
-            "{{ result().data.items }}".to_string(),
+            JsonValue::String("{{ result().data.items }}".to_string()),
         );
 
         ctx.publish_from_result(&json!({}), &[], Some(&publish_map))
@@ -1115,6 +1117,52 @@ mod tests {
             .unwrap();
 
         assert_eq!(ctx.get_var("my_var").unwrap(), result);
+    }
+
+    #[test]
+    fn test_publish_typed_values() {
+        // Non-string publish values (booleans, numbers, null) should pass
+        // through render_json unchanged and be stored with their original type.
+        let mut ctx = WorkflowContext::new(json!({}), HashMap::new());
+        ctx.set_last_task_outcome(json!({"status": "ok"}), TaskOutcome::Succeeded);
+
+        let mut publish_map = HashMap::new();
+        publish_map.insert("flag".to_string(), JsonValue::Bool(true));
+        publish_map.insert("count".to_string(), json!(42));
+        publish_map.insert("ratio".to_string(), json!(3.14));
+        publish_map.insert("nothing".to_string(), JsonValue::Null);
+        publish_map.insert(
+            "template".to_string(),
+            JsonValue::String("{{ result().status }}".to_string()),
+        );
+        publish_map.insert(
+            "plain_str".to_string(),
+            JsonValue::String("hello".to_string()),
+        );
+
+        ctx.publish_from_result(&json!({}), &[], Some(&publish_map))
+            .unwrap();
+
+        // Boolean preserved as boolean (not string "true")
+        assert_eq!(ctx.get_var("flag").unwrap(), json!(true));
+        assert!(ctx.get_var("flag").unwrap().is_boolean());
+
+        // Integer preserved
+        assert_eq!(ctx.get_var("count").unwrap(), json!(42));
+        assert!(ctx.get_var("count").unwrap().is_number());
+
+        // Float preserved
+        assert_eq!(ctx.get_var("ratio").unwrap(), json!(3.14));
+
+        // Null preserved
+        assert_eq!(ctx.get_var("nothing").unwrap(), json!(null));
+        assert!(ctx.get_var("nothing").unwrap().is_null());
+
+        // Template expression rendered with type preservation
+        assert_eq!(ctx.get_var("template").unwrap(), json!("ok"));
+
+        // Plain string stays as string
+        assert_eq!(ctx.get_var("plain_str").unwrap(), json!("hello"));
     }
 
     #[test]
