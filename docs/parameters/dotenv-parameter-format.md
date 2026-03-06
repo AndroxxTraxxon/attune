@@ -102,11 +102,8 @@ message='It'\''s working!'
 ```bash
 #!/bin/sh
 
-# Read DOTENV-formatted parameters from stdin
+# Read DOTENV-formatted parameters from stdin until EOF
 while IFS= read -r line; do
-    case "$line" in
-        *"---ATTUNE_PARAMS_END---"*) break ;;
-    esac
     [ -z "$line" ] && continue
 
     key="${line%%=*}"
@@ -137,9 +134,6 @@ headers_file=$(mktemp)
 query_params_file=$(mktemp)
 
 while IFS= read -r line; do
-    case "$line" in
-        *"---ATTUNE_PARAMS_END---"*) break ;;
-    esac
     [ -z "$line" ] && continue
 
     key="${line%%=*}"
@@ -212,14 +206,13 @@ This combination provides several security benefits:
 
 ### Secret Handling
 
-Secrets are passed separately via stdin after parameters. They are never included in environment variables or parameter files.
+Secrets are merged into the parameters document before delivery. They appear as regular key-value pairs in the DOTENV output. Secrets are never included in environment variables or parameter files.
 
 ```bash
-# Parameters are sent first
+# All parameters (including secrets) delivered as a single document
 url='https://api.example.com'
----ATTUNE_PARAMS_END---
-# Then secrets (as JSON)
-{"api_key":"secret123","password":"hunter2"}
+api_key='secret123'
+password='hunter2'
 ```
 
 ## Examples
@@ -257,7 +250,6 @@ method='POST'
 query_params.limit='10'
 query_params.page='1'
 url='https://api.example.com/users'
----ATTUNE_PARAMS_END---
 ```
 
 ### Example 2: Simple Shell Action
@@ -281,7 +273,6 @@ parameter_format: dotenv
 ```bash
 greeting='Hello'
 name='Alice'
----ATTUNE_PARAMS_END---
 ```
 
 ## Troubleshooting
@@ -290,13 +281,11 @@ name='Alice'
 
 **Symptom:** Action receives empty or incorrect parameter values.
 
-**Solution:** Ensure you're reading until the `---ATTUNE_PARAMS_END---` delimiter:
+**Solution:** Ensure you're reading stdin until EOF:
 
 ```bash
 while IFS= read -r line; do
-    case "$line" in
-        *"---ATTUNE_PARAMS_END---"*) break ;;  # Important!
-    esac
+    [ -z "$line" ] && continue
     # ... parse line
 done
 ```

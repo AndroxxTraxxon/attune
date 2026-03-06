@@ -99,8 +99,8 @@ parameter_format: dotenv
 **Action scripts should read from stdin** (default):
 ```python
 import sys, json
-content = sys.stdin.read()
-params = json.loads(content.split('---ATTUNE_PARAMS_END---')[0])
+content = sys.stdin.read().strip()
+params = json.loads(content) if content else {}
 ```
 
 **For env delivery** (explicit opt-in):

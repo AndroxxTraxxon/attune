@@ -42,7 +42,7 @@ Environment variables provide execution context and configuration:
 **Security**: ✅ **High** - Not visible in process listings  
 **Use Case**: Sensitive data, structured parameters, credentials
 
-Parameters are serialized in the specified format and passed via stdin. A delimiter `---ATTUNE_PARAMS_END---` separates parameters from secrets.
+Parameters are serialized in the specified format and written to stdin as a single document (secrets are merged into the parameters), followed by a newline, then stdin is closed.
 
 **Example** (this is the default):
 ```yaml
@@ -56,9 +56,7 @@ parameter_format: json
 
 **Stdin content (JSON format)**:
 ```
-{"message":"Hello","count":42,"enabled":true}
----ATTUNE_PARAMS_END---
-{"api_key":"secret123","db_password":"pass456"}
+{"message":"Hello","count":42,"enabled":true,"api_key":"secret123","db_password":"pass456"}
 ```
 
 **Python script example**:
@@ -68,23 +66,13 @@ import sys
 import json
 
 def read_stdin_params():
-    """Read parameters and secrets from stdin."""
-    content = sys.stdin.read()
-    parts = content.split('---ATTUNE_PARAMS_END---')
-    
-    # Parse parameters
-    params = json.loads(parts[0].strip()) if parts[0].strip() else {}
-    
-    # Parse secrets (if present)
-    secrets = {}
-    if len(parts) > 1 and parts[1].strip():
-        secrets = json.loads(parts[1].strip())
-    
-    return params, secrets
+    """Read parameters from stdin. Secrets are already merged into parameters."""
+    content = sys.stdin.read().strip()
+    return json.loads(content) if content else {}
 
-params, secrets = read_stdin_params()
+params = read_stdin_params()
 message = params.get('message', 'default')
-api_key = secrets.get('api_key')
+api_key = params.get('api_key')
 print(f"Message: {message}")
 ```
 
@@ -373,10 +361,10 @@ If you were previously passing data as environment variables, you now have two o
 
 **Option 1: Move to Parameters** (for action data):
 ```python
-# Read from stdin
+# Read from stdin (secrets are merged into parameters)
 import sys, json
-content = sys.stdin.read()
-params = json.loads(content.split('---ATTUNE_PARAMS_END---')[0])
+content = sys.stdin.read().strip()
+params = json.loads(content) if content else {}
 value = params.get('key')
 ```
 
@@ -434,16 +422,9 @@ import json
 import requests
 
 def read_stdin_params():
-    """Read parameters and secrets from stdin."""
-    content = sys.stdin.read()
-    parts = content.split('---ATTUNE_PARAMS_END---')
-    
-    params = json.loads(parts[0].strip()) if parts[0].strip() else {}
-    secrets = {}
-    if len(parts) > 1 and parts[1].strip():
-        secrets = json.loads(parts[1].strip())
-    
-    return {**params, **secrets}
+    """Read parameters from stdin. Secrets are already merged into parameters."""
+    content = sys.stdin.read().strip()
+    return json.loads(content) if content else {}
 
 def main():
     params = read_stdin_params()

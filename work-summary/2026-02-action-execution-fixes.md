@@ -105,12 +105,9 @@ error: "/opt/attune/packs/core/actions/echo.sh: line 12: jq: command not found"
 
 **Parsing Logic**:
 ```sh
-# Read DOTENV-formatted parameters from stdin until delimiter
+# Read DOTENV-formatted parameters from stdin until EOF
 while IFS= read -r line; do
     case "$line" in
-        *"---ATTUNE_PARAMS_END---"*)
-            break
-            ;;
         message=*)
             message="${line#message=}"
             # Remove quotes if present
@@ -176,9 +173,7 @@ Manual testing verified:
 
 Example test:
 ```sh
-echo "message='Hello World!'" > test.txt
-echo "---ATTUNE_PARAMS_END---" >> test.txt
-cat test.txt | sh packs/core/actions/echo.sh
+echo "message='Hello World!'" | sh packs/core/actions/echo.sh
 # Output: Hello World!
 ```
 

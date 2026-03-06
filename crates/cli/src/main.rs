@@ -9,9 +9,11 @@ mod wait;
 
 use commands::{
     action::{handle_action_command, ActionCommands},
+    artifact::ArtifactCommands,
     auth::AuthCommands,
     config::ConfigCommands,
     execution::ExecutionCommands,
+    key::KeyCommands,
     pack::PackCommands,
     rule::RuleCommands,
     sensor::SensorCommands,
@@ -33,8 +35,8 @@ struct Cli {
     api_url: Option<String>,
 
     /// Output format
-    #[arg(long, value_enum, default_value = "table", global = true, conflicts_with_all = ["json", "yaml"])]
-    output: output::OutputFormat,
+    #[arg(long, value_enum, global = true, conflicts_with_all = ["json", "yaml"])]
+    output: Option<output::OutputFormat>,
 
     /// Output as JSON (shorthand for --output json)
     #[arg(short = 'j', long, global = true, conflicts_with_all = ["output", "yaml"])]
@@ -74,6 +76,11 @@ enum Commands {
         #[command(subcommand)]
         command: RuleCommands,
     },
+    /// Key/secret management
+    Key {
+        #[command(subcommand)]
+        command: KeyCommands,
+    },
     /// Execution monitoring
     Execution {
         #[command(subcommand)]
@@ -93,6 +100,11 @@ enum Commands {
     Sensor {
         #[command(subcommand)]
         command: SensorCommands,
+    },
+    /// Artifact management (list, upload, download, delete)
+    Artifact {
+        #[command(subcommand)]
+        command: ArtifactCommands,
     },
     /// Configuration management
     Config {
@@ -129,6 +141,9 @@ enum Commands {
 
 #[tokio::main]
 async fn main() {
+    // Install HMAC-only JWT crypto provider (must be before any token operations)
+    attune_common::auth::install_crypto_provider();
+
     let cli = Cli::parse();
 
     // Initialize logging
@@ -138,14 +153,17 @@ async fn main() {
             .init();
     }
 
-    // Determine output format from flags
-    let output_format = if cli.json {
-        output::OutputFormat::Json
+    // Determine output format: explicit CLI flags > config file > default (table)
+    let cli_override = if cli.json {
+        Some(output::OutputFormat::Json)
     } else if cli.yaml {
-        output::OutputFormat::Yaml
+        Some(output::OutputFormat::Yaml)
     } else {
         cli.output
     };
+    let config_for_format =
+        config::CliConfig::load_with_profile(cli.profile.as_deref()).unwrap_or_default();
+    let output_format = config_for_format.effective_format(cli_override);
 
     let result = match cli.command {
         Commands::Auth { command } => {
@@ -167,6 +185,10 @@ async fn main() {
         }
         Commands::Rule { command } => {
             commands::rule::handle_rule_command(&cli.profile, command, &cli.api_url, output_format)
+                .await
+        }
+        Commands::Key { command } => {
+            commands::key::handle_key_command(&cli.profile, command, &cli.api_url, output_format)
                 .await
         }
         Commands::Execution { command } => {
@@ -198,6 +220,15 @@ async fn main() {
         }
         Commands::Sensor { command } => {
             commands::sensor::handle_sensor_command(
+                &cli.profile,
+                command,
+                &cli.api_url,
+                output_format,
+            )
+            .await
+        }
+        Commands::Artifact { command } => {
+            commands::artifact::handle_artifact_command(
                 &cli.profile,
                 command,
                 &cli.api_url,

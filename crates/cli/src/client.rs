@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use reqwest::{multipart, Client as HttpClient, Method, RequestBuilder, StatusCode};
+use reqwest::{header, multipart, Client as HttpClient, Method, RequestBuilder, StatusCode};
 use serde::{de::DeserializeOwned, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -345,6 +345,80 @@ impl ApiClient {
     pub async fn delete_no_response(&mut self, path: &str) -> Result<()> {
         self.execute_json_no_response::<()>(Method::DELETE, path, None)
             .await
+    }
+
+    /// GET request that returns raw bytes and optional filename from Content-Disposition.
+    ///
+    /// Used for downloading binary content (e.g., artifact files).
+    /// Returns `(bytes, content_type, optional_filename)`.
+    pub async fn download_bytes(
+        &mut self,
+        path: &str,
+    ) -> Result<(Vec<u8>, String, Option<String>)> {
+        // First attempt
+        let req = self.build_request(Method::GET, path);
+        let response = req.send().await.context("Failed to send request to API")?;
+
+        if response.status() == StatusCode::UNAUTHORIZED
+            && self.refresh_token.is_some()
+            && self.refresh_auth_token().await?
+        {
+            // Retry with new token
+            let req = self.build_request(Method::GET, path);
+            let response = req
+                .send()
+                .await
+                .context("Failed to send request to API (retry)")?;
+            return self.handle_bytes_response(response).await;
+        }
+
+        self.handle_bytes_response(response).await
+    }
+
+    /// Parse a binary response, extracting content type and optional filename.
+    async fn handle_bytes_response(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<(Vec<u8>, String, Option<String>)> {
+        let status = response.status();
+
+        if status.is_success() {
+            let content_type = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("application/octet-stream")
+                .to_string();
+
+            let filename = response
+                .headers()
+                .get(header::CONTENT_DISPOSITION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| {
+                    // Parse filename from Content-Disposition: attachment; filename="name.ext"
+                    v.split("filename=")
+                        .nth(1)
+                        .map(|f| f.trim_matches('"').trim_matches('\'').to_string())
+                });
+
+            let bytes = response
+                .bytes()
+                .await
+                .context("Failed to read response bytes")?;
+
+            Ok((bytes.to_vec(), content_type, filename))
+        } else {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+
+            if let Ok(api_error) = serde_json::from_str::<ApiError>(&error_text) {
+                anyhow::bail!("API error ({}): {}", status, api_error.error);
+            } else {
+                anyhow::bail!("API error ({}): {}", status, error_text);
+            }
+        }
     }
 
     /// POST a multipart/form-data request with a file field and optional text fields.

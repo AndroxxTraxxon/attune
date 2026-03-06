@@ -9,6 +9,7 @@ use helpers::*;
 use sqlx::Row;
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_migrations_applied() {
     let pool = create_test_pool().await.unwrap();
 
@@ -41,6 +42,7 @@ async fn test_migrations_applied() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_pack_table_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -62,6 +64,7 @@ async fn test_pack_table_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_action_table_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -83,6 +86,7 @@ async fn test_action_table_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_trigger_table_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -104,6 +108,7 @@ async fn test_trigger_table_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_sensor_table_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -125,6 +130,7 @@ async fn test_sensor_table_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_rule_table_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -146,6 +152,7 @@ async fn test_rule_table_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_execution_table_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -167,6 +174,7 @@ async fn test_execution_table_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_event_table_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -188,6 +196,7 @@ async fn test_event_table_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_enforcement_table_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -209,6 +218,7 @@ async fn test_enforcement_table_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_inquiry_table_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -230,6 +240,7 @@ async fn test_inquiry_table_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_identity_table_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -251,6 +262,7 @@ async fn test_identity_table_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_key_table_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -272,6 +284,7 @@ async fn test_key_table_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_table_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -293,6 +306,7 @@ async fn test_notification_table_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_runtime_table_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -314,6 +328,7 @@ async fn test_runtime_table_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_worker_table_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -335,6 +350,7 @@ async fn test_worker_table_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_pack_columns() {
     let pool = create_test_pool().await.unwrap();
 
@@ -381,6 +397,7 @@ async fn test_pack_columns() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_action_columns() {
     let pool = create_test_pool().await.unwrap();
 
@@ -425,6 +442,7 @@ async fn test_action_columns() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_timestamps_auto_populated() {
     let pool = create_test_pool().await.unwrap();
     clean_database(&pool).await.unwrap();
@@ -443,6 +461,7 @@ async fn test_timestamps_auto_populated() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_json_column_storage() {
     let pool = create_test_pool().await.unwrap();
     clean_database(&pool).await.unwrap();
@@ -461,6 +480,7 @@ async fn test_json_column_storage() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_array_column_storage() {
     let pool = create_test_pool().await.unwrap();
     clean_database(&pool).await.unwrap();
@@ -484,6 +504,7 @@ async fn test_array_column_storage() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_unique_constraints() {
     let pool = create_test_pool().await.unwrap();
     clean_database(&pool).await.unwrap();
@@ -498,6 +519,7 @@ async fn test_unique_constraints() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_foreign_key_constraints() {
     let pool = create_test_pool().await.unwrap();
     clean_database(&pool).await.unwrap();
@@ -525,6 +547,7 @@ async fn test_foreign_key_constraints() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_enum_types_exist() {
     let pool = create_test_pool().await.unwrap();
 

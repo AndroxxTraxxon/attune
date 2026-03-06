@@ -6,9 +6,6 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[features]
-integration-tests = []
-
 [lib]
 name = "attune_api"
 path = "src/lib.rs"

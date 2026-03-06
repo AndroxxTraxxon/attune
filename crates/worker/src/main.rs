@@ -23,6 +23,9 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install HMAC-only JWT crypto provider (must be before any token operations)
+    attune_common::auth::install_crypto_provider();
+
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_target(false)

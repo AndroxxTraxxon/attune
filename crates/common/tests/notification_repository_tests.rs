@@ -89,6 +89,7 @@ impl NotificationFixture {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_notification_minimal() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -119,6 +120,7 @@ async fn test_create_notification_minimal() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_notification_with_content() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -152,6 +154,7 @@ async fn test_create_notification_with_content() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_notification_all_states() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -185,6 +188,7 @@ async fn test_create_notification_all_states() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_notification_by_id() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -205,6 +209,7 @@ async fn test_find_notification_by_id() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_notification_by_id_not_found() {
     let pool = create_test_pool().await.expect("Failed to create pool");
 
@@ -216,6 +221,7 @@ async fn test_find_notification_by_id_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_notification_state() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -238,6 +244,7 @@ async fn test_update_notification_state() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_notification_content() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -265,6 +272,7 @@ async fn test_update_notification_content() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_notification_state_and_content() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -289,6 +297,7 @@ async fn test_update_notification_state_and_content() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_notification_no_changes() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -310,6 +319,7 @@ async fn test_update_notification_no_changes() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_notification_timestamps() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -337,6 +347,7 @@ async fn test_update_notification_timestamps() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_notification() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -357,6 +368,7 @@ async fn test_delete_notification() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_notification_not_found() {
     let pool = create_test_pool().await.expect("Failed to create pool");
 
@@ -368,6 +380,7 @@ async fn test_delete_notification_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_list_notifications() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -408,6 +421,7 @@ async fn test_list_notifications() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_by_state() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -467,6 +481,7 @@ async fn test_find_by_state() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_by_state_empty() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -485,6 +500,7 @@ async fn test_find_by_state_empty() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_by_channel() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -541,6 +557,7 @@ async fn test_find_by_channel() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_by_channel_empty() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -555,6 +572,7 @@ async fn test_find_by_channel_empty() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_with_complex_content() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -589,6 +607,7 @@ async fn test_notification_with_complex_content() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_entity_types() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -615,6 +634,7 @@ async fn test_notification_entity_types() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_activity_types() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -641,6 +661,7 @@ async fn test_notification_activity_types() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_ordering_by_created() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -702,6 +723,7 @@ async fn test_notification_ordering_by_created() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_timestamps_auto_set() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -724,6 +746,7 @@ async fn test_notification_timestamps_auto_set() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_multiple_notifications_same_entity() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -776,6 +799,7 @@ async fn test_multiple_notifications_same_entity() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_content_null_vs_empty_json() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -794,6 +818,7 @@ async fn test_notification_content_null_vs_empty_json() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_notification_content_to_null() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -817,6 +842,7 @@ async fn test_update_notification_content_to_null() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_state_transition_workflow() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -867,6 +893,7 @@ async fn test_notification_state_transition_workflow() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_list_limit() {
     let pool = create_test_pool().await.expect("Failed to create pool");
 
@@ -879,6 +906,7 @@ async fn test_notification_list_limit() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_with_special_characters() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -911,6 +939,7 @@ async fn test_notification_with_special_characters() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_with_long_strings() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -944,6 +973,7 @@ async fn test_notification_with_long_strings() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_by_state_with_multiple_states() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -1018,6 +1048,7 @@ async fn test_find_by_state_with_multiple_states() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_content_array() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -1034,6 +1065,7 @@ async fn test_notification_content_array() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_content_string_value() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -1046,6 +1078,7 @@ async fn test_notification_content_string_value() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_content_number_value() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -1058,6 +1091,7 @@ async fn test_notification_content_number_value() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_parallel_creation() {
     let pool = create_test_pool().await.expect("Failed to create pool");
 
@@ -1096,6 +1130,7 @@ async fn test_notification_parallel_creation() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_channel_case_sensitive() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -1143,6 +1178,7 @@ async fn test_notification_channel_case_sensitive() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_entity_type_variations() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -1181,6 +1217,7 @@ async fn test_notification_entity_type_variations() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_update_same_state() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -1207,6 +1244,7 @@ async fn test_notification_update_same_state() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_multiple_updates() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());
@@ -1230,6 +1268,7 @@ async fn test_notification_multiple_updates() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_notification_get_by_id_alias() {
     let pool = create_test_pool().await.expect("Failed to create pool");
     let fixture = NotificationFixture::new(pool.clone());

@@ -22,6 +22,7 @@ use serde_json::json;
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_inquiry_minimal() {
     let pool = create_test_pool().await.unwrap();
 
@@ -83,6 +84,7 @@ async fn test_create_inquiry_minimal() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_inquiry_with_response_schema() {
     let pool = create_test_pool().await.unwrap();
 
@@ -140,6 +142,7 @@ async fn test_create_inquiry_with_response_schema() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_inquiry_with_timeout() {
     let pool = create_test_pool().await.unwrap();
 
@@ -193,6 +196,7 @@ async fn test_create_inquiry_with_timeout() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_inquiry_with_assigned_user() {
     let pool = create_test_pool().await.unwrap();
 
@@ -255,6 +259,7 @@ async fn test_create_inquiry_with_assigned_user() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_inquiry_with_invalid_execution_fails() {
     let pool = create_test_pool().await.unwrap();
 
@@ -280,6 +285,7 @@ async fn test_create_inquiry_with_invalid_execution_fails() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_inquiry_by_id() {
     let pool = create_test_pool().await.unwrap();
 
@@ -331,6 +337,7 @@ async fn test_find_inquiry_by_id() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_inquiry_by_id_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -340,6 +347,7 @@ async fn test_find_inquiry_by_id_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_get_inquiry_by_id() {
     let pool = create_test_pool().await.unwrap();
 
@@ -385,6 +393,7 @@ async fn test_get_inquiry_by_id() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_get_inquiry_by_id_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -399,6 +408,7 @@ async fn test_get_inquiry_by_id_not_found() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_list_inquiries_empty() {
     let pool = create_test_pool().await.unwrap();
 
@@ -408,6 +418,7 @@ async fn test_list_inquiries_empty() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_list_inquiries() {
     let pool = create_test_pool().await.unwrap();
 
@@ -468,6 +479,7 @@ async fn test_list_inquiries() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_inquiry_status() {
     let pool = create_test_pool().await.unwrap();
 
@@ -523,6 +535,7 @@ async fn test_update_inquiry_status() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_inquiry_status_transitions() {
     let pool = create_test_pool().await.unwrap();
 
@@ -607,6 +620,7 @@ async fn test_update_inquiry_status_transitions() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_inquiry_response() {
     let pool = create_test_pool().await.unwrap();
 
@@ -664,6 +678,7 @@ async fn test_update_inquiry_response() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_inquiry_with_response_and_status() {
     let pool = create_test_pool().await.unwrap();
 
@@ -721,6 +736,7 @@ async fn test_update_inquiry_with_response_and_status() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_inquiry_assignment() {
     let pool = create_test_pool().await.unwrap();
 
@@ -787,6 +803,7 @@ async fn test_update_inquiry_assignment() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_inquiry_no_changes() {
     let pool = create_test_pool().await.unwrap();
 
@@ -841,6 +858,7 @@ async fn test_update_inquiry_no_changes() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_inquiry_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -862,6 +880,7 @@ async fn test_update_inquiry_not_found() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_inquiry() {
     let pool = create_test_pool().await.unwrap();
 
@@ -911,6 +930,7 @@ async fn test_delete_inquiry() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_inquiry_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -920,6 +940,7 @@ async fn test_delete_inquiry_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_execution_cascades_to_inquiries() {
     let pool = create_test_pool().await.unwrap();
 
@@ -986,6 +1007,7 @@ async fn test_delete_execution_cascades_to_inquiries() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_inquiries_by_status() {
     let pool = create_test_pool().await.unwrap();
 
@@ -1064,6 +1086,7 @@ async fn test_find_inquiries_by_status() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_inquiries_by_execution() {
     let pool = create_test_pool().await.unwrap();
 
@@ -1145,6 +1168,7 @@ async fn test_find_inquiries_by_execution() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_inquiry_timestamps_auto_managed() {
     let pool = create_test_pool().await.unwrap();
 
@@ -1211,6 +1235,7 @@ async fn test_inquiry_timestamps_auto_managed() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_inquiry_complex_response_schema() {
     let pool = create_test_pool().await.unwrap();
 

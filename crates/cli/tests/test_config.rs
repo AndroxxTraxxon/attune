@@ -20,7 +20,7 @@ async fn test_config_show_default() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("current_profile"))
+        .stdout(predicate::str::contains("profile"))
         .stdout(predicate::str::contains("api_url"));
 }
 
@@ -38,7 +38,7 @@ async fn test_config_show_json_output() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains(r#""current_profile""#))
+        .stdout(predicate::str::contains(r#""profile""#))
         .stdout(predicate::str::contains(r#""api_url""#));
 }
 
@@ -56,7 +56,7 @@ async fn test_config_show_yaml_output() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("current_profile:"))
+        .stdout(predicate::str::contains("profile:"))
         .stdout(predicate::str::contains("api_url:"));
 }
 
@@ -118,7 +118,7 @@ async fn test_config_set_api_url() {
 }
 
 #[tokio::test]
-async fn test_config_set_output_format() {
+async fn test_config_set_format() {
     let fixture = TestFixture::new().await;
     fixture.write_default_config();
 
@@ -127,7 +127,7 @@ async fn test_config_set_output_format() {
         .env("HOME", fixture.config_dir_path())
         .arg("config")
         .arg("set")
-        .arg("output_format")
+        .arg("format")
         .arg("json");
 
     cmd.assert()
@@ -137,7 +137,7 @@ async fn test_config_set_output_format() {
     // Verify the change was persisted
     let config_content =
         std::fs::read_to_string(&fixture.config_path).expect("Failed to read config");
-    assert!(config_content.contains("output_format: json"));
+    assert!(config_content.contains("format: json"));
 }
 
 #[tokio::test]
@@ -273,7 +273,7 @@ async fn test_profile_use_switch() {
     // Verify the current profile was changed
     let config_content =
         std::fs::read_to_string(&fixture.config_path).expect("Failed to read config");
-    assert!(config_content.contains("current_profile: staging"));
+    assert!(config_content.contains("profile: staging"));
 }
 
 #[tokio::test]
@@ -384,7 +384,7 @@ async fn test_profile_override_with_flag() {
     // Verify current profile wasn't changed in the config file
     let config_content =
         std::fs::read_to_string(&fixture.config_path).expect("Failed to read config");
-    assert!(config_content.contains("current_profile: default"));
+    assert!(config_content.contains("profile: default"));
 }
 
 #[tokio::test]
@@ -405,28 +405,35 @@ async fn test_profile_override_with_env_var() {
     // Verify current profile wasn't changed in the config file
     let config_content =
         std::fs::read_to_string(&fixture.config_path).expect("Failed to read config");
-    assert!(config_content.contains("current_profile: default"));
+    assert!(config_content.contains("profile: default"));
 }
 
 #[tokio::test]
-async fn test_profile_with_custom_output_format() {
+async fn test_config_format_respected_by_commands() {
     let fixture = TestFixture::new().await;
-    fixture.write_multi_profile_config();
+    // Write a config with format set to json
+    let config = format!(
+        r#"
+profile: default
+format: json
+profiles:
+  default:
+    api_url: {}
+    description: Test server
+"#,
+        fixture.server_url()
+    );
+    fixture.write_config(&config);
 
-    // Switch to production which has json output format
+    // Run config list without --json flag; should output JSON because config says so
     let mut cmd = Command::cargo_bin("attune").unwrap();
     cmd.env("XDG_CONFIG_HOME", fixture.config_dir_path())
         .env("HOME", fixture.config_dir_path())
         .arg("config")
-        .arg("use")
-        .arg("production");
+        .arg("list");
 
-    cmd.assert().success();
-
-    // Verify the profile has custom output format
-    let config_content =
-        std::fs::read_to_string(&fixture.config_path).expect("Failed to read config");
-    assert!(config_content.contains("output_format: json"));
+    // JSON output contains curly braces
+    cmd.assert().success().stdout(predicate::str::contains("{"));
 }
 
 #[tokio::test]
@@ -443,7 +450,7 @@ async fn test_config_list_all_keys() {
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("api_url"))
-        .stdout(predicate::str::contains("output_format"))
+        .stdout(predicate::str::contains("format"))
         .stdout(predicate::str::contains("auth_token"));
 }
 

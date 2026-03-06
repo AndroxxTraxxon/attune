@@ -1,4 +1,3 @@
-#![cfg(feature = "integration-tests")]
 //! Comprehensive integration tests for webhook security features (Phase 3)
 //!
 //! Tests cover:
@@ -123,6 +122,7 @@ fn generate_hmac_signature(payload: &[u8], secret: &str, algorithm: &str) -> Str
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_webhook_hmac_sha256_valid() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -189,6 +189,7 @@ async fn test_webhook_hmac_sha256_valid() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_webhook_hmac_sha512_valid() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -245,6 +246,7 @@ async fn test_webhook_hmac_sha512_valid() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_webhook_hmac_invalid_signature() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -300,6 +302,7 @@ async fn test_webhook_hmac_invalid_signature() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_webhook_hmac_missing_signature() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -352,6 +355,7 @@ async fn test_webhook_hmac_missing_signature() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_webhook_hmac_wrong_secret() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -414,6 +418,7 @@ async fn test_webhook_hmac_wrong_secret() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_webhook_rate_limit_enforced() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -489,6 +494,7 @@ async fn test_webhook_rate_limit_enforced() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_webhook_rate_limit_disabled() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -535,6 +541,7 @@ async fn test_webhook_rate_limit_disabled() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_webhook_ip_whitelist_allowed() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -605,6 +612,7 @@ async fn test_webhook_ip_whitelist_allowed() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_webhook_ip_whitelist_blocked() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -661,6 +669,7 @@ async fn test_webhook_ip_whitelist_blocked() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_webhook_payload_size_limit_enforced() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));
@@ -711,6 +720,7 @@ async fn test_webhook_payload_size_limit_enforced() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_webhook_payload_size_within_limit() {
     let state = setup_test_state().await;
     let server = Server::new(std::sync::Arc::new(state.clone()));

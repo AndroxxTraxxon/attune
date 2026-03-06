@@ -65,7 +65,7 @@ impl ShellRuntime {
     async fn execute_with_streaming(
         &self,
         mut cmd: Command,
-        secrets: &std::collections::HashMap<String, String>,
+        _secrets: &std::collections::HashMap<String, String>,
         parameters_stdin: Option<&str>,
         timeout_secs: Option<u64>,
         max_stdout_bytes: usize,
@@ -81,39 +81,19 @@ impl ShellRuntime {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        // Write to stdin - parameters (if using stdin delivery) and/or secrets
-        // If this fails, the process has already started, so we continue and capture output
+        // Write to stdin - parameters (with secrets already merged in by the caller).
+        // If this fails, the process has already started, so we continue and capture output.
         let stdin_write_error = if let Some(mut stdin) = child.stdin.take() {
             let mut error = None;
 
-            // Write parameters first if using stdin delivery.
-            // Skip empty/trivial content ("{}","","[]") to avoid polluting stdin
-            // before secrets — scripts that read secrets via readline() expect
-            // the secrets JSON as the first line.
-            let has_real_params = parameters_stdin
-                .map(|s| !matches!(s.trim(), "" | "{}" | "[]"))
-                .unwrap_or(false);
+            // Write parameters to stdin as a single JSON line.
+            // Secrets are merged into the parameters map by the caller, so the
+            // action reads everything with a single readline().
             if let Some(params_data) = parameters_stdin {
-                if has_real_params {
-                    if let Err(e) = stdin.write_all(params_data.as_bytes()).await {
-                        error = Some(format!("Failed to write parameters to stdin: {}", e));
-                    } else if let Err(e) = stdin.write_all(b"\n---ATTUNE_PARAMS_END---\n").await {
-                        error = Some(format!("Failed to write parameter delimiter: {}", e));
-                    }
-                }
-            }
-
-            // Write secrets as JSON (always, for backward compatibility)
-            if error.is_none() && !secrets.is_empty() {
-                match serde_json::to_string(secrets) {
-                    Ok(secrets_json) => {
-                        if let Err(e) = stdin.write_all(secrets_json.as_bytes()).await {
-                            error = Some(format!("Failed to write secrets to stdin: {}", e));
-                        } else if let Err(e) = stdin.write_all(b"\n").await {
-                            error = Some(format!("Failed to write newline to stdin: {}", e));
-                        }
-                    }
-                    Err(e) => error = Some(format!("Failed to serialize secrets: {}", e)),
+                if let Err(e) = stdin.write_all(params_data.as_bytes()).await {
+                    error = Some(format!("Failed to write parameters to stdin: {}", e));
+                } else if let Err(e) = stdin.write_all(b"\n").await {
+                    error = Some(format!("Failed to write newline to stdin: {}", e));
                 }
             }
 
@@ -338,7 +318,12 @@ impl ShellRuntime {
         script.push_str("declare -A ATTUNE_SECRETS\n");
         for (key, value) in &context.secrets {
             let escaped_key = bash_single_quote_escape(key);
-            let escaped_val = bash_single_quote_escape(value);
+            // Serialize structured JSON values to string for bash; plain strings used directly.
+            let val_str = match value {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            let escaped_val = bash_single_quote_escape(&val_str);
             script.push_str(&format!(
                 "ATTUNE_SECRETS['{}']='{}'\n",
                 escaped_key, escaped_val
@@ -388,7 +373,7 @@ impl ShellRuntime {
     async fn execute_shell_file(
         &self,
         script_path: PathBuf,
-        secrets: &std::collections::HashMap<String, String>,
+        _secrets: &std::collections::HashMap<String, String>,
         env: &std::collections::HashMap<String, String>,
         parameters_stdin: Option<&str>,
         timeout_secs: Option<u64>,
@@ -396,11 +381,7 @@ impl ShellRuntime {
         max_stderr_bytes: usize,
         output_format: OutputFormat,
     ) -> RuntimeResult<ExecutionResult> {
-        debug!(
-            "Executing shell file: {:?} with {} secrets",
-            script_path,
-            secrets.len()
-        );
+        debug!("Executing shell file: {:?}", script_path,);
 
         // Build command
         let mut cmd = Command::new(&self.shell_path);
@@ -413,7 +394,7 @@ impl ShellRuntime {
 
         self.execute_with_streaming(
             cmd,
-            secrets,
+            &std::collections::HashMap::new(),
             parameters_stdin,
             timeout_secs,
             max_stdout_bytes,
@@ -463,6 +444,13 @@ impl Runtime for ShellRuntime {
             context.parameters
         );
 
+        // Merge secrets into parameters as a single JSON document.
+        // Actions receive everything via one readline() on stdin.
+        let mut merged_parameters = context.parameters.clone();
+        for (key, value) in &context.secrets {
+            merged_parameters.insert(key.clone(), value.clone());
+        }
+
         // Prepare environment and parameters according to delivery method
         let mut env = context.env.clone();
         let config = ParameterDeliveryConfig {
@@ -471,7 +459,7 @@ impl Runtime for ShellRuntime {
         };
 
         let prepared_params =
-            parameter_passing::prepare_parameters(&context.parameters, &mut env, config)?;
+            parameter_passing::prepare_parameters(&merged_parameters, &mut env, config)?;
 
         // Get stdin content if parameters are delivered via stdin
         let parameters_stdin = prepared_params.stdin_content();
@@ -486,12 +474,13 @@ impl Runtime for ShellRuntime {
             info!("No parameters will be sent via stdin");
         }
 
-        // If code_path is provided, execute the file directly
+        // If code_path is provided, execute the file directly.
+        // Secrets are already merged into parameters — no separate secrets arg needed.
         if let Some(code_path) = &context.code_path {
             return self
                 .execute_shell_file(
                     code_path.clone(),
-                    &context.secrets,
+                    &HashMap::new(),
                     &env,
                     parameters_stdin,
                     context.timeout,
@@ -747,8 +736,11 @@ mod tests {
             env: HashMap::new(),
             secrets: {
                 let mut s = HashMap::new();
-                s.insert("api_key".to_string(), "secret_key_12345".to_string());
-                s.insert("db_password".to_string(), "super_secret_pass".to_string());
+                s.insert("api_key".to_string(), serde_json::json!("secret_key_12345"));
+                s.insert(
+                    "db_password".to_string(),
+                    serde_json::json!("super_secret_pass"),
+                );
                 s
             },
             timeout: Some(10),

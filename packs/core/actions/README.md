@@ -16,7 +16,7 @@ All actions in the core pack are implemented as **pure POSIX shell scripts** wit
 **All actions use stdin with DOTENV format:**
 - Parameters read from **stdin** in `key=value` format
 - Use `parameter_delivery: stdin` and `parameter_format: dotenv` in YAML
-- Terminated with `---ATTUNE_PARAMS_END---` delimiter
+- Stdin is closed after delivery; scripts read until EOF
 - **DO NOT** use environment variables for parameters
 
 **Example DOTENV input:**
@@ -24,7 +24,6 @@ All actions in the core pack are implemented as **pure POSIX shell scripts** wit
 message="Hello World"
 seconds=5
 enabled=true
----ATTUNE_PARAMS_END---
 ```
 
 ## Output Format
@@ -83,7 +82,7 @@ All core pack actions follow this pattern:
 # Brief description
 #
 # This script uses pure POSIX shell without external dependencies like jq.
-# It reads parameters in DOTENV format from stdin until the delimiter.
+# It reads parameters in DOTENV format from stdin until EOF.
 
 set -e
 
@@ -91,11 +90,8 @@ set -e
 param1=""
 param2="default_value"
 
-# Read DOTENV-formatted parameters from stdin
+# Read DOTENV-formatted parameters from stdin until EOF
 while IFS= read -r line; do
-    case "$line" in
-        *"---ATTUNE_PARAMS_END---"*) break ;;
-    esac
     [ -z "$line" ] && continue
 
     key="${line%%=*}"
@@ -186,16 +182,16 @@ Test actions by echoing DOTENV format to stdin:
 
 ```bash
 # Test echo action
-printf 'message="Hello World"\n---ATTUNE_PARAMS_END---\n' | ./echo.sh
+printf 'message="Hello World"\n' | ./echo.sh
 
 # Test with empty parameters
-printf '---ATTUNE_PARAMS_END---\n' | ./echo.sh
+printf '' | ./echo.sh
 
 # Test sleep action
-printf 'seconds=2\nmessage="Sleeping..."\n---ATTUNE_PARAMS_END---\n' | ./sleep.sh
+printf 'seconds=2\nmessage="Sleeping..."\n' | ./sleep.sh
 
 # Test http_request action
-printf 'url="https://api.github.com"\nmethod="GET"\n---ATTUNE_PARAMS_END---\n' | ./http_request.sh
+printf 'url="https://api.github.com"\nmethod="GET"\n' | ./http_request.sh
 
 # Test with file input
 cat params.dotenv | ./echo.sh
@@ -322,11 +318,8 @@ echo "[$ATTUNE_ACTION] [Exec: $ATTUNE_EXEC_ID] Starting" >&2
 url=""
 timeout="30"
 
-# Read DOTENV parameters
+# Read DOTENV parameters from stdin until EOF
 while IFS= read -r line; do
-    case "$line" in
-        *"---ATTUNE_PARAMS_END---"*) break ;;
-    esac
     [ -z "$line" ] && continue
 
     key="${line%%=*}"

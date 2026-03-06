@@ -1,4 +1,3 @@
-#![cfg(feature = "integration-tests")]
 //! Integration tests for pack workflow sync and validation
 
 mod helpers;
@@ -59,6 +58,7 @@ tasks:
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_sync_pack_workflows_endpoint() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -95,6 +95,7 @@ async fn test_sync_pack_workflows_endpoint() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_validate_pack_workflows_endpoint() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -121,6 +122,7 @@ async fn test_validate_pack_workflows_endpoint() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_sync_nonexistent_pack_returns_404() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -137,6 +139,7 @@ async fn test_sync_nonexistent_pack_returns_404() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_validate_nonexistent_pack_returns_404() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -153,6 +156,7 @@ async fn test_validate_nonexistent_pack_returns_404() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_sync_workflows_requires_authentication() {
     let ctx = TestContext::new().await.unwrap();
 
@@ -180,6 +184,7 @@ async fn test_sync_workflows_requires_authentication() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_validate_workflows_requires_authentication() {
     let ctx = TestContext::new().await.unwrap();
 
@@ -207,6 +212,7 @@ async fn test_validate_workflows_requires_authentication() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_pack_creation_with_auto_sync() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -237,6 +243,7 @@ async fn test_pack_creation_with_auto_sync() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_pack_update_with_auto_resync() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 

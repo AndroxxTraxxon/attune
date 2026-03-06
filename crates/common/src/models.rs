@@ -1232,7 +1232,7 @@ pub mod key {
         pub name: String,
         pub encrypted: bool,
         pub encryption_key_hash: Option<String>,
-        pub value: String,
+        pub value: JsonValue,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
     }

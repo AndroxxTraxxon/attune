@@ -5,25 +5,35 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::output::OutputFormat;
+
 /// CLI configuration stored in user's home directory
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CliConfig {
     /// Current active profile name
-    #[serde(default = "default_profile_name")]
+    #[serde(
+        default = "default_profile_name",
+        rename = "profile",
+        alias = "current_profile"
+    )]
     pub current_profile: String,
     /// Named profiles (like SSH hosts)
     #[serde(default)]
     pub profiles: HashMap<String, Profile>,
-    /// Default output format (can be overridden per-profile)
-    #[serde(default = "default_output_format")]
-    pub default_output_format: String,
+    /// Output format (table, json, yaml)
+    #[serde(
+        default = "default_format",
+        rename = "format",
+        alias = "default_output_format"
+    )]
+    pub format: String,
 }
 
 fn default_profile_name() -> String {
     "default".to_string()
 }
 
-fn default_output_format() -> String {
+fn default_format() -> String {
     "table".to_string()
 }
 
@@ -38,8 +48,9 @@ pub struct Profile {
     /// Refresh token
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
-    /// Output format override for this profile
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Output format override for this profile (deprecated — ignored, kept for deserialization compat)
+    #[serde(skip_serializing)]
+    #[allow(dead_code)]
     pub output_format: Option<String>,
     /// Optional description
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -63,7 +74,7 @@ impl Default for CliConfig {
         Self {
             current_profile: "default".to_string(),
             profiles,
-            default_output_format: default_output_format(),
+            format: default_format(),
         }
     }
 }
@@ -193,6 +204,29 @@ impl CliConfig {
         self.save()
     }
 
+    /// Resolve the effective output format.
+    ///
+    /// Priority (highest to lowest):
+    /// 1. Explicit CLI flag (`--json`, `--yaml`, `--output`)
+    /// 2. Config `format` field
+    ///
+    /// The `cli_flag` parameter should be `None` when the user did not pass an
+    /// explicit flag (i.e. clap returned the default value `table` *without*
+    /// the user typing it). Callers should pass `Some(format)` only when the
+    /// user actually supplied the flag.
+    pub fn effective_format(&self, cli_override: Option<OutputFormat>) -> OutputFormat {
+        if let Some(fmt) = cli_override {
+            return fmt;
+        }
+
+        // Fall back to config value
+        match self.format.to_lowercase().as_str() {
+            "json" => OutputFormat::Json,
+            "yaml" => OutputFormat::Yaml,
+            _ => OutputFormat::Table,
+        }
+    }
+
     /// Set a configuration value by key
     pub fn set_value(&mut self, key: &str, value: String) -> Result<()> {
         match key {
@@ -200,14 +234,18 @@ impl CliConfig {
                 let profile = self.current_profile_mut()?;
                 profile.api_url = value;
             }
-            "output_format" => {
-                let profile = self.current_profile_mut()?;
-                profile.output_format = Some(value);
+            "format" | "output_format" | "default_output_format" => {
+                // Validate the value
+                match value.to_lowercase().as_str() {
+                    "table" | "json" | "yaml" => {}
+                    _ => anyhow::bail!(
+                        "Invalid format '{}'. Must be one of: table, json, yaml",
+                        value
+                    ),
+                }
+                self.format = value.to_lowercase();
             }
-            "default_output_format" => {
-                self.default_output_format = value;
-            }
-            "current_profile" => {
+            "profile" | "current_profile" => {
                 self.switch_profile(value)?;
                 return Ok(());
             }
@@ -223,15 +261,8 @@ impl CliConfig {
                 let profile = self.current_profile()?;
                 Ok(profile.api_url.clone())
             }
-            "output_format" => {
-                let profile = self.current_profile()?;
-                Ok(profile
-                    .output_format
-                    .clone()
-                    .unwrap_or_else(|| self.default_output_format.clone()))
-            }
-            "default_output_format" => Ok(self.default_output_format.clone()),
-            "current_profile" => Ok(self.current_profile.clone()),
+            "format" | "output_format" | "default_output_format" => Ok(self.format.clone()),
+            "profile" | "current_profile" => Ok(self.current_profile.clone()),
             "auth_token" => {
                 let profile = self.current_profile()?;
                 Ok(profile
@@ -262,19 +293,9 @@ impl CliConfig {
         };
 
         vec![
-            ("current_profile".to_string(), self.current_profile.clone()),
+            ("profile".to_string(), self.current_profile.clone()),
+            ("format".to_string(), self.format.clone()),
             ("api_url".to_string(), profile.api_url.clone()),
-            (
-                "output_format".to_string(),
-                profile
-                    .output_format
-                    .clone()
-                    .unwrap_or_else(|| self.default_output_format.clone()),
-            ),
-            (
-                "default_output_format".to_string(),
-                self.default_output_format.clone(),
-            ),
             (
                 "auth_token".to_string(),
                 profile
@@ -354,7 +375,7 @@ mod tests {
     fn test_default_config() {
         let config = CliConfig::default();
         assert_eq!(config.current_profile, "default");
-        assert_eq!(config.default_output_format, "table");
+        assert_eq!(config.format, "table");
         assert!(config.profiles.contains_key("default"));
 
         let profile = config.current_profile().unwrap();
@@ -379,6 +400,33 @@ mod tests {
     }
 
     #[test]
+    fn test_effective_format_defaults_to_config() {
+        let mut config = CliConfig::default();
+        config.format = "json".to_string();
+
+        // No CLI override → uses config
+        assert_eq!(config.effective_format(None), OutputFormat::Json);
+    }
+
+    #[test]
+    fn test_effective_format_cli_overrides_config() {
+        let mut config = CliConfig::default();
+        config.format = "json".to_string();
+
+        // CLI override wins
+        assert_eq!(
+            config.effective_format(Some(OutputFormat::Yaml)),
+            OutputFormat::Yaml
+        );
+    }
+
+    #[test]
+    fn test_effective_format_default_table() {
+        let config = CliConfig::default();
+        assert_eq!(config.effective_format(None), OutputFormat::Table);
+    }
+
+    #[test]
     fn test_profile_management() {
         let mut config = CliConfig::default();
 
@@ -387,7 +435,7 @@ mod tests {
             api_url: "https://staging.example.com".to_string(),
             auth_token: None,
             refresh_token: None,
-            output_format: Some("json".to_string()),
+            output_format: None,
             description: Some("Staging environment".to_string()),
         };
         config
@@ -442,7 +490,7 @@ mod tests {
             config.get_value("api_url").unwrap(),
             "http://localhost:8080"
         );
-        assert_eq!(config.get_value("output_format").unwrap(), "table");
+        assert_eq!(config.get_value("format").unwrap(), "table");
 
         // Set API URL for current profile
         config
@@ -450,10 +498,53 @@ mod tests {
             .unwrap();
         assert_eq!(config.get_value("api_url").unwrap(), "http://test.com");
 
-        // Set output format for current profile
-        config
+        // Set format
+        config.set_value("format", "json".to_string()).unwrap();
+        assert_eq!(config.get_value("format").unwrap(), "json");
+    }
+
+    #[test]
+    fn test_set_value_validates_format() {
+        let mut config = CliConfig::default();
+
+        // Valid values
+        assert!(config.set_value("format", "table".to_string()).is_ok());
+        assert!(config.set_value("format", "json".to_string()).is_ok());
+        assert!(config.set_value("format", "yaml".to_string()).is_ok());
+        assert!(config.set_value("format", "JSON".to_string()).is_ok()); // case-insensitive
+
+        // Invalid value
+        assert!(config.set_value("format", "xml".to_string()).is_err());
+    }
+
+    #[test]
+    fn test_backward_compat_aliases() {
+        let mut config = CliConfig::default();
+
+        // Old key names should still work for get/set
+        assert!(config
             .set_value("output_format", "json".to_string())
-            .unwrap();
+            .is_ok());
         assert_eq!(config.get_value("output_format").unwrap(), "json");
+        assert_eq!(config.get_value("format").unwrap(), "json");
+
+        assert!(config
+            .set_value("default_output_format", "yaml".to_string())
+            .is_ok());
+        assert_eq!(config.get_value("default_output_format").unwrap(), "yaml");
+        assert_eq!(config.get_value("format").unwrap(), "yaml");
+    }
+
+    #[test]
+    fn test_deserialize_legacy_default_output_format() {
+        let yaml = r#"
+profile: default
+default_output_format: json
+profiles:
+  default:
+    api_url: http://localhost:8080
+"#;
+        let config: CliConfig = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(config.format, "json");
     }
 }

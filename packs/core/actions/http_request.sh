@@ -3,7 +3,7 @@
 # Make HTTP requests to external APIs using curl
 #
 # This script uses pure POSIX shell without external dependencies like jq.
-# It reads parameters in DOTENV format from stdin until the delimiter.
+# It reads parameters in DOTENV format from stdin until EOF.
 
 set -e
 
@@ -37,11 +37,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Read DOTENV-formatted parameters
+# Read DOTENV-formatted parameters from stdin until EOF
 while IFS= read -r line; do
-    case "$line" in
-        *"---ATTUNE_PARAMS_END---"*) break ;;
-    esac
     [ -z "$line" ] && continue
 
     key="${line%%=*}"

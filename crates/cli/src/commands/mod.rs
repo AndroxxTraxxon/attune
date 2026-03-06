@@ -1,7 +1,9 @@
 pub mod action;
+pub mod artifact;
 pub mod auth;
 pub mod config;
 pub mod execution;
+pub mod key;
 pub mod pack;
 pub mod pack_index;
 pub mod rule;

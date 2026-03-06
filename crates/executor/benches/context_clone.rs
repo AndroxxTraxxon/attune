@@ -1,7 +1,8 @@
 use attune_executor::workflow::context::WorkflowContext;
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use serde_json::json;
 use std::collections::HashMap;
+use std::hint::black_box;
 
 fn bench_context_clone_empty(c: &mut Criterion) {
     let ctx = WorkflowContext::new(json!({}), HashMap::new());

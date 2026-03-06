@@ -3,7 +3,7 @@
 # API Wrapper for POST /api/v1/packs/register-batch
 #
 # This script uses pure POSIX shell without external dependencies like jq.
-# It reads parameters in DOTENV format from stdin until the delimiter.
+# It reads parameters in DOTENV format from stdin until EOF.
 
 set -e
 
@@ -16,14 +16,8 @@ force="false"
 api_url="http://localhost:8080"
 api_token=""
 
-# Read DOTENV-formatted parameters from stdin until delimiter
+# Read DOTENV-formatted parameters from stdin until EOF
 while IFS= read -r line; do
-    # Check for parameter delimiter
-    case "$line" in
-        *"---ATTUNE_PARAMS_END---"*)
-            break
-            ;;
-    esac
     [ -z "$line" ] && continue
 
     key="${line%%=*}"

@@ -1,4 +1,3 @@
-#![cfg(feature = "integration-tests")]
 //! Integration tests for health check and authentication endpoints
 
 use axum::http::StatusCode;
@@ -8,6 +7,7 @@ use serde_json::json;
 mod helpers;
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_register_debug() {
     let ctx = TestContext::new()
         .await
@@ -37,6 +37,7 @@ async fn test_register_debug() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_health_check() {
     let ctx = TestContext::new()
         .await
@@ -55,6 +56,7 @@ async fn test_health_check() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_health_detailed() {
     let ctx = TestContext::new()
         .await
@@ -75,6 +77,7 @@ async fn test_health_detailed() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_health_ready() {
     let ctx = TestContext::new()
         .await
@@ -91,6 +94,7 @@ async fn test_health_ready() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_health_live() {
     let ctx = TestContext::new()
         .await
@@ -107,6 +111,7 @@ async fn test_health_live() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_register_user() {
     let ctx = TestContext::new()
         .await
@@ -138,6 +143,7 @@ async fn test_register_user() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_register_duplicate_user() {
     let ctx = TestContext::new()
         .await
@@ -175,6 +181,7 @@ async fn test_register_duplicate_user() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_register_invalid_password() {
     let ctx = TestContext::new()
         .await
@@ -197,6 +204,7 @@ async fn test_register_invalid_password() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_login_success() {
     let ctx = TestContext::new()
         .await
@@ -239,6 +247,7 @@ async fn test_login_success() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_login_wrong_password() {
     let ctx = TestContext::new()
         .await
@@ -275,6 +284,7 @@ async fn test_login_wrong_password() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_login_nonexistent_user() {
     let ctx = TestContext::new()
         .await
@@ -296,6 +306,7 @@ async fn test_login_nonexistent_user() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_get_current_user() {
     let ctx = TestContext::new()
         .await
@@ -319,6 +330,7 @@ async fn test_get_current_user() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_get_current_user_unauthorized() {
     let ctx = TestContext::new()
         .await
@@ -333,6 +345,7 @@ async fn test_get_current_user_unauthorized() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_get_current_user_invalid_token() {
     let ctx = TestContext::new()
         .await
@@ -347,6 +360,7 @@ async fn test_get_current_user_invalid_token() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_refresh_token() {
     let ctx = TestContext::new()
         .await
@@ -397,6 +411,7 @@ async fn test_refresh_token() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_refresh_with_invalid_token() {
     let ctx = TestContext::new()
         .await

@@ -66,9 +66,9 @@ print(json.dumps(result))
             let mut s = HashMap::new();
             s.insert(
                 "api_key".to_string(),
-                "super_secret_key_do_not_expose".to_string(),
+                serde_json::json!("super_secret_key_do_not_expose"),
             );
-            s.insert("password".to_string(), "secret_pass_123".to_string());
+            s.insert("password".to_string(), serde_json::json!("secret_pass_123"));
             s
         },
         timeout: Some(10),
@@ -125,9 +125,9 @@ async fn test_shell_secrets_not_in_environ() {
             let mut s = HashMap::new();
             s.insert(
                 "api_key".to_string(),
-                "super_secret_key_do_not_expose".to_string(),
+                serde_json::json!("super_secret_key_do_not_expose"),
             );
-            s.insert("password".to_string(), "secret_pass_123".to_string());
+            s.insert("password".to_string(), serde_json::json!("secret_pass_123"));
             s
         },
         timeout: Some(10),
@@ -227,7 +227,7 @@ print(json.dumps({'secret_a': secrets.get('secret_a')}))
         env: HashMap::new(),
         secrets: {
             let mut s = HashMap::new();
-            s.insert("secret_a".to_string(), "value_a".to_string());
+            s.insert("secret_a".to_string(), serde_json::json!("value_a"));
             s
         },
         timeout: Some(10),
@@ -273,7 +273,7 @@ print(json.dumps({
         env: HashMap::new(),
         secrets: {
             let mut s = HashMap::new();
-            s.insert("secret_b".to_string(), "value_b".to_string());
+            s.insert("secret_b".to_string(), serde_json::json!("value_b"));
             s
         },
         timeout: Some(10),
@@ -458,7 +458,10 @@ echo "PASS: No secrets in environment"
         env: HashMap::new(),
         secrets: {
             let mut s = HashMap::new();
-            s.insert("db_password".to_string(), "SUPER_SECRET_VALUE".to_string());
+            s.insert(
+                "db_password".to_string(),
+                serde_json::json!("SUPER_SECRET_VALUE"),
+            );
             s
         },
         timeout: Some(10),
@@ -535,7 +538,10 @@ print(json.dumps({"leaked": leaked}))
         env: HashMap::new(),
         secrets: {
             let mut s = HashMap::new();
-            s.insert("api_key".to_string(), "TOP_SECRET_API_KEY".to_string());
+            s.insert(
+                "api_key".to_string(),
+                serde_json::json!("TOP_SECRET_API_KEY"),
+            );
             s
         },
         timeout: Some(10),

@@ -20,6 +20,7 @@ use super::{
 };
 use async_trait::async_trait;
 use attune_common::models::runtime::{EnvironmentConfig, RuntimeExecutionConfig};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use tracing::{debug, error, info, warn};
@@ -645,12 +646,21 @@ impl Runtime for ProcessRuntime {
                 env.insert(key.clone(), resolved);
             }
         }
+        // Merge secrets into parameters as a single JSON document.
+        // Actions receive everything via one readline() on stdin.
+        // Secret values are already JsonValue (string, object, array, etc.)
+        // so they are inserted directly without wrapping.
+        let mut merged_parameters = context.parameters.clone();
+        for (key, value) in &context.secrets {
+            merged_parameters.insert(key.clone(), value.clone());
+        }
+
         let param_config = ParameterDeliveryConfig {
             delivery: context.parameter_delivery,
             format: context.parameter_format,
         };
         let prepared_params =
-            parameter_passing::prepare_parameters(&context.parameters, &mut env, param_config)?;
+            parameter_passing::prepare_parameters(&merged_parameters, &mut env, param_config)?;
         let parameters_stdin = prepared_params.stdin_content();
 
         // Determine working directory: use context override, or pack dir
@@ -725,10 +735,11 @@ impl Runtime for ProcessRuntime {
                 .unwrap_or_else(|| "<none>".to_string()),
         );
 
-        // Execute with streaming output capture (with optional cancellation support)
+        // Execute with streaming output capture (with optional cancellation support).
+        // Secrets are already merged into parameters — no separate secrets arg needed.
         process_executor::execute_streaming_cancellable(
             cmd,
-            &context.secrets,
+            &HashMap::new(),
             parameters_stdin,
             context.timeout,
             context.max_stdout_bytes,

@@ -50,11 +50,10 @@ parameter_format: yaml
 ```
 
 ```python
-# Read from stdin
+# Read from stdin (secrets are merged into parameters)
 import sys, json
-content = sys.stdin.read()
-params_str = content.split('---ATTUNE_PARAMS_END---')[0]
-params = json.loads(params_str)
+content = sys.stdin.read().strip()
+params = json.loads(content) if content else {}
 api_key = params['api_key']  # Secure!
 ```
 
@@ -119,11 +118,9 @@ import sys
 import json
 
 def read_params():
-    content = sys.stdin.read()
-    parts = content.split('---ATTUNE_PARAMS_END---')
-    params = json.loads(parts[0].strip()) if parts[0].strip() else {}
-    secrets = json.loads(parts[1].strip()) if len(parts) > 1 and parts[1].strip() else {}
-    return {**params, **secrets}
+    """Read parameters from stdin. Secrets are already merged in."""
+    content = sys.stdin.read().strip()
+    return json.loads(content) if content else {}
 
 params = read_params()
 api_key = params['api_key']
@@ -279,10 +276,10 @@ ps aux | grep attune-worker
 - Read from stdin or parameter file
 
 ```python
-# Read parameters from stdin
+# Read parameters from stdin (secrets are merged in)
 import sys, json
-content = sys.stdin.read()
-params = json.loads(content.split('---ATTUNE_PARAMS_END---')[0])
+content = sys.stdin.read().strip()
+params = json.loads(content) if content else {}
 api_key = params['api_key']  # Secure!
 ```
 

@@ -51,9 +51,12 @@ flate2 = { workspace = true }
 # WebSocket client (for notifier integration)
 tokio-tungstenite = { workspace = true }
 
+# Hashing
+sha2 = { workspace = true }
+
 # Terminal UI
 colored = "3.1"
-comfy-table = "7.2"
+comfy-table = { version = "7.2", features = ["custom_styling"] }
 dialoguer = "0.12"
 
 # Authentication

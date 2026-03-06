@@ -1,4 +1,3 @@
-#![cfg(feature = "integration-tests")]
 //! Integration tests for workflow API endpoints
 
 use attune_common::repositories::{
@@ -20,6 +19,7 @@ fn unique_pack_name() -> String {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_workflow_success() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -65,6 +65,7 @@ async fn test_create_workflow_success() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_workflow_duplicate_ref() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -110,6 +111,7 @@ async fn test_create_workflow_duplicate_ref() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_workflow_pack_not_found() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -132,6 +134,7 @@ async fn test_create_workflow_pack_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_get_workflow_by_ref() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -170,6 +173,7 @@ async fn test_get_workflow_by_ref() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_get_workflow_not_found() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -182,6 +186,7 @@ async fn test_get_workflow_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_list_workflows() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -228,6 +233,7 @@ async fn test_list_workflows() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_list_workflows_by_pack() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -295,6 +301,7 @@ async fn test_list_workflows_by_pack() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_list_workflows_with_filters() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -362,6 +369,7 @@ async fn test_list_workflows_with_filters() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_workflow() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -410,6 +418,7 @@ async fn test_update_workflow() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_workflow_not_found() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -428,6 +437,7 @@ async fn test_update_workflow_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_workflow() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -469,6 +479,7 @@ async fn test_delete_workflow() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_workflow_not_found() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 
@@ -481,6 +492,7 @@ async fn test_delete_workflow_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_workflow_requires_auth() {
     let ctx = TestContext::new().await.unwrap();
 
@@ -505,6 +517,7 @@ async fn test_create_workflow_requires_auth() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_workflow_validation() {
     let ctx = TestContext::new().await.unwrap().with_auth().await.unwrap();
 

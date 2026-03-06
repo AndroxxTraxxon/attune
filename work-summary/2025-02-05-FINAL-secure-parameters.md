@@ -186,7 +186,7 @@ pub enum PreparedParameters {
 **Security Features**:
 - Temporary files created with restrictive permissions (0400 on Unix)
 - Automatic cleanup of temporary files
-- Delimiter separation (`---ATTUNE_PARAMS_END---`) for parameters and secrets
+- Single-document delivery (secrets merged into parameters)
 
 ### 4. Runtime Integration
 
@@ -310,12 +310,9 @@ import json
 import os
 
 def read_stdin_params():
-    """Read parameters from stdin."""
-    content = sys.stdin.read()
-    parts = content.split('---ATTUNE_PARAMS_END---')
-    params = json.loads(parts[0].strip()) if parts[0].strip() else {}
-    secrets = json.loads(parts[1].strip()) if len(parts) > 1 and parts[1].strip() else {}
-    return {**params, **secrets}
+    """Read parameters from stdin. Secrets are already merged into parameters."""
+    content = sys.stdin.read().strip()
+    return json.loads(content) if content else {}
 
 def main():
     # Read parameters (secure)
@@ -491,8 +488,8 @@ parameter_format: json
 Write action to read from stdin:
 ```python
 import sys, json
-content = sys.stdin.read()
-params = json.loads(content.split('---ATTUNE_PARAMS_END---')[0])
+content = sys.stdin.read().strip()
+params = json.loads(content) if content else {}
 ```
 
 ### For Execution Context

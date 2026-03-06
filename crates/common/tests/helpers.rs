@@ -1116,7 +1116,7 @@ pub struct KeyFixture {
     pub name: String,
     pub encrypted: bool,
     pub encryption_key_hash: Option<String>,
-    pub value: String,
+    pub value: serde_json::Value,
 }
 
 impl KeyFixture {
@@ -1136,7 +1136,7 @@ impl KeyFixture {
             name: name.to_string(),
             encrypted: false,
             encryption_key_hash: None,
-            value: value.to_string(),
+            value: serde_json::json!(value),
         }
     }
 
@@ -1157,7 +1157,7 @@ impl KeyFixture {
             name: unique_name,
             encrypted: false,
             encryption_key_hash: None,
-            value: value.to_string(),
+            value: serde_json::json!(value),
         }
     }
 
@@ -1177,7 +1177,7 @@ impl KeyFixture {
             name: name.to_string(),
             encrypted: false,
             encryption_key_hash: None,
-            value: value.to_string(),
+            value: serde_json::json!(value),
         }
     }
 
@@ -1198,7 +1198,7 @@ impl KeyFixture {
             name: unique_name,
             encrypted: false,
             encryption_key_hash: None,
-            value: value.to_string(),
+            value: serde_json::json!(value),
         }
     }
 
@@ -1218,7 +1218,7 @@ impl KeyFixture {
             name: name.to_string(),
             encrypted: false,
             encryption_key_hash: None,
-            value: value.to_string(),
+            value: serde_json::json!(value),
         }
     }
 
@@ -1239,7 +1239,7 @@ impl KeyFixture {
             name: unique_name,
             encrypted: false,
             encryption_key_hash: None,
-            value: value.to_string(),
+            value: serde_json::json!(value),
         }
     }
 
@@ -1254,7 +1254,7 @@ impl KeyFixture {
     }
 
     pub fn with_value(mut self, value: &str) -> Self {
-        self.value = value.to_string();
+        self.value = serde_json::json!(value);
         self
     }
 

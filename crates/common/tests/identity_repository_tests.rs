@@ -16,6 +16,7 @@ use helpers::*;
 use serde_json::json;
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_identity() {
     let pool = create_test_pool().await.unwrap();
 
@@ -38,6 +39,7 @@ async fn test_create_identity() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_identity_minimal() {
     let pool = create_test_pool().await.unwrap();
 
@@ -56,6 +58,7 @@ async fn test_create_identity_minimal() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_identity_duplicate_login() {
     let pool = create_test_pool().await.unwrap();
 
@@ -92,6 +95,7 @@ async fn test_create_identity_duplicate_login() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_identity_by_id() {
     let pool = create_test_pool().await.unwrap();
 
@@ -116,6 +120,7 @@ async fn test_find_identity_by_id() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_identity_by_id_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -125,6 +130,7 @@ async fn test_find_identity_by_id_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_identity_by_login() {
     let pool = create_test_pool().await.unwrap();
 
@@ -148,6 +154,7 @@ async fn test_find_identity_by_login() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_identity_by_login_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -159,6 +166,7 @@ async fn test_find_identity_by_login_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_list_identities() {
     let pool = create_test_pool().await.unwrap();
 
@@ -190,6 +198,7 @@ async fn test_list_identities() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_identity() {
     let pool = create_test_pool().await.unwrap();
 
@@ -225,6 +234,7 @@ async fn test_update_identity() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_identity_partial() {
     let pool = create_test_pool().await.unwrap();
 
@@ -256,6 +266,7 @@ async fn test_update_identity_partial() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_identity_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -279,6 +290,7 @@ async fn test_update_identity_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_identity() {
     let pool = create_test_pool().await.unwrap();
 
@@ -311,6 +323,7 @@ async fn test_delete_identity() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_identity_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -320,6 +333,7 @@ async fn test_delete_identity_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_identity_timestamps_auto_populated() {
     let pool = create_test_pool().await.unwrap();
 
@@ -344,6 +358,7 @@ async fn test_identity_timestamps_auto_populated() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_identity_updated_changes_on_update() {
     let pool = create_test_pool().await.unwrap();
 
@@ -379,6 +394,7 @@ async fn test_identity_updated_changes_on_update() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_identity_with_complex_attributes() {
     let pool = create_test_pool().await.unwrap();
 
@@ -419,6 +435,7 @@ async fn test_identity_with_complex_attributes() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_identity_login_case_sensitive() {
     let pool = create_test_pool().await.unwrap();
 

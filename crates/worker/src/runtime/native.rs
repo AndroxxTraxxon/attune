@@ -39,7 +39,7 @@ impl NativeRuntime {
     async fn execute_binary(
         &self,
         binary_path: PathBuf,
-        secrets: &std::collections::HashMap<String, String>,
+        _secrets: &std::collections::HashMap<String, serde_json::Value>,
         env: &std::collections::HashMap<String, String>,
         parameters_stdin: Option<&str>,
         timeout: Option<u64>,
@@ -94,31 +94,17 @@ impl NativeRuntime {
             .spawn()
             .map_err(|e| RuntimeError::ExecutionFailed(format!("Failed to spawn binary: {}", e)))?;
 
-        // Write to stdin - parameters (if using stdin delivery) and/or secrets
-        // If this fails, the process has already started, so we continue and capture output
+        // Write parameters to stdin as a single JSON line.
+        // Secrets are merged into the parameters map by the caller, so the
+        // action reads everything with a single readline().
         let stdin_write_error = if let Some(mut stdin) = child.stdin.take() {
             let mut error = None;
 
-            // Write parameters first if using stdin delivery
             if let Some(params_data) = parameters_stdin {
                 if let Err(e) = stdin.write_all(params_data.as_bytes()).await {
                     error = Some(format!("Failed to write parameters to stdin: {}", e));
-                } else if let Err(e) = stdin.write_all(b"\n---ATTUNE_PARAMS_END---\n").await {
-                    error = Some(format!("Failed to write parameter delimiter: {}", e));
-                }
-            }
-
-            // Write secrets as JSON (always, for backward compatibility)
-            if error.is_none() && !secrets.is_empty() {
-                match serde_json::to_string(secrets) {
-                    Ok(secrets_json) => {
-                        if let Err(e) = stdin.write_all(secrets_json.as_bytes()).await {
-                            error = Some(format!("Failed to write secrets to stdin: {}", e));
-                        } else if let Err(e) = stdin.write_all(b"\n").await {
-                            error = Some(format!("Failed to write newline to stdin: {}", e));
-                        }
-                    }
-                    Err(e) => error = Some(format!("Failed to serialize secrets: {}", e)),
+                } else if let Err(e) = stdin.write_all(b"\n").await {
+                    error = Some(format!("Failed to write newline to stdin: {}", e));
                 }
             }
 
@@ -331,6 +317,15 @@ impl Runtime for NativeRuntime {
             context.action_ref, context.execution_id, context.parameter_delivery, context.parameter_format
         );
 
+        // Merge secrets into parameters as a single JSON document.
+        // Actions receive everything via one readline() on stdin.
+        // Secret values are already JsonValue (string, object, array, etc.)
+        // so they are inserted directly without wrapping.
+        let mut merged_parameters = context.parameters.clone();
+        for (key, value) in &context.secrets {
+            merged_parameters.insert(key.clone(), value.clone());
+        }
+
         // Prepare environment and parameters according to delivery method
         let mut env = context.env.clone();
         let config = ParameterDeliveryConfig {
@@ -339,7 +334,7 @@ impl Runtime for NativeRuntime {
         };
 
         let prepared_params =
-            parameter_passing::prepare_parameters(&context.parameters, &mut env, config)?;
+            parameter_passing::prepare_parameters(&merged_parameters, &mut env, config)?;
 
         // Get stdin content if parameters are delivered via stdin
         let parameters_stdin = prepared_params.stdin_content();
@@ -351,7 +346,7 @@ impl Runtime for NativeRuntime {
 
         self.execute_binary(
             binary_path,
-            &context.secrets,
+            &std::collections::HashMap::new(),
             &env,
             parameters_stdin,
             context.timeout,

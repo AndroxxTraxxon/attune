@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use utoipa::{IntoParams, ToSchema};
 use validator::Validate;
 
@@ -61,9 +62,9 @@ pub struct KeyResponse {
     #[schema(example = true)]
     pub encrypted: bool,
 
-    /// The secret value (decrypted if encrypted)
-    #[schema(example = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")]
-    pub value: String,
+    /// The secret value (decrypted if encrypted). Can be a string, object, array, number, or boolean.
+    #[schema(value_type = Value, example = json!("ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"))]
+    pub value: JsonValue,
 
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
@@ -194,19 +195,14 @@ pub struct CreateKeyRequest {
     #[schema(example = "GitHub API Token")]
     pub name: String,
 
-    /// The secret value to store
-    #[validate(length(min = 1, max = 10000))]
-    #[schema(example = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")]
-    pub value: String,
+    /// The secret value to store. Can be a string, object, array, number, or boolean.
+    #[schema(value_type = Value, example = json!("ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"))]
+    pub value: JsonValue,
 
-    /// Whether to encrypt the value (recommended: true)
-    #[serde(default = "default_encrypted")]
-    #[schema(example = true)]
+    /// Whether to encrypt the value at rest (default: false; use --encrypt / -e from CLI)
+    #[serde(default)]
+    #[schema(example = false)]
     pub encrypted: bool,
-}
-
-fn default_encrypted() -> bool {
-    true
 }
 
 /// Request to update an existing key/secret
@@ -217,10 +213,9 @@ pub struct UpdateKeyRequest {
     #[schema(example = "GitHub API Token (Updated)")]
     pub name: Option<String>,
 
-    /// Update the secret value
-    #[validate(length(min = 1, max = 10000))]
-    #[schema(example = "ghp_new_token_xxxxxxxxxxxxxxxxxxxxxxxx")]
-    pub value: Option<String>,
+    /// Update the secret value. Can be a string, object, array, number, or boolean.
+    #[schema(value_type = Option<Value>, example = json!("ghp_new_token_xxxxxxxxxxxxxxxxxxxxxxxx"))]
+    pub value: Option<JsonValue>,
 
     /// Update encryption status (re-encrypts if changing from false to true)
     #[schema(example = true)]

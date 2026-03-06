@@ -5,7 +5,7 @@
 ## Core Principles
 
 1. **Use POSIX shell** (`#!/bin/sh`), not bash
-2. **Read parameters in DOTENV format** from stdin
+2. **Read parameters in DOTENV format** from stdin until EOF
 3. **No external JSON parsers** (jq, yq, etc.)
 4. **Minimal dependencies** (only POSIX utilities + curl)
 
@@ -17,7 +17,7 @@
 # Brief description of what this action does
 #
 # This script uses pure POSIX shell without external dependencies like jq.
-# It reads parameters in DOTENV format from stdin until the delimiter.
+# It reads parameters in DOTENV format from stdin until EOF.
 
 set -e
 
@@ -27,14 +27,8 @@ param2="default_value"
 bool_param="false"
 numeric_param="0"
 
-# Read DOTENV-formatted parameters from stdin until delimiter
+# Read DOTENV-formatted parameters from stdin until EOF
 while IFS= read -r line; do
-    # Check for parameter delimiter
-    case "$line" in
-        *"---ATTUNE_PARAMS_END---"*)
-            break
-            ;;
-    esac
     [ -z "$line" ] && continue
 
     key="${line%%=*}"
@@ -135,12 +129,11 @@ parameters:
 
 ### 1. Parameter Parsing
 
-**Read until delimiter:**
+**Read until EOF:**
 ```sh
 while IFS= read -r line; do
-    case "$line" in
-        *"---ATTUNE_PARAMS_END---"*) break ;;
-    esac
+    [ -z "$line" ] && continue
+    # ... process line
 done
 ```
 
@@ -303,11 +296,10 @@ runner_type: python  # NO! Use shell for core pack
 param1="string value"
 param2=42
 bool_param=true
----ATTUNE_PARAMS_END---
 ```
 
 **Key Rules:**
-- Parameters end with `---ATTUNE_PARAMS_END---` delimiter
+- Parameters are delivered via stdin; the script reads until EOF (stdin is closed after delivery)
 - Values may be quoted (single or double quotes)
 - Empty lines are skipped
 - No multiline values (use base64 if needed)

@@ -16,6 +16,7 @@ use helpers::*;
 use serde_json::json;
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_trigger() {
     let pool = create_test_pool().await.unwrap();
 
@@ -48,6 +49,7 @@ async fn test_create_trigger() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_trigger_without_pack() {
     let pool = create_test_pool().await.unwrap();
 
@@ -72,6 +74,7 @@ async fn test_create_trigger_without_pack() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_trigger_with_schemas() {
     let pool = create_test_pool().await.unwrap();
 
@@ -116,6 +119,7 @@ async fn test_create_trigger_with_schemas() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_trigger_disabled() {
     let pool = create_test_pool().await.unwrap();
 
@@ -138,6 +142,7 @@ async fn test_create_trigger_disabled() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_trigger_duplicate_ref() {
     let pool = create_test_pool().await.unwrap();
 
@@ -182,6 +187,7 @@ async fn test_create_trigger_duplicate_ref() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_trigger_by_id() {
     let pool = create_test_pool().await.unwrap();
 
@@ -215,6 +221,7 @@ async fn test_find_trigger_by_id() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_trigger_by_id_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -224,6 +231,7 @@ async fn test_find_trigger_by_id_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_trigger_by_ref() {
     let pool = create_test_pool().await.unwrap();
 
@@ -257,6 +265,7 @@ async fn test_find_trigger_by_ref() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_trigger_by_ref_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -268,6 +277,7 @@ async fn test_find_trigger_by_ref_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_list_triggers() {
     let pool = create_test_pool().await.unwrap();
 
@@ -314,6 +324,7 @@ async fn test_list_triggers() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_triggers_by_pack() {
     let pool = create_test_pool().await.unwrap();
 
@@ -384,6 +395,7 @@ async fn test_find_triggers_by_pack() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_enabled_triggers() {
     let pool = create_test_pool().await.unwrap();
 
@@ -436,6 +448,7 @@ async fn test_find_enabled_triggers() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_trigger() {
     let pool = create_test_pool().await.unwrap();
 
@@ -483,6 +496,7 @@ async fn test_update_trigger() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_trigger_partial() {
     let pool = create_test_pool().await.unwrap();
 
@@ -520,6 +534,7 @@ async fn test_update_trigger_partial() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_trigger_schemas() {
     let pool = create_test_pool().await.unwrap();
 
@@ -569,6 +584,7 @@ async fn test_update_trigger_schemas() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_trigger_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -593,6 +609,7 @@ async fn test_update_trigger_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_trigger() {
     let pool = create_test_pool().await.unwrap();
 
@@ -629,6 +646,7 @@ async fn test_delete_trigger() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_trigger_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -638,6 +656,7 @@ async fn test_delete_trigger_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_trigger_timestamps_auto_populated() {
     let pool = create_test_pool().await.unwrap();
 
@@ -666,6 +685,7 @@ async fn test_trigger_timestamps_auto_populated() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_trigger_updated_changes_on_update() {
     let pool = create_test_pool().await.unwrap();
 
@@ -709,6 +729,7 @@ async fn test_trigger_updated_changes_on_update() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_multiple_triggers_same_pack() {
     let pool = create_test_pool().await.unwrap();
 
@@ -754,6 +775,7 @@ async fn test_multiple_triggers_same_pack() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_trigger_cascade_delete_with_pack() {
     let pool = create_test_pool().await.unwrap();
 

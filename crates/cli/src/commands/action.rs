@@ -241,7 +241,7 @@ async fn handle_list(
                 let mut table = output::create_table();
                 output::add_header(
                     &mut table,
-                    vec!["ID", "Pack", "Name", "Runner", "Enabled", "Description"],
+                    vec!["ID", "Pack", "Name", "Runner", "Description"],
                 );
 
                 for action in actions {
@@ -253,7 +253,6 @@ async fn handle_list(
                             .runtime
                             .map(|r| r.to_string())
                             .unwrap_or_else(|| "none".to_string()),
-                        "✓".to_string(),
                         output::truncate(&action.description, 40),
                     ]);
                 }

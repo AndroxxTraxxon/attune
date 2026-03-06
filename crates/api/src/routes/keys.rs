@@ -102,8 +102,8 @@ pub async fn get_key(
                 ApiError::InternalServerError("Encryption key not configured on server".to_string())
             })?;
 
-        let decrypted_value =
-            attune_common::crypto::decrypt(&key.value, encryption_key).map_err(|e| {
+        let decrypted_value = attune_common::crypto::decrypt_json(&key.value, encryption_key)
+            .map_err(|e| {
                 tracing::error!("Failed to decrypt key '{}': {}", key_ref, e);
                 ApiError::InternalServerError(format!("Failed to decrypt key: {}", e))
             })?;
@@ -233,11 +233,11 @@ pub async fn create_key(
                 )
             })?;
 
-        let encrypted_value = attune_common::crypto::encrypt(&request.value, encryption_key)
+        let encrypted_value = attune_common::crypto::encrypt_json(&request.value, encryption_key)
             .map_err(|e| {
-                tracing::error!("Failed to encrypt key value: {}", e);
-                ApiError::InternalServerError(format!("Failed to encrypt value: {}", e))
-            })?;
+            tracing::error!("Failed to encrypt key value: {}", e);
+            ApiError::InternalServerError(format!("Failed to encrypt value: {}", e))
+        })?;
 
         let key_hash = attune_common::crypto::hash_encryption_key(encryption_key);
 
@@ -270,10 +270,11 @@ pub async fn create_key(
     // Return decrypted value in response
     if key.encrypted {
         let encryption_key = state.config.security.encryption_key.as_ref().unwrap();
-        key.value = attune_common::crypto::decrypt(&key.value, encryption_key).map_err(|e| {
-            tracing::error!("Failed to decrypt newly created key: {}", e);
-            ApiError::InternalServerError(format!("Failed to decrypt value: {}", e))
-        })?;
+        key.value =
+            attune_common::crypto::decrypt_json(&key.value, encryption_key).map_err(|e| {
+                tracing::error!("Failed to decrypt newly created key: {}", e);
+                ApiError::InternalServerError(format!("Failed to decrypt value: {}", e))
+            })?;
     }
 
     let response = ApiResponse::with_message(KeyResponse::from(key), "Key created successfully");
@@ -328,11 +329,11 @@ pub async fn update_key(
                         )
                     })?;
 
-            let encrypted_value = attune_common::crypto::encrypt(&new_value, encryption_key)
+            let encrypted_value = attune_common::crypto::encrypt_json(&new_value, encryption_key)
                 .map_err(|e| {
-                    tracing::error!("Failed to encrypt key value: {}", e);
-                    ApiError::InternalServerError(format!("Failed to encrypt value: {}", e))
-                })?;
+                tracing::error!("Failed to encrypt key value: {}", e);
+                ApiError::InternalServerError(format!("Failed to encrypt value: {}", e))
+            })?;
 
             let key_hash = attune_common::crypto::hash_encryption_key(encryption_key);
 
@@ -366,7 +367,7 @@ pub async fn update_key(
                 ApiError::InternalServerError("Encryption key not configured on server".to_string())
             })?;
 
-        updated_key.value = attune_common::crypto::decrypt(&updated_key.value, encryption_key)
+        updated_key.value = attune_common::crypto::decrypt_json(&updated_key.value, encryption_key)
             .map_err(|e| {
                 tracing::error!("Failed to decrypt updated key '{}': {}", key_ref, e);
                 ApiError::InternalServerError(format!("Failed to decrypt value: {}", e))

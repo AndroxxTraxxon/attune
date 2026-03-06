@@ -115,11 +115,33 @@ fn create_test_index(packs: &[(&str, &str)]) -> TempDir {
     temp_dir
 }
 
+/// Create an isolated CLI command that never touches the user's real config.
+///
+/// Returns `(Command, TempDir)` — the `TempDir` must be kept alive for the
+/// duration of the test so the config directory isn't deleted prematurely.
+fn isolated_cmd() -> (Command, TempDir) {
+    let config_dir = TempDir::new().expect("Failed to create temp config dir");
+
+    // Write a minimal default config so the CLI doesn't try to create one
+    let attune_dir = config_dir.path().join("attune");
+    fs::create_dir_all(&attune_dir).expect("Failed to create attune config dir");
+    fs::write(
+        attune_dir.join("config.yaml"),
+        "profile: default\nformat: table\nprofiles:\n  default:\n    api_url: http://localhost:8080\n",
+    )
+    .expect("Failed to write test config");
+
+    let mut cmd = Command::cargo_bin("attune").unwrap();
+    cmd.env("XDG_CONFIG_HOME", config_dir.path())
+        .env("HOME", config_dir.path());
+    (cmd, config_dir)
+}
+
 #[test]
 fn test_pack_checksum_directory() {
     let pack_dir = create_test_pack("checksum-test", "1.0.0", &[]);
 
-    let mut cmd = Command::cargo_bin("attune").unwrap();
+    let (mut cmd, _config_dir) = isolated_cmd();
     cmd.arg("--output")
         .arg("table")
         .arg("pack")
@@ -135,7 +157,7 @@ fn test_pack_checksum_directory() {
 fn test_pack_checksum_json_output() {
     let pack_dir = create_test_pack("checksum-json", "1.0.0", &[]);
 
-    let mut cmd = Command::cargo_bin("attune").unwrap();
+    let (mut cmd, _config_dir) = isolated_cmd();
     cmd.arg("--output")
         .arg("json")
         .arg("pack")
@@ -153,7 +175,7 @@ fn test_pack_checksum_json_output() {
 
 #[test]
 fn test_pack_checksum_nonexistent_path() {
-    let mut cmd = Command::cargo_bin("attune").unwrap();
+    let (mut cmd, _config_dir) = isolated_cmd();
     cmd.arg("pack").arg("checksum").arg("/nonexistent/path");
 
     cmd.assert().failure().stderr(
@@ -165,7 +187,7 @@ fn test_pack_checksum_nonexistent_path() {
 fn test_pack_index_entry_generates_valid_json() {
     let pack_dir = create_test_pack("index-entry-test", "1.2.3", &[]);
 
-    let mut cmd = Command::cargo_bin("attune").unwrap();
+    let (mut cmd, _config_dir) = isolated_cmd();
     cmd.arg("--output")
         .arg("json")
         .arg("pack")
@@ -199,7 +221,7 @@ fn test_pack_index_entry_generates_valid_json() {
 fn test_pack_index_entry_with_archive_url() {
     let pack_dir = create_test_pack("archive-test", "2.0.0", &[]);
 
-    let mut cmd = Command::cargo_bin("attune").unwrap();
+    let (mut cmd, _config_dir) = isolated_cmd();
     cmd.arg("--output")
         .arg("json")
         .arg("pack")
@@ -227,7 +249,7 @@ fn test_pack_index_entry_missing_pack_yaml() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(temp_dir.path().join("readme.txt"), "No pack.yaml here").unwrap();
 
-    let mut cmd = Command::cargo_bin("attune").unwrap();
+    let (mut cmd, _config_dir) = isolated_cmd();
     cmd.arg("pack")
         .arg("index-entry")
         .arg(temp_dir.path().to_str().unwrap());
@@ -244,7 +266,7 @@ fn test_pack_index_update_adds_new_entry() {
 
     let pack_dir = create_test_pack("new-pack", "1.0.0", &[]);
 
-    let mut cmd = Command::cargo_bin("attune").unwrap();
+    let (mut cmd, _config_dir) = isolated_cmd();
     cmd.arg("pack")
         .arg("index-update")
         .arg("--index")
@@ -273,7 +295,7 @@ fn test_pack_index_update_prevents_duplicate_without_flag() {
 
     let pack_dir = create_test_pack("existing-pack", "1.0.0", &[]);
 
-    let mut cmd = Command::cargo_bin("attune").unwrap();
+    let (mut cmd, _config_dir) = isolated_cmd();
     cmd.arg("pack")
         .arg("index-update")
         .arg("--index")
@@ -294,7 +316,7 @@ fn test_pack_index_update_with_update_flag() {
 
     let pack_dir = create_test_pack("existing-pack", "2.0.0", &[]);
 
-    let mut cmd = Command::cargo_bin("attune").unwrap();
+    let (mut cmd, _config_dir) = isolated_cmd();
     cmd.arg("pack")
         .arg("index-update")
         .arg("--index")
@@ -327,7 +349,7 @@ fn test_pack_index_update_invalid_index_file() {
 
     let pack_dir = create_test_pack("test-pack", "1.0.0", &[]);
 
-    let mut cmd = Command::cargo_bin("attune").unwrap();
+    let (mut cmd, _config_dir) = isolated_cmd();
     cmd.arg("pack")
         .arg("index-update")
         .arg("--index")
@@ -345,8 +367,10 @@ fn test_pack_index_merge_combines_indexes() {
     let output_dir = TempDir::new().unwrap();
     let output_path = output_dir.path().join("merged.json");
 
-    let mut cmd = Command::cargo_bin("attune").unwrap();
-    cmd.arg("pack")
+    let (mut cmd, _config_dir) = isolated_cmd();
+    cmd.arg("--output")
+        .arg("table")
+        .arg("pack")
         .arg("index-merge")
         .arg("--file")
         .arg(output_path.to_str().unwrap())
@@ -372,8 +396,10 @@ fn test_pack_index_merge_deduplicates() {
     let output_dir = TempDir::new().unwrap();
     let output_path = output_dir.path().join("merged.json");
 
-    let mut cmd = Command::cargo_bin("attune").unwrap();
-    cmd.arg("pack")
+    let (mut cmd, _config_dir) = isolated_cmd();
+    cmd.arg("--output")
+        .arg("table")
+        .arg("pack")
         .arg("index-merge")
         .arg("--file")
         .arg(output_path.to_str().unwrap())
@@ -403,7 +429,7 @@ fn test_pack_index_merge_output_exists_without_force() {
     let output_path = output_dir.path().join("merged.json");
     fs::write(&output_path, "existing content").unwrap();
 
-    let mut cmd = Command::cargo_bin("attune").unwrap();
+    let (mut cmd, _config_dir) = isolated_cmd();
     cmd.arg("pack")
         .arg("index-merge")
         .arg("--file")
@@ -423,7 +449,7 @@ fn test_pack_index_merge_with_force_flag() {
     let output_path = output_dir.path().join("merged.json");
     fs::write(&output_path, "existing content").unwrap();
 
-    let mut cmd = Command::cargo_bin("attune").unwrap();
+    let (mut cmd, _config_dir) = isolated_cmd();
     cmd.arg("pack")
         .arg("index-merge")
         .arg("--file")
@@ -443,7 +469,7 @@ fn test_pack_index_merge_empty_input_list() {
     let output_dir = TempDir::new().unwrap();
     let output_path = output_dir.path().join("merged.json");
 
-    let mut cmd = Command::cargo_bin("attune").unwrap();
+    let (mut cmd, _config_dir) = isolated_cmd();
     cmd.arg("pack")
         .arg("index-merge")
         .arg("--file")
@@ -459,8 +485,10 @@ fn test_pack_index_merge_missing_input_file() {
     let output_dir = TempDir::new().unwrap();
     let output_path = output_dir.path().join("merged.json");
 
-    let mut cmd = Command::cargo_bin("attune").unwrap();
-    cmd.arg("pack")
+    let (mut cmd, _config_dir) = isolated_cmd();
+    cmd.arg("--output")
+        .arg("table")
+        .arg("pack")
         .arg("index-merge")
         .arg("--file")
         .arg(output_path.to_str().unwrap())
@@ -483,7 +511,7 @@ fn test_pack_commands_help() {
     ];
 
     for args in commands {
-        let mut cmd = Command::cargo_bin("attune").unwrap();
+        let (mut cmd, _config_dir) = isolated_cmd();
         for arg in &args {
             cmd.arg(arg);
         }

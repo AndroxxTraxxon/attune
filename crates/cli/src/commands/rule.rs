@@ -98,7 +98,7 @@ pub enum RuleCommands {
         rule_ref: String,
 
         /// Skip confirmation prompt
-        #[arg(short = 'y', long)]
+        #[arg(long)]
         yes: bool,
     },
 }
@@ -275,12 +275,13 @@ async fn handle_list(
                 let mut table = output::create_table();
                 output::add_header(
                     &mut table,
-                    vec!["ID", "Pack", "Name", "Trigger", "Action", "Enabled"],
+                    vec!["ID", "Ref", "Pack", "Label", "Trigger", "Action", "Enabled"],
                 );
 
                 for rule in rules {
                     table.add_row(vec![
                         rule.id.to_string(),
+                        rule.rule_ref.clone(),
                         rule.pack_ref.clone(),
                         rule.label.clone(),
                         rule.trigger_ref.clone(),

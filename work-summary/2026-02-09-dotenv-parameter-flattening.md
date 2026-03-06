@@ -174,7 +174,6 @@ attune action execute core.http_request \
 headers.Content-Type='application/json'
 query_params.page='1'
 url='https://example.com'
----ATTUNE_PARAMS_END---
 ```
 
 3. Verify execution succeeds with correct HTTP request/response

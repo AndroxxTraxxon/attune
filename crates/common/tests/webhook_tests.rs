@@ -36,6 +36,7 @@ async fn create_test_trigger(pool: &PgPool) -> Trigger {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_webhook_enable() {
     let pool = setup_test_db().await;
     let trigger = create_test_trigger(&pool).await;
@@ -76,6 +77,7 @@ async fn test_webhook_enable() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_webhook_disable() {
     let pool = setup_test_db().await;
     let trigger = create_test_trigger(&pool).await;
@@ -113,6 +115,7 @@ async fn test_webhook_disable() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_webhook_key_regeneration() {
     let pool = setup_test_db().await;
     let trigger = create_test_trigger(&pool).await;
@@ -153,6 +156,7 @@ async fn test_webhook_key_regeneration() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_by_webhook_key() {
     let pool = setup_test_db().await;
     let trigger = create_test_trigger(&pool).await;
@@ -189,6 +193,7 @@ async fn test_find_by_webhook_key() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_webhook_key_uniqueness() {
     let pool = setup_test_db().await;
     let trigger1 = create_test_trigger(&pool).await;
@@ -220,6 +225,7 @@ async fn test_webhook_key_uniqueness() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_enable_webhook_idempotent() {
     let pool = setup_test_db().await;
     let trigger = create_test_trigger(&pool).await;

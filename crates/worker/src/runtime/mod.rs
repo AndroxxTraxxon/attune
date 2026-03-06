@@ -105,8 +105,9 @@ pub struct ExecutionContext {
     /// Environment variables
     pub env: HashMap<String, String>,
 
-    /// Secrets (passed securely via stdin, not environment variables)
-    pub secrets: HashMap<String, String>,
+    /// Secrets (passed securely via stdin, not environment variables).
+    /// Values are JSON — strings, objects, arrays, numbers, or booleans.
+    pub secrets: HashMap<String, serde_json::Value>,
 
     /// Execution timeout in seconds
     pub timeout: Option<u64>,

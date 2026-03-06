@@ -175,7 +175,7 @@ async fn handle_current(output_format: OutputFormat) -> Result<()> {
     match output_format {
         OutputFormat::Json | OutputFormat::Yaml => {
             let result = serde_json::json!({
-                "current_profile": config.current_profile
+                "profile": config.current_profile
             });
             output::print_output(&result, output_format)?;
         }
@@ -194,7 +194,7 @@ async fn handle_use(name: String, output_format: OutputFormat) -> Result<()> {
     match output_format {
         OutputFormat::Json | OutputFormat::Yaml => {
             let result = serde_json::json!({
-                "current_profile": name,
+                "profile": name,
                 "message": "Switched profile"
             });
             output::print_output(&result, output_format)?;
@@ -298,10 +298,6 @@ async fn handle_show_profile(name: String, output_format: OutputFormat) -> Resul
                         .to_string(),
                 ),
             ];
-
-            if let Some(output_format) = &profile.output_format {
-                pairs.push(("Output Format", output_format.clone()));
-            }
 
             if let Some(description) = &profile.description {
                 pairs.push(("Description", description.clone()));

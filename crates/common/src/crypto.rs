@@ -2,6 +2,14 @@
 //!
 //! This module provides functions for encrypting and decrypting secret values
 //! using AES-256-GCM encryption with randomly generated nonces.
+//!
+//! ## JSON value encryption
+//!
+//! [`encrypt_json`] / [`decrypt_json`] operate on [`serde_json::Value`] values.
+//! The JSON value is serialised to its compact string form before encryption,
+//! and the resulting ciphertext is stored as a JSON string (`Value::String`).
+//! This means the JSONB column always holds a plain JSON string when encrypted,
+//! and the original structured value is recovered after decryption.
 
 use crate::{Error, Result};
 use aes_gcm::{
@@ -9,6 +17,7 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 
 /// Size of the nonce in bytes (96 bits for AES-GCM)
@@ -53,6 +62,33 @@ pub fn encrypt(plaintext: &str, encryption_key: &str) -> Result<String> {
     result.extend_from_slice(&ciphertext);
 
     Ok(BASE64.encode(&result))
+}
+
+/// Encrypt a [`JsonValue`] using AES-256-GCM.
+///
+/// The value is first serialised to its compact JSON string representation,
+/// then encrypted with [`encrypt`]. The returned value is a
+/// [`JsonValue::String`] containing the base64 ciphertext, suitable for
+/// storage in a JSONB column.
+pub fn encrypt_json(value: &JsonValue, encryption_key: &str) -> Result<JsonValue> {
+    let plaintext = serde_json::to_string(value)
+        .map_err(|e| Error::encryption(format!("Failed to serialise JSON for encryption: {e}")))?;
+    let ciphertext = encrypt(&plaintext, encryption_key)?;
+    Ok(JsonValue::String(ciphertext))
+}
+
+/// Decrypt a [`JsonValue`] that was previously encrypted with [`encrypt_json`].
+///
+/// The input must be a [`JsonValue::String`] containing a base64 ciphertext.
+/// After decryption the JSON string is parsed back into the original
+/// structured [`JsonValue`].
+pub fn decrypt_json(value: &JsonValue, encryption_key: &str) -> Result<JsonValue> {
+    let ciphertext = value
+        .as_str()
+        .ok_or_else(|| Error::encryption("Encrypted JSON value must be a string"))?;
+    let plaintext = decrypt(ciphertext, encryption_key)?;
+    serde_json::from_str(&plaintext)
+        .map_err(|e| Error::encryption(format!("Failed to parse decrypted JSON: {e}")))
 }
 
 /// Decrypt a ciphertext value using AES-256-GCM
@@ -225,5 +261,62 @@ mod tests {
         let key2 = derive_key(TEST_KEY);
         assert_eq!(key1, key2);
         assert_eq!(key1.len(), 32); // 256 bits
+    }
+
+    // ── JSON encryption tests ──────────────────────────────────────
+
+    #[test]
+    fn test_encrypt_decrypt_json_string() {
+        let value = serde_json::json!("my_secret_token");
+        let encrypted = encrypt_json(&value, TEST_KEY).expect("encrypt_json should succeed");
+        assert!(encrypted.is_string(), "encrypted JSON should be a string");
+        let decrypted = decrypt_json(&encrypted, TEST_KEY).expect("decrypt_json should succeed");
+        assert_eq!(value, decrypted);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_json_object() {
+        let value = serde_json::json!({"user": "admin", "password": "s3cret", "port": 5432});
+        let encrypted = encrypt_json(&value, TEST_KEY).expect("encrypt_json should succeed");
+        let decrypted = decrypt_json(&encrypted, TEST_KEY).expect("decrypt_json should succeed");
+        assert_eq!(value, decrypted);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_json_array() {
+        let value = serde_json::json!(["token1", "token2", 42, true, null]);
+        let encrypted = encrypt_json(&value, TEST_KEY).expect("encrypt_json should succeed");
+        let decrypted = decrypt_json(&encrypted, TEST_KEY).expect("decrypt_json should succeed");
+        assert_eq!(value, decrypted);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_json_number() {
+        let value = serde_json::json!(42);
+        let encrypted = encrypt_json(&value, TEST_KEY).unwrap();
+        let decrypted = decrypt_json(&encrypted, TEST_KEY).unwrap();
+        assert_eq!(value, decrypted);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_json_bool() {
+        let value = serde_json::json!(true);
+        let encrypted = encrypt_json(&value, TEST_KEY).unwrap();
+        let decrypted = decrypt_json(&encrypted, TEST_KEY).unwrap();
+        assert_eq!(value, decrypted);
+    }
+
+    #[test]
+    fn test_decrypt_json_wrong_key_fails() {
+        let value = serde_json::json!({"secret": "data"});
+        let encrypted = encrypt_json(&value, TEST_KEY).unwrap();
+        let wrong = "wrong_key_that_is_also_32_chars_long!!!";
+        assert!(decrypt_json(&encrypted, wrong).is_err());
+    }
+
+    #[test]
+    fn test_decrypt_json_non_string_fails() {
+        let not_encrypted = serde_json::json!(42);
+        assert!(decrypt_json(&not_encrypted, TEST_KEY).is_err());
     }
 }

@@ -248,8 +248,10 @@ pub fn extract_token_from_header(auth_header: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::crypto_provider;
 
     fn test_config() -> JwtConfig {
+        crypto_provider::install();
         JwtConfig {
             secret: "test_secret_key_for_testing".to_string(),
             access_token_expiration: 3600,
@@ -260,6 +262,7 @@ mod tests {
     #[test]
     fn test_generate_and_validate_access_token() {
         let config = test_config();
+
         let token =
             generate_access_token(123, "testuser", &config).expect("Failed to generate token");
 
@@ -293,6 +296,7 @@ mod tests {
     #[test]
     fn test_token_with_wrong_secret() {
         let config = test_config();
+
         let token = generate_access_token(789, "user", &config).expect("Failed to generate token");
 
         let wrong_config = JwtConfig {
@@ -306,6 +310,7 @@ mod tests {
 
     #[test]
     fn test_expired_token() {
+        crypto_provider::install();
         let now = Utc::now().timestamp();
         let expired_claims = Claims {
             sub: "999".to_string(),

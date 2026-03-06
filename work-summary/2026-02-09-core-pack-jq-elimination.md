@@ -42,7 +42,7 @@ All four API wrapper actions have been converted from bash scripts using `jq` fo
 All converted scripts now follow the pattern established by `core.echo`:
 
 - **Shebang:** `#!/bin/sh` (POSIX shell, not bash)
-- **Parameter Parsing:** DOTENV format from stdin with delimiter `---ATTUNE_PARAMS_END---`
+- **Parameter Parsing:** DOTENV format from stdin until EOF
 - **JSON Construction:** Manual string construction with proper escaping
 - **HTTP Requests:** Using `curl` with response written to temp files
 - **Response Parsing:** Simple sed/case pattern matching for JSON field extraction
@@ -54,10 +54,8 @@ All converted scripts now follow the pattern established by `core.echo`:
 #### DOTENV Parameter Parsing
 ```sh
 while IFS= read -r line; do
-    case "$line" in
-        *"---ATTUNE_PARAMS_END---"*) break ;;
-    esac
-    
+    [ -z "$line" ] && continue
+
     key="${line%%=*}"
     value="${line#*=}"
     

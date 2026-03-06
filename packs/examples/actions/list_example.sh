@@ -3,19 +3,16 @@
 # Demonstrates JSON Lines output format for streaming results
 #
 # This script uses pure POSIX shell without external dependencies like jq.
-# It reads parameters in DOTENV format from stdin until the delimiter.
+# It reads parameters in DOTENV format from stdin until EOF.
 
 set -e
 
 # Initialize count with default
 count=5
 
-# Read DOTENV-formatted parameters from stdin until delimiter
+# Read DOTENV-formatted parameters from stdin until EOF
 while IFS= read -r line; do
     case "$line" in
-        *"---ATTUNE_PARAMS_END---"*)
-            break
-            ;;
         count=*)
             # Extract value after count=
             count="${line#count=}"

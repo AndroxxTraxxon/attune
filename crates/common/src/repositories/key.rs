@@ -2,6 +2,7 @@
 
 use crate::models::{key::*, Id, OwnerType};
 use crate::Result;
+use serde_json::Value as JsonValue;
 use sqlx::{Executor, Postgres, QueryBuilder};
 
 use super::{Create, Delete, FindById, List, Repository, Update};
@@ -48,13 +49,13 @@ pub struct CreateKeyInput {
     pub name: String,
     pub encrypted: bool,
     pub encryption_key_hash: Option<String>,
-    pub value: String,
+    pub value: JsonValue,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct UpdateKeyInput {
     pub name: Option<String>,
-    pub value: Option<String>,
+    pub value: Option<JsonValue>,
     pub encrypted: Option<bool>,
     pub encryption_key_hash: Option<String>,
 }

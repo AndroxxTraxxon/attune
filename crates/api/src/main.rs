@@ -115,6 +115,9 @@ async fn mq_reconnect_loop(state: Arc<AppState>, mq_url: String) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install HMAC-only JWT crypto provider (must be before any token operations)
+    attune_common::auth::install_crypto_provider();
+
     // Initialize tracing subscriber
     tracing_subscriber::fmt()
         .with_target(false)

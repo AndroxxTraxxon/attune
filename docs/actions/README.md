@@ -57,9 +57,9 @@ parameters:
 # my_action.py
 import sys, json
 
-# Read from stdin (the default)
-content = sys.stdin.read()
-params = json.loads(content.split('---ATTUNE_PARAMS_END---')[0])
+# Read from stdin (the default) — secrets are merged into parameters
+content = sys.stdin.read().strip()
+params = json.loads(content) if content else {}
 api_key = params['api_key']  # Secure - not in process list!
 ```
 

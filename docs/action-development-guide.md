@@ -107,17 +107,15 @@ parameter_format: json
 
 **Reading stdin parameters:**
 
-The worker writes parameters to stdin with a delimiter:
+The worker writes a single document to stdin containing all parameters (including secrets merged in), followed by a newline, then closes stdin:
 
 ```
-<formatted_parameters>
----ATTUNE_PARAMS_END---
-<secrets_json>
+<formatted_parameters>\n
 ```
 
-- Parameters come first in your chosen format
-- Delimiter `---ATTUNE_PARAMS_END---` separates parameters from secrets
-- Secrets follow as JSON (if any)
+- Parameters and secrets are merged into a single document
+- Secrets are included as top-level keys in the parameters object
+- The action reads until EOF (stdin is closed after delivery)
 
 #### 2. **File Delivery**
 
@@ -174,10 +172,9 @@ COUNT=$(echo "$PARAMS_JSON" | jq -r '.count // 1')
 import json
 import sys
 
-# Read until delimiter
-content = sys.stdin.read()
-parts = content.split('---ATTUNE_PARAMS_END---')
-params = json.loads(parts[0].strip()) if parts[0].strip() else {}
+# Read all parameters from stdin (secrets are merged in)
+content = sys.stdin.read().strip()
+params = json.loads(content) if content else {}
 
 message = params.get('message', '')
 count = params.get('count', 1)
@@ -206,9 +203,9 @@ nested:
 import sys
 import yaml
 
-content = sys.stdin.read()
-parts = content.split('---ATTUNE_PARAMS_END---')
-params = yaml.safe_load(parts[0].strip()) if parts[0].strip() else {}
+# Read all parameters from stdin (secrets are merged in)
+content = sys.stdin.read().strip()
+params = yaml.safe_load(content) if content else {}
 
 message = params.get('message', '')
 ```
@@ -240,7 +237,6 @@ count=""
 # Read until delimiter
 while IFS= read -r line; do
     case "$line" in
-        *"---ATTUNE_PARAMS_END---"*) break ;;
         message=*) 
             message="${line#message=}"
             # Remove quotes
@@ -564,10 +560,9 @@ import json
 import sys
 
 def main():
-    # Read parameters
-    content = sys.stdin.read()
-    parts = content.split('---ATTUNE_PARAMS_END---')
-    params = json.loads(parts[0].strip()) if parts[0].strip() else {}
+    # Read parameters (secrets are merged into the same document)
+    content = sys.stdin.read().strip()
+    params = json.loads(content) if content else {}
     
     # Process
     message = params.get('message', '')
@@ -614,7 +609,6 @@ async function main() {
 
     let input = '';
     for await (const line of rl) {
-        if (line.includes('---ATTUNE_PARAMS_END---')) break;
         input += line;
     }
 
@@ -815,15 +809,9 @@ import smtplib
 from email.mime.text import MIMEText
 
 def read_stdin_params():
-    """Read parameters and secrets from stdin."""
-    content = sys.stdin.read()
-    parts = content.split('---ATTUNE_PARAMS_END---')
-    
-    params = json.loads(parts[0].strip()) if parts[0].strip() else {}
-    secrets = json.loads(parts[1].strip()) if len(parts) > 1 and parts[1].strip() else {}
-    
-    # Merge secrets into params
-    return {**params, **secrets}
+    """Read parameters from stdin. Secrets are already merged into the parameters."""
+    content = sys.stdin.read().strip()
+    return json.loads(content) if content else {}
 
 def main():
     try:
@@ -903,10 +891,9 @@ import sys
 import time
 
 def main():
-    # Read parameters
-    content = sys.stdin.read()
-    parts = content.split('---ATTUNE_PARAMS_END---')
-    params = json.loads(parts[0].strip()) if parts[0].strip() else {}
+    # Read parameters (secrets are merged into the same document)
+    content = sys.stdin.read().strip()
+    params = json.loads(content) if content else {}
     
     items = params.get('items', [])
     
@@ -975,7 +962,6 @@ compress="true"
 # Read dotenv format from stdin
 while IFS= read -r line; do
     case "$line" in
-        *"---ATTUNE_PARAMS_END---"*) break ;;
         source=*)
             source="${line#source=}"
             source="${source#[\"\']}"
@@ -1060,7 +1046,7 @@ exit 0
 **Check:**
 - Is `parameter_delivery` set correctly?
 - Are you reading from stdin or checking `$ATTUNE_PARAMETER_FILE`?
-- Are you reading until the delimiter `---ATTUNE_PARAMS_END---`?
+- Are you reading stdin until EOF?
 
 **Debug:**
 ```bash
@@ -1100,15 +1086,13 @@ sys.stdout.flush()  # Ensure output is written immediately
 
 **Check:**
 - Are secrets configured for the action?
-- Are you reading past the delimiter in stdin?
-- Secrets come as JSON after `---ATTUNE_PARAMS_END---`
+- Secrets are merged into the parameters document — access them by key name just like regular parameters
 
 **Example:**
 ```python
-content = sys.stdin.read()
-parts = content.split('---ATTUNE_PARAMS_END---')
-params = json.loads(parts[0].strip()) if parts[0].strip() else {}
-secrets = json.loads(parts[1].strip()) if len(parts) > 1 else {}
+content = sys.stdin.read().strip()
+params = json.loads(content) if content else {}
+api_key = params.get('api_key', '')  # Secrets are regular keys
 ```
 
 ### Environment variables are missing

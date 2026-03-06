@@ -20,6 +20,7 @@ use helpers::*;
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_key_system_owner() {
     let pool = create_test_pool().await.unwrap();
 
@@ -36,12 +37,13 @@ async fn test_create_key_system_owner() {
     assert_eq!(key.owner_action, None);
     assert_eq!(key.owner_sensor, None);
     assert!(!key.encrypted);
-    assert_eq!(key.value, "test_value");
+    assert_eq!(key.value, serde_json::json!("test_value"));
     assert!(key.created.timestamp() > 0);
     assert!(key.updated.timestamp() > 0);
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_key_system_encrypted() {
     let pool = create_test_pool().await.unwrap();
 
@@ -61,6 +63,7 @@ async fn test_create_key_system_encrypted() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_key_identity_owner() {
     let pool = create_test_pool().await.unwrap();
 
@@ -79,7 +82,7 @@ async fn test_create_key_identity_owner() {
     assert_eq!(key.owner, Some(identity.id.to_string()));
     assert_eq!(key.owner_identity, Some(identity.id));
     assert_eq!(key.owner_pack, None);
-    assert_eq!(key.value, "secret_token");
+    assert_eq!(key.value, serde_json::json!("secret_token"));
 }
 
 // ============================================================================
@@ -87,6 +90,7 @@ async fn test_create_key_identity_owner() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_key_pack_owner() {
     let pool = create_test_pool().await.unwrap();
 
@@ -104,7 +108,7 @@ async fn test_create_key_pack_owner() {
     assert_eq!(key.owner, Some(pack.id.to_string()));
     assert_eq!(key.owner_pack, Some(pack.id));
     assert_eq!(key.owner_pack_ref, Some(pack.r#ref.clone()));
-    assert_eq!(key.value, "config_value");
+    assert_eq!(key.value, serde_json::json!("config_value"));
 }
 
 // ============================================================================
@@ -112,6 +116,7 @@ async fn test_create_key_pack_owner() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_key_duplicate_ref_fails() {
     let pool = create_test_pool().await.unwrap();
 
@@ -132,7 +137,7 @@ async fn test_create_key_duplicate_ref_fails() {
         name: key_ref.clone(),
         encrypted: false,
         encryption_key_hash: None,
-        value: "value1".to_string(),
+        value: serde_json::json!("value1"),
     };
 
     KeyRepository::create(&pool, input.clone()).await.unwrap();
@@ -143,6 +148,7 @@ async fn test_create_key_duplicate_ref_fails() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_key_system_with_owner_fields_fails() {
     let pool = create_test_pool().await.unwrap();
 
@@ -167,7 +173,7 @@ async fn test_create_key_system_with_owner_fields_fails() {
         name: "invalid".to_string(),
         encrypted: false,
         encryption_key_hash: None,
-        value: "value".to_string(),
+        value: serde_json::json!("value"),
     };
 
     let result = KeyRepository::create(&pool, input).await;
@@ -175,6 +181,7 @@ async fn test_create_key_system_with_owner_fields_fails() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_key_identity_without_owner_id_fails() {
     let pool = create_test_pool().await.unwrap();
 
@@ -193,7 +200,7 @@ async fn test_create_key_identity_without_owner_id_fails() {
         name: "invalid".to_string(),
         encrypted: false,
         encryption_key_hash: None,
-        value: "value".to_string(),
+        value: serde_json::json!("value"),
     };
 
     let result = KeyRepository::create(&pool, input).await;
@@ -201,6 +208,7 @@ async fn test_create_key_identity_without_owner_id_fails() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_key_multiple_owners_fails() {
     let pool = create_test_pool().await.unwrap();
 
@@ -229,7 +237,7 @@ async fn test_create_key_multiple_owners_fails() {
         name: "invalid".to_string(),
         encrypted: false,
         encryption_key_hash: None,
-        value: "value".to_string(),
+        value: serde_json::json!("value"),
     };
 
     let result = KeyRepository::create(&pool, input).await;
@@ -237,6 +245,7 @@ async fn test_create_key_multiple_owners_fails() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_key_invalid_ref_format_fails() {
     let pool = create_test_pool().await.unwrap();
 
@@ -255,7 +264,7 @@ async fn test_create_key_invalid_ref_format_fails() {
         name: "uppercase".to_string(),
         encrypted: false,
         encryption_key_hash: None,
-        value: "value".to_string(),
+        value: serde_json::json!("value"),
     };
 
     let result = KeyRepository::create(&pool, input).await;
@@ -267,6 +276,7 @@ async fn test_create_key_invalid_ref_format_fails() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_by_id_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -285,6 +295,7 @@ async fn test_find_by_id_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_by_id_not_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -293,6 +304,7 @@ async fn test_find_by_id_not_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_get_by_id_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -308,6 +320,7 @@ async fn test_get_by_id_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_get_by_id_not_exists_fails() {
     let pool = create_test_pool().await.unwrap();
 
@@ -317,6 +330,7 @@ async fn test_get_by_id_not_exists_fails() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_by_ref_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -334,6 +348,7 @@ async fn test_find_by_ref_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_by_ref_not_exists() {
     let pool = create_test_pool().await.unwrap();
 
@@ -344,6 +359,7 @@ async fn test_find_by_ref_not_exists() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_list_all_keys() {
     let pool = create_test_pool().await.unwrap();
 
@@ -373,6 +389,7 @@ async fn test_list_all_keys() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_value() {
     let pool = create_test_pool().await.unwrap();
 
@@ -387,17 +404,18 @@ async fn test_update_value() {
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
     let input = UpdateKeyInput {
-        value: Some("new_value".to_string()),
+        value: Some(serde_json::json!("new_value")),
         ..Default::default()
     };
 
     let updated = KeyRepository::update(&pool, key.id, input).await.unwrap();
 
-    assert_eq!(updated.value, "new_value");
+    assert_eq!(updated.value, serde_json::json!("new_value"));
     assert!(updated.updated > original_updated);
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_name() {
     let pool = create_test_pool().await.unwrap();
 
@@ -419,6 +437,7 @@ async fn test_update_name() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_encrypted_status() {
     let pool = create_test_pool().await.unwrap();
 
@@ -432,7 +451,7 @@ async fn test_update_encrypted_status() {
     let input = UpdateKeyInput {
         encrypted: Some(true),
         encryption_key_hash: Some("sha256:xyz789".to_string()),
-        value: Some("encrypted_value".to_string()),
+        value: Some(serde_json::json!("encrypted_value")),
         ..Default::default()
     };
 
@@ -443,10 +462,11 @@ async fn test_update_encrypted_status() {
         updated.encryption_key_hash,
         Some("sha256:xyz789".to_string())
     );
-    assert_eq!(updated.value, "encrypted_value");
+    assert_eq!(updated.value, serde_json::json!("encrypted_value"));
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_multiple_fields() {
     let pool = create_test_pool().await.unwrap();
 
@@ -459,7 +479,7 @@ async fn test_update_multiple_fields() {
     let new_name = format!("updated_name_{}", unique_test_id());
     let input = UpdateKeyInput {
         name: Some(new_name.clone()),
-        value: Some("updated_value".to_string()),
+        value: Some(serde_json::json!("updated_value")),
         encrypted: Some(true),
         encryption_key_hash: Some("hash123".to_string()),
     };
@@ -467,12 +487,13 @@ async fn test_update_multiple_fields() {
     let updated = KeyRepository::update(&pool, key.id, input).await.unwrap();
 
     assert_eq!(updated.name, new_name);
-    assert_eq!(updated.value, "updated_value");
+    assert_eq!(updated.value, serde_json::json!("updated_value"));
     assert!(updated.encrypted);
     assert_eq!(updated.encryption_key_hash, Some("hash123".to_string()));
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_no_changes() {
     let pool = create_test_pool().await.unwrap();
 
@@ -495,11 +516,12 @@ async fn test_update_no_changes() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_nonexistent_key_fails() {
     let pool = create_test_pool().await.unwrap();
 
     let input = UpdateKeyInput {
-        value: Some("new_value".to_string()),
+        value: Some(serde_json::json!("new_value")),
         ..Default::default()
     };
 
@@ -512,6 +534,7 @@ async fn test_update_nonexistent_key_fails() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_existing_key() {
     let pool = create_test_pool().await.unwrap();
 
@@ -529,6 +552,7 @@ async fn test_delete_existing_key() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_nonexistent_key() {
     let pool = create_test_pool().await.unwrap();
 
@@ -537,6 +561,7 @@ async fn test_delete_nonexistent_key() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_key_when_identity_deleted() {
     let pool = create_test_pool().await.unwrap();
 
@@ -563,6 +588,7 @@ async fn test_delete_key_when_identity_deleted() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_key_when_pack_deleted() {
     let pool = create_test_pool().await.unwrap();
 
@@ -593,6 +619,7 @@ async fn test_delete_key_when_pack_deleted() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_by_owner_type_system() {
     let pool = create_test_pool().await.unwrap();
 
@@ -616,6 +643,7 @@ async fn test_find_by_owner_type_system() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_by_owner_type_identity() {
     let pool = create_test_pool().await.unwrap();
 
@@ -650,6 +678,7 @@ async fn test_find_by_owner_type_identity() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_by_owner_type_pack() {
     let pool = create_test_pool().await.unwrap();
 
@@ -683,6 +712,7 @@ async fn test_find_by_owner_type_pack() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_created_timestamp_set_automatically() {
     let pool = create_test_pool().await.unwrap();
 
@@ -701,6 +731,7 @@ async fn test_created_timestamp_set_automatically() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_updated_timestamp_changes_on_update() {
     let pool = create_test_pool().await.unwrap();
 
@@ -715,7 +746,7 @@ async fn test_updated_timestamp_changes_on_update() {
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
     let input = UpdateKeyInput {
-        value: Some("new_value".to_string()),
+        value: Some(serde_json::json!("new_value")),
         ..Default::default()
     };
 
@@ -726,6 +757,7 @@ async fn test_updated_timestamp_changes_on_update() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_updated_timestamp_unchanged_on_read() {
     let pool = create_test_pool().await.unwrap();
 
@@ -753,6 +785,7 @@ async fn test_updated_timestamp_unchanged_on_read() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_key_encrypted_flag() {
     let pool = create_test_pool().await.unwrap();
 
@@ -779,6 +812,7 @@ async fn test_key_encrypted_flag() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_encryption_status() {
     let pool = create_test_pool().await.unwrap();
 
@@ -794,7 +828,7 @@ async fn test_update_encryption_status() {
     let input = UpdateKeyInput {
         encrypted: Some(true),
         encryption_key_hash: Some("sha256:newkey".to_string()),
-        value: Some("encrypted_value".to_string()),
+        value: Some(serde_json::json!("encrypted_value")),
         ..Default::default()
     };
 
@@ -805,20 +839,20 @@ async fn test_update_encryption_status() {
         encrypted.encryption_key_hash,
         Some("sha256:newkey".to_string())
     );
-    assert_eq!(encrypted.value, "encrypted_value");
+    assert_eq!(encrypted.value, serde_json::json!("encrypted_value"));
 
     // Decrypt it
     let input = UpdateKeyInput {
         encrypted: Some(false),
         encryption_key_hash: None,
-        value: Some("plain_value".to_string()),
+        value: Some(serde_json::json!("plain_value")),
         ..Default::default()
     };
 
     let decrypted = KeyRepository::update(&pool, key.id, input).await.unwrap();
 
     assert!(!decrypted.encrypted);
-    assert_eq!(decrypted.value, "plain_value");
+    assert_eq!(decrypted.value, serde_json::json!("plain_value"));
 }
 
 // ============================================================================
@@ -826,6 +860,7 @@ async fn test_update_encryption_status() {
 // ============================================================================
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_multiple_keys_same_pack_different_names() {
     let pool = create_test_pool().await.unwrap();
 
@@ -851,6 +886,7 @@ async fn test_multiple_keys_same_pack_different_names() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_same_key_name_different_owners() {
     let pool = create_test_pool().await.unwrap();
 

@@ -2,7 +2,7 @@
 //!
 //! Provides common subprocess execution infrastructure used by all runtime
 //! implementations. Handles streaming stdout/stderr capture, bounded log
-//! collection, timeout management, stdin parameter/secret delivery, and
+//! collection, timeout management, stdin parameter delivery, and
 //! output format parsing.
 //!
 //! ## Cancellation Support
@@ -28,22 +28,22 @@ use tracing::{debug, info, warn};
 /// This is the core execution function used by all runtime implementations.
 /// It handles:
 /// - Spawning the process with piped I/O
-/// - Writing parameters and secrets to stdin
+/// - Writing parameters (with secrets merged in) to stdin
 /// - Streaming stdout/stderr with bounded log collection
 /// - Timeout management
 /// - Output format parsing (JSON, YAML, JSONL, text)
 ///
 /// # Arguments
 /// * `cmd` - Pre-configured `Command` (interpreter, args, env vars, working dir already set)
-/// * `secrets` - Secrets to pass via stdin (as JSON)
-/// * `parameters_stdin` - Optional parameter data to write to stdin before secrets
+/// * `secrets` - Deprecated/unused — secrets are now merged into parameters by the caller
+/// * `parameters_stdin` - Optional parameter data (including secrets) to write to stdin
 /// * `timeout_secs` - Optional execution timeout in seconds
 /// * `max_stdout_bytes` - Maximum stdout size before truncation
 /// * `max_stderr_bytes` - Maximum stderr size before truncation
 /// * `output_format` - How to parse stdout (Text, Json, Yaml, Jsonl)
 pub async fn execute_streaming(
     cmd: Command,
-    secrets: &HashMap<String, String>,
+    _secrets: &HashMap<String, serde_json::Value>,
     parameters_stdin: Option<&str>,
     timeout_secs: Option<u64>,
     max_stdout_bytes: usize,
@@ -52,7 +52,7 @@ pub async fn execute_streaming(
 ) -> RuntimeResult<ExecutionResult> {
     execute_streaming_cancellable(
         cmd,
-        secrets,
+        _secrets,
         parameters_stdin,
         timeout_secs,
         max_stdout_bytes,
@@ -68,7 +68,7 @@ pub async fn execute_streaming(
 /// This is the core execution function used by all runtime implementations.
 /// It handles:
 /// - Spawning the process with piped I/O
-/// - Writing parameters and secrets to stdin
+/// - Writing parameters (with secrets merged in) to stdin
 /// - Streaming stdout/stderr with bounded log collection
 /// - Timeout management
 /// - Graceful cancellation via SIGINT → SIGTERM → SIGKILL escalation
@@ -76,8 +76,8 @@ pub async fn execute_streaming(
 ///
 /// # Arguments
 /// * `cmd` - Pre-configured `Command` (interpreter, args, env vars, working dir already set)
-/// * `secrets` - Secrets to pass via stdin (as JSON)
-/// * `parameters_stdin` - Optional parameter data to write to stdin before secrets
+/// * `secrets` - Deprecated/unused — secrets are now merged into parameters by the caller
+/// * `parameters_stdin` - Optional parameter data (including secrets) to write to stdin
 /// * `timeout_secs` - Optional execution timeout in seconds
 /// * `max_stdout_bytes` - Maximum stdout size before truncation
 /// * `max_stderr_bytes` - Maximum stderr size before truncation
@@ -86,7 +86,7 @@ pub async fn execute_streaming(
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_streaming_cancellable(
     mut cmd: Command,
-    secrets: &HashMap<String, String>,
+    _secrets: &HashMap<String, serde_json::Value>,
     parameters_stdin: Option<&str>,
     timeout_secs: Option<u64>,
     max_stdout_bytes: usize,
@@ -103,34 +103,19 @@ pub async fn execute_streaming_cancellable(
         .stderr(std::process::Stdio::piped())
         .spawn()?;
 
-    // Write to stdin - parameters (if using stdin delivery) and/or secrets.
+    // Write to stdin - parameters (with secrets already merged in by the caller).
     // If this fails, the process has already started, so we continue and capture output.
     let stdin_write_error = if let Some(mut stdin) = child.stdin.take() {
         let mut error = None;
 
-        // Write parameters first if using stdin delivery.
-        // When the caller provides parameters_stdin (i.e. the action uses
-        // stdin delivery), always write the content — even if it's "{}" —
-        // because the script expects to read valid JSON from stdin.
+        // Write parameters to stdin as a single JSON line.
+        // Secrets are merged into the parameters map by the caller, so the
+        // action reads everything with a single readline().
         if let Some(params_data) = parameters_stdin {
             if let Err(e) = stdin.write_all(params_data.as_bytes()).await {
                 error = Some(format!("Failed to write parameters to stdin: {}", e));
-            } else if let Err(e) = stdin.write_all(b"\n---ATTUNE_PARAMS_END---\n").await {
-                error = Some(format!("Failed to write parameter delimiter: {}", e));
-            }
-        }
-
-        // Write secrets as JSON (always, for backward compatibility)
-        if error.is_none() && !secrets.is_empty() {
-            match serde_json::to_string(secrets) {
-                Ok(secrets_json) => {
-                    if let Err(e) = stdin.write_all(secrets_json.as_bytes()).await {
-                        error = Some(format!("Failed to write secrets to stdin: {}", e));
-                    } else if let Err(e) = stdin.write_all(b"\n").await {
-                        error = Some(format!("Failed to write newline to stdin: {}", e));
-                    }
-                }
-                Err(e) => error = Some(format!("Failed to serialize secrets: {}", e)),
+            } else if let Err(e) = stdin.write_all(b"\n").await {
+                error = Some(format!("Failed to write newline to stdin: {}", e));
             }
         }
 

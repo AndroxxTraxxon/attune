@@ -98,7 +98,7 @@ test-integration: test-integration-api
 
 test-integration-api:
 	@echo "Running API integration tests..."
-	cargo test -p attune-api --features integration-tests -- --test-threads=1
+	cargo test -p attune-api -- --ignored --test-threads=1
 	@echo "API integration tests complete"
 
 test-with-db: db-test-setup test-integration

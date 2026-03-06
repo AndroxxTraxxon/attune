@@ -139,7 +139,7 @@ New utility module providing:
 - Temporary files created with restrictive permissions (owner read-only)
 - Automatic cleanup of temporary files
 - Proper escaping of special characters in dotenv format
-- Delimiter (`---ATTUNE_PARAMS_END---`) separates parameters from secrets in stdin
+- Single-document delivery (secrets merged into parameters)
 
 **Test Coverage**: Comprehensive unit tests for all formatting and delivery methods
 
@@ -252,11 +252,9 @@ import sys
 import json
 
 def read_stdin_params():
-    content = sys.stdin.read()
-    parts = content.split('---ATTUNE_PARAMS_END---')
-    params = json.loads(parts[0].strip()) if parts[0].strip() else {}
-    secrets = json.loads(parts[1].strip()) if len(parts) > 1 and parts[1].strip() else {}
-    return {**params, **secrets}
+    """Read parameters from stdin. Secrets are already merged into parameters."""
+    content = sys.stdin.read().strip()
+    return json.loads(content) if content else {}
 
 params = read_stdin_params()
 api_key = params.get('api_key')  # Secure - not in process list!

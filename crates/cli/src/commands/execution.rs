@@ -50,7 +50,7 @@ pub enum ExecutionCommands {
         execution_id: i64,
 
         /// Skip confirmation prompt
-        #[arg(short = 'y', long)]
+        #[arg(long)]
         yes: bool,
     },
     /// Get raw execution result

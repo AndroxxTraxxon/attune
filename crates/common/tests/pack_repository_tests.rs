@@ -12,6 +12,7 @@ use helpers::*;
 use serde_json::json;
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_pack() {
     let pool = create_test_pool().await.unwrap();
 
@@ -32,6 +33,7 @@ async fn test_create_pack() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_pack_duplicate_ref() {
     let pool = create_test_pool().await.unwrap();
 
@@ -48,6 +50,7 @@ async fn test_create_pack_duplicate_ref() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_pack_with_tags() {
     let pool = create_test_pool().await.unwrap();
 
@@ -63,6 +66,7 @@ async fn test_create_pack_with_tags() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_create_pack_standard() {
     let pool = create_test_pool().await.unwrap();
 
@@ -76,6 +80,7 @@ async fn test_create_pack_standard() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_pack_by_id() {
     let pool = create_test_pool().await.unwrap();
 
@@ -95,6 +100,7 @@ async fn test_find_pack_by_id() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_pack_by_id_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -104,6 +110,7 @@ async fn test_find_pack_by_id_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_pack_by_ref() {
     let pool = create_test_pool().await.unwrap();
 
@@ -122,6 +129,7 @@ async fn test_find_pack_by_ref() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_find_pack_by_ref_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -133,6 +141,7 @@ async fn test_find_pack_by_ref_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_list_packs() {
     let pool = create_test_pool().await.unwrap();
 
@@ -163,6 +172,7 @@ async fn test_list_packs() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_list_packs_with_pagination() {
     let pool = create_test_pool().await.unwrap();
 
@@ -190,6 +200,7 @@ async fn test_list_packs_with_pagination() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_pack() {
     let pool = create_test_pool().await.unwrap();
 
@@ -219,6 +230,7 @@ async fn test_update_pack() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_pack_partial() {
     let pool = create_test_pool().await.unwrap();
 
@@ -246,6 +258,7 @@ async fn test_update_pack_partial() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_pack_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -261,6 +274,7 @@ async fn test_update_pack_not_found() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_update_pack_tags() {
     let pool = create_test_pool().await.unwrap();
 
@@ -286,6 +300,7 @@ async fn test_update_pack_tags() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_pack() {
     let pool = create_test_pool().await.unwrap();
 
@@ -307,6 +322,7 @@ async fn test_delete_pack() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_delete_pack_not_found() {
     let pool = create_test_pool().await.unwrap();
 
@@ -348,6 +364,7 @@ async fn test_delete_pack_not_found() {
 // }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_count_packs() {
     let pool = create_test_pool().await.unwrap();
 
@@ -374,6 +391,7 @@ async fn test_count_packs() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_pack_transaction_commit() {
     let pool = create_test_pool().await.unwrap();
 
@@ -412,6 +430,7 @@ async fn test_pack_transaction_commit() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_pack_transaction_rollback() {
     let pool = create_test_pool().await.unwrap();
 
@@ -446,6 +465,7 @@ async fn test_pack_transaction_rollback() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_pack_invalid_ref_format() {
     let pool = create_test_pool().await.unwrap();
 
@@ -471,6 +491,7 @@ async fn test_pack_invalid_ref_format() {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_pack_valid_ref_formats() {
     let pool = create_test_pool().await.unwrap();
 

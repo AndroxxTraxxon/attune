@@ -95,10 +95,6 @@ pub enum PackCommands {
         /// Update version
         #[arg(long)]
         version: Option<String>,
-
-        /// Update enabled status
-        #[arg(long)]
-        enabled: Option<bool>,
     },
     /// Uninstall a pack
     Uninstall {
@@ -246,8 +242,6 @@ struct Pack {
     #[serde(default)]
     keywords: Option<Vec<String>>,
     #[serde(default)]
-    enabled: Option<bool>,
-    #[serde(default)]
     metadata: Option<serde_json::Value>,
     created: String,
     updated: String,
@@ -272,8 +266,6 @@ struct PackDetail {
     author: Option<String>,
     #[serde(default)]
     keywords: Option<Vec<String>>,
-    #[serde(default)]
-    enabled: Option<bool>,
     #[serde(default)]
     metadata: Option<serde_json::Value>,
     created: String,
@@ -404,7 +396,6 @@ pub async fn handle_pack_command(
             label,
             description,
             version,
-            enabled,
         } => {
             handle_update(
                 profile,
@@ -412,7 +403,6 @@ pub async fn handle_pack_command(
                 label,
                 description,
                 version,
-                enabled,
                 api_url,
                 output_format,
             )
@@ -651,17 +641,13 @@ async fn handle_list(
                 output::print_info("No packs found");
             } else {
                 let mut table = output::create_table();
-                output::add_header(
-                    &mut table,
-                    vec!["ID", "Name", "Version", "Enabled", "Description"],
-                );
+                output::add_header(&mut table, vec!["ID", "Name", "Version", "Description"]);
 
                 for pack in packs {
                     table.add_row(vec![
                         pack.id.to_string(),
                         pack.pack_ref,
                         pack.version,
-                        output::format_bool(pack.enabled.unwrap_or(true)),
                         output::truncate(&pack.description.unwrap_or_default(), 50),
                     ]);
                 }
@@ -705,7 +691,6 @@ async fn handle_show(
                     "Description",
                     pack.description.unwrap_or_else(|| "None".to_string()),
                 ),
-                ("Enabled", output::format_bool(pack.enabled.unwrap_or(true))),
                 ("Actions", pack.action_count.unwrap_or(0).to_string()),
                 ("Triggers", pack.trigger_count.unwrap_or(0).to_string()),
                 ("Rules", pack.rule_count.unwrap_or(0).to_string()),
@@ -1779,7 +1764,6 @@ async fn handle_update(
     label: Option<String>,
     description: Option<String>,
     version: Option<String>,
-    enabled: Option<bool>,
     api_url: &Option<String>,
     output_format: OutputFormat,
 ) -> Result<()> {
@@ -1787,7 +1771,7 @@ async fn handle_update(
     let mut client = ApiClient::from_config(&config, api_url);
 
     // Check that at least one field is provided
-    if label.is_none() && description.is_none() && version.is_none() && enabled.is_none() {
+    if label.is_none() && description.is_none() && version.is_none() {
         anyhow::bail!("At least one field must be provided to update");
     }
 
@@ -1799,15 +1783,12 @@ async fn handle_update(
         description: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         version: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        enabled: Option<bool>,
     }
 
     let request = UpdatePackRequest {
         label,
         description,
         version,
-        enabled,
     };
 
     let path = format!("/packs/{}", pack_ref);
@@ -1824,7 +1805,6 @@ async fn handle_update(
                 ("Ref", pack.pack_ref.clone()),
                 ("Label", pack.label.clone()),
                 ("Version", pack.version.clone()),
-                ("Enabled", output::format_bool(pack.enabled.unwrap_or(true))),
                 ("Updated", output::format_timestamp(&pack.updated)),
             ]);
         }

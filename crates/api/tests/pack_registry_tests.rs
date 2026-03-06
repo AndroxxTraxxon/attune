@@ -1,4 +1,3 @@
-#![cfg(feature = "integration-tests")]
 //! Integration tests for pack registry system
 //!
 //! This module tests:
@@ -128,6 +127,7 @@ actions:
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_install_pack_from_local_directory() -> Result<()> {
     let ctx = TestContext::new().await?.with_auth().await?;
     let token = ctx.token().unwrap();
@@ -167,6 +167,7 @@ async fn test_install_pack_from_local_directory() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_install_pack_with_dependency_validation_success() -> Result<()> {
     let ctx = TestContext::new().await?.with_auth().await?;
     let token = ctx.token().unwrap();
@@ -217,6 +218,7 @@ async fn test_install_pack_with_dependency_validation_success() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_install_pack_with_missing_dependency_fails() -> Result<()> {
     let ctx = TestContext::new().await?.with_auth().await?;
     let token = ctx.token().unwrap();
@@ -256,6 +258,7 @@ async fn test_install_pack_with_missing_dependency_fails() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_install_pack_skip_deps_bypasses_validation() -> Result<()> {
     let ctx = TestContext::new().await?.with_auth().await?;
     let token = ctx.token().unwrap();
@@ -291,6 +294,7 @@ async fn test_install_pack_skip_deps_bypasses_validation() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_install_pack_with_runtime_validation() -> Result<()> {
     let ctx = TestContext::new().await?.with_auth().await?;
     let token = ctx.token().unwrap();
@@ -324,6 +328,7 @@ async fn test_install_pack_with_runtime_validation() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_install_pack_metadata_tracking() -> Result<()> {
     let ctx = TestContext::new().await?.with_auth().await?;
     let token = ctx.token().unwrap();
@@ -373,6 +378,7 @@ async fn test_install_pack_metadata_tracking() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_install_pack_force_reinstall() -> Result<()> {
     let ctx = TestContext::new().await?.with_auth().await?;
     let token = ctx.token().unwrap();
@@ -425,6 +431,7 @@ async fn test_install_pack_force_reinstall() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_install_pack_storage_path_created() -> Result<()> {
     let ctx = TestContext::new().await?.with_auth().await?;
     let token = ctx.token().unwrap();
@@ -475,6 +482,7 @@ async fn test_install_pack_storage_path_created() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_install_pack_invalid_source() -> Result<()> {
     let ctx = TestContext::new().await?.with_auth().await?;
     let token = ctx.token().unwrap();
@@ -505,6 +513,7 @@ async fn test_install_pack_invalid_source() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_install_pack_missing_pack_yaml() -> Result<()> {
     let ctx = TestContext::new().await?.with_auth().await?;
     let token = ctx.token().unwrap();
@@ -539,6 +548,7 @@ async fn test_install_pack_missing_pack_yaml() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_install_pack_invalid_pack_yaml() -> Result<()> {
     let ctx = TestContext::new().await?.with_auth().await?;
     let token = ctx.token().unwrap();
@@ -567,6 +577,7 @@ async fn test_install_pack_invalid_pack_yaml() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_install_pack_without_auth_fails() -> Result<()> {
     let ctx = TestContext::new().await?; // No auth
 
@@ -592,6 +603,7 @@ async fn test_install_pack_without_auth_fails() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_multiple_pack_installations() -> Result<()> {
     let ctx = TestContext::new().await?.with_auth().await?;
     let token = ctx.token().unwrap();
@@ -639,6 +651,7 @@ async fn test_multiple_pack_installations() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "integration test — requires database"]
 async fn test_install_pack_version_upgrade() -> Result<()> {
     let ctx = TestContext::new().await?.with_auth().await?;
     let token = ctx.token().unwrap();
