@@ -15,9 +15,9 @@ pub use pack_service::{
     PackSyncResult, PackValidationResult, PackWorkflowService, PackWorkflowServiceConfig,
 };
 pub use parser::{
-    parse_workflow_file, parse_workflow_yaml, workflow_to_json, BackoffStrategy, DecisionBranch,
-    ParseError, ParseResult, PublishDirective, RetryConfig, Task, TaskTransition, TaskType,
-    WorkflowDefinition,
+    parse_workflow_file, parse_workflow_yaml, workflow_to_json, BackoffStrategy,
+    CancellationPolicy, DecisionBranch, ParseError, ParseResult, PublishDirective, RetryConfig,
+    Task, TaskTransition, TaskType, WorkflowDefinition,
 };
 pub use registrar::{RegistrationOptions, RegistrationResult, WorkflowRegistrar};
 pub use validator::{ValidationError, ValidationResult, WorkflowValidator};

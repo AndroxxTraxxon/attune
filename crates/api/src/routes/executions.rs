@@ -24,9 +24,10 @@ use attune_common::repositories::{
     execution::{
         CreateExecutionInput, ExecutionRepository, ExecutionSearchFilters, UpdateExecutionInput,
     },
-    workflow::WorkflowExecutionRepository,
+    workflow::{WorkflowDefinitionRepository, WorkflowExecutionRepository},
     Create, FindById, FindByRef, Update,
 };
+use attune_common::workflow::{CancellationPolicy, WorkflowDefinition};
 use sqlx::Row;
 
 use crate::{
@@ -503,6 +504,42 @@ async fn send_cancel_to_worker(publisher: Option<&Publisher>, execution_id: i64,
     }
 }
 
+/// Resolve the [`CancellationPolicy`] for a workflow parent execution.
+///
+/// Looks up the `workflow_execution` → `workflow_definition` chain and
+/// deserialises the stored definition to extract the policy.  Returns
+/// [`CancellationPolicy::AllowFinish`] (the default) when any lookup
+/// step fails so that the safest behaviour is used as a fallback.
+async fn resolve_cancellation_policy(
+    db: &sqlx::PgPool,
+    parent_execution_id: i64,
+) -> CancellationPolicy {
+    let wf_exec =
+        match WorkflowExecutionRepository::find_by_execution(db, parent_execution_id).await {
+            Ok(Some(wf)) => wf,
+            _ => return CancellationPolicy::default(),
+        };
+
+    let wf_def = match WorkflowDefinitionRepository::find_by_id(db, wf_exec.workflow_def).await {
+        Ok(Some(def)) => def,
+        _ => return CancellationPolicy::default(),
+    };
+
+    // Deserialise the stored JSON definition to extract the policy field.
+    match serde_json::from_value::<WorkflowDefinition>(wf_def.definition) {
+        Ok(def) => def.cancellation_policy,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to deserialise workflow definition for workflow_def {}: {}. \
+                 Falling back to AllowFinish cancellation policy.",
+                wf_exec.workflow_def,
+                e
+            );
+            CancellationPolicy::default()
+        }
+    }
+}
+
 /// Cancel all incomplete child executions of a workflow parent execution.
 ///
 /// This handles the workflow cascade: when a workflow execution is cancelled,
@@ -510,13 +547,35 @@ async fn send_cancel_to_worker(publisher: Option<&Publisher>, execution_id: i64,
 /// Additionally, the `workflow_execution` record is marked Cancelled so the
 /// scheduler's `advance_workflow` will short-circuit and not dispatch new tasks.
 ///
-/// Children in pre-running states (Requested, Scheduling, Scheduled) are set
-/// to Cancelled immediately. Children that are Running receive a cancel MQ
-/// message so their worker can gracefully stop the process.
+/// Behaviour depends on the workflow's [`CancellationPolicy`]:
+///
+/// - **`AllowFinish`** (default): Children in pre-running states (Requested,
+///   Scheduling, Scheduled) are set to Cancelled immediately.  Running children
+///   are left alone and will complete naturally; `advance_workflow` sees the
+///   cancelled `workflow_execution` and will not dispatch further tasks.
+///
+/// - **`CancelRunning`**: Pre-running children are cancelled as above.
+///   Running children also receive a cancel MQ message so their worker can
+///   gracefully stop the process (SIGINT → SIGTERM → SIGKILL).
 async fn cancel_workflow_children(
     db: &sqlx::PgPool,
     publisher: Option<&Publisher>,
     parent_execution_id: i64,
+) {
+    // Determine the cancellation policy from the workflow definition.
+    let policy = resolve_cancellation_policy(db, parent_execution_id).await;
+
+    cancel_workflow_children_with_policy(db, publisher, parent_execution_id, policy).await;
+}
+
+/// Inner implementation that carries the resolved [`CancellationPolicy`]
+/// through recursive calls so that nested child workflows inherit the
+/// top-level policy.
+async fn cancel_workflow_children_with_policy(
+    db: &sqlx::PgPool,
+    publisher: Option<&Publisher>,
+    parent_execution_id: i64,
+    policy: CancellationPolicy,
 ) {
     // Find all child executions that are still incomplete
     let children: Vec<attune_common::models::Execution> = match sqlx::query_as::<
@@ -546,9 +605,10 @@ async fn cancel_workflow_children(
     }
 
     tracing::info!(
-        "Cascading cancellation from execution {} to {} child execution(s)",
+        "Cascading cancellation from execution {} to {} child execution(s) (policy: {:?})",
         parent_execution_id,
-        children.len()
+        children.len(),
+        policy,
     );
 
     for child in &children {
@@ -558,7 +618,7 @@ async fn cancel_workflow_children(
             child.status,
             ExecutionStatus::Requested | ExecutionStatus::Scheduling | ExecutionStatus::Scheduled
         ) {
-            // Pre-running: cancel immediately in DB
+            // Pre-running: cancel immediately in DB (both policies)
             let update = UpdateExecutionInput {
                 status: Some(ExecutionStatus::Cancelled),
                 result: Some(serde_json::json!({
@@ -575,29 +635,45 @@ async fn cancel_workflow_children(
             child.status,
             ExecutionStatus::Running | ExecutionStatus::Canceling
         ) {
-            // Running: set to Canceling and send MQ message to the worker
-            if child.status != ExecutionStatus::Canceling {
-                let update = UpdateExecutionInput {
-                    status: Some(ExecutionStatus::Canceling),
-                    ..Default::default()
-                };
-                if let Err(e) = ExecutionRepository::update(db, child_id, update).await {
-                    tracing::error!(
-                        "Failed to set child execution {} to canceling: {}",
-                        child_id,
-                        e
+            match policy {
+                CancellationPolicy::CancelRunning => {
+                    // Running: set to Canceling and send MQ message to the worker
+                    if child.status != ExecutionStatus::Canceling {
+                        let update = UpdateExecutionInput {
+                            status: Some(ExecutionStatus::Canceling),
+                            ..Default::default()
+                        };
+                        if let Err(e) = ExecutionRepository::update(db, child_id, update).await {
+                            tracing::error!(
+                                "Failed to set child execution {} to canceling: {}",
+                                child_id,
+                                e
+                            );
+                        }
+                    }
+
+                    if let Some(worker_id) = child.executor {
+                        send_cancel_to_worker(publisher, child_id, worker_id).await;
+                    }
+                }
+                CancellationPolicy::AllowFinish => {
+                    // Running tasks are allowed to complete naturally.
+                    // advance_workflow will see the cancelled workflow_execution
+                    // and will not dispatch any further tasks.
+                    tracing::info!(
+                        "AllowFinish policy: leaving running child execution {} alone",
+                        child_id
                     );
                 }
-            }
-
-            if let Some(worker_id) = child.executor {
-                send_cancel_to_worker(publisher, child_id, worker_id).await;
             }
         }
 
         // Recursively cancel grandchildren (nested workflows)
         // Use Box::pin to allow the recursive async call
-        Box::pin(cancel_workflow_children(db, publisher, child_id)).await;
+        Box::pin(cancel_workflow_children_with_policy(
+            db, publisher, child_id, policy,
+        ))
+        .await;
     }
 
     // Also mark any associated workflow_execution record as Cancelled so that
@@ -632,6 +708,56 @@ async fn cancel_workflow_children(
                     parent_execution_id
                 );
             }
+        }
+    }
+
+    // If no children are still running (all were pre-running or were
+    // cancelled), finalize the parent execution as Cancelled immediately.
+    // Without this, the parent would stay stuck in "Canceling" because no
+    // task completion would trigger advance_workflow to finalize it.
+    let still_running: Vec<attune_common::models::Execution> = match sqlx::query_as::<
+        _,
+        attune_common::models::Execution,
+    >(&format!(
+        "SELECT {} FROM execution WHERE parent = $1 AND status IN ('running', 'canceling', 'scheduling', 'scheduled', 'requested')",
+        attune_common::repositories::execution::SELECT_COLUMNS
+    ))
+    .bind(parent_execution_id)
+    .fetch_all(db)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!(
+                "Failed to check remaining children for parent {}: {}",
+                parent_execution_id,
+                e
+            );
+            return;
+        }
+    };
+
+    if still_running.is_empty() {
+        // No children left in flight — finalize the parent execution now.
+        let update = UpdateExecutionInput {
+            status: Some(ExecutionStatus::Cancelled),
+            result: Some(serde_json::json!({
+                "error": "Workflow cancelled",
+                "succeeded": false,
+            })),
+            ..Default::default()
+        };
+        if let Err(e) = ExecutionRepository::update(db, parent_execution_id, update).await {
+            tracing::error!(
+                "Failed to finalize parent execution {} as Cancelled: {}",
+                parent_execution_id,
+                e
+            );
+        } else {
+            tracing::info!(
+                "Finalized parent execution {} as Cancelled (no running children remain)",
+                parent_execution_id
+            );
         }
     }
 }

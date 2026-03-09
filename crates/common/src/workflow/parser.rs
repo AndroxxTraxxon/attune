@@ -127,6 +127,17 @@ pub struct WorkflowDefinition {
     /// Tags for categorization
     #[serde(default)]
     pub tags: Vec<String>,
+
+    /// Cancellation policy for the workflow.
+    ///
+    /// Controls what happens to running tasks when the workflow is cancelled:
+    /// - `allow_finish` (default): Running tasks are allowed to complete naturally.
+    ///   Only pending/requested tasks are cancelled. The workflow waits for running
+    ///   tasks to finish but does not dispatch any new tasks.
+    /// - `cancel_running`: All running and pending tasks are forcefully cancelled.
+    ///   Running processes receive SIGINT → SIGTERM → SIGKILL via the worker.
+    #[serde(default, skip_serializing_if = "CancellationPolicy::is_default")]
+    pub cancellation_policy: CancellationPolicy,
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +420,27 @@ impl Task {
 
 fn default_task_type() -> TaskType {
     TaskType::Action
+}
+
+/// Policy controlling how running tasks are handled when a workflow is cancelled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CancellationPolicy {
+    /// Running tasks are allowed to complete naturally; only pending tasks are
+    /// cancelled and no new tasks are dispatched.  This is the default.
+    #[default]
+    AllowFinish,
+    /// All running and pending tasks are forcefully cancelled.  Running
+    /// processes receive SIGINT → SIGTERM → SIGKILL via the worker.
+    CancelRunning,
+}
+
+impl CancellationPolicy {
+    /// Returns `true` when the value is the default ([`AllowFinish`]).
+    /// Used by `#[serde(skip_serializing_if)]` to keep stored JSON compact.
+    pub fn is_default(&self) -> bool {
+        matches!(self, Self::AllowFinish)
+    }
 }
 
 /// Task type enumeration
@@ -1508,5 +1540,94 @@ tasks:
         } else {
             panic!("Expected Simple publish directive");
         }
+    }
+
+    #[test]
+    fn test_cancellation_policy_defaults_to_allow_finish() {
+        let yaml = r#"
+            version: "1.0.0"
+            tasks:
+              - name: task1
+                action: core.echo
+                input:
+                  message: hello
+        "#;
+        let workflow = parse_workflow_yaml(yaml).unwrap();
+        assert_eq!(
+            workflow.cancellation_policy,
+            CancellationPolicy::AllowFinish
+        );
+    }
+
+    #[test]
+    fn test_cancellation_policy_cancel_running() {
+        let yaml = r#"
+            version: "1.0.0"
+            cancellation_policy: cancel_running
+            tasks:
+              - name: task1
+                action: core.echo
+                input:
+                  message: hello
+        "#;
+        let workflow = parse_workflow_yaml(yaml).unwrap();
+        assert_eq!(
+            workflow.cancellation_policy,
+            CancellationPolicy::CancelRunning
+        );
+    }
+
+    #[test]
+    fn test_cancellation_policy_allow_finish_explicit() {
+        let yaml = r#"
+            version: "1.0.0"
+            cancellation_policy: allow_finish
+            tasks:
+              - name: task1
+                action: core.echo
+                input:
+                  message: hello
+        "#;
+        let workflow = parse_workflow_yaml(yaml).unwrap();
+        assert_eq!(
+            workflow.cancellation_policy,
+            CancellationPolicy::AllowFinish
+        );
+    }
+
+    #[test]
+    fn test_cancellation_policy_json_roundtrip() {
+        let yaml = r#"
+            version: "1.0.0"
+            cancellation_policy: cancel_running
+            tasks:
+              - name: step1
+                action: core.echo
+                input:
+                  message: hello
+        "#;
+        let workflow = parse_workflow_yaml(yaml).unwrap();
+        let json = workflow_to_json(&workflow).unwrap();
+        let restored: WorkflowDefinition = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            restored.cancellation_policy,
+            CancellationPolicy::CancelRunning
+        );
+    }
+
+    #[test]
+    fn test_cancellation_policy_absent_in_json_defaults() {
+        // Simulate a definition stored in the DB before this field existed
+        let json = serde_json::json!({
+            "ref": "test.wf",
+            "label": "Test",
+            "version": "1.0.0",
+            "tasks": [{"name": "t1", "action": "core.echo", "input": {"message": "hi"}}]
+        });
+        let workflow: WorkflowDefinition = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            workflow.cancellation_policy,
+            CancellationPolicy::AllowFinish
+        );
     }
 }

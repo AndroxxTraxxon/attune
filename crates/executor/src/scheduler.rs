@@ -17,7 +17,7 @@ use attune_common::{
     mq::{Consumer, ExecutionRequestedPayload, MessageEnvelope, MessageType, Publisher},
     repositories::{
         action::ActionRepository,
-        execution::{CreateExecutionInput, ExecutionRepository},
+        execution::{CreateExecutionInput, ExecutionRepository, UpdateExecutionInput},
         runtime::{RuntimeRepository, WorkerRepository},
         workflow::{
             CreateWorkflowExecutionInput, WorkflowDefinitionRepository, WorkflowExecutionRepository,
@@ -884,15 +884,50 @@ impl ExecutionScheduler {
                     anyhow::anyhow!("Workflow execution {} not found", workflow_execution_id)
                 })?;
 
-        // Already in a terminal state — nothing to do
+        // Already fully terminal (Completed / Failed) — nothing to do
         if matches!(
             workflow_execution.status,
-            ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Cancelled
+            ExecutionStatus::Completed | ExecutionStatus::Failed
         ) {
             debug!(
                 "Workflow execution {} already in terminal state {:?}, skipping advance",
                 workflow_execution_id, workflow_execution.status
             );
+            return Ok(());
+        }
+
+        // Cancelled workflow: don't dispatch new tasks, but check whether all
+        // running children have now finished.  When none remain, finalize the
+        // parent execution as Cancelled so it doesn't stay stuck in "Canceling".
+        if workflow_execution.status == ExecutionStatus::Cancelled {
+            let running = Self::count_running_workflow_children(
+                pool,
+                workflow_execution_id,
+                &workflow_execution.completed_tasks,
+                &workflow_execution.failed_tasks,
+            )
+            .await?;
+
+            if running == 0 {
+                info!(
+                    "Cancelled workflow_execution {} has no more running children, \
+                     finalizing parent execution {} as Cancelled",
+                    workflow_execution_id, workflow_execution.execution
+                );
+                Self::finalize_cancelled_workflow(
+                    pool,
+                    workflow_execution.execution,
+                    workflow_execution_id,
+                )
+                .await?;
+            } else {
+                debug!(
+                    "Cancelled workflow_execution {} still has {} running children, \
+                     waiting for them to finish",
+                    workflow_execution_id, running
+                );
+            }
+
             return Ok(());
         }
 
@@ -1373,6 +1408,32 @@ impl ExecutionScheduler {
             .count();
 
         Ok(count)
+    }
+
+    /// Finalize a cancelled workflow by updating the parent `execution` record
+    /// to `Cancelled`.  The `workflow_execution` record is already `Cancelled`
+    /// (set by `cancel_workflow_children`); this only touches the parent.
+    async fn finalize_cancelled_workflow(
+        pool: &PgPool,
+        parent_execution_id: i64,
+        workflow_execution_id: i64,
+    ) -> Result<()> {
+        info!(
+            "Finalizing cancelled workflow: parent execution {} (workflow_execution {})",
+            parent_execution_id, workflow_execution_id
+        );
+
+        let update = UpdateExecutionInput {
+            status: Some(ExecutionStatus::Cancelled),
+            result: Some(serde_json::json!({
+                "error": "Workflow cancelled",
+                "succeeded": false,
+            })),
+            ..Default::default()
+        };
+        ExecutionRepository::update(pool, parent_execution_id, update).await?;
+
+        Ok(())
     }
 
     /// Mark a workflow as completed (success or failure) and update both the

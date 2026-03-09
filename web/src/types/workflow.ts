@@ -185,6 +185,23 @@ export interface WorkflowEdge {
   labelPosition?: number;
 }
 
+/**
+ * Cancellation policy for a workflow.
+ *
+ * Controls what happens to running tasks when a workflow is cancelled:
+ * - `allow_finish` (default): Running tasks complete naturally; only
+ *   pending/requested tasks are cancelled and no new tasks are dispatched.
+ * - `cancel_running`: All running and pending tasks are forcefully cancelled.
+ *   Running processes receive SIGINT → SIGTERM → SIGKILL via the worker.
+ */
+export type CancellationPolicy = "allow_finish" | "cancel_running";
+
+/** Human-readable labels for each cancellation policy */
+export const CANCELLATION_POLICY_LABELS: Record<CancellationPolicy, string> = {
+  allow_finish: "Allow running tasks to finish",
+  cancel_running: "Cancel running tasks",
+};
+
 /** Complete workflow builder state */
 export interface WorkflowBuilderState {
   /** Workflow name (used to derive ref and filename) */
@@ -209,6 +226,8 @@ export interface WorkflowBuilderState {
   tags: string[];
   /** Whether the workflow is enabled */
   enabled: boolean;
+  /** Cancellation policy (default: allow_finish) */
+  cancellationPolicy: CancellationPolicy;
 }
 
 /** Parameter definition in flat schema format */
@@ -238,6 +257,7 @@ export interface WorkflowYamlDefinition {
   tasks: WorkflowYamlTask[];
   output_map?: Record<string, string>;
   tags?: string[];
+  cancellation_policy?: CancellationPolicy;
 }
 
 /**
@@ -252,6 +272,7 @@ export interface WorkflowGraphDefinition {
   vars?: Record<string, unknown>;
   tasks: WorkflowYamlTask[];
   output_map?: Record<string, string>;
+  cancellation_policy?: CancellationPolicy;
 }
 
 /**
@@ -450,6 +471,10 @@ export function builderStateToDefinition(
     definition.tags = state.tags;
   }
 
+  if (state.cancellationPolicy !== "allow_finish") {
+    definition.cancellation_policy = state.cancellationPolicy;
+  }
+
   return definition;
 }
 
@@ -535,6 +560,10 @@ export function builderStateToGraph(
 
   if (Object.keys(state.vars).length > 0) {
     graph.vars = state.vars;
+  }
+
+  if (state.cancellationPolicy !== "allow_finish") {
+    graph.cancellation_policy = state.cancellationPolicy;
   }
 
   return graph;
@@ -723,6 +752,7 @@ export function definitionToBuilderState(
     tasks,
     tags: definition.tags || [],
     enabled: true,
+    cancellationPolicy: definition.cancellation_policy || "allow_finish",
   };
 }
 

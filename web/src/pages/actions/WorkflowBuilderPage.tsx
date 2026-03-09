@@ -40,6 +40,7 @@ import type {
   WorkflowBuilderState,
   PaletteAction,
   TransitionPreset,
+  CancellationPolicy,
 } from "@/types/workflow";
 import {
   generateUniqueTaskName,
@@ -53,6 +54,7 @@ import {
   removeTaskFromTransitions,
   renameTaskInTransitions,
   findStartingTaskIds,
+  CANCELLATION_POLICY_LABELS,
 } from "@/types/workflow";
 
 const INITIAL_STATE: WorkflowBuilderState = {
@@ -67,6 +69,7 @@ const INITIAL_STATE: WorkflowBuilderState = {
   tasks: [],
   tags: [],
   enabled: true,
+  cancellationPolicy: "allow_finish",
 };
 
 export default function WorkflowBuilderPage() {
@@ -135,6 +138,7 @@ export default function WorkflowBuilderPage() {
       const name =
         refParts.length > 1 ? refParts.slice(1).join(".") : workflow.ref;
 
+      const defn = workflow.definition as Record<string, unknown> | undefined;
       const builderState = definitionToBuilderState(
         {
           ref: workflow.ref,
@@ -143,10 +147,15 @@ export default function WorkflowBuilderPage() {
           version: workflow.version,
           parameters: workflow.param_schema || undefined,
           output: workflow.out_schema || undefined,
-          tasks:
-            ((workflow.definition as Record<string, unknown>)
-              ?.tasks as WorkflowYamlDefinition["tasks"]) || [],
+          vars: (defn?.vars as Record<string, unknown>) || undefined,
+          tasks: (defn?.tasks as WorkflowYamlDefinition["tasks"]) || [],
+          output_map: (defn?.output_map as Record<string, string>) || undefined,
           tags: workflow.tags,
+          cancellation_policy:
+            (defn?.cancellation_policy as
+              | "allow_finish"
+              | "cancel_running"
+              | undefined) || undefined,
         },
         workflow.pack_ref,
         name,
@@ -843,6 +852,24 @@ export default function WorkflowBuilderPage() {
               />
               Enabled
             </label>
+            <select
+              value={state.cancellationPolicy}
+              onChange={(e) =>
+                updateMetadata({
+                  cancellationPolicy: e.target.value as CancellationPolicy,
+                })
+              }
+              className="px-2 py-1 border border-gray-200 rounded text-xs text-gray-600 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
+              title="Cancellation policy: controls how running tasks behave when the workflow is cancelled"
+            >
+              {Object.entries(CANCELLATION_POLICY_LABELS).map(
+                ([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ),
+              )}
+            </select>
           </div>
         </div>
       </div>
