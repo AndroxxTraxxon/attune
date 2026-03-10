@@ -1,0 +1,24 @@
+ref: core.editor
+label: Editor
+description: Create and update operational resources without full administrative control.
+grants:
+  - resource: packs
+    actions: [read, create, update]
+  - resource: actions
+    actions: [read, create, update, execute]
+  - resource: rules
+    actions: [read, create, update]
+  - resource: triggers
+    actions: [read]
+  - resource: executions
+    actions: [read, create, cancel]
+  - resource: keys
+    actions: [read, update]
+  - resource: artifacts
+    actions: [read]
+  - resource: workflows
+    actions: [read, create, update]
+  - resource: analytics
+    actions: [read]
+  - resource: history
+    actions: [read]

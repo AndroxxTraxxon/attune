@@ -152,6 +152,12 @@ pub async fn register(
     State(state): State<SharedState>,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<Json<ApiResponse<TokenResponse>>, ApiError> {
+    if !state.config.security.allow_self_registration {
+        return Err(ApiError::Forbidden(
+            "Self-service registration is disabled; identities must be provisioned by an administrator or identity provider".to_string(),
+        ));
+    }
+
     // Validate request
     payload
         .validate()
@@ -171,7 +177,7 @@ pub async fn register(
     // Hash password
     let password_hash = hash_password(&payload.password)?;
 
-    // Create identity with password hash
+    // Registration creates an identity only; permission assignments are managed separately.
     let input = CreateIdentityInput {
         login: payload.login.clone(),
         display_name: payload.display_name,

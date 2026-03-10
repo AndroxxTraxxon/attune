@@ -1,14 +1,15 @@
 //! Pack Component Loader
 //!
-//! Reads runtime, action, trigger, and sensor YAML definitions from a pack directory
+//! Reads permission set, runtime, action, trigger, and sensor YAML definitions from a pack directory
 //! and registers them in the database. This is the Rust-native equivalent of
 //! the Python `load_core_pack.py` script used during init-packs.
 //!
 //! Components are loaded in dependency order:
-//! 1. Runtimes (no dependencies)
-//! 2. Triggers (no dependencies)
-//! 3. Actions (depend on runtime; workflow actions also create workflow_definition records)
-//! 4. Sensors (depend on triggers and runtime)
+//! 1. Permission sets (no dependencies)
+//! 2. Runtimes (no dependencies)
+//! 3. Triggers (no dependencies)
+//! 4. Actions (depend on runtime; workflow actions also create workflow_definition records)
+//! 5. Sensors (depend on triggers and runtime)
 //!
 //! All loaders use **upsert** semantics: if an entity with the same ref already
 //! exists it is updated in place (preserving its database ID); otherwise a new
@@ -38,6 +39,9 @@ use tracing::{debug, info, warn};
 use crate::error::{Error, Result};
 use crate::models::Id;
 use crate::repositories::action::{ActionRepository, UpdateActionInput};
+use crate::repositories::identity::{
+    CreatePermissionSetInput, PermissionSetRepository, UpdatePermissionSetInput,
+};
 use crate::repositories::runtime::{CreateRuntimeInput, RuntimeRepository, UpdateRuntimeInput};
 use crate::repositories::runtime_version::{
     CreateRuntimeVersionInput, RuntimeVersionRepository, UpdateRuntimeVersionInput,
@@ -56,6 +60,12 @@ use crate::workflow::parser::parse_workflow_yaml;
 /// Result of loading pack components into the database.
 #[derive(Debug, Default)]
 pub struct PackLoadResult {
+    /// Number of permission sets created
+    pub permission_sets_loaded: usize,
+    /// Number of permission sets updated
+    pub permission_sets_updated: usize,
+    /// Number of permission sets skipped
+    pub permission_sets_skipped: usize,
     /// Number of runtimes created
     pub runtimes_loaded: usize,
     /// Number of runtimes updated (already existed)
@@ -88,15 +98,27 @@ pub struct PackLoadResult {
 
 impl PackLoadResult {
     pub fn total_loaded(&self) -> usize {
-        self.runtimes_loaded + self.triggers_loaded + self.actions_loaded + self.sensors_loaded
+        self.permission_sets_loaded
+            + self.runtimes_loaded
+            + self.triggers_loaded
+            + self.actions_loaded
+            + self.sensors_loaded
     }
 
     pub fn total_skipped(&self) -> usize {
-        self.runtimes_skipped + self.triggers_skipped + self.actions_skipped + self.sensors_skipped
+        self.permission_sets_skipped
+            + self.runtimes_skipped
+            + self.triggers_skipped
+            + self.actions_skipped
+            + self.sensors_skipped
     }
 
     pub fn total_updated(&self) -> usize {
-        self.runtimes_updated + self.triggers_updated + self.actions_updated + self.sensors_updated
+        self.permission_sets_updated
+            + self.runtimes_updated
+            + self.triggers_updated
+            + self.actions_updated
+            + self.sensors_updated
     }
 }
 
@@ -132,22 +154,26 @@ impl<'a> PackComponentLoader<'a> {
             pack_dir.display()
         );
 
-        // 1. Load runtimes first (no dependencies)
+        // 1. Load permission sets first (no dependencies)
+        let permission_set_refs = self.load_permission_sets(pack_dir, &mut result).await?;
+
+        // 2. Load runtimes (no dependencies)
         let runtime_refs = self.load_runtimes(pack_dir, &mut result).await?;
 
-        // 2. Load triggers (no dependencies)
+        // 3. Load triggers (no dependencies)
         let (trigger_ids, trigger_refs) = self.load_triggers(pack_dir, &mut result).await?;
 
-        // 3. Load actions (depend on runtime)
+        // 4. Load actions (depend on runtime)
         let action_refs = self.load_actions(pack_dir, &mut result).await?;
 
-        // 4. Load sensors (depend on triggers and runtime)
+        // 5. Load sensors (depend on triggers and runtime)
         let sensor_refs = self
             .load_sensors(pack_dir, &trigger_ids, &mut result)
             .await?;
 
-        // 5. Clean up entities that are no longer in the pack's YAML files
+        // 6. Clean up entities that are no longer in the pack's YAML files
         self.cleanup_removed_entities(
+            &permission_set_refs,
             &runtime_refs,
             &trigger_refs,
             &action_refs,
@@ -167,6 +193,146 @@ impl<'a> PackComponentLoader<'a> {
         );
 
         Ok(result)
+    }
+
+    /// Load permission set definitions from `pack_dir/permission_sets/*.yaml`.
+    ///
+    /// Permission sets are pack-scoped authorization metadata. Their `grants`
+    /// payload is stored verbatim and interpreted by the API authorization
+    /// layer at request time.
+    async fn load_permission_sets(
+        &self,
+        pack_dir: &Path,
+        result: &mut PackLoadResult,
+    ) -> Result<Vec<String>> {
+        let permission_sets_dir = pack_dir.join("permission_sets");
+        let mut loaded_refs = Vec::new();
+
+        if !permission_sets_dir.exists() {
+            info!(
+                "No permission_sets directory found for pack '{}'",
+                self.pack_ref
+            );
+            return Ok(loaded_refs);
+        }
+
+        let yaml_files = read_yaml_files(&permission_sets_dir)?;
+        info!(
+            "Found {} permission set definition(s) for pack '{}'",
+            yaml_files.len(),
+            self.pack_ref
+        );
+
+        for (filename, content) in &yaml_files {
+            let data: serde_yaml_ng::Value = serde_yaml_ng::from_str(content).map_err(|e| {
+                Error::validation(format!(
+                    "Failed to parse permission set YAML {}: {}",
+                    filename, e
+                ))
+            })?;
+
+            let permission_set_ref = match data.get("ref").and_then(|v| v.as_str()) {
+                Some(r) => r.to_string(),
+                None => {
+                    let msg = format!(
+                        "Permission set YAML {} missing 'ref' field, skipping",
+                        filename
+                    );
+                    warn!("{}", msg);
+                    result.warnings.push(msg);
+                    result.permission_sets_skipped += 1;
+                    continue;
+                }
+            };
+
+            let label = data
+                .get("label")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            let description = data
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            let grants = data
+                .get("grants")
+                .and_then(|v| serde_json::to_value(v).ok())
+                .unwrap_or_else(|| serde_json::json!([]));
+
+            if !grants.is_array() {
+                let msg = format!(
+                    "Permission set '{}' has non-array 'grants', skipping",
+                    permission_set_ref
+                );
+                warn!("{}", msg);
+                result.warnings.push(msg);
+                result.permission_sets_skipped += 1;
+                continue;
+            }
+
+            if let Some(existing) =
+                PermissionSetRepository::find_by_ref(self.pool, &permission_set_ref).await?
+            {
+                let update_input = UpdatePermissionSetInput {
+                    label,
+                    description,
+                    grants: Some(grants),
+                };
+
+                match PermissionSetRepository::update(self.pool, existing.id, update_input).await {
+                    Ok(_) => {
+                        info!(
+                            "Updated permission set '{}' (ID: {})",
+                            permission_set_ref, existing.id
+                        );
+                        result.permission_sets_updated += 1;
+                    }
+                    Err(e) => {
+                        let msg = format!(
+                            "Failed to update permission set '{}': {}",
+                            permission_set_ref, e
+                        );
+                        warn!("{}", msg);
+                        result.warnings.push(msg);
+                        result.permission_sets_skipped += 1;
+                    }
+                }
+                loaded_refs.push(permission_set_ref);
+                continue;
+            }
+
+            let input = CreatePermissionSetInput {
+                r#ref: permission_set_ref.clone(),
+                pack: Some(self.pack_id),
+                pack_ref: Some(self.pack_ref.clone()),
+                label,
+                description,
+                grants,
+            };
+
+            match PermissionSetRepository::create(self.pool, input).await {
+                Ok(permission_set) => {
+                    info!(
+                        "Created permission set '{}' (ID: {})",
+                        permission_set_ref, permission_set.id
+                    );
+                    result.permission_sets_loaded += 1;
+                    loaded_refs.push(permission_set_ref);
+                }
+                Err(e) => {
+                    let msg = format!(
+                        "Failed to create permission set '{}': {}",
+                        permission_set_ref, e
+                    );
+                    warn!("{}", msg);
+                    result.warnings.push(msg);
+                    result.permission_sets_skipped += 1;
+                }
+            }
+        }
+
+        Ok(loaded_refs)
     }
 
     /// Load runtime definitions from `pack_dir/runtimes/*.yaml`.
@@ -1308,12 +1474,37 @@ impl<'a> PackComponentLoader<'a> {
     /// removed.
     async fn cleanup_removed_entities(
         &self,
+        permission_set_refs: &[String],
         runtime_refs: &[String],
         trigger_refs: &[String],
         action_refs: &[String],
         sensor_refs: &[String],
         result: &mut PackLoadResult,
     ) {
+        match PermissionSetRepository::delete_by_pack_excluding(
+            self.pool,
+            self.pack_id,
+            permission_set_refs,
+        )
+        .await
+        {
+            Ok(count) => {
+                if count > 0 {
+                    info!(
+                        "Removed {} stale permission set(s) from pack '{}'",
+                        count, self.pack_ref
+                    );
+                    result.removed += count as usize;
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to clean up stale permission sets for pack '{}': {}",
+                    self.pack_ref, e
+                );
+            }
+        }
+
         // Clean up sensors first (they depend on triggers/runtimes)
         match SensorRepository::delete_by_pack_excluding(self.pool, self.pack_id, sensor_refs).await
         {

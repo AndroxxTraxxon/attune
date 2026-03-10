@@ -32,3 +32,7 @@ execution_config:
     binary: "/bin/bash"
     args: []
     file_extension: ".sh"
+  inline_execution:
+    strategy: temp_file
+    extension: ".sh"
+    inject_shell_helpers: true

@@ -1,6 +1,6 @@
 //! Local Runtime Module
 //!
-//! Provides local execution capabilities by combining Process and Shell runtimes.
+//! Provides local execution capabilities by combining Process and Native runtimes.
 //! This module serves as a facade for all local process-based execution.
 //!
 //! The `ProcessRuntime` is used for Python (and other interpreted languages),
@@ -8,10 +8,11 @@
 
 use super::native::NativeRuntime;
 use super::process::ProcessRuntime;
-use super::shell::ShellRuntime;
 use super::{ExecutionContext, ExecutionResult, Runtime, RuntimeError, RuntimeResult};
 use async_trait::async_trait;
-use attune_common::models::runtime::{InterpreterConfig, RuntimeExecutionConfig};
+use attune_common::models::runtime::{
+    InlineExecutionConfig, InlineExecutionStrategy, InterpreterConfig, RuntimeExecutionConfig,
+};
 use std::path::PathBuf;
 use tracing::{debug, info};
 
@@ -19,7 +20,7 @@ use tracing::{debug, info};
 pub struct LocalRuntime {
     native: NativeRuntime,
     python: ProcessRuntime,
-    shell: ShellRuntime,
+    shell: ProcessRuntime,
 }
 
 impl LocalRuntime {
@@ -34,6 +35,23 @@ impl LocalRuntime {
                 args: vec![],
                 file_extension: Some(".py".to_string()),
             },
+            inline_execution: InlineExecutionConfig::default(),
+            environment: None,
+            dependencies: None,
+            env_vars: std::collections::HashMap::new(),
+        };
+
+        let shell_config = RuntimeExecutionConfig {
+            interpreter: InterpreterConfig {
+                binary: "/bin/bash".to_string(),
+                args: vec![],
+                file_extension: Some(".sh".to_string()),
+            },
+            inline_execution: InlineExecutionConfig {
+                strategy: InlineExecutionStrategy::TempFile,
+                extension: Some(".sh".to_string()),
+                inject_shell_helpers: true,
+            },
             environment: None,
             dependencies: None,
             env_vars: std::collections::HashMap::new(),
@@ -47,7 +65,12 @@ impl LocalRuntime {
                 PathBuf::from("/opt/attune/packs"),
                 PathBuf::from("/opt/attune/runtime_envs"),
             ),
-            shell: ShellRuntime::new(),
+            shell: ProcessRuntime::new(
+                "shell".to_string(),
+                shell_config,
+                PathBuf::from("/opt/attune/packs"),
+                PathBuf::from("/opt/attune/runtime_envs"),
+            ),
         }
     }
 
@@ -55,7 +78,7 @@ impl LocalRuntime {
     pub fn with_runtimes(
         native: NativeRuntime,
         python: ProcessRuntime,
-        shell: ShellRuntime,
+        shell: ProcessRuntime,
     ) -> Self {
         Self {
             native,
@@ -76,7 +99,10 @@ impl LocalRuntime {
             );
             Ok(&self.python)
         } else if self.shell.can_execute(context) {
-            debug!("Selected Shell runtime for action: {}", context.action_ref);
+            debug!(
+                "Selected Shell (ProcessRuntime) for action: {}",
+                context.action_ref
+            );
             Ok(&self.shell)
         } else {
             Err(RuntimeError::RuntimeNotFound(format!(

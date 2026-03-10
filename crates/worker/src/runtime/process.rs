@@ -19,11 +19,17 @@ use super::{
     process_executor, ExecutionContext, ExecutionResult, Runtime, RuntimeError, RuntimeResult,
 };
 use async_trait::async_trait;
-use attune_common::models::runtime::{EnvironmentConfig, RuntimeExecutionConfig};
+use attune_common::models::runtime::{
+    EnvironmentConfig, InlineExecutionStrategy, RuntimeExecutionConfig,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use tracing::{debug, error, info, warn};
+
+fn bash_single_quote_escape(s: &str) -> String {
+    s.replace('\'', "'\\''")
+}
 
 /// A generic runtime driven by `RuntimeExecutionConfig` from the database.
 ///
@@ -437,6 +443,90 @@ impl ProcessRuntime {
     pub fn config(&self) -> &RuntimeExecutionConfig {
         &self.config
     }
+
+    fn build_shell_inline_wrapper(
+        &self,
+        merged_parameters: &HashMap<String, serde_json::Value>,
+        code: &str,
+    ) -> RuntimeResult<String> {
+        let mut script = String::new();
+        script.push_str("#!/bin/bash\n");
+        script.push_str("set -e\n\n");
+
+        script.push_str("# Action parameters\n");
+        for (key, value) in merged_parameters {
+            let value_str = match value {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                _ => serde_json::to_string(value)?,
+            };
+            let escaped = bash_single_quote_escape(&value_str);
+            script.push_str(&format!(
+                "export PARAM_{}='{}'\n",
+                key.to_uppercase(),
+                escaped
+            ));
+            script.push_str(&format!("export {}='{}'\n", key, escaped));
+        }
+        script.push('\n');
+        script.push_str("# Action code\n");
+        script.push_str(code);
+
+        Ok(script)
+    }
+
+    async fn materialize_inline_code(
+        &self,
+        execution_id: i64,
+        merged_parameters: &HashMap<String, serde_json::Value>,
+        code: &str,
+        effective_config: &RuntimeExecutionConfig,
+    ) -> RuntimeResult<(PathBuf, bool)> {
+        let inline_dir = std::env::temp_dir().join("attune").join("inline_actions");
+        tokio::fs::create_dir_all(&inline_dir).await.map_err(|e| {
+            RuntimeError::ExecutionFailed(format!(
+                "Failed to create inline action directory {}: {}",
+                inline_dir.display(),
+                e
+            ))
+        })?;
+
+        let extension = effective_config
+            .inline_execution
+            .extension
+            .as_deref()
+            .unwrap_or("");
+        let extension = if extension.is_empty() {
+            String::new()
+        } else if extension.starts_with('.') {
+            extension.to_string()
+        } else {
+            format!(".{}", extension)
+        };
+
+        let inline_path = inline_dir.join(format!("exec_{}{}", execution_id, extension));
+        let inline_code = if effective_config.inline_execution.inject_shell_helpers {
+            self.build_shell_inline_wrapper(merged_parameters, code)?
+        } else {
+            code.to_string()
+        };
+
+        tokio::fs::write(&inline_path, inline_code)
+            .await
+            .map_err(|e| {
+                RuntimeError::ExecutionFailed(format!(
+                    "Failed to write inline action file {}: {}",
+                    inline_path.display(),
+                    e
+                ))
+            })?;
+
+        Ok((
+            inline_path,
+            effective_config.inline_execution.inject_shell_helpers,
+        ))
+    }
 }
 
 #[async_trait]
@@ -661,7 +751,7 @@ impl Runtime for ProcessRuntime {
         };
         let prepared_params =
             parameter_passing::prepare_parameters(&merged_parameters, &mut env, param_config)?;
-        let parameters_stdin = prepared_params.stdin_content();
+        let mut parameters_stdin = prepared_params.stdin_content();
 
         // Determine working directory: use context override, or pack dir
         let working_dir = context
@@ -677,6 +767,7 @@ impl Runtime for ProcessRuntime {
             });
 
         // Build the command based on whether we have a file or inline code
+        let mut temp_inline_file: Option<PathBuf> = None;
         let cmd = if let Some(ref code_path) = context.code_path {
             // File-based execution: interpreter [args] <action_file>
             debug!("Executing file: {}", code_path.display());
@@ -688,13 +779,38 @@ impl Runtime for ProcessRuntime {
                 &env,
             )
         } else if let Some(ref code) = context.code {
-            // Inline code execution: interpreter -c <code>
-            debug!("Executing inline code ({} bytes)", code.len());
-            let mut cmd = process_executor::build_inline_command(&interpreter, code, &env);
-            if let Some(dir) = working_dir {
-                cmd.current_dir(dir);
+            match effective_config.inline_execution.strategy {
+                InlineExecutionStrategy::Direct => {
+                    debug!("Executing inline code directly ({} bytes)", code.len());
+                    let mut cmd = process_executor::build_inline_command(&interpreter, code, &env);
+                    if let Some(dir) = working_dir {
+                        cmd.current_dir(dir);
+                    }
+                    cmd
+                }
+                InlineExecutionStrategy::TempFile => {
+                    debug!("Executing inline code via temp file ({} bytes)", code.len());
+                    let (inline_path, consumes_parameters) = self
+                        .materialize_inline_code(
+                            context.execution_id,
+                            &merged_parameters,
+                            code,
+                            effective_config,
+                        )
+                        .await?;
+                    if consumes_parameters {
+                        parameters_stdin = None;
+                    }
+                    temp_inline_file = Some(inline_path.clone());
+                    process_executor::build_action_command(
+                        &interpreter,
+                        &effective_config.interpreter.args,
+                        &inline_path,
+                        working_dir,
+                        &env,
+                    )
+                }
             }
-            cmd
         } else {
             // No code_path and no inline code — try treating entry_point as a file
             // relative to the pack's actions directory
@@ -737,7 +853,7 @@ impl Runtime for ProcessRuntime {
 
         // Execute with streaming output capture (with optional cancellation support).
         // Secrets are already merged into parameters — no separate secrets arg needed.
-        process_executor::execute_streaming_cancellable(
+        let result = process_executor::execute_streaming_cancellable(
             cmd,
             &HashMap::new(),
             parameters_stdin,
@@ -747,7 +863,13 @@ impl Runtime for ProcessRuntime {
             context.output_format,
             context.cancel_token.clone(),
         )
-        .await
+        .await;
+
+        if let Some(path) = temp_inline_file {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+
+        result
     }
 
     async fn setup(&self) -> RuntimeResult<()> {
@@ -836,7 +958,8 @@ impl Runtime for ProcessRuntime {
 mod tests {
     use super::*;
     use attune_common::models::runtime::{
-        DependencyConfig, EnvironmentConfig, InterpreterConfig, RuntimeExecutionConfig,
+        DependencyConfig, EnvironmentConfig, InlineExecutionConfig, InlineExecutionStrategy,
+        InterpreterConfig, RuntimeExecutionConfig,
     };
     use attune_common::models::{OutputFormat, ParameterDelivery, ParameterFormat};
     use std::collections::HashMap;
@@ -848,6 +971,11 @@ mod tests {
                 binary: "/bin/bash".to_string(),
                 args: vec![],
                 file_extension: Some(".sh".to_string()),
+            },
+            inline_execution: InlineExecutionConfig {
+                strategy: InlineExecutionStrategy::TempFile,
+                extension: Some(".sh".to_string()),
+                inject_shell_helpers: true,
             },
             environment: None,
             dependencies: None,
@@ -862,6 +990,7 @@ mod tests {
                 args: vec!["-u".to_string()],
                 file_extension: Some(".py".to_string()),
             },
+            inline_execution: InlineExecutionConfig::default(),
             environment: Some(EnvironmentConfig {
                 env_type: "virtualenv".to_string(),
                 dir_name: ".venv".to_string(),
@@ -1104,6 +1233,7 @@ mod tests {
                 args: vec![],
                 file_extension: Some(".py".to_string()),
             },
+            inline_execution: InlineExecutionConfig::default(),
             environment: None,
             dependencies: None,
             env_vars: HashMap::new(),
@@ -1181,6 +1311,53 @@ mod tests {
         let result = runtime.execute(context).await.unwrap();
         assert_eq!(result.exit_code, 0);
         assert!(result.stdout.contains("inline shell code"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_inline_code_with_merged_inputs() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let runtime = ProcessRuntime::new(
+            "shell".to_string(),
+            make_shell_config(),
+            temp_dir.path().to_path_buf(),
+            temp_dir.path().join("runtime_envs"),
+        );
+
+        let context = ExecutionContext {
+            execution_id: 30,
+            action_ref: "adhoc.test_inputs".to_string(),
+            parameters: {
+                let mut map = HashMap::new();
+                map.insert("name".to_string(), serde_json::json!("Alice"));
+                map
+            },
+            env: HashMap::new(),
+            secrets: {
+                let mut map = HashMap::new();
+                map.insert("api_key".to_string(), serde_json::json!("secret-123"));
+                map
+            },
+            timeout: Some(10),
+            working_dir: None,
+            entry_point: "inline".to_string(),
+            code: Some("echo \"$name/$api_key/$PARAM_NAME/$PARAM_API_KEY\"".to_string()),
+            code_path: None,
+            runtime_name: Some("shell".to_string()),
+            runtime_config_override: None,
+            runtime_env_dir_suffix: None,
+            selected_runtime_version: None,
+            max_stdout_bytes: 1024 * 1024,
+            max_stderr_bytes: 1024 * 1024,
+            parameter_delivery: ParameterDelivery::default(),
+            parameter_format: ParameterFormat::default(),
+            output_format: OutputFormat::default(),
+            cancel_token: None,
+        };
+
+        let result = runtime.execute(context).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("Alice/secret-123/Alice/secret-123"));
     }
 
     #[tokio::test]

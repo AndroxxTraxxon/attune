@@ -430,6 +430,10 @@ pub mod runtime {
         #[serde(default)]
         pub interpreter: InterpreterConfig,
 
+        /// Strategy for inline code execution.
+        #[serde(default)]
+        pub inline_execution: InlineExecutionConfig,
+
         /// Optional isolated environment configuration (venv, node_modules, etc.)
         #[serde(default)]
         pub environment: Option<EnvironmentConfig>,
@@ -447,6 +451,33 @@ pub mod runtime {
         /// can find packages installed in the isolated runtime environment.
         #[serde(default)]
         pub env_vars: HashMap<String, String>,
+    }
+
+    /// Controls how inline code is materialized before execution.
+    #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+    pub struct InlineExecutionConfig {
+        /// Whether inline code is passed directly to the interpreter or first
+        /// written to a temporary file.
+        #[serde(default)]
+        pub strategy: InlineExecutionStrategy,
+
+        /// Optional extension for temporary inline files (e.g. ".sh").
+        #[serde(default)]
+        pub extension: Option<String>,
+
+        /// When true, inline wrapper files export the merged input map as shell
+        /// environment variables (`PARAM_*` and bare names) before executing the
+        /// script body.
+        #[serde(default)]
+        pub inject_shell_helpers: bool,
+    }
+
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+    #[serde(rename_all = "snake_case")]
+    pub enum InlineExecutionStrategy {
+        #[default]
+        Direct,
+        TempFile,
     }
 
     /// Describes the interpreter binary and how it invokes action scripts.

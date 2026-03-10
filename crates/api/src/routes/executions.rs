@@ -10,6 +10,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use chrono::Utc;
 use futures::stream::{Stream, StreamExt};
 use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
@@ -32,6 +33,7 @@ use sqlx::Row;
 
 use crate::{
     auth::middleware::RequireAuth,
+    authz::{AuthorizationCheck, AuthorizationService},
     dto::{
         common::{PaginatedResponse, PaginationParams},
         execution::{
@@ -42,6 +44,7 @@ use crate::{
     middleware::{ApiError, ApiResult},
     state::AppState,
 };
+use attune_common::rbac::{Action, AuthorizationContext, Resource};
 
 /// Create a new execution (manual execution)
 ///
@@ -61,13 +64,49 @@ use crate::{
 )]
 pub async fn create_execution(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Json(request): Json<CreateExecutionRequest>,
 ) -> ApiResult<impl IntoResponse> {
     // Validate that the action exists
     let action = ActionRepository::find_by_ref(&state.db, &request.action_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Action '{}' not found", request.action_ref)))?;
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+
+        let mut action_ctx = AuthorizationContext::new(identity_id);
+        action_ctx.target_id = Some(action.id);
+        action_ctx.target_ref = Some(action.r#ref.clone());
+        action_ctx.pack_ref = Some(action.pack_ref.clone());
+
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Actions,
+                    action: Action::Execute,
+                    context: action_ctx,
+                },
+            )
+            .await?;
+
+        let mut execution_ctx = AuthorizationContext::new(identity_id);
+        execution_ctx.pack_ref = Some(action.pack_ref.clone());
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Executions,
+                    action: Action::Create,
+                    context: execution_ctx,
+                },
+            )
+            .await?;
+    }
 
     // Create execution input
     let execution_input = CreateExecutionInput {
@@ -440,9 +479,17 @@ pub async fn cancel_execution(
             ..Default::default()
         };
         let updated = ExecutionRepository::update(&state.db, id, update).await?;
+        let delegated_to_executor = publish_status_change_to_executor(
+            publisher.as_deref(),
+            &execution,
+            ExecutionStatus::Cancelled,
+            "api-service",
+        )
+        .await;
 
-        // Cascade to workflow children if this is a workflow execution
-        cancel_workflow_children(&state.db, publisher.as_deref(), id).await;
+        if !delegated_to_executor {
+            cancel_workflow_children(&state.db, publisher.as_deref(), id).await;
+        }
 
         let response = ApiResponse::new(ExecutionResponse::from(updated));
         return Ok((StatusCode::OK, Json(response)));
@@ -454,6 +501,13 @@ pub async fn cancel_execution(
         ..Default::default()
     };
     let updated = ExecutionRepository::update(&state.db, id, update).await?;
+    let delegated_to_executor = publish_status_change_to_executor(
+        publisher.as_deref(),
+        &execution,
+        ExecutionStatus::Canceling,
+        "api-service",
+    )
+    .await;
 
     // Send cancel request to the worker via MQ
     if let Some(worker_id) = execution.executor {
@@ -465,8 +519,9 @@ pub async fn cancel_execution(
         );
     }
 
-    // Cascade to workflow children if this is a workflow execution
-    cancel_workflow_children(&state.db, publisher.as_deref(), id).await;
+    if !delegated_to_executor {
+        cancel_workflow_children(&state.db, publisher.as_deref(), id).await;
+    }
 
     let response = ApiResponse::new(ExecutionResponse::from(updated));
     Ok((StatusCode::OK, Json(response)))
@@ -502,6 +557,53 @@ async fn send_cancel_to_worker(publisher: Option<&Publisher>, execution_id: i64,
             execution_id
         );
     }
+}
+
+async fn publish_status_change_to_executor(
+    publisher: Option<&Publisher>,
+    execution: &attune_common::models::Execution,
+    new_status: ExecutionStatus,
+    source: &str,
+) -> bool {
+    let Some(publisher) = publisher else {
+        return false;
+    };
+
+    let new_status = match new_status {
+        ExecutionStatus::Requested => "requested",
+        ExecutionStatus::Scheduling => "scheduling",
+        ExecutionStatus::Scheduled => "scheduled",
+        ExecutionStatus::Running => "running",
+        ExecutionStatus::Completed => "completed",
+        ExecutionStatus::Failed => "failed",
+        ExecutionStatus::Canceling => "canceling",
+        ExecutionStatus::Cancelled => "cancelled",
+        ExecutionStatus::Timeout => "timeout",
+        ExecutionStatus::Abandoned => "abandoned",
+    };
+
+    let payload = attune_common::mq::ExecutionStatusChangedPayload {
+        execution_id: execution.id,
+        action_ref: execution.action_ref.clone(),
+        previous_status: format!("{:?}", execution.status).to_lowercase(),
+        new_status: new_status.to_string(),
+        changed_at: Utc::now(),
+    };
+
+    let envelope = MessageEnvelope::new(MessageType::ExecutionStatusChanged, payload)
+        .with_source(source)
+        .with_correlation_id(uuid::Uuid::new_v4());
+
+    if let Err(e) = publisher.publish_envelope(&envelope).await {
+        tracing::error!(
+            "Failed to publish status change for execution {} to executor: {}",
+            execution.id,
+            e
+        );
+        return false;
+    }
+
+    true
 }
 
 /// Resolve the [`CancellationPolicy`] for a workflow parent execution.

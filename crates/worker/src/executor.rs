@@ -100,7 +100,7 @@ impl ActionExecutor {
     /// Execute an action for the given execution, with cancellation support.
     ///
     /// When the `cancel_token` is triggered, the running process receives
-    /// SIGINT → SIGTERM → SIGKILL with escalating grace periods.
+    /// SIGTERM → SIGKILL with a short grace period.
     pub async fn execute_with_cancel(
         &self,
         execution_id: i64,
@@ -139,7 +139,7 @@ impl ActionExecutor {
         };
 
         // Attach the cancellation token so the process executor can monitor it
-        context.cancel_token = Some(cancel_token);
+        context.cancel_token = Some(cancel_token.clone());
 
         // Execute the action
         // Note: execute_action should rarely return Err - most failures should be
@@ -181,7 +181,16 @@ impl ActionExecutor {
             execution_id, result.exit_code, result.error, is_success
         );
 
-        if is_success {
+        let was_cancelled = cancel_token.is_cancelled()
+            || result
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("cancelled"));
+
+        if was_cancelled {
+            self.handle_execution_cancelled(execution_id, &result)
+                .await?;
+        } else if is_success {
             self.handle_execution_success(execution_id, &result).await?;
         } else {
             self.handle_execution_failure(execution_id, Some(&result), None)
@@ -904,6 +913,51 @@ impl ActionExecutor {
 
         let input = UpdateExecutionInput {
             status: Some(ExecutionStatus::Failed),
+            result: Some(result_data),
+            ..Default::default()
+        };
+
+        ExecutionRepository::update(&self.pool, execution_id, input).await?;
+
+        Ok(())
+    }
+
+    async fn handle_execution_cancelled(
+        &self,
+        execution_id: i64,
+        result: &ExecutionResult,
+    ) -> Result<()> {
+        let exec_dir = self.artifact_manager.get_execution_dir(execution_id);
+        let mut result_data = serde_json::json!({
+            "succeeded": false,
+            "cancelled": true,
+            "exit_code": result.exit_code,
+            "duration_ms": result.duration_ms,
+            "error": result.error.clone().unwrap_or_else(|| "Execution cancelled by user".to_string()),
+        });
+
+        if !result.stdout.is_empty() {
+            result_data["stdout"] = serde_json::json!(result.stdout);
+        }
+
+        if !result.stderr.trim().is_empty() {
+            let stderr_path = exec_dir.join("stderr.log");
+            result_data["stderr_log"] = serde_json::json!(stderr_path.to_string_lossy());
+        }
+
+        if result.stdout_truncated {
+            result_data["stdout_truncated"] = serde_json::json!(true);
+            result_data["stdout_bytes_truncated"] =
+                serde_json::json!(result.stdout_bytes_truncated);
+        }
+        if result.stderr_truncated {
+            result_data["stderr_truncated"] = serde_json::json!(true);
+            result_data["stderr_bytes_truncated"] =
+                serde_json::json!(result.stderr_bytes_truncated);
+        }
+
+        let input = UpdateExecutionInput {
+            status: Some(ExecutionStatus::Cancelled),
             result: Some(result_data),
             ..Default::default()
         };

@@ -11,6 +11,7 @@ pub mod history;
 pub mod inquiry;
 pub mod key;
 pub mod pack;
+pub mod permission;
 pub mod rule;
 pub mod trigger;
 pub mod webhook;
@@ -48,6 +49,11 @@ pub use inquiry::{
 };
 pub use key::{CreateKeyRequest, KeyQueryParams, KeyResponse, KeySummary, UpdateKeyRequest};
 pub use pack::{CreatePackRequest, PackResponse, PackSummary, UpdatePackRequest};
+pub use permission::{
+    CreateIdentityRequest, CreatePermissionAssignmentRequest, IdentityResponse, IdentitySummary,
+    PermissionAssignmentResponse, PermissionSetQueryParams, PermissionSetSummary,
+    UpdateIdentityRequest,
+};
 pub use rule::{CreateRuleRequest, RuleResponse, RuleSummary, UpdateRuleRequest};
 pub use trigger::{
     CreateSensorRequest, CreateTriggerRequest, SensorResponse, SensorSummary, TriggerResponse,

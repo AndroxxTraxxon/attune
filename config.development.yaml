@@ -46,6 +46,7 @@ security:
   jwt_refresh_expiration: 2592000 # 30 days
   encryption_key: test-encryption-key-32-chars-okay
   enable_auth: true
+  allow_self_registration: true
 
 # Packs directory (where pack action files are located)
 packs_base_dir: ./packs

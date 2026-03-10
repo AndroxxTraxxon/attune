@@ -159,9 +159,9 @@ pub struct ExecutionContext {
     /// Format for output parsing
     pub output_format: OutputFormat,
 
-    /// Optional cancellation token for graceful process termination.
-    /// When triggered, the executor sends SIGINT → SIGTERM → SIGKILL
-    /// with escalating grace periods.
+    /// Optional cancellation token for process termination.
+    /// When triggered, the executor sends SIGTERM → SIGKILL
+    /// with a short grace period.
     pub cancel_token: Option<CancellationToken>,
 }
 

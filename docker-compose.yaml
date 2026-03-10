@@ -109,6 +109,8 @@ services:
       SOURCE_PACKS_DIR: /source/packs
       TARGET_PACKS_DIR: /opt/attune/packs
       LOADER_SCRIPT: /scripts/load_core_pack.py
+      DEFAULT_ADMIN_LOGIN: test@attune.local
+      DEFAULT_ADMIN_PERMISSION_SET_REF: core.admin
     command: ["/bin/sh", "/init-packs.sh"]
     depends_on:
       migrations:

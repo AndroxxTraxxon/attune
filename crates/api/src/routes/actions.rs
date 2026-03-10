@@ -10,6 +10,7 @@ use axum::{
 use std::sync::Arc;
 use validator::Validate;
 
+use attune_common::rbac::{Action, AuthorizationContext, Resource};
 use attune_common::repositories::{
     action::{ActionRepository, ActionSearchFilters, CreateActionInput, UpdateActionInput},
     pack::PackRepository,
@@ -19,6 +20,7 @@ use attune_common::repositories::{
 
 use crate::{
     auth::middleware::RequireAuth,
+    authz::{AuthorizationCheck, AuthorizationService},
     dto::{
         action::{
             ActionResponse, ActionSummary, CreateActionRequest, QueueStatsResponse,
@@ -153,7 +155,7 @@ pub async fn get_action(
 )]
 pub async fn create_action(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Json(request): Json<CreateActionRequest>,
 ) -> ApiResult<impl IntoResponse> {
     // Validate request
@@ -174,6 +176,26 @@ pub async fn create_action(
     let pack = PackRepository::find_by_ref(&state.db, &request.pack_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", request.pack_ref)))?;
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let mut ctx = AuthorizationContext::new(identity_id);
+        ctx.pack_ref = Some(pack.r#ref.clone());
+        ctx.target_ref = Some(request.r#ref.clone());
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Actions,
+                    action: Action::Create,
+                    context: ctx,
+                },
+            )
+            .await?;
+    }
 
     // If runtime is specified, we could verify it exists (future enhancement)
     // For now, the database foreign key constraint will handle invalid runtime IDs
@@ -219,7 +241,7 @@ pub async fn create_action(
 )]
 pub async fn update_action(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Path(action_ref): Path<String>,
     Json(request): Json<UpdateActionRequest>,
 ) -> ApiResult<impl IntoResponse> {
@@ -230,6 +252,27 @@ pub async fn update_action(
     let existing_action = ActionRepository::find_by_ref(&state.db, &action_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Action '{}' not found", action_ref)))?;
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let mut ctx = AuthorizationContext::new(identity_id);
+        ctx.target_id = Some(existing_action.id);
+        ctx.target_ref = Some(existing_action.r#ref.clone());
+        ctx.pack_ref = Some(existing_action.pack_ref.clone());
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Actions,
+                    action: Action::Update,
+                    context: ctx,
+                },
+            )
+            .await?;
+    }
 
     // Create update input
     let update_input = UpdateActionInput {
@@ -269,13 +312,34 @@ pub async fn update_action(
 )]
 pub async fn delete_action(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Path(action_ref): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
     // Check if action exists
     let action = ActionRepository::find_by_ref(&state.db, &action_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Action '{}' not found", action_ref)))?;
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let mut ctx = AuthorizationContext::new(identity_id);
+        ctx.target_id = Some(action.id);
+        ctx.target_ref = Some(action.r#ref.clone());
+        ctx.pack_ref = Some(action.pack_ref.clone());
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Actions,
+                    action: Action::Delete,
+                    context: ctx,
+                },
+            )
+            .await?;
+    }
 
     // Delete the action
     let deleted = ActionRepository::delete(&state.db, action.id).await?;

@@ -295,6 +295,10 @@ pub struct SecurityConfig {
     /// Enable authentication
     #[serde(default = "default_true")]
     pub enable_auth: bool,
+
+    /// Allow unauthenticated self-service user registration
+    #[serde(default)]
+    pub allow_self_registration: bool,
 }
 
 fn default_jwt_access_expiration() -> u64 {
@@ -676,6 +680,7 @@ impl Default for SecurityConfig {
             jwt_refresh_expiration: default_jwt_refresh_expiration(),
             encryption_key: None,
             enable_auth: true,
+            allow_self_registration: false,
         }
     }
 }
@@ -924,6 +929,7 @@ mod tests {
                 jwt_refresh_expiration: 604800,
                 encryption_key: Some("a".repeat(32)),
                 enable_auth: true,
+                allow_self_registration: false,
             },
             worker: None,
             sensor: None,

@@ -15,6 +15,7 @@ pub mod models;
 pub mod mq;
 pub mod pack_environment;
 pub mod pack_registry;
+pub mod rbac;
 pub mod repositories;
 pub mod runtime_detection;
 pub mod schema;

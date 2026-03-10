@@ -26,6 +26,10 @@ use crate::dto::{
         PackWorkflowSyncResponse, PackWorkflowValidationResponse, RegisterPackRequest,
         UpdatePackRequest, WorkflowSyncResult,
     },
+    permission::{
+        CreateIdentityRequest, CreatePermissionAssignmentRequest, IdentityResponse,
+        IdentitySummary, PermissionAssignmentResponse, PermissionSetSummary, UpdateIdentityRequest,
+    },
     rule::{CreateRuleRequest, RuleResponse, RuleSummary, UpdateRuleRequest},
     trigger::{
         CreateSensorRequest, CreateTriggerRequest, SensorResponse, SensorSummary, TriggerResponse,
@@ -160,6 +164,17 @@ use crate::dto::{
         crate::routes::keys::update_key,
         crate::routes::keys::delete_key,
 
+        // Permissions
+        crate::routes::permissions::list_identities,
+        crate::routes::permissions::get_identity,
+        crate::routes::permissions::create_identity,
+        crate::routes::permissions::update_identity,
+        crate::routes::permissions::delete_identity,
+        crate::routes::permissions::list_permission_sets,
+        crate::routes::permissions::list_identity_permissions,
+        crate::routes::permissions::create_permission_assignment,
+        crate::routes::permissions::delete_permission_assignment,
+
         // Workflows
         crate::routes::workflows::list_workflows,
         crate::routes::workflows::list_workflows_by_pack,
@@ -190,6 +205,8 @@ use crate::dto::{
             ApiResponse<EnforcementResponse>,
             ApiResponse<InquiryResponse>,
             ApiResponse<KeyResponse>,
+            ApiResponse<IdentityResponse>,
+            ApiResponse<PermissionAssignmentResponse>,
             ApiResponse<WorkflowResponse>,
             ApiResponse<QueueStatsResponse>,
             PaginatedResponse<PackSummary>,
@@ -202,6 +219,7 @@ use crate::dto::{
             PaginatedResponse<EnforcementSummary>,
             PaginatedResponse<InquirySummary>,
             PaginatedResponse<KeySummary>,
+            PaginatedResponse<IdentitySummary>,
             PaginatedResponse<WorkflowSummary>,
             PaginationMeta,
             SuccessResponse,
@@ -232,6 +250,15 @@ use crate::dto::{
             attune_common::models::pack_test::TestStatus,
             attune_common::models::pack_test::PackTestSummary,
             PaginatedResponse<attune_common::models::pack_test::PackTestSummary>,
+
+            // Permission DTOs
+            CreateIdentityRequest,
+            UpdateIdentityRequest,
+            IdentityResponse,
+            PermissionSetSummary,
+            PermissionAssignmentResponse,
+            CreatePermissionAssignmentRequest,
+            IdentitySummary,
 
             // Action DTOs
             CreateActionRequest,

@@ -5,6 +5,7 @@
 //! It is primarily used by the binary target and integration tests.
 
 pub mod auth;
+pub mod authz;
 pub mod dto;
 pub mod middleware;
 pub mod openapi;

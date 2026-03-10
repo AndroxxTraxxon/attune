@@ -14,6 +14,7 @@ use validator::Validate;
 use attune_common::mq::{
     MessageEnvelope, MessageType, RuleCreatedPayload, RuleDisabledPayload, RuleEnabledPayload,
 };
+use attune_common::rbac::{Action, AuthorizationContext, Resource};
 use attune_common::repositories::{
     action::ActionRepository,
     pack::PackRepository,
@@ -24,6 +25,7 @@ use attune_common::repositories::{
 
 use crate::{
     auth::middleware::RequireAuth,
+    authz::{AuthorizationCheck, AuthorizationService},
     dto::{
         common::{PaginatedResponse, PaginationParams},
         rule::{CreateRuleRequest, RuleResponse, RuleSummary, UpdateRuleRequest},
@@ -283,7 +285,7 @@ pub async fn get_rule(
 )]
 pub async fn create_rule(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Json(request): Json<CreateRuleRequest>,
 ) -> ApiResult<impl IntoResponse> {
     // Validate request
@@ -316,6 +318,26 @@ pub async fn create_rule(
         .ok_or_else(|| {
             ApiError::NotFound(format!("Trigger '{}' not found", request.trigger_ref))
         })?;
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let mut ctx = AuthorizationContext::new(identity_id);
+        ctx.pack_ref = Some(pack.r#ref.clone());
+        ctx.target_ref = Some(request.r#ref.clone());
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Rules,
+                    action: Action::Create,
+                    context: ctx,
+                },
+            )
+            .await?;
+    }
 
     // Validate trigger parameters against schema
     validate_trigger_params(&trigger, &request.trigger_params)?;
@@ -392,7 +414,7 @@ pub async fn create_rule(
 )]
 pub async fn update_rule(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Path(rule_ref): Path<String>,
     Json(request): Json<UpdateRuleRequest>,
 ) -> ApiResult<impl IntoResponse> {
@@ -403,6 +425,27 @@ pub async fn update_rule(
     let existing_rule = RuleRepository::find_by_ref(&state.db, &rule_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Rule '{}' not found", rule_ref)))?;
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let mut ctx = AuthorizationContext::new(identity_id);
+        ctx.target_id = Some(existing_rule.id);
+        ctx.target_ref = Some(existing_rule.r#ref.clone());
+        ctx.pack_ref = Some(existing_rule.pack_ref.clone());
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Rules,
+                    action: Action::Update,
+                    context: ctx,
+                },
+            )
+            .await?;
+    }
 
     // If action parameters are being updated, validate against the action's schema
     if let Some(ref action_params) = request.action_params {
@@ -489,13 +532,34 @@ pub async fn update_rule(
 )]
 pub async fn delete_rule(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Path(rule_ref): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
     // Check if rule exists
     let rule = RuleRepository::find_by_ref(&state.db, &rule_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Rule '{}' not found", rule_ref)))?;
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let mut ctx = AuthorizationContext::new(identity_id);
+        ctx.target_id = Some(rule.id);
+        ctx.target_ref = Some(rule.r#ref.clone());
+        ctx.pack_ref = Some(rule.pack_ref.clone());
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Rules,
+                    action: Action::Delete,
+                    context: ctx,
+                },
+            )
+            .await?;
+    }
 
     // Delete the rule
     let deleted = RuleRepository::delete(&state.db, rule.id).await?;

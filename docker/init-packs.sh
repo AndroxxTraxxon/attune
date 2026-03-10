@@ -26,6 +26,8 @@ TARGET_PACKS_DIR="${TARGET_PACKS_DIR:-/opt/attune/packs}"
 
 # Python loader script
 LOADER_SCRIPT="${LOADER_SCRIPT:-/scripts/load_core_pack.py}"
+DEFAULT_ADMIN_LOGIN="${DEFAULT_ADMIN_LOGIN:-}"
+DEFAULT_ADMIN_PERMISSION_SET_REF="${DEFAULT_ADMIN_PERMISSION_SET_REF:-core.admin}"
 
 echo ""
 echo -e "${BLUE}╔════════════════════════════════════════════════╗${NC}"
@@ -203,6 +205,63 @@ else
     echo -e "${YELLOW}⚠${NC} Pack loader script not found: $LOADER_SCRIPT"
     echo -e "${BLUE}ℹ${NC} Packs copied but not registered in database"
     echo -e "${BLUE}ℹ${NC} You can manually load them later"
+fi
+
+if [ -n "$DEFAULT_ADMIN_LOGIN" ] && [ "$LOADED_COUNT" -gt 0 ]; then
+    echo ""
+    echo -e "${BLUE}Bootstrapping local admin assignment...${NC}"
+    if python3 - <<PY
+import psycopg2
+import sys
+
+conn = psycopg2.connect(
+    host="${DB_HOST}",
+    port=${DB_PORT},
+    user="${DB_USER}",
+    password="${DB_PASSWORD}",
+    dbname="${DB_NAME}",
+)
+conn.autocommit = False
+
+try:
+    with conn.cursor() as cur:
+        cur.execute("SET search_path TO ${DB_SCHEMA}, public")
+        cur.execute("SELECT id FROM identity WHERE login = %s", ("${DEFAULT_ADMIN_LOGIN}",))
+        identity_row = cur.fetchone()
+        if identity_row is None:
+            print("  ⚠ Default admin identity not found; skipping assignment")
+            conn.rollback()
+            sys.exit(0)
+
+        cur.execute("SELECT id FROM permission_set WHERE ref = %s", ("${DEFAULT_ADMIN_PERMISSION_SET_REF}",))
+        permset_row = cur.fetchone()
+        if permset_row is None:
+            print("  ⚠ Default admin permission set not found; skipping assignment")
+            conn.rollback()
+            sys.exit(0)
+
+        cur.execute(
+            """
+            INSERT INTO permission_assignment (identity, permset)
+            VALUES (%s, %s)
+            ON CONFLICT (identity, permset) DO NOTHING
+            """,
+            (identity_row[0], permset_row[0]),
+        )
+    conn.commit()
+    print("  ✓ Default admin permission assignment ensured")
+except Exception as exc:
+    conn.rollback()
+    print(f"  ✗ Failed to ensure default admin assignment: {exc}")
+    sys.exit(1)
+finally:
+    conn.close()
+PY
+    then
+        :
+    else
+        exit 1
+    fi
 fi
 
 # Summary

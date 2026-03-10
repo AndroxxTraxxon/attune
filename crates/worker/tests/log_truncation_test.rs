@@ -3,7 +3,9 @@
 //! Tests that verify stdout/stderr are properly truncated when they exceed
 //! configured size limits, preventing OOM issues with large output.
 
-use attune_common::models::runtime::{InterpreterConfig, RuntimeExecutionConfig};
+use attune_common::models::runtime::{
+    InlineExecutionConfig, InterpreterConfig, RuntimeExecutionConfig,
+};
 use attune_worker::runtime::process::ProcessRuntime;
 use attune_worker::runtime::{ExecutionContext, Runtime, ShellRuntime};
 use std::collections::HashMap;
@@ -17,6 +19,7 @@ fn make_python_process_runtime(packs_base_dir: PathBuf) -> ProcessRuntime {
             args: vec!["-u".to_string()],
             file_extension: Some(".py".to_string()),
         },
+        inline_execution: InlineExecutionConfig::default(),
         environment: None,
         dependencies: None,
         env_vars: std::collections::HashMap::new(),
@@ -270,6 +273,7 @@ async fn test_shell_process_runtime_truncation() {
             args: vec![],
             file_extension: Some(".sh".to_string()),
         },
+        inline_execution: InlineExecutionConfig::default(),
         environment: None,
         dependencies: None,
         env_vars: std::collections::HashMap::new(),

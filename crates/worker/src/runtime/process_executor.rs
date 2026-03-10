@@ -9,9 +9,8 @@
 //!
 //! When a `CancellationToken` is provided, the executor monitors it alongside
 //! the running process. On cancellation:
-//! 1. SIGINT is sent to the process (allows graceful shutdown)
-//! 2. After a 10-second grace period, SIGTERM is sent if the process hasn't exited
-//! 3. After another 5-second grace period, SIGKILL is sent as a last resort
+//! 1. SIGTERM is sent to the process immediately
+//! 2. After a 5-second grace period, SIGKILL is sent as a last resort
 
 use super::{BoundedLogWriter, ExecutionResult, OutputFormat, RuntimeResult};
 use std::collections::HashMap;
@@ -71,7 +70,7 @@ pub async fn execute_streaming(
 /// - Writing parameters (with secrets merged in) to stdin
 /// - Streaming stdout/stderr with bounded log collection
 /// - Timeout management
-/// - Graceful cancellation via SIGINT → SIGTERM → SIGKILL escalation
+/// - Prompt cancellation via SIGTERM → SIGKILL escalation
 /// - Output format parsing (JSON, YAML, JSONL, text)
 ///
 /// # Arguments
@@ -199,35 +198,23 @@ pub async fn execute_streaming_cancellable(
             tokio::select! {
                 result = timed_wait => (result, false),
                 _ = token.cancelled() => {
-                    // Cancellation requested — escalate signals to the child process.
-                    info!("Cancel signal received, sending SIGINT to process");
+                    // Cancellation requested — terminate the child process promptly.
+                    info!("Cancel signal received, sending SIGTERM to process");
                     if let Some(pid) = child_pid {
-                        send_signal(pid, libc::SIGINT);
+                        send_signal(pid, libc::SIGTERM);
                     }
 
-                    // Grace period: wait up to 10s for the process to exit after SIGINT.
-                    match timeout(std::time::Duration::from_secs(10), child.wait()).await {
+                    // Grace period: wait up to 5s for the process to exit after SIGTERM.
+                    match timeout(std::time::Duration::from_secs(5), child.wait()).await {
                         Ok(status) => (Ok(status), true),
                         Err(_) => {
-                            // Still alive — escalate to SIGTERM
-                            warn!("Process did not exit after SIGINT + 10s grace period, sending SIGTERM");
+                            // Last resort — SIGKILL
+                            warn!("Process did not exit after SIGTERM + 5s, sending SIGKILL");
                             if let Some(pid) = child_pid {
-                                send_signal(pid, libc::SIGTERM);
+                                send_signal(pid, libc::SIGKILL);
                             }
-
-                            // Final grace period: wait up to 5s for SIGTERM
-                            match timeout(std::time::Duration::from_secs(5), child.wait()).await {
-                                Ok(status) => (Ok(status), true),
-                                Err(_) => {
-                                    // Last resort — SIGKILL
-                                    warn!("Process did not exit after SIGTERM + 5s, sending SIGKILL");
-                                    if let Some(pid) = child_pid {
-                                        send_signal(pid, libc::SIGKILL);
-                                    }
-                                    // Wait indefinitely for the SIGKILL to take effect
-                                    (Ok(child.wait().await), true)
-                                }
-                            }
+                            // Wait indefinitely for the SIGKILL to take effect
+                            (Ok(child.wait().await), true)
                         }
                     }
                 }

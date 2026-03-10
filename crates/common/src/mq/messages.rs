@@ -481,9 +481,8 @@ pub struct PackRegisteredPayload {
 
 /// Payload for ExecutionCancelRequested message
 ///
-/// Sent by the API to the worker that is running a specific execution,
-/// instructing it to gracefully terminate the process (SIGINT, then SIGTERM
-/// after a grace period).
+/// Sent by the API or executor to the worker that is running a specific
+/// execution, instructing it to terminate the process promptly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionCancelRequestedPayload {
     /// Execution ID to cancel

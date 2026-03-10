@@ -13,6 +13,7 @@ use validator::Validate;
 
 use attune_common::models::pack_test::PackTestResult;
 use attune_common::mq::{MessageEnvelope, MessageType, PackRegisteredPayload};
+use attune_common::rbac::{Action, AuthorizationContext, Resource};
 use attune_common::repositories::{
     pack::{CreatePackInput, UpdatePackInput},
     Create, Delete, FindById, FindByRef, PackRepository, PackTestRepository, Pagination, Update,
@@ -21,6 +22,7 @@ use attune_common::workflow::{PackWorkflowService, PackWorkflowServiceConfig};
 
 use crate::{
     auth::middleware::RequireAuth,
+    authz::{AuthorizationCheck, AuthorizationService},
     dto::{
         common::{PaginatedResponse, PaginationParams},
         pack::{
@@ -115,7 +117,7 @@ pub async fn get_pack(
 )]
 pub async fn create_pack(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Json(request): Json<CreatePackRequest>,
 ) -> ApiResult<impl IntoResponse> {
     // Validate request
@@ -127,6 +129,25 @@ pub async fn create_pack(
             "Pack with ref '{}' already exists",
             request.r#ref
         )));
+    }
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let mut ctx = AuthorizationContext::new(identity_id);
+        ctx.target_ref = Some(request.r#ref.clone());
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Packs,
+                    action: Action::Create,
+                    context: ctx,
+                },
+            )
+            .await?;
     }
 
     // Create pack input
@@ -202,7 +223,7 @@ pub async fn create_pack(
 )]
 pub async fn update_pack(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Path(pack_ref): Path<String>,
     Json(request): Json<UpdatePackRequest>,
 ) -> ApiResult<impl IntoResponse> {
@@ -213,6 +234,26 @@ pub async fn update_pack(
     let existing_pack = PackRepository::find_by_ref(&state.db, &pack_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", pack_ref)))?;
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let mut ctx = AuthorizationContext::new(identity_id);
+        ctx.target_id = Some(existing_pack.id);
+        ctx.target_ref = Some(existing_pack.r#ref.clone());
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Packs,
+                    action: Action::Update,
+                    context: ctx,
+                },
+            )
+            .await?;
+    }
 
     // Create update input
     let update_input = UpdatePackInput {
@@ -284,13 +325,33 @@ pub async fn update_pack(
 )]
 pub async fn delete_pack(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Path(pack_ref): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
     // Check if pack exists
     let pack = PackRepository::find_by_ref(&state.db, &pack_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", pack_ref)))?;
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let mut ctx = AuthorizationContext::new(identity_id);
+        ctx.target_id = Some(pack.id);
+        ctx.target_ref = Some(pack.r#ref.clone());
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Packs,
+                    action: Action::Delete,
+                    context: ctx,
+                },
+            )
+            .await?;
+    }
 
     // Delete the pack from the database (cascades to actions, triggers, sensors, rules, etc.
     // Foreign keys on execution, event, enforcement, and rule tables use ON DELETE SET NULL
@@ -475,6 +536,23 @@ pub async fn upload_pack(
 
     const MAX_PACK_SIZE: usize = 100 * 1024 * 1024; // 100 MB
 
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Packs,
+                    action: Action::Create,
+                    context: AuthorizationContext::new(identity_id),
+                },
+            )
+            .await?;
+    }
+
     let mut pack_bytes: Option<Vec<u8>> = None;
     let mut force = false;
     let mut skip_tests = false;
@@ -648,6 +726,23 @@ pub async fn register_pack(
 ) -> ApiResult<impl IntoResponse> {
     // Validate request
     request.validate()?;
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Packs,
+                    action: Action::Create,
+                    context: AuthorizationContext::new(identity_id),
+                },
+            )
+            .await?;
+    }
 
     // Call internal registration logic
     let pack_id = register_pack_internal(
@@ -1206,6 +1301,23 @@ pub async fn install_pack(
     use attune_common::repositories::List;
 
     tracing::info!("Installing pack from source: {}", request.source);
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Packs,
+                    action: Action::Create,
+                    context: AuthorizationContext::new(identity_id),
+                },
+            )
+            .await?;
+    }
 
     // Get user ID early to avoid borrow issues
     let user_id = user.identity_id().ok();
@@ -2247,6 +2359,23 @@ pub async fn register_packs_batch(
     RequireAuth(user): RequireAuth,
     Json(request): Json<RegisterPacksRequest>,
 ) -> ApiResult<Json<ApiResponse<RegisterPacksResponse>>> {
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Packs,
+                    action: Action::Create,
+                    context: AuthorizationContext::new(identity_id),
+                },
+            )
+            .await?;
+    }
+
     let start = std::time::Instant::now();
     let mut registered = Vec::new();
     let mut failed = Vec::new();

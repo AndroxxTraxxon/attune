@@ -27,7 +27,7 @@ use attune_common::runtime_detection::runtime_in_filter;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,7 +44,6 @@ use crate::registration::WorkerRegistration;
 use crate::runtime::local::LocalRuntime;
 use crate::runtime::native::NativeRuntime;
 use crate::runtime::process::ProcessRuntime;
-use crate::runtime::shell::ShellRuntime;
 use crate::runtime::RuntimeRegistry;
 use crate::secrets::SecretManager;
 use crate::version_verify;
@@ -89,8 +88,11 @@ pub struct WorkerService {
     in_flight_tasks: Arc<Mutex<JoinSet<()>>>,
     /// Maps execution ID → CancellationToken for running processes.
     /// When a cancel request arrives, the token is triggered, causing
-    /// the process executor to send SIGINT → SIGTERM → SIGKILL.
+    /// the process executor to send SIGTERM → SIGKILL.
     cancel_tokens: Arc<Mutex<HashMap<i64, CancellationToken>>>,
+    /// Tracks cancellation requests that arrived before the in-memory token
+    /// for an execution had been registered.
+    pending_cancellations: Arc<Mutex<HashSet<i64>>>,
 }
 
 impl WorkerService {
@@ -263,9 +265,29 @@ impl WorkerService {
         if runtime_registry.list_runtimes().is_empty() {
             info!("No runtimes loaded from database, registering built-in defaults");
 
-            // Shell runtime (always available)
-            runtime_registry.register(Box::new(ShellRuntime::new()));
-            info!("Registered built-in Shell runtime");
+            // Shell runtime (always available) via generic ProcessRuntime
+            let shell_runtime = ProcessRuntime::new(
+                "shell".to_string(),
+                attune_common::models::runtime::RuntimeExecutionConfig {
+                    interpreter: attune_common::models::runtime::InterpreterConfig {
+                        binary: "/bin/bash".to_string(),
+                        args: vec![],
+                        file_extension: Some(".sh".to_string()),
+                    },
+                    inline_execution: attune_common::models::runtime::InlineExecutionConfig {
+                        strategy: attune_common::models::runtime::InlineExecutionStrategy::TempFile,
+                        extension: Some(".sh".to_string()),
+                        inject_shell_helpers: true,
+                    },
+                    environment: None,
+                    dependencies: None,
+                    env_vars: std::collections::HashMap::new(),
+                },
+                packs_base_dir.clone(),
+                runtime_envs_dir.clone(),
+            );
+            runtime_registry.register(Box::new(shell_runtime));
+            info!("Registered built-in shell ProcessRuntime");
 
             // Native runtime (for compiled binaries)
             runtime_registry.register(Box::new(NativeRuntime::new()));
@@ -379,6 +401,7 @@ impl WorkerService {
             execution_semaphore: Arc::new(Semaphore::new(max_concurrent_tasks)),
             in_flight_tasks: Arc::new(Mutex::new(JoinSet::new())),
             cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
+            pending_cancellations: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
@@ -755,6 +778,7 @@ impl WorkerService {
         let semaphore = self.execution_semaphore.clone();
         let in_flight = self.in_flight_tasks.clone();
         let cancel_tokens = self.cancel_tokens.clone();
+        let pending_cancellations = self.pending_cancellations.clone();
 
         // Spawn the consumer loop as a background task so start() can return
         let handle = tokio::spawn(async move {
@@ -768,6 +792,7 @@ impl WorkerService {
                         let semaphore = semaphore.clone();
                         let in_flight = in_flight.clone();
                         let cancel_tokens = cancel_tokens.clone();
+                        let pending_cancellations = pending_cancellations.clone();
 
                         async move {
                             let execution_id = envelope.payload.execution_id;
@@ -794,6 +819,16 @@ impl WorkerService {
                                 let mut tokens = cancel_tokens.lock().await;
                                 tokens.insert(execution_id, cancel_token.clone());
                             }
+                            {
+                                let pending = pending_cancellations.lock().await;
+                                if pending.contains(&execution_id) {
+                                    info!(
+                                        "Execution {} already had a pending cancel request; cancelling immediately",
+                                        execution_id
+                                    );
+                                    cancel_token.cancel();
+                                }
+                            }
 
                             // Spawn the actual execution as a background task so this
                             // handler returns immediately, acking the message and freeing
@@ -819,6 +854,8 @@ impl WorkerService {
                                 // Remove the cancel token now that execution is done
                                 let mut tokens = cancel_tokens.lock().await;
                                 tokens.remove(&execution_id);
+                                let mut pending = pending_cancellations.lock().await;
+                                pending.remove(&execution_id);
                             });
 
                             Ok(())
@@ -1060,6 +1097,7 @@ impl WorkerService {
 
         let consumer_for_task = consumer.clone();
         let cancel_tokens = self.cancel_tokens.clone();
+        let pending_cancellations = self.pending_cancellations.clone();
         let queue_name_for_log = queue_name.clone();
 
         let handle = tokio::spawn(async move {
@@ -1071,10 +1109,16 @@ impl WorkerService {
                 .consume_with_handler(
                     move |envelope: MessageEnvelope<ExecutionCancelRequestedPayload>| {
                         let cancel_tokens = cancel_tokens.clone();
+                        let pending_cancellations = pending_cancellations.clone();
 
                         async move {
                             let execution_id = envelope.payload.execution_id;
                             info!("Received cancel request for execution {}", execution_id);
+
+                            {
+                                let mut pending = pending_cancellations.lock().await;
+                                pending.insert(execution_id);
+                            }
 
                             let tokens = cancel_tokens.lock().await;
                             if let Some(token) = tokens.get(&execution_id) {

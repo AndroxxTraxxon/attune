@@ -9,6 +9,10 @@ use attune_common::{
     models::*,
     repositories::{
         action::{ActionRepository, CreateActionInput},
+        identity::{
+            CreatePermissionAssignmentInput, CreatePermissionSetInput,
+            PermissionAssignmentRepository, PermissionSetRepository,
+        },
         pack::{CreatePackInput, PackRepository},
         trigger::{CreateTriggerInput, TriggerRepository},
         workflow::{CreateWorkflowDefinitionInput, WorkflowDefinitionRepository},
@@ -242,6 +246,47 @@ impl TestContext {
         let unique_id = uuid::Uuid::new_v4().to_string().replace("-", "")[..8].to_string();
         let login = format!("testuser_{}", unique_id);
         let token = self.create_test_user(&login).await?;
+        self.token = Some(token);
+        Ok(self)
+    }
+
+    /// Create and authenticate a test user with identity + permission admin grants.
+    pub async fn with_admin_auth(mut self) -> Result<Self> {
+        let unique_id = uuid::Uuid::new_v4().to_string().replace("-", "")[..8].to_string();
+        let login = format!("adminuser_{}", unique_id);
+        let token = self.create_test_user(&login).await?;
+
+        let identity = attune_common::repositories::identity::IdentityRepository::find_by_login(
+            &self.pool, &login,
+        )
+        .await?
+        .ok_or_else(|| format!("Failed to find newly created identity '{}'", login))?;
+
+        let permset = PermissionSetRepository::create(
+            &self.pool,
+            CreatePermissionSetInput {
+                r#ref: "core.admin".to_string(),
+                pack: None,
+                pack_ref: None,
+                label: Some("Admin".to_string()),
+                description: Some("Test admin permission set".to_string()),
+                grants: json!([
+                    {"resource": "identities", "actions": ["read", "create", "update", "delete"]},
+                    {"resource": "permissions", "actions": ["read", "create", "update", "delete", "manage"]}
+                ]),
+            },
+        )
+        .await?;
+
+        PermissionAssignmentRepository::create(
+            &self.pool,
+            CreatePermissionAssignmentInput {
+                identity: identity.id,
+                permset: permset.id,
+            },
+        )
+        .await?;
+
         self.token = Some(token);
         Ok(self)
     }

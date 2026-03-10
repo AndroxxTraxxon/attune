@@ -10,7 +10,6 @@ use axum::{
 use std::sync::Arc;
 use validator::Validate;
 
-use attune_common::models::OwnerType;
 use attune_common::repositories::{
     action::ActionRepository,
     key::{CreateKeyInput, KeyRepository, KeySearchFilters, UpdateKeyInput},
@@ -18,9 +17,14 @@ use attune_common::repositories::{
     trigger::SensorRepository,
     Create, Delete, FindByRef, Update,
 };
+use attune_common::{
+    models::{key::Key, OwnerType},
+    rbac::{Action, AuthorizationContext, Resource},
+};
 
-use crate::auth::RequireAuth;
+use crate::auth::{jwt::TokenType, RequireAuth};
 use crate::{
+    authz::{AuthorizationCheck, AuthorizationService},
     dto::{
         common::{PaginatedResponse, PaginationParams},
         key::{CreateKeyRequest, KeyQueryParams, KeyResponse, KeySummary, UpdateKeyRequest},
@@ -42,7 +46,7 @@ use crate::{
     security(("bearer_auth" = []))
 )]
 pub async fn list_keys(
-    _user: RequireAuth,
+    user: RequireAuth,
     State(state): State<Arc<AppState>>,
     Query(query): Query<KeyQueryParams>,
 ) -> ApiResult<impl IntoResponse> {
@@ -55,8 +59,33 @@ pub async fn list_keys(
     };
 
     let result = KeyRepository::search(&state.db, &filters).await?;
+    let mut rows = result.rows;
 
-    let paginated_keys: Vec<KeySummary> = result.rows.into_iter().map(KeySummary::from).collect();
+    if user.0.claims.token_type == TokenType::Access {
+        let identity_id = user
+            .0
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let grants = authz.effective_grants(&user.0).await?;
+
+        // Ensure the principal can read at least some key records.
+        let can_read_any_key = grants
+            .iter()
+            .any(|g| g.resource == Resource::Keys && g.actions.contains(&Action::Read));
+        if !can_read_any_key {
+            return Err(ApiError::Forbidden(
+                "Insufficient permissions: keys:read".to_string(),
+            ));
+        }
+
+        rows.retain(|key| {
+            let ctx = key_authorization_context(identity_id, key);
+            AuthorizationService::is_allowed(&grants, Resource::Keys, Action::Read, &ctx)
+        });
+    }
+
+    let paginated_keys: Vec<KeySummary> = rows.into_iter().map(KeySummary::from).collect();
 
     let pagination_params = PaginationParams {
         page: query.page,
@@ -83,13 +112,33 @@ pub async fn list_keys(
     security(("bearer_auth" = []))
 )]
 pub async fn get_key(
-    _user: RequireAuth,
+    user: RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(key_ref): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
     let mut key = KeyRepository::find_by_ref(&state.db, &key_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Key '{}' not found", key_ref)))?;
+
+    if user.0.claims.token_type == TokenType::Access {
+        let identity_id = user
+            .0
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        authz
+            .authorize(
+                &user.0,
+                AuthorizationCheck {
+                    resource: Resource::Keys,
+                    action: Action::Read,
+                    context: key_authorization_context(identity_id, &key),
+                },
+            )
+            .await
+            // Hide unauthorized records behind 404 to reduce enumeration leakage.
+            .map_err(|_| ApiError::NotFound(format!("Key '{}' not found", key_ref)))?;
+    }
 
     // Decrypt value if encrypted
     if key.encrypted {
@@ -130,12 +179,36 @@ pub async fn get_key(
     security(("bearer_auth" = []))
 )]
 pub async fn create_key(
-    _user: RequireAuth,
+    user: RequireAuth,
     State(state): State<Arc<AppState>>,
     Json(request): Json<CreateKeyRequest>,
 ) -> ApiResult<impl IntoResponse> {
     // Validate request
     request.validate()?;
+
+    if user.0.claims.token_type == TokenType::Access {
+        let identity_id = user
+            .0
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let mut ctx = AuthorizationContext::new(identity_id);
+        ctx.owner_identity_id = request.owner_identity;
+        ctx.owner_type = Some(request.owner_type);
+        ctx.encrypted = Some(request.encrypted);
+        ctx.target_ref = Some(request.r#ref.clone());
+
+        authz
+            .authorize(
+                &user.0,
+                AuthorizationCheck {
+                    resource: Resource::Keys,
+                    action: Action::Create,
+                    context: ctx,
+                },
+            )
+            .await?;
+    }
 
     // Check if key with same ref already exists
     if KeyRepository::find_by_ref(&state.db, &request.r#ref)
@@ -299,7 +372,7 @@ pub async fn create_key(
     security(("bearer_auth" = []))
 )]
 pub async fn update_key(
-    _user: RequireAuth,
+    user: RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(key_ref): Path<String>,
     Json(request): Json<UpdateKeyRequest>,
@@ -311,6 +384,24 @@ pub async fn update_key(
     let existing = KeyRepository::find_by_ref(&state.db, &key_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Key '{}' not found", key_ref)))?;
+
+    if user.0.claims.token_type == TokenType::Access {
+        let identity_id = user
+            .0
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        authz
+            .authorize(
+                &user.0,
+                AuthorizationCheck {
+                    resource: Resource::Keys,
+                    action: Action::Update,
+                    context: key_authorization_context(identity_id, &existing),
+                },
+            )
+            .await?;
+    }
 
     // Handle value update with encryption
     let (value, encrypted, encryption_key_hash) = if let Some(new_value) = request.value {
@@ -395,7 +486,7 @@ pub async fn update_key(
     security(("bearer_auth" = []))
 )]
 pub async fn delete_key(
-    _user: RequireAuth,
+    user: RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(key_ref): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
@@ -403,6 +494,24 @@ pub async fn delete_key(
     let key = KeyRepository::find_by_ref(&state.db, &key_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Key '{}' not found", key_ref)))?;
+
+    if user.0.claims.token_type == TokenType::Access {
+        let identity_id = user
+            .0
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        authz
+            .authorize(
+                &user.0,
+                AuthorizationCheck {
+                    resource: Resource::Keys,
+                    action: Action::Delete,
+                    context: key_authorization_context(identity_id, &key),
+                },
+            )
+            .await?;
+    }
 
     // Delete the key
     let deleted = KeyRepository::delete(&state.db, key.id).await?;
@@ -424,4 +533,14 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/keys/{ref}",
             get(get_key).put(update_key).delete(delete_key),
         )
+}
+
+fn key_authorization_context(identity_id: i64, key: &Key) -> AuthorizationContext {
+    let mut ctx = AuthorizationContext::new(identity_id);
+    ctx.target_id = Some(key.id);
+    ctx.target_ref = Some(key.r#ref.clone());
+    ctx.owner_identity_id = key.owner_identity;
+    ctx.owner_type = Some(key.owner_type);
+    ctx.encrypted = Some(key.encrypted);
+    ctx
 }

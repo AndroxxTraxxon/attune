@@ -3,8 +3,8 @@
 Pack Loader for Attune
 
 This script loads a pack from the filesystem into the database.
-It reads pack.yaml, action definitions, trigger definitions, and sensor definitions
-and creates all necessary database entries.
+It reads pack.yaml, permission set definitions, action definitions, trigger
+definitions, and sensor definitions and creates all necessary database entries.
 
 Usage:
     python3 scripts/load_core_pack.py [--database-url URL] [--pack-dir DIR] [--pack-name NAME]
@@ -146,6 +146,70 @@ class PackLoader:
 
         print(f"✓ Pack '{ref}' loaded (ID: {self.pack_id})")
         return self.pack_id
+
+    def upsert_permission_sets(self) -> Dict[str, int]:
+        """Load permission set definitions from permission_sets/*.yaml."""
+        print("\n→ Loading permission sets...")
+
+        permission_sets_dir = self.pack_dir / "permission_sets"
+        if not permission_sets_dir.exists():
+            print("  No permission_sets directory found")
+            return {}
+
+        permission_set_ids = {}
+        cursor = self.conn.cursor()
+
+        for yaml_file in sorted(permission_sets_dir.glob("*.yaml")):
+            permission_set_data = self.load_yaml(yaml_file)
+            if not permission_set_data:
+                continue
+
+            ref = permission_set_data.get("ref")
+            if not ref:
+                print(
+                    f"  ⚠ Permission set YAML {yaml_file.name} missing 'ref' field, skipping"
+                )
+                continue
+
+            label = permission_set_data.get("label")
+            description = permission_set_data.get("description")
+            grants = permission_set_data.get("grants", [])
+
+            if not isinstance(grants, list):
+                print(
+                    f"  ⚠ Permission set '{ref}' has non-array grants, skipping"
+                )
+                continue
+
+            cursor.execute(
+                """
+                INSERT INTO permission_set (
+                    ref, pack, pack_ref, label, description, grants
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (ref) DO UPDATE SET
+                    label = EXCLUDED.label,
+                    description = EXCLUDED.description,
+                    grants = EXCLUDED.grants,
+                    updated = NOW()
+                RETURNING id
+            """,
+                (
+                    ref,
+                    self.pack_id,
+                    self.pack_ref,
+                    label,
+                    description,
+                    json.dumps(grants),
+                ),
+            )
+
+            permission_set_id = cursor.fetchone()[0]
+            permission_set_ids[ref] = permission_set_id
+            print(f"  ✓ Permission set '{ref}' (ID: {permission_set_id})")
+
+        cursor.close()
+        return permission_set_ids
 
     def upsert_triggers(self) -> Dict[str, int]:
         """Load trigger definitions"""
@@ -708,11 +772,12 @@ class PackLoader:
         """Main loading process.
 
         Components are loaded in dependency order:
-        1. Runtimes (no dependencies)
-        2. Triggers (no dependencies)
-        3. Actions (depend on runtime; workflow actions also create
+        1. Permission sets (no dependencies)
+        2. Runtimes (no dependencies)
+        3. Triggers (no dependencies)
+        4. Actions (depend on runtime; workflow actions also create
            workflow_definition records)
-        4. Sensors (depend on triggers and runtime)
+        5. Sensors (depend on triggers and runtime)
         """
         print("=" * 60)
         print(f"Pack Loader - {self.pack_name}")
@@ -727,7 +792,10 @@ class PackLoader:
             # Load pack metadata
             self.upsert_pack()
 
-            # Load runtimes first (actions and sensors depend on them)
+            # Load permission sets first (authorization metadata)
+            permission_set_ids = self.upsert_permission_sets()
+
+            # Load runtimes (actions and sensors depend on them)
             runtime_ids = self.upsert_runtimes()
 
             # Load triggers
@@ -746,6 +814,7 @@ class PackLoader:
             print(f"✓ Pack '{self.pack_name}' loaded successfully!")
             print("=" * 60)
             print(f"  Pack ID: {self.pack_id}")
+            print(f"  Permission sets: {len(permission_set_ids)}")
             print(f"  Runtimes: {len(set(runtime_ids.values()))}")
             print(f"  Triggers: {len(trigger_ids)}")
             print(f"  Actions: {len(action_ids)}")

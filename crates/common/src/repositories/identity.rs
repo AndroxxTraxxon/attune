@@ -4,7 +4,7 @@ use crate::models::{identity::*, Id, JsonDict};
 use crate::Result;
 use sqlx::{Executor, Postgres, QueryBuilder};
 
-use super::{Create, Delete, FindById, List, Repository, Update};
+use super::{Create, Delete, FindById, FindByRef, List, Repository, Update};
 
 pub struct IdentityRepository;
 
@@ -201,6 +201,22 @@ impl FindById for PermissionSetRepository {
 }
 
 #[async_trait::async_trait]
+impl FindByRef for PermissionSetRepository {
+    async fn find_by_ref<'e, E>(executor: E, ref_str: &str) -> Result<Option<Self::Entity>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, PermissionSet>(
+            "SELECT id, ref, pack, pack_ref, label, description, grants, created, updated FROM permission_set WHERE ref = $1"
+        )
+        .bind(ref_str)
+        .fetch_optional(executor)
+        .await
+        .map_err(Into::into)
+    }
+}
+
+#[async_trait::async_trait]
 impl List for PermissionSetRepository {
     async fn list<'e, E>(executor: E) -> Result<Vec<Self::Entity>>
     where
@@ -284,6 +300,54 @@ impl Delete for PermissionSetRepository {
             .execute(executor)
             .await?;
         Ok(result.rows_affected() > 0)
+    }
+}
+
+impl PermissionSetRepository {
+    pub async fn find_by_identity<'e, E>(executor: E, identity_id: Id) -> Result<Vec<PermissionSet>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, PermissionSet>(
+            "SELECT ps.id, ps.ref, ps.pack, ps.pack_ref, ps.label, ps.description, ps.grants, ps.created, ps.updated
+             FROM permission_set ps
+             INNER JOIN permission_assignment pa ON pa.permset = ps.id
+             WHERE pa.identity = $1
+             ORDER BY ps.ref ASC",
+        )
+        .bind(identity_id)
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+
+    /// Delete permission sets belonging to a pack whose refs are NOT in the given set.
+    ///
+    /// Used during pack reinstallation to clean up permission sets that were
+    /// removed from the pack's metadata. Associated permission assignments are
+    /// cascade-deleted by the FK constraint.
+    pub async fn delete_by_pack_excluding<'e, E>(
+        executor: E,
+        pack_id: Id,
+        keep_refs: &[String],
+    ) -> Result<u64>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = if keep_refs.is_empty() {
+            sqlx::query("DELETE FROM permission_set WHERE pack = $1")
+                .bind(pack_id)
+                .execute(executor)
+                .await?
+        } else {
+            sqlx::query("DELETE FROM permission_set WHERE pack = $1 AND ref != ALL($2)")
+                .bind(pack_id)
+                .bind(keep_refs)
+                .execute(executor)
+                .await?
+        };
+
+        Ok(result.rows_affected())
     }
 }
 

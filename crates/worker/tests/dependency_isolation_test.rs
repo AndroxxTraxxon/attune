@@ -9,7 +9,8 @@
 //! This keeps the pack directory clean and read-only.
 
 use attune_common::models::runtime::{
-    DependencyConfig, EnvironmentConfig, InterpreterConfig, RuntimeExecutionConfig,
+    DependencyConfig, EnvironmentConfig, InlineExecutionConfig, InterpreterConfig,
+    RuntimeExecutionConfig,
 };
 use attune_worker::runtime::process::ProcessRuntime;
 use attune_worker::runtime::ExecutionContext;
@@ -26,6 +27,7 @@ fn make_python_config() -> RuntimeExecutionConfig {
             args: vec!["-u".to_string()],
             file_extension: Some(".py".to_string()),
         },
+        inline_execution: InlineExecutionConfig::default(),
         environment: Some(EnvironmentConfig {
             env_type: "virtualenv".to_string(),
             dir_name: ".venv".to_string(),
@@ -59,6 +61,7 @@ fn make_shell_config() -> RuntimeExecutionConfig {
             args: vec![],
             file_extension: Some(".sh".to_string()),
         },
+        inline_execution: InlineExecutionConfig::default(),
         environment: None,
         dependencies: None,
         env_vars: std::collections::HashMap::new(),
