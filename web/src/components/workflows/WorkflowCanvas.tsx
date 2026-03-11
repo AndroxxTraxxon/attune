@@ -42,6 +42,10 @@ const PRESET_BANNER_COLORS: Record<TransitionPreset, string> = {
 const MIN_ZOOM = 0.15;
 const MAX_ZOOM = 3;
 const ZOOM_SENSITIVITY = 0.0015;
+const CANVAS_SIDE_PADDING = 120;
+const CANVAS_TOP_PADDING = 140;
+const CANVAS_BOTTOM_PADDING = 120;
+const CANVAS_RIGHT_PADDING = 380;
 
 /**
  * Build CSS background style for the infinite grid.
@@ -465,6 +469,11 @@ export default function WorkflowCanvas({
         maxY = Math.max(maxY, t.position.y + 140);
       }
 
+      minX -= CANVAS_SIDE_PADDING;
+      minY -= CANVAS_TOP_PADDING;
+      maxX += CANVAS_RIGHT_PADDING;
+      maxY += CANVAS_BOTTOM_PADDING;
+
       const contentW = maxX - minX;
       const contentH = maxY - minY;
       const pad = 80;
@@ -492,10 +501,10 @@ export default function WorkflowCanvas({
     let maxX = 4000;
     let maxY = 4000;
     for (const task of tasks) {
-      minX = Math.min(minX, task.position.x - 100);
-      minY = Math.min(minY, task.position.y - 100);
-      maxX = Math.max(maxX, task.position.x + 500);
-      maxY = Math.max(maxY, task.position.y + 500);
+      minX = Math.min(minX, task.position.x - CANVAS_SIDE_PADDING);
+      minY = Math.min(minY, task.position.y - CANVAS_TOP_PADDING);
+      maxX = Math.max(maxX, task.position.x + CANVAS_RIGHT_PADDING);
+      maxY = Math.max(maxY, task.position.y + CANVAS_BOTTOM_PADDING + 380);
     }
     return { width: maxX - minX, height: maxY - minY };
   }, [tasks]);

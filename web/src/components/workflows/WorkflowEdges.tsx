@@ -56,6 +56,14 @@ interface WorkflowEdgesProps {
 
 const NODE_WIDTH = 240;
 const NODE_HEIGHT = 96;
+const SELF_LOOP_RIGHT_OFFSET = 24;
+const SELF_LOOP_TOP_OFFSET = 36;
+const SELF_LOOP_BOTTOM_OFFSET = 30;
+const ARROW_LENGTH = 12;
+const ARROW_HALF_WIDTH = 5;
+const ARROW_DIRECTION_LOOKBACK_PX = 10;
+const ARROW_DIRECTION_SAMPLES = 48;
+const ARROW_SHAFT_OVERLAP_PX = 2;
 
 /** Color for each edge type (alias for shared constant) */
 const EDGE_COLORS = EDGE_TYPE_COLORS;
@@ -159,13 +167,14 @@ function getBestConnectionPoints(
   end: { x: number; y: number };
   selfLoop?: boolean;
 } {
-  // Self-loop: right side → top
+  // Self-loop uses a dedicated route that stays outside the task card so the
+  // arrowhead and label remain readable instead of being covered by the node.
   if (fromTask.id === toTask.id) {
     return {
       start: getNodeBottomCenter(fromTask, nodeWidth, nodeHeight),
       end: {
-        x: fromTask.position.x + nodeWidth * 0.75,
-        y: fromTask.position.y,
+        x: fromTask.position.x + nodeWidth,
+        y: fromTask.position.y + nodeHeight * 0.28,
       },
       selfLoop: true,
     };
@@ -184,17 +193,25 @@ function getBestConnectionPoints(
   return { start, end };
 }
 
-/**
- * Build an SVG path for a self-loop.
- */
-function buildSelfLoopPath(
-  start: { x: number; y: number },
-  end: { x: number; y: number },
-): string {
-  const loopOffset = 50;
-  const cp1 = { x: start.x + loopOffset, y: start.y - 20 };
-  const cp2 = { x: end.x + loopOffset, y: end.y - 40 };
-  return `M ${start.x} ${start.y} C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${end.x} ${end.y}`;
+function buildSelfLoopRoute(
+  task: WorkflowTask,
+  nodeWidth: number,
+  nodeHeight: number,
+): { x: number; y: number }[] {
+  const start = getNodeBottomCenter(task, nodeWidth, nodeHeight);
+  const cardRight = task.position.x + nodeWidth;
+  const cardTop = task.position.y;
+  const loopRight = cardRight + SELF_LOOP_RIGHT_OFFSET;
+  const loopTop = cardTop + SELF_LOOP_TOP_OFFSET;
+  const loopBottom = start.y + SELF_LOOP_BOTTOM_OFFSET;
+
+  return [
+    start,
+    { x: start.x, y: loopBottom },
+    { x: loopRight, y: loopBottom },
+    { x: loopRight, y: loopTop },
+    { x: cardRight, y: task.position.y + nodeHeight * 0.28 },
+  ];
 }
 
 /**
@@ -296,28 +313,13 @@ function getSegmentControlPoints(
 function evaluatePathAtT(
   allPoints: { x: number; y: number }[],
   t: number,
-  selfLoop?: boolean,
+  _selfLoop?: boolean,
 ): { x: number; y: number } {
   if (allPoints.length < 2) {
     return allPoints[0] ?? { x: 0, y: 0 };
   }
 
   // Self-loop with no waypoints (allPoints = [start, end])
-  if (selfLoop && allPoints.length === 2) {
-    const start = allPoints[0];
-    const end = allPoints[1];
-    const loopOffset = 50;
-    const cp1 = { x: start.x + loopOffset, y: start.y - 20 };
-    const cp2 = { x: end.x + loopOffset, y: end.y - 40 };
-    return evaluateCubicBezier(
-      start,
-      cp1,
-      cp2,
-      end,
-      Math.max(0, Math.min(1, t)),
-    );
-  }
-
   const numSegments = allPoints.length - 1;
   const clampedT = Math.max(0, Math.min(1, t));
   const scaledT = clampedT * numSegments;
@@ -341,32 +343,13 @@ function evaluatePathAtT(
 function projectOntoPath(
   allPoints: { x: number; y: number }[],
   mousePos: { x: number; y: number },
-  selfLoop?: boolean,
+  _selfLoop?: boolean,
 ): number {
   if (allPoints.length < 2) return 0;
 
   const samplesPerSegment = 60;
   let bestT = 0.5;
   let bestDist = Infinity;
-
-  // Self-loop with no waypoints
-  if (selfLoop && allPoints.length === 2) {
-    const start = allPoints[0];
-    const end = allPoints[1];
-    const loopOffset = 50;
-    const cp1 = { x: start.x + loopOffset, y: start.y - 20 };
-    const cp2 = { x: end.x + loopOffset, y: end.y - 40 };
-    for (let s = 0; s <= samplesPerSegment; s++) {
-      const localT = s / samplesPerSegment;
-      const pt = evaluateCubicBezier(start, cp1, cp2, end, localT);
-      const dist = Math.hypot(pt.x - mousePos.x, pt.y - mousePos.y);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestT = localT;
-      }
-    }
-    return bestT;
-  }
 
   const numSegments = allPoints.length - 1;
 
@@ -466,6 +449,151 @@ function curveSegmentMidpoint(
   return evaluateCubicBezier(p1, cp1, cp2, p2, 0.5);
 }
 
+function buildArrowHeadPath(
+  from: { x: number; y: number },
+  tip: { x: number; y: number },
+): {
+  path: string;
+} {
+  const dx = tip.x - from.x;
+  const dy = tip.y - from.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const ux = dx / length;
+  const uy = dy / length;
+  const baseX = tip.x - ux * ARROW_LENGTH;
+  const baseY = tip.y - uy * ARROW_LENGTH;
+  const perpX = -uy;
+  const perpY = ux;
+
+  return {
+    path: `M ${tip.x} ${tip.y} L ${baseX + perpX * ARROW_HALF_WIDTH} ${baseY + perpY * ARROW_HALF_WIDTH} L ${baseX - perpX * ARROW_HALF_WIDTH} ${baseY - perpY * ARROW_HALF_WIDTH} Z`,
+  };
+}
+
+function getArrowDirectionPoint(
+  allPoints: { x: number; y: number }[],
+  lookbackPx: number = ARROW_DIRECTION_LOOKBACK_PX,
+): { x: number; y: number } {
+  if (allPoints.length < 2) {
+    return allPoints[0] ?? { x: 0, y: 0 };
+  }
+
+  const segIdx = allPoints.length - 2;
+  const start = allPoints[segIdx];
+  const end = allPoints[segIdx + 1];
+  const { cp1, cp2 } = getSegmentControlPoints(allPoints, segIdx);
+
+  let prev = end;
+  let traversed = 0;
+
+  for (let i = ARROW_DIRECTION_SAMPLES - 1; i >= 0; i--) {
+    const t = i / ARROW_DIRECTION_SAMPLES;
+    const pt = evaluateCubicBezier(start, cp1, cp2, end, t);
+    traversed += Math.hypot(prev.x - pt.x, prev.y - pt.y);
+    if (traversed >= lookbackPx) {
+      return pt;
+    }
+    prev = pt;
+  }
+
+  return start;
+}
+
+function lerpPoint(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  t: number,
+): { x: number; y: number } {
+  return {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+  };
+}
+
+function splitCubicAtT(
+  p0: { x: number; y: number },
+  p1: { x: number; y: number },
+  p2: { x: number; y: number },
+  p3: { x: number; y: number },
+  t: number,
+): {
+  leftCp1: { x: number; y: number };
+  leftCp2: { x: number; y: number };
+  point: { x: number; y: number };
+} {
+  const p01 = lerpPoint(p0, p1, t);
+  const p12 = lerpPoint(p1, p2, t);
+  const p23 = lerpPoint(p2, p3, t);
+  const p012 = lerpPoint(p01, p12, t);
+  const p123 = lerpPoint(p12, p23, t);
+  const point = lerpPoint(p012, p123, t);
+
+  return {
+    leftCp1: p01,
+    leftCp2: p012,
+    point,
+  };
+}
+
+function findTrimmedSegmentEnd(
+  allPoints: { x: number; y: number }[],
+  trimPx: number,
+): {
+  segIdx: number;
+  t: number;
+  point: { x: number; y: number };
+} {
+  const segIdx = allPoints.length - 2;
+  const start = allPoints[segIdx];
+  const end = allPoints[segIdx + 1];
+  const { cp1, cp2 } = getSegmentControlPoints(allPoints, segIdx);
+
+  let prev = end;
+  let traversed = 0;
+
+  for (let i = ARROW_DIRECTION_SAMPLES - 1; i >= 0; i--) {
+    const t = i / ARROW_DIRECTION_SAMPLES;
+    const pt = evaluateCubicBezier(start, cp1, cp2, end, t);
+    traversed += Math.hypot(prev.x - pt.x, prev.y - pt.y);
+    if (traversed >= trimPx) {
+      return { segIdx, t, point: pt };
+    }
+    prev = pt;
+  }
+
+  return { segIdx, t: 0, point: start };
+}
+
+function buildTrimmedPath(
+  allPoints: { x: number; y: number }[],
+  trimPx: number,
+): string {
+  if (allPoints.length < 2) return "";
+  if (trimPx <= 0) {
+    return allPoints.length === 2
+      ? buildCurvePath(allPoints[0], allPoints[1])
+      : buildSmoothPath(allPoints);
+  }
+
+  const { segIdx, t } = findTrimmedSegmentEnd(allPoints, trimPx);
+  const start = allPoints[segIdx];
+  const end = allPoints[segIdx + 1];
+  const { cp1, cp2 } = getSegmentControlPoints(allPoints, segIdx);
+  const trimmed = splitCubicAtT(start, cp1, cp2, end, t);
+
+  let d = `M ${allPoints[0].x} ${allPoints[0].y}`;
+
+  for (let i = 0; i < segIdx; i++) {
+    const p2 = allPoints[i + 1];
+    const { cp1: segCp1, cp2: segCp2 } = getSegmentControlPoints(allPoints, i);
+    d += ` C ${segCp1.x} ${segCp1.y}, ${segCp2.x} ${segCp2.y}, ${p2.x} ${p2.y}`;
+  }
+
+  d += ` C ${trimmed.leftCp1.x} ${trimmed.leftCp1.y}, ${trimmed.leftCp2.x} ${trimmed.leftCp2.y}, ${trimmed.point.x} ${trimmed.point.y}`;
+
+  return d;
+}
+
 /** Check whether two SelectedEdgeInfo match the same edge */
 function edgeMatches(
   sel: SelectedEdgeInfo | null | undefined,
@@ -530,9 +658,12 @@ function WorkflowEdgesInner({
     let maxX = 0;
     let maxY = 0;
     for (const task of tasks) {
-      minX = Math.min(minX, task.position.x - 100);
-      minY = Math.min(minY, task.position.y - 100);
-      maxX = Math.max(maxX, task.position.x + nodeWidth + 100);
+      minX = Math.min(minX, task.position.x - 120);
+      minY = Math.min(minY, task.position.y - 140);
+      maxX = Math.max(
+        maxX,
+        task.position.x + nodeWidth + SELF_LOOP_RIGHT_OFFSET + 40,
+      );
       maxY = Math.max(maxY, task.position.y + nodeHeight + 100);
     }
     return {
@@ -909,56 +1040,20 @@ function WorkflowEdgesInner({
       height={svgBounds.height}
       style={{ zIndex: 1 }}
     >
-      <defs>
-        {/* Arrow markers for each edge type */}
-        {Object.entries(EDGE_COLORS).map(([type, color]) => (
-          <marker
-            key={`arrow-${type}`}
-            id={`arrow-${type}`}
-            viewBox="0 0 10 10"
-            refX={9}
-            refY={5}
-            markerWidth={8}
-            markerHeight={8}
-            orient="auto-start-reverse"
-          >
-            <path d="M 0 0 L 10 5 L 0 10 z" fill={color} opacity={0.8} />
-          </marker>
-        ))}
-      </defs>
-
       <g className="pointer-events-auto">
-        {/* Dynamic arrow markers for custom-colored edges */}
-        {edges.map((edge, index) => {
-          if (!edge.color) return null;
-          return (
-            <marker
-              key={`arrow-custom-${index}`}
-              id={`arrow-custom-${index}`}
-              viewBox="0 0 10 10"
-              refX={9}
-              refY={5}
-              markerWidth={8}
-              markerHeight={8}
-              orient="auto-start-reverse"
-            >
-              <path d="M 0 0 L 10 5 L 0 10 z" fill={edge.color} opacity={0.8} />
-            </marker>
-          );
-        })}
-
         {/* Render edges */}
         {edges.map((edge, index) => {
           const fromTask = taskMap.get(edge.from);
           const toTask = taskMap.get(edge.to);
           if (!fromTask || !toTask) return null;
+          const isSelfLoopEdge = edge.from === edge.to;
 
           // Build the current waypoints first so we can pass them into
           // connection-point selection as an approach hint.
-          let currentWaypoints: NodePosition[] = edge.waypoints
-            ? [...edge.waypoints]
-            : [];
+          let currentWaypoints: NodePosition[] =
+            !isSelfLoopEdge && edge.waypoints ? [...edge.waypoints] : [];
           if (
+            !isSelfLoopEdge &&
             activeDrag &&
             activeDrag.edgeFrom === edge.from &&
             activeDrag.edgeTo === edge.to &&
@@ -985,26 +1080,21 @@ function WorkflowEdgesInner({
 
           const isSelected = edgeMatches(selectedEdge, edge);
 
-          // All points: start → waypoints → end
-          const allPoints = [start, ...currentWaypoints, end];
-
-          const pathD =
+          const selfLoopRoute =
             selfLoop && currentWaypoints.length === 0
-              ? buildSelfLoopPath(start, end)
-              : allPoints.length === 2
-                ? buildCurvePath(start, end)
-                : buildSmoothPath(allPoints);
+              ? buildSelfLoopRoute(fromTask, nodeWidth, nodeHeight)
+              : null;
 
           const color =
             edge.color || EDGE_COLORS[edge.type] || EDGE_COLORS.complete;
           const dash = edge.lineStyle ? LINE_STYLE_DASH[edge.lineStyle] : "";
-          const arrowId = edge.color
-            ? `arrow-custom-${index}`
-            : `arrow-${edge.type}`;
+          const groupOpacity = isSelected ? 1 : 0.75;
 
           // Label position — evaluate t-parameter on the actual path
           let labelPos: { x: number; y: number };
-          const isSelfLoopEdge = selfLoop && currentWaypoints.length === 0;
+          const usesDefaultSelfLoopRoute =
+            selfLoop && currentWaypoints.length === 0;
+          const allPoints = selfLoopRoute ?? [start, ...currentWaypoints, end];
           if (
             activeDrag &&
             activeDrag.type === "label" &&
@@ -1016,15 +1106,25 @@ function WorkflowEdgesInner({
             // During drag, dragPos is already snapped to the curve
             labelPos = dragPos;
           } else {
-            const t = edge.labelPosition ?? 0.5;
-            labelPos = evaluatePathAtT(allPoints, t, isSelfLoopEdge);
+            const t =
+              edge.labelPosition ?? (usesDefaultSelfLoopRoute ? 0.62 : 0.5);
+            labelPos = evaluatePathAtT(allPoints, t, usesDefaultSelfLoopRoute);
           }
+          const arrowDirectionPoint = getArrowDirectionPoint(allPoints);
+          const arrowHead = buildArrowHeadPath(arrowDirectionPoint, end);
+          const pathD = buildTrimmedPath(
+            allPoints,
+            ARROW_LENGTH - ARROW_SHAFT_OVERLAP_PX,
+          );
 
           const labelText = edge.label || "";
           const labelWidth = Math.max(labelText.length * 5.5 + 12, 48);
 
           return (
-            <g key={`edge-${index}-${edge.from}-${edge.to}`}>
+            <g
+              key={`edge-${index}-${edge.from}-${edge.to}`}
+              opacity={groupOpacity}
+            >
               {/* Edge path */}
               <path
                 d={pathD}
@@ -1032,9 +1132,12 @@ function WorkflowEdgesInner({
                 stroke={color}
                 strokeWidth={isSelected ? 2.5 : 2}
                 strokeDasharray={dash}
-                markerEnd={`url(#${arrowId})`}
                 className="transition-opacity"
-                opacity={isSelected ? 1 : 0.75}
+              />
+              <path
+                d={arrowHead.path}
+                fill={color}
+                className="pointer-events-none transition-opacity"
               />
 
               {/* Selection glow for selected edge */}
@@ -1078,7 +1181,7 @@ function WorkflowEdgesInner({
                             edge,
                             labelPos,
                             allPoints,
-                            isSelfLoopEdge,
+                            usesDefaultSelfLoopRoute,
                           )
                       : undefined
                   }
@@ -1138,7 +1241,7 @@ function WorkflowEdgesInner({
               )}
 
               {/* === Selected edge interactive elements === */}
-              {isSelected && (
+              {isSelected && !isSelfLoopEdge && (
                 <>
                   {/* Waypoint handles */}
                   {currentWaypoints.map((wp, wpIdx) => {
