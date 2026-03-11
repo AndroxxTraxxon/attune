@@ -251,6 +251,7 @@ impl TestContext {
     }
 
     /// Create and authenticate a test user with identity + permission admin grants.
+    #[allow(dead_code)]
     pub async fn with_admin_auth(mut self) -> Result<Self> {
         let unique_id = uuid::Uuid::new_v4().to_string().replace("-", "")[..8].to_string();
         let login = format!("adminuser_{}", unique_id);
