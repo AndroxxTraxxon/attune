@@ -401,8 +401,10 @@ mod tests {
 
     #[test]
     fn test_effective_format_defaults_to_config() {
-        let mut config = CliConfig::default();
-        config.format = "json".to_string();
+        let config = CliConfig {
+            format: "json".to_string(),
+            ..Default::default()
+        };
 
         // No CLI override → uses config
         assert_eq!(config.effective_format(None), OutputFormat::Json);
@@ -410,8 +412,10 @@ mod tests {
 
     #[test]
     fn test_effective_format_cli_overrides_config() {
-        let mut config = CliConfig::default();
-        config.format = "json".to_string();
+        let config = CliConfig {
+            format: "json".to_string(),
+            ..Default::default()
+        };
 
         // CLI override wins
         assert_eq!(
