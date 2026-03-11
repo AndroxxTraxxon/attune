@@ -1385,7 +1385,6 @@ pub mod workflow {
         pub out_schema: Option<JsonSchema>,
         pub definition: JsonDict,
         pub tags: Vec<String>,
-        pub enabled: bool,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
     }

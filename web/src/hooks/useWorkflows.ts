@@ -10,7 +10,6 @@ interface WorkflowsQueryParams {
   pageSize?: number;
   packRef?: string;
   tags?: string;
-  enabled?: boolean;
   search?: string;
 }
 
@@ -23,7 +22,6 @@ export function useWorkflows(params?: WorkflowsQueryParams) {
         page: params?.page || 1,
         pageSize: params?.pageSize || 50,
         tags: params?.tags,
-        enabled: params?.enabled,
         search: params?.search,
         packRef: params?.packRef,
       });

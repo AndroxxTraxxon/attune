@@ -22,7 +22,6 @@ ref: {}.example_workflow
 label: Example Workflow
 description: A test workflow for integration testing
 version: "1.0.0"
-enabled: true
 parameters:
   message:
     type: string
@@ -46,7 +45,6 @@ ref: {}.another_workflow
 label: Another Workflow
 description: Second test workflow
 version: "1.0.0"
-enabled: false
 tasks:
   - name: task1
     action: core.noop

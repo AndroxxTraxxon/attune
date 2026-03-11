@@ -26,14 +26,12 @@ CREATE TABLE workflow_definition (
     out_schema JSONB,
     definition JSONB NOT NULL,
     tags TEXT[] DEFAULT '{}',
-    enabled BOOLEAN DEFAULT true NOT NULL,
     created TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
 -- Indexes
 CREATE INDEX idx_workflow_def_pack ON workflow_definition(pack);
-CREATE INDEX idx_workflow_def_enabled ON workflow_definition(enabled);
 CREATE INDEX idx_workflow_def_ref ON workflow_definition(ref);
 CREATE INDEX idx_workflow_def_tags ON workflow_definition USING gin(tags);
 
@@ -137,7 +135,6 @@ SELECT
     wd.ref as workflow_ref,
     wd.label,
     wd.version,
-    wd.enabled,
     a.id as action_id,
     a.ref as action_ref,
     a.pack as pack_id,

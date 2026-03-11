@@ -63,7 +63,9 @@ const ARROW_LENGTH = 12;
 const ARROW_HALF_WIDTH = 5;
 const ARROW_DIRECTION_LOOKBACK_PX = 10;
 const ARROW_DIRECTION_SAMPLES = 48;
-const ARROW_SHAFT_OVERLAP_PX = 2;
+// Keep a small amount of shaft under the arrowhead so sample-based trimming
+// does not leave a visible gap on simple bezier edges without waypoints.
+const ARROW_SHAFT_OVERLAP_PX = 4;
 
 /** Color for each edge type (alias for shared constant) */
 const EDGE_COLORS = EDGE_TYPE_COLORS;

@@ -379,7 +379,6 @@ impl WorkflowRegistrar {
             out_schema: workflow.output.clone(),
             definition,
             tags: workflow.tags.clone(),
-            enabled: true,
         };
 
         let created = WorkflowDefinitionRepository::create(&self.pool, input).await?;
@@ -411,7 +410,6 @@ impl WorkflowRegistrar {
             out_schema: workflow.output.clone(),
             definition: Some(definition),
             tags: Some(workflow.tags.clone()),
-            enabled: Some(true),
         };
 
         let updated = WorkflowDefinitionRepository::update(&self.pool, *workflow_id, input).await?;

@@ -15,10 +15,6 @@ export type CreateWorkflowRequest = {
      */
     description?: string | null;
     /**
-     * Whether the workflow is enabled
-     */
-    enabled?: boolean | null;
-    /**
      * Human-readable label
      */
     label: string;
@@ -47,4 +43,3 @@ export type CreateWorkflowRequest = {
      */
     version: string;
 };
-

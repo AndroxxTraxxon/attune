@@ -66,7 +66,6 @@ pub async fn list_workflows(
     let filters = WorkflowSearchFilters {
         pack: None,
         pack_ref: search_params.pack_ref.clone(),
-        enabled: search_params.enabled,
         tags,
         search: search_params.search.clone(),
         limit: pagination.limit(),
@@ -113,7 +112,6 @@ pub async fn list_workflows_by_pack(
     let filters = WorkflowSearchFilters {
         pack: None,
         pack_ref: Some(pack_ref),
-        enabled: None,
         tags: None,
         search: None,
         limit: pagination.limit(),
@@ -208,7 +206,6 @@ pub async fn create_workflow(
         out_schema: request.out_schema.clone(),
         definition: request.definition,
         tags: request.tags.clone().unwrap_or_default(),
-        enabled: request.enabled.unwrap_or(true),
     };
 
     let workflow = WorkflowDefinitionRepository::create(&state.db, workflow_input).await?;
@@ -275,7 +272,6 @@ pub async fn update_workflow(
         out_schema: request.out_schema.clone(),
         definition: request.definition,
         tags: request.tags,
-        enabled: request.enabled,
     };
 
     let workflow =
@@ -408,7 +404,6 @@ pub async fn save_workflow_file(
         out_schema: request.out_schema.clone(),
         definition: definition_json,
         tags: request.tags.clone().unwrap_or_default(),
-        enabled: request.enabled.unwrap_or(true),
     };
 
     let workflow = WorkflowDefinitionRepository::create(&state.db, workflow_input).await?;
@@ -489,7 +484,6 @@ pub async fn update_workflow_file(
         out_schema: request.out_schema.clone(),
         definition: Some(definition_json),
         tags: request.tags,
-        enabled: request.enabled,
     };
 
     let workflow =
@@ -647,7 +641,6 @@ fn build_action_yaml(pack_ref: &str, request: &SaveWorkflowFileRequest) -> Strin
             lines.push(format!("description: \"{}\"", desc.replace('"', "\\\"")));
         }
     }
-    lines.push("enabled: true".to_string());
     lines.push(format!(
         "workflow_file: workflows/{}.workflow.yaml",
         request.name

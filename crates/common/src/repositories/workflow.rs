@@ -20,8 +20,6 @@ pub struct WorkflowSearchFilters {
     pub pack: Option<Id>,
     /// Filter by pack reference
     pub pack_ref: Option<String>,
-    /// Filter by enabled status
-    pub enabled: Option<bool>,
     /// Filter by tags (OR across tags — matches if any tag is present)
     pub tags: Option<Vec<String>>,
     /// Text search across label and description (case-insensitive substring)
@@ -62,7 +60,6 @@ pub struct CreateWorkflowDefinitionInput {
     pub out_schema: Option<JsonSchema>,
     pub definition: JsonDict,
     pub tags: Vec<String>,
-    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -74,7 +71,6 @@ pub struct UpdateWorkflowDefinitionInput {
     pub out_schema: Option<JsonSchema>,
     pub definition: Option<JsonDict>,
     pub tags: Option<Vec<String>>,
-    pub enabled: Option<bool>,
 }
 
 #[async_trait::async_trait]
@@ -84,7 +80,7 @@ impl FindById for WorkflowDefinitionRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, WorkflowDefinition>(
-            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated
+            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, created, updated
              FROM workflow_definition
              WHERE id = $1"
         )
@@ -102,7 +98,7 @@ impl FindByRef for WorkflowDefinitionRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, WorkflowDefinition>(
-            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated
+            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, created, updated
              FROM workflow_definition
              WHERE ref = $1"
         )
@@ -120,7 +116,7 @@ impl List for WorkflowDefinitionRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, WorkflowDefinition>(
-            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated
+            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, created, updated
              FROM workflow_definition
              ORDER BY created DESC
              LIMIT 1000"
@@ -141,9 +137,9 @@ impl Create for WorkflowDefinitionRepository {
     {
         sqlx::query_as::<_, WorkflowDefinition>(
             "INSERT INTO workflow_definition
-             (ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-             RETURNING id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated"
+             (ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             RETURNING id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, created, updated"
         )
         .bind(&input.r#ref)
         .bind(input.pack)
@@ -155,7 +151,6 @@ impl Create for WorkflowDefinitionRepository {
         .bind(&input.out_schema)
         .bind(&input.definition)
         .bind(&input.tags)
-        .bind(input.enabled)
         .fetch_one(executor)
         .await
         .map_err(Into::into)
@@ -219,20 +214,12 @@ impl Update for WorkflowDefinitionRepository {
             query.push("tags = ").push_bind(tags);
             has_updates = true;
         }
-        if let Some(enabled) = input.enabled {
-            if has_updates {
-                query.push(", ");
-            }
-            query.push("enabled = ").push_bind(enabled);
-            has_updates = true;
-        }
-
         if !has_updates {
             return Self::get_by_id(executor, id).await;
         }
 
         query.push(", updated = NOW() WHERE id = ").push_bind(id);
-        query.push(" RETURNING id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated");
+        query.push(" RETURNING id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, created, updated");
 
         query
             .build_query_as::<WorkflowDefinition>()
@@ -269,7 +256,7 @@ impl WorkflowDefinitionRepository {
     where
         E: Executor<'e, Database = Postgres> + Copy + 'e,
     {
-        let select_cols = "id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated";
+        let select_cols = "id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, created, updated";
 
         let mut qb: QueryBuilder<'_, Postgres> =
             QueryBuilder::new(format!("SELECT {select_cols} FROM workflow_definition"));
@@ -300,9 +287,6 @@ impl WorkflowDefinitionRepository {
         }
         if let Some(ref pack_ref) = filters.pack_ref {
             push_condition!("pack_ref = ", pack_ref.clone());
-        }
-        if let Some(enabled) = filters.enabled {
-            push_condition!("enabled = ", enabled);
         }
         if let Some(ref tags) = filters.tags {
             if !tags.is_empty() {
@@ -359,7 +343,7 @@ impl WorkflowDefinitionRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, WorkflowDefinition>(
-            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated
+            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, created, updated
              FROM workflow_definition
              WHERE pack = $1
              ORDER BY label"
@@ -379,7 +363,7 @@ impl WorkflowDefinitionRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, WorkflowDefinition>(
-            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated
+            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, created, updated
              FROM workflow_definition
              WHERE pack_ref = $1
              ORDER BY label"
@@ -403,29 +387,13 @@ impl WorkflowDefinitionRepository {
         Ok(result.0)
     }
 
-    /// Find all enabled workflows
-    pub async fn find_enabled<'e, E>(executor: E) -> Result<Vec<WorkflowDefinition>>
-    where
-        E: Executor<'e, Database = Postgres> + 'e,
-    {
-        sqlx::query_as::<_, WorkflowDefinition>(
-            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated
-             FROM workflow_definition
-             WHERE enabled = true
-             ORDER BY label"
-        )
-        .fetch_all(executor)
-        .await
-        .map_err(Into::into)
-    }
-
     /// Find workflows by tag
     pub async fn find_by_tag<'e, E>(executor: E, tag: &str) -> Result<Vec<WorkflowDefinition>>
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, WorkflowDefinition>(
-            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, enabled, created, updated
+            "SELECT id, ref, pack, pack_ref, label, description, version, param_schema, out_schema, definition, tags, created, updated
              FROM workflow_definition
              WHERE $1 = ANY(tags)
              ORDER BY label"

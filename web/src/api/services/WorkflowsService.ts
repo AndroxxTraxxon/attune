@@ -57,7 +57,6 @@ export class WorkflowsService {
         page,
         pageSize,
         tags,
-        enabled,
         search,
         packRef,
     }: {
@@ -74,10 +73,6 @@ export class WorkflowsService {
          */
         tags?: string | null,
         /**
-         * Filter by enabled status
-         */
-        enabled?: boolean | null,
-        /**
          * Search term for label/description (case-insensitive)
          */
         search?: string | null,
@@ -93,7 +88,6 @@ export class WorkflowsService {
                 'page': page,
                 'page_size': pageSize,
                 'tags': tags,
-                'enabled': enabled,
                 'search': search,
                 'pack_ref': packRef,
             },
@@ -125,10 +119,6 @@ export class WorkflowsService {
              * Workflow description
              */
             description?: string | null;
-            /**
-             * Whether the workflow is enabled
-             */
-            enabled: boolean;
             /**
              * Workflow ID
              */
@@ -217,10 +207,6 @@ export class WorkflowsService {
              */
             description?: string | null;
             /**
-             * Whether the workflow is enabled
-             */
-            enabled: boolean;
-            /**
              * Workflow ID
              */
             id: number;
@@ -308,10 +294,6 @@ export class WorkflowsService {
              * Workflow description
              */
             description?: string | null;
-            /**
-             * Whether the workflow is enabled
-             */
-            enabled: boolean;
             /**
              * Workflow ID
              */

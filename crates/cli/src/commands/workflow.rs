@@ -86,9 +86,6 @@ struct ActionYaml {
     #[serde(default)]
     tags: Option<Vec<String>>,
 
-    /// Whether the action is enabled
-    #[serde(default)]
-    enabled: Option<bool>,
 }
 
 // ── API DTOs ────────────────────────────────────────────────────────────
@@ -109,8 +106,6 @@ struct SaveWorkflowFileRequest {
     out_schema: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tags: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    enabled: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -127,7 +122,6 @@ struct WorkflowResponse {
     out_schema: Option<serde_json::Value>,
     definition: serde_json::Value,
     tags: Vec<String>,
-    enabled: bool,
     created: String,
     updated: String,
 }
@@ -142,7 +136,6 @@ struct WorkflowSummary {
     description: Option<String>,
     version: String,
     tags: Vec<String>,
-    enabled: bool,
     created: String,
     updated: String,
 }
@@ -281,7 +274,6 @@ async fn handle_upload(
         param_schema: action.parameters.clone(),
         out_schema: action.output.clone(),
         tags: action.tags.clone(),
-        enabled: action.enabled,
     };
 
     // ── 6. Print progress ───────────────────────────────────────────────
@@ -357,7 +349,6 @@ async fn handle_upload(
                         response.tags.join(", ")
                     },
                 ),
-                ("Enabled", output::format_bool(response.enabled)),
             ]);
         }
     }
@@ -414,7 +405,6 @@ async fn handle_list(
                         "Pack",
                         "Label",
                         "Version",
-                        "Enabled",
                         "Tags",
                     ],
                 );
@@ -426,7 +416,6 @@ async fn handle_list(
                         wf.pack_ref.clone(),
                         output::truncate(&wf.label, 30),
                         wf.version.clone(),
-                        output::format_bool(wf.enabled),
                         if wf.tags.is_empty() {
                             "-".to_string()
                         } else {
@@ -478,7 +467,6 @@ async fn handle_show(
                         .unwrap_or_else(|| "-".to_string()),
                 ),
                 ("Version", workflow.version.clone()),
-                ("Enabled", output::format_bool(workflow.enabled)),
                 (
                     "Tags",
                     if workflow.tags.is_empty() {

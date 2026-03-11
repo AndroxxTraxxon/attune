@@ -551,7 +551,6 @@ pub async fn create_test_workflow(
             ]
         }),
         tags: vec!["test".to_string()],
-        enabled: true,
     };
 
     Ok(WorkflowDefinitionRepository::create(pool, input).await?)

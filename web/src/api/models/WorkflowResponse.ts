@@ -19,10 +19,6 @@ export type WorkflowResponse = {
      */
     description?: string | null;
     /**
-     * Whether the workflow is enabled
-     */
-    enabled: boolean;
-    /**
      * Workflow ID
      */
     id: number;
@@ -63,4 +59,3 @@ export type WorkflowResponse = {
      */
     version: string;
 };
-

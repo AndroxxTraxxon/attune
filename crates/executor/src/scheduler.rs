@@ -286,21 +286,6 @@ impl ExecutionScheduler {
                 )
             })?;
 
-        if !workflow_def.enabled {
-            warn!(
-                "Workflow '{}' is disabled, failing execution {}",
-                workflow_def.r#ref, execution.id
-            );
-            let mut fail = execution.clone();
-            fail.status = ExecutionStatus::Failed;
-            fail.result = Some(serde_json::json!({
-                "error": format!("Workflow '{}' is disabled", workflow_def.r#ref),
-                "succeeded": false,
-            }));
-            ExecutionRepository::update(pool, fail.id, fail.into()).await?;
-            return Ok(());
-        }
-
         // Parse workflow definition JSON into the strongly-typed struct
         let definition: WorkflowDefinition =
             serde_json::from_value(workflow_def.definition.clone()).map_err(|e| {
@@ -900,35 +885,61 @@ impl ExecutionScheduler {
             return Ok(());
         }
 
-        // Cancelled workflow: don't dispatch new tasks, but check whether all
-        // running children have now finished.  When none remain, finalize the
-        // parent execution as Cancelled so it doesn't stay stuck in "Canceling".
-        if workflow_execution.status == ExecutionStatus::Cancelled {
-            let running = Self::count_running_workflow_children(
-                pool,
-                workflow_execution_id,
-                &workflow_execution.completed_tasks,
-                &workflow_execution.failed_tasks,
-            )
-            .await?;
-
-            if running == 0 {
-                info!(
-                    "Cancelled workflow_execution {} has no more running children, \
-                     finalizing parent execution {} as Cancelled",
-                    workflow_execution_id, workflow_execution.execution
-                );
-                Self::finalize_cancelled_workflow(
-                    pool,
+        let parent_execution = ExecutionRepository::find_by_id(pool, workflow_execution.execution)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Parent execution {} not found for workflow_execution {}",
                     workflow_execution.execution,
+                    workflow_execution_id
+                )
+            })?;
+
+        // Cancellation must be a hard stop for workflow orchestration. Once
+        // either the workflow record, the parent execution, or the completed
+        // child itself is in a cancellation state, do not evaluate transitions,
+        // release more with_items siblings, or dispatch any successor tasks.
+        if Self::should_halt_workflow_advancement(
+            workflow_execution.status,
+            parent_execution.status,
+            execution.status,
+        ) {
+            if workflow_execution.status == ExecutionStatus::Cancelled {
+                let running = Self::count_running_workflow_children(
+                    pool,
                     workflow_execution_id,
+                    &workflow_execution.completed_tasks,
+                    &workflow_execution.failed_tasks,
                 )
                 .await?;
+
+                if running == 0 {
+                    info!(
+                        "Cancelled workflow_execution {} has no more running children, \
+                         finalizing parent execution {} as Cancelled",
+                        workflow_execution_id, workflow_execution.execution
+                    );
+                    Self::finalize_cancelled_workflow(
+                        pool,
+                        workflow_execution.execution,
+                        workflow_execution_id,
+                    )
+                    .await?;
+                } else {
+                    debug!(
+                        "Workflow_execution {} is cancelling/cancelled with {} running children, \
+                         skipping advancement",
+                        workflow_execution_id, running
+                    );
+                }
             } else {
                 debug!(
-                    "Cancelled workflow_execution {} still has {} running children, \
-                     waiting for them to finish",
-                    workflow_execution_id, running
+                    "Workflow_execution {} advancement halted due to cancellation state \
+                     (workflow: {:?}, parent: {:?}, child: {:?})",
+                    workflow_execution_id,
+                    workflow_execution.status,
+                    parent_execution.status,
+                    execution.status
                 );
             }
 
@@ -1115,17 +1126,6 @@ impl ExecutionScheduler {
                 failed_tasks.push(task_name.clone());
             }
         }
-
-        // Load the parent execution for context
-        let parent_execution = ExecutionRepository::find_by_id(pool, workflow_execution.execution)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Parent execution {} not found for workflow_execution {}",
-                    workflow_execution.execution,
-                    workflow_execution_id
-                )
-            })?;
 
         // -----------------------------------------------------------------
         // Rebuild the WorkflowContext from persisted state + completed task
@@ -1412,6 +1412,23 @@ impl ExecutionScheduler {
             .count();
 
         Ok(count)
+    }
+
+    fn should_halt_workflow_advancement(
+        workflow_status: ExecutionStatus,
+        parent_status: ExecutionStatus,
+        child_status: ExecutionStatus,
+    ) -> bool {
+        matches!(
+            workflow_status,
+            ExecutionStatus::Canceling | ExecutionStatus::Cancelled
+        ) || matches!(
+            parent_status,
+            ExecutionStatus::Canceling | ExecutionStatus::Cancelled
+        ) || matches!(
+            child_status,
+            ExecutionStatus::Canceling | ExecutionStatus::Cancelled
+        )
     }
 
     /// Finalize a cancelled workflow by updating the parent `execution` record
@@ -1917,5 +1934,29 @@ mod tests {
         let update: UpdateExecutionInput = execution.into();
         assert_eq!(update.status, Some(ExecutionStatus::Scheduled));
         assert_eq!(update.worker, Some(99));
+    }
+
+    #[test]
+    fn test_workflow_advancement_halts_for_any_cancellation_state() {
+        assert!(ExecutionScheduler::should_halt_workflow_advancement(
+            ExecutionStatus::Running,
+            ExecutionStatus::Canceling,
+            ExecutionStatus::Completed
+        ));
+        assert!(ExecutionScheduler::should_halt_workflow_advancement(
+            ExecutionStatus::Cancelled,
+            ExecutionStatus::Running,
+            ExecutionStatus::Failed
+        ));
+        assert!(ExecutionScheduler::should_halt_workflow_advancement(
+            ExecutionStatus::Running,
+            ExecutionStatus::Running,
+            ExecutionStatus::Cancelled
+        ));
+        assert!(!ExecutionScheduler::should_halt_workflow_advancement(
+            ExecutionStatus::Running,
+            ExecutionStatus::Running,
+            ExecutionStatus::Failed
+        ));
     }
 }

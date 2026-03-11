@@ -49,9 +49,6 @@ pub struct SaveWorkflowFileRequest {
     #[schema(example = json!(["deployment", "automation"]))]
     pub tags: Option<Vec<String>>,
 
-    /// Whether the workflow is enabled
-    #[schema(example = true)]
-    pub enabled: Option<bool>,
 }
 
 /// Request DTO for creating a new workflow
@@ -97,9 +94,6 @@ pub struct CreateWorkflowRequest {
     #[schema(example = json!(["incident", "slack", "approval"]))]
     pub tags: Option<Vec<String>>,
 
-    /// Whether the workflow is enabled
-    #[schema(example = true)]
-    pub enabled: Option<bool>,
 }
 
 /// Request DTO for updating a workflow
@@ -135,9 +129,6 @@ pub struct UpdateWorkflowRequest {
     #[schema(example = json!(["incident", "slack", "approval", "automation"]))]
     pub tags: Option<Vec<String>>,
 
-    /// Whether the workflow is enabled
-    #[schema(example = true)]
-    pub enabled: Option<bool>,
 }
 
 /// Response DTO for workflow information
@@ -187,10 +178,6 @@ pub struct WorkflowResponse {
     #[schema(example = json!(["incident", "slack", "approval"]))]
     pub tags: Vec<String>,
 
-    /// Whether the workflow is enabled
-    #[schema(example = true)]
-    pub enabled: bool,
-
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
@@ -231,10 +218,6 @@ pub struct WorkflowSummary {
     #[schema(example = json!(["incident", "slack", "approval"]))]
     pub tags: Vec<String>,
 
-    /// Whether the workflow is enabled
-    #[schema(example = true)]
-    pub enabled: bool,
-
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
@@ -259,7 +242,6 @@ impl From<attune_common::models::workflow::WorkflowDefinition> for WorkflowRespo
             out_schema: workflow.out_schema,
             definition: workflow.definition,
             tags: workflow.tags,
-            enabled: workflow.enabled,
             created: workflow.created,
             updated: workflow.updated,
         }
@@ -277,7 +259,6 @@ impl From<attune_common::models::workflow::WorkflowDefinition> for WorkflowSumma
             description: workflow.description,
             version: workflow.version,
             tags: workflow.tags,
-            enabled: workflow.enabled,
             created: workflow.created,
             updated: workflow.updated,
         }
@@ -290,10 +271,6 @@ pub struct WorkflowSearchParams {
     /// Filter by tag(s) - comma-separated list
     #[param(example = "incident,approval")]
     pub tags: Option<String>,
-
-    /// Filter by enabled status
-    #[param(example = true)]
-    pub enabled: Option<bool>,
 
     /// Search term for label/description (case-insensitive)
     #[param(example = "incident")]
@@ -320,7 +297,6 @@ mod tests {
             out_schema: None,
             definition: serde_json::json!({"tasks": []}),
             tags: None,
-            enabled: None,
         };
 
         assert!(req.validate().is_err());
@@ -338,7 +314,6 @@ mod tests {
             out_schema: None,
             definition: serde_json::json!({"tasks": []}),
             tags: Some(vec!["test".to_string()]),
-            enabled: Some(true),
         };
 
         assert!(req.validate().is_ok());
@@ -354,7 +329,6 @@ mod tests {
             out_schema: None,
             definition: None,
             tags: None,
-            enabled: None,
         };
 
         // Should be valid even with all None values
@@ -365,7 +339,6 @@ mod tests {
     fn test_workflow_search_params() {
         let params = WorkflowSearchParams {
             tags: Some("incident,approval".to_string()),
-            enabled: Some(true),
             search: Some("response".to_string()),
             pack_ref: Some("core".to_string()),
         };

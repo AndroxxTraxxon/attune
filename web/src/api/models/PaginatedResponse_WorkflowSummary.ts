@@ -20,10 +20,6 @@ export type PaginatedResponse_WorkflowSummary = {
          */
         description?: string | null;
         /**
-         * Whether the workflow is enabled
-         */
-        enabled: boolean;
-        /**
          * Workflow ID
          */
         id: number;
@@ -57,4 +53,3 @@ export type PaginatedResponse_WorkflowSummary = {
      */
     pagination: PaginationMeta;
 };
-

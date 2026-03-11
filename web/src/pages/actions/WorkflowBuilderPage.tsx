@@ -15,6 +15,7 @@ import {
   ExternalLink,
   Copy,
   Check,
+  PanelLeftClose,
 } from "lucide-react";
 import SearchableSelect from "@/components/common/SearchableSelect";
 import yaml from "js-yaml";
@@ -40,7 +41,6 @@ import type {
   WorkflowBuilderState,
   PaletteAction,
   TransitionPreset,
-  CancellationPolicy,
 } from "@/types/workflow";
 import {
   generateUniqueTaskName,
@@ -54,7 +54,6 @@ import {
   removeTaskFromTransitions,
   renameTaskInTransitions,
   findStartingTaskIds,
-  CANCELLATION_POLICY_LABELS,
 } from "@/types/workflow";
 
 const INITIAL_STATE: WorkflowBuilderState = {
@@ -68,9 +67,12 @@ const INITIAL_STATE: WorkflowBuilderState = {
   vars: {},
   tasks: [],
   tags: [],
-  enabled: true,
   cancellationPolicy: "allow_finish",
 };
+
+const ACTIONS_SIDEBAR_WIDTH = 256;
+const WORKFLOW_OPTIONS_DEFAULT_WIDTH = 360;
+const WORKFLOW_OPTIONS_STORAGE_KEY = "workflow-builder-options-width";
 
 export default function WorkflowBuilderPage() {
   const navigate = useNavigate();
@@ -104,10 +106,19 @@ export default function WorkflowBuilderPage() {
   const [initialized, setInitialized] = useState(false);
   const [showYamlPreview, setShowYamlPreview] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"actions" | "inputs">("actions");
+  const [workflowOptionsWidth, setWorkflowOptionsWidth] = useState<number>(() => {
+    if (typeof window === "undefined") {
+      return WORKFLOW_OPTIONS_DEFAULT_WIDTH;
+    }
+    const saved = window.localStorage.getItem(WORKFLOW_OPTIONS_STORAGE_KEY);
+    const parsed = saved ? Number(saved) : NaN;
+    return Number.isFinite(parsed) ? parsed : WORKFLOW_OPTIONS_DEFAULT_WIDTH;
+  });
   const [highlightedTransition, setHighlightedTransition] = useState<{
     taskId: string;
     transitionIndex: number;
   } | null>(null);
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
 
   // Start-node warning toast state
   const [startWarningVisible, setStartWarningVisible] = useState(false);
@@ -260,6 +271,71 @@ export default function WorkflowBuilderPage() {
       };
     return null;
   }, [state.tasks, startingTaskIds]);
+
+  const getMaxWorkflowOptionsWidth = useCallback(() => {
+    if (typeof window === "undefined") {
+      return WORKFLOW_OPTIONS_DEFAULT_WIDTH;
+    }
+    return Math.max(
+      ACTIONS_SIDEBAR_WIDTH,
+      Math.floor(window.innerWidth * 0.5),
+    );
+  }, []);
+
+  const clampWorkflowOptionsWidth = useCallback(
+    (width: number) =>
+      Math.min(
+        Math.max(Math.round(width), ACTIONS_SIDEBAR_WIDTH),
+        getMaxWorkflowOptionsWidth(),
+      ),
+    [getMaxWorkflowOptionsWidth],
+  );
+
+  useEffect(() => {
+    setWorkflowOptionsWidth((prev) => clampWorkflowOptionsWidth(prev));
+  }, [clampWorkflowOptionsWidth]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setWorkflowOptionsWidth((prev) => clampWorkflowOptionsWidth(prev));
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [clampWorkflowOptionsWidth]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      WORKFLOW_OPTIONS_STORAGE_KEY,
+      String(workflowOptionsWidth),
+    );
+  }, [workflowOptionsWidth]);
+
+  useEffect(() => {
+    if (!isResizingSidebar) return;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      setWorkflowOptionsWidth(clampWorkflowOptionsWidth(event.clientX));
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingSidebar(false);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizingSidebar, clampWorkflowOptionsWidth]);
 
   // Render-phase state adjustment: detect warning key changes for immediate
   // show/hide without refs or synchronous setState inside effects.
@@ -475,7 +551,6 @@ export default function WorkflowBuilderPage() {
             out_schema:
               Object.keys(state.output).length > 0 ? state.output : undefined,
             tags: state.tags.length > 0 ? state.tags : undefined,
-            enabled: state.enabled,
           },
         });
       } else {
@@ -493,7 +568,6 @@ export default function WorkflowBuilderPage() {
           out_schema:
             Object.keys(state.output).length > 0 ? state.output : undefined,
           tags: state.tags.length > 0 ? state.tags : undefined,
-          enabled: state.enabled,
         };
         try {
           await saveWorkflowFile.mutateAsync(fileData);
@@ -635,6 +709,8 @@ export default function WorkflowBuilderPage() {
 
   const isSaving = saveWorkflowFile.isPending || updateWorkflowFile.isPending;
   const isExecuting = requestExecution.isPending;
+  const sidebarWidth =
+    sidebarTab === "inputs" ? workflowOptionsWidth : ACTIONS_SIDEBAR_WIDTH;
 
   if (isEditing && workflowLoading) {
     return (
@@ -675,7 +751,7 @@ export default function WorkflowBuilderPage() {
                 disabled={isEditing}
               />
 
-              <span className="text-gray-400 text-lg font-light">/</span>
+                <span className="text-gray-400 text-lg font-light">/</span>
 
               {/* Workflow name */}
               <input
@@ -692,24 +768,9 @@ export default function WorkflowBuilderPage() {
               />
 
               <span className="text-gray-400 text-lg font-light">—</span>
-
-              {/* Label */}
-              <input
-                type="text"
-                value={state.label}
-                onChange={(e) => updateMetadata({ label: e.target.value })}
-                className="px-2 py-1.5 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 flex-1 min-w-[160px] max-w-[300px]"
-                placeholder="Workflow Label"
-              />
-
-              {/* Version */}
-              <input
-                type="text"
-                value={state.version}
-                onChange={(e) => updateMetadata({ version: e.target.value })}
-                className="px-2 py-1.5 border border-gray-300 rounded text-sm font-mono focus:ring-2 focus:ring-blue-500 focus:border-blue-500 w-20"
-                placeholder="1.0.0"
-              />
+              <span className="truncate text-sm text-gray-600">
+                {state.label || "Untitled workflow"}
+              </span>
             </div>
           </div>
 
@@ -819,59 +880,6 @@ export default function WorkflowBuilderPage() {
           </div>
         </div>
 
-        {/* Description row (collapsible) */}
-        <div className="mt-2 flex items-center gap-2">
-          <input
-            type="text"
-            value={state.description}
-            onChange={(e) => updateMetadata({ description: e.target.value })}
-            className="flex-1 px-2 py-1 border border-gray-200 rounded text-xs text-gray-600 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-            placeholder="Workflow description (optional)"
-          />
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            <input
-              type="text"
-              value={state.tags.join(", ")}
-              onChange={(e) =>
-                updateMetadata({
-                  tags: e.target.value
-                    .split(",")
-                    .map((t) => t.trim())
-                    .filter(Boolean),
-                })
-              }
-              className="px-2 py-1 border border-gray-200 rounded text-xs text-gray-600 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 w-40"
-              placeholder="Tags (comma-sep)"
-            />
-            <label className="flex items-center gap-1 text-xs text-gray-600">
-              <input
-                type="checkbox"
-                checked={state.enabled}
-                onChange={(e) => updateMetadata({ enabled: e.target.checked })}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              Enabled
-            </label>
-            <select
-              value={state.cancellationPolicy}
-              onChange={(e) =>
-                updateMetadata({
-                  cancellationPolicy: e.target.value as CancellationPolicy,
-                })
-              }
-              className="px-2 py-1 border border-gray-200 rounded text-xs text-gray-600 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
-              title="Cancellation policy: controls how running tasks behave when the workflow is cancelled"
-            >
-              {Object.entries(CANCELLATION_POLICY_LABELS).map(
-                ([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ),
-              )}
-            </select>
-          </div>
-        </div>
       </div>
 
       {/* Validation errors panel */}
@@ -987,8 +995,11 @@ export default function WorkflowBuilderPage() {
           </div>
         ) : (
           <>
-            {/* Left sidebar: tabbed Actions / Inputs */}
-            <div className="w-64 border-r border-gray-200 bg-gray-50 flex flex-col h-full overflow-hidden">
+            {/* Left sidebar: tabbed Actions / Workflow Options */}
+            <div
+              className="border-r border-gray-200 bg-gray-50 flex flex-col h-full overflow-hidden relative flex-shrink-0"
+              style={{ width: sidebarWidth }}
+            >
               {/* Tab header */}
               <div className="flex border-b border-gray-200 bg-white flex-shrink-0">
                 <button
@@ -1011,7 +1022,7 @@ export default function WorkflowBuilderPage() {
                   }`}
                 >
                   <Settings2 className="w-3.5 h-3.5" />
-                  Inputs
+                  Workflow Options
                   {Object.keys(state.parameters).length > 0 && (
                     <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">
                       {Object.keys(state.parameters).length}
@@ -1029,8 +1040,22 @@ export default function WorkflowBuilderPage() {
                 />
               ) : (
                 <WorkflowInputsPanel
+                  label={state.label}
+                  version={state.version}
+                  description={state.description}
+                  tags={state.tags}
+                  cancellationPolicy={state.cancellationPolicy}
                   parameters={state.parameters}
                   output={state.output}
+                  onLabelChange={(label) => updateMetadata({ label })}
+                  onVersionChange={(version) => updateMetadata({ version })}
+                  onDescriptionChange={(description) =>
+                    updateMetadata({ description })
+                  }
+                  onTagsChange={(tags) => updateMetadata({ tags })}
+                  onCancellationPolicyChange={(cancellationPolicy) =>
+                    updateMetadata({ cancellationPolicy })
+                  }
                   onParametersChange={(parameters) =>
                     setState((prev) => ({ ...prev, parameters }))
                   }
@@ -1038,6 +1063,30 @@ export default function WorkflowBuilderPage() {
                     setState((prev) => ({ ...prev, output }))
                   }
                 />
+              )}
+
+              {sidebarTab === "inputs" && (
+                <div
+                  className={`absolute top-0 right-0 h-full w-2 translate-x-1/2 cursor-col-resize group ${
+                    isResizingSidebar ? "z-30" : "z-10"
+                  }`}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    setIsResizingSidebar(true);
+                  }}
+                  title="Resize workflow options panel"
+                >
+                  <div
+                    className={`mx-auto h-full w-px transition-colors ${
+                      isResizingSidebar
+                        ? "bg-blue-500"
+                        : "bg-transparent group-hover:bg-blue-300"
+                    }`}
+                  />
+                  <div className="absolute top-3 right-0 -translate-y-1/2 translate-x-1/2 rounded-full border border-gray-200 bg-white p-1 text-gray-300 shadow-sm group-hover:text-blue-500">
+                    <PanelLeftClose className="w-3 h-3" />
+                  </div>
+                </div>
               )}
             </div>
 

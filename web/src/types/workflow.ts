@@ -224,8 +224,6 @@ export interface WorkflowBuilderState {
   tasks: WorkflowTask[];
   /** Tags */
   tags: string[];
-  /** Whether the workflow is enabled */
-  enabled: boolean;
   /** Cancellation policy (default: allow_finish) */
   cancellationPolicy: CancellationPolicy;
 }
@@ -285,7 +283,6 @@ export interface ActionYamlDefinition {
   ref: string;
   label: string;
   description?: string;
-  enabled: boolean;
   workflow_file: string;
   parameters?: Record<string, unknown>;
   output?: Record<string, unknown>;
@@ -358,8 +355,6 @@ export interface SaveWorkflowFileRequest {
   out_schema?: Record<string, unknown>;
   /** Tags */
   tags?: string[];
-  /** Whether the workflow is enabled */
-  enabled?: boolean;
 }
 
 /** An action summary used in the action palette */
@@ -581,7 +576,6 @@ export function builderStateToActionYaml(
   const action: ActionYamlDefinition = {
     ref: `${state.packRef}.${state.name}`,
     label: state.label,
-    enabled: state.enabled,
     workflow_file: `workflows/${state.name}.workflow.yaml`,
   };
 
@@ -751,7 +745,6 @@ export function definitionToBuilderState(
     vars: definition.vars || {},
     tasks,
     tags: definition.tags || [],
-    enabled: true,
     cancellationPolicy: definition.cancellation_policy || "allow_finish",
   };
 }

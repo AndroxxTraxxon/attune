@@ -46,8 +46,7 @@ async fn test_create_workflow_success() {
                         }
                     ]
                 },
-                "tags": ["test", "automation"],
-                "enabled": true
+                "tags": ["test", "automation"]
             }),
             ctx.token(),
         )
@@ -60,7 +59,6 @@ async fn test_create_workflow_success() {
     assert_eq!(body["data"]["ref"], "test-pack.test_workflow");
     assert_eq!(body["data"]["label"], "Test Workflow");
     assert_eq!(body["data"]["version"], "1.0.0");
-    assert_eq!(body["data"]["enabled"], true);
     assert!(body["data"]["tags"].as_array().unwrap().len() == 2);
 }
 
@@ -85,7 +83,6 @@ async fn test_create_workflow_duplicate_ref() {
         out_schema: None,
         definition: json!({"tasks": []}),
         tags: vec![],
-        enabled: true,
     };
     WorkflowDefinitionRepository::create(&ctx.pool, input)
         .await
@@ -152,7 +149,6 @@ async fn test_get_workflow_by_ref() {
         out_schema: None,
         definition: json!({"tasks": [{"name": "task1"}]}),
         tags: vec!["test".to_string()],
-        enabled: true,
     };
     WorkflowDefinitionRepository::create(&ctx.pool, input)
         .await
@@ -206,7 +202,6 @@ async fn test_list_workflows() {
             out_schema: None,
             definition: json!({"tasks": []}),
             tags: vec!["test".to_string()],
-            enabled: i % 2 == 1, // Odd ones enabled
         };
         WorkflowDefinitionRepository::create(&ctx.pool, input)
             .await
@@ -256,7 +251,6 @@ async fn test_list_workflows_by_pack() {
             out_schema: None,
             definition: json!({"tasks": []}),
             tags: vec![],
-            enabled: true,
         };
         WorkflowDefinitionRepository::create(&ctx.pool, input)
             .await
@@ -275,7 +269,6 @@ async fn test_list_workflows_by_pack() {
         out_schema: None,
         definition: json!({"tasks": []}),
         tags: vec![],
-        enabled: true,
     };
     WorkflowDefinitionRepository::create(&ctx.pool, input)
         .await
@@ -308,14 +301,14 @@ async fn test_list_workflows_with_filters() {
     let pack_name = unique_pack_name();
     let pack = create_test_pack(&ctx.pool, &pack_name).await.unwrap();
 
-    // Create workflows with different tags and enabled status
+    // Create workflows with different tags
     let workflows = vec![
-        ("workflow1", vec!["incident", "approval"], true),
-        ("workflow2", vec!["incident"], false),
-        ("workflow3", vec!["automation"], true),
+        ("workflow1", vec!["incident", "approval"]),
+        ("workflow2", vec!["incident"]),
+        ("workflow3", vec!["automation"]),
     ];
 
-    for (ref_name, tags, enabled) in workflows {
+    for (ref_name, tags) in workflows {
         let input = CreateWorkflowDefinitionInput {
             r#ref: format!("test-pack.{}", ref_name),
             pack: pack.id,
@@ -327,23 +320,11 @@ async fn test_list_workflows_with_filters() {
             out_schema: None,
             definition: json!({"tasks": []}),
             tags: tags.iter().map(|s| s.to_string()).collect(),
-            enabled,
         };
         WorkflowDefinitionRepository::create(&ctx.pool, input)
             .await
             .unwrap();
     }
-
-    // Filter by enabled (and pack_ref for isolation)
-    let response = ctx
-        .get(
-            &format!("/api/v1/workflows?enabled=true&pack_ref={}", pack_name),
-            ctx.token(),
-        )
-        .await
-        .unwrap();
-    let body: Value = response.json().await.unwrap();
-    assert_eq!(body["data"].as_array().unwrap().len(), 2);
 
     // Filter by tag (and pack_ref for isolation)
     let response = ctx
@@ -387,7 +368,6 @@ async fn test_update_workflow() {
         out_schema: None,
         definition: json!({"tasks": []}),
         tags: vec!["test".to_string()],
-        enabled: true,
     };
     WorkflowDefinitionRepository::create(&ctx.pool, input)
         .await
@@ -400,8 +380,7 @@ async fn test_update_workflow() {
             json!({
                 "label": "Updated Label",
                 "description": "Updated description",
-                "version": "1.1.0",
-                "enabled": false
+                "version": "1.1.0"
             }),
             ctx.token(),
         )
@@ -414,7 +393,6 @@ async fn test_update_workflow() {
     assert_eq!(body["data"]["label"], "Updated Label");
     assert_eq!(body["data"]["description"], "Updated description");
     assert_eq!(body["data"]["version"], "1.1.0");
-    assert_eq!(body["data"]["enabled"], false);
 }
 
 #[tokio::test]
@@ -455,7 +433,6 @@ async fn test_delete_workflow() {
         out_schema: None,
         definition: json!({"tasks": []}),
         tags: vec![],
-        enabled: true,
     };
     WorkflowDefinitionRepository::create(&ctx.pool, input)
         .await

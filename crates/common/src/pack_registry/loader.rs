@@ -1131,7 +1131,6 @@ impl<'a> PackComponentLoader<'a> {
                 out_schema,
                 definition: Some(definition_json),
                 tags: Some(tags),
-                enabled: Some(true),
             };
 
             WorkflowDefinitionRepository::update(self.pool, existing.id, update_input).await?;
@@ -1159,7 +1158,6 @@ impl<'a> PackComponentLoader<'a> {
                 out_schema,
                 definition: definition_json,
                 tags,
-                enabled: true,
             };
 
             let created = WorkflowDefinitionRepository::create(self.pool, create_input).await?;

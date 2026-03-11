@@ -15,10 +15,6 @@ export type WorkflowSummary = {
      */
     description?: string | null;
     /**
-     * Whether the workflow is enabled
-     */
-    enabled: boolean;
-    /**
      * Workflow ID
      */
     id: number;
@@ -47,4 +43,3 @@ export type WorkflowSummary = {
      */
     version: string;
 };
-
