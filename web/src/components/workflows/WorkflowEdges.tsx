@@ -315,7 +315,6 @@ function getSegmentControlPoints(
 function evaluatePathAtT(
   allPoints: { x: number; y: number }[],
   t: number,
-  _selfLoop?: boolean,
 ): { x: number; y: number } {
   if (allPoints.length < 2) {
     return allPoints[0] ?? { x: 0, y: 0 };
@@ -345,7 +344,6 @@ function evaluatePathAtT(
 function projectOntoPath(
   allPoints: { x: number; y: number }[],
   mousePos: { x: number; y: number },
-  _selfLoop?: boolean,
 ): number {
   if (allPoints.length < 2) return 0;
 
@@ -747,9 +745,9 @@ function WorkflowEdgesInner({
 
       if (ds.type === "label" && ds.pathPoints) {
         // Project mouse onto path and snap the label to it
-        const t = projectOntoPath(ds.pathPoints, svgPos, ds.isSelfLoop);
+        const t = projectOntoPath(ds.pathPoints, svgPos);
         labelDragTRef.current = t;
-        const onCurve = evaluatePathAtT(ds.pathPoints, t, ds.isSelfLoop);
+        const onCurve = evaluatePathAtT(ds.pathPoints, t);
         setDragPos(onCurve);
         dragPosRef.current = onCurve;
       } else {
@@ -867,7 +865,7 @@ function WorkflowEdgesInner({
       const svgPos = clientToSvg(e.clientX, e.clientY);
 
       // Initialise t from current label position
-      const initialT = projectOntoPath(allPoints, currentLabelPos, selfLoop);
+      const initialT = projectOntoPath(allPoints, currentLabelPos);
       labelDragTRef.current = initialT;
 
       dragStateRef.current = {
@@ -1110,7 +1108,7 @@ function WorkflowEdgesInner({
           } else {
             const t =
               edge.labelPosition ?? (usesDefaultSelfLoopRoute ? 0.62 : 0.5);
-            labelPos = evaluatePathAtT(allPoints, t, usesDefaultSelfLoopRoute);
+            labelPos = evaluatePathAtT(allPoints, t);
           }
           const arrowDirectionPoint = getArrowDirectionPoint(allPoints);
           const arrowHead = buildArrowHeadPath(arrowDirectionPoint, end);
