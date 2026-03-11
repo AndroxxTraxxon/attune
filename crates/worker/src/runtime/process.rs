@@ -462,12 +462,12 @@ impl ProcessRuntime {
                 _ => serde_json::to_string(value)?,
             };
             let escaped = bash_single_quote_escape(&value_str);
-            script.push_str(&format!(
-                "export PARAM_{}='{}'\n",
-                key.to_uppercase(),
-                escaped
-            ));
-            script.push_str(&format!("export {}='{}'\n", key, escaped));
+            // Define shell variables for the inline action without exporting
+            // them into the process environment. This keeps secrets available
+            // to the current script while preventing leakage via `printenv`
+            // or to child processes spawned by the action.
+            script.push_str(&format!("PARAM_{}='{}'\n", key.to_uppercase(), escaped));
+            script.push_str(&format!("{}='{}'\n", key, escaped));
         }
         script.push('\n');
         script.push_str("# Action code\n");
