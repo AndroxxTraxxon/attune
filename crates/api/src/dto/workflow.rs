@@ -48,7 +48,6 @@ pub struct SaveWorkflowFileRequest {
     /// Tags for categorization
     #[schema(example = json!(["deployment", "automation"]))]
     pub tags: Option<Vec<String>>,
-
 }
 
 /// Request DTO for creating a new workflow
@@ -93,7 +92,6 @@ pub struct CreateWorkflowRequest {
     /// Tags for categorization and search
     #[schema(example = json!(["incident", "slack", "approval"]))]
     pub tags: Option<Vec<String>>,
-
 }
 
 /// Request DTO for updating a workflow
@@ -128,7 +126,6 @@ pub struct UpdateWorkflowRequest {
     /// Tags
     #[schema(example = json!(["incident", "slack", "approval", "automation"]))]
     pub tags: Option<Vec<String>>,
-
 }
 
 /// Response DTO for workflow information

@@ -85,7 +85,6 @@ struct ActionYaml {
     /// Tags
     #[serde(default)]
     tags: Option<Vec<String>>,
-
 }
 
 // ── API DTOs ────────────────────────────────────────────────────────────
@@ -399,14 +398,7 @@ async fn handle_list(
                 let mut table = output::create_table();
                 output::add_header(
                     &mut table,
-                    vec![
-                        "ID",
-                        "Reference",
-                        "Pack",
-                        "Label",
-                        "Version",
-                        "Tags",
-                    ],
+                    vec!["ID", "Reference", "Pack", "Label", "Version", "Tags"],
                 );
 
                 for wf in &workflows {
