@@ -22,6 +22,16 @@ interface ExecutionsQueryParams {
   topLevelOnly?: boolean;
 }
 
+function isExecutionActive(status: string | undefined): boolean {
+  return (
+    status === "requested" ||
+    status === "scheduling" ||
+    status === "scheduled" ||
+    status === "running" ||
+    status === "canceling"
+  );
+}
+
 export function useExecutions(params?: ExecutionsQueryParams) {
   // Check if any filters are applied
   const hasFilters =
@@ -67,7 +77,9 @@ export function useExecution(id: number) {
       return response;
     },
     enabled: !!id,
-    staleTime: 30000, // 30 seconds - SSE handles real-time updates
+    staleTime: 30000,
+    refetchInterval: (query) =>
+      isExecutionActive(query.state.data?.data?.status) ? 3000 : false,
   });
 }
 
@@ -180,11 +192,7 @@ export function useChildExecutions(parentId: number | undefined) {
       const data = query.state.data;
       if (!data) return false;
       const hasActive = data.data.some(
-        (e) =>
-          e.status === "requested" ||
-          e.status === "scheduling" ||
-          e.status === "scheduled" ||
-          e.status === "running",
+        (e) => isExecutionActive(e.status),
       );
       return hasActive ? 5000 : false;
     },

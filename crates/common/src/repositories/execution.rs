@@ -54,6 +54,7 @@ pub struct ExecutionWithRefs {
     pub parent: Option<Id>,
     pub enforcement: Option<Id>,
     pub executor: Option<Id>,
+    pub worker: Option<Id>,
     pub status: ExecutionStatus,
     pub result: Option<JsonDict>,
     pub started_at: Option<DateTime<Utc>>,
@@ -73,7 +74,7 @@ pub struct ExecutionWithRefs {
 /// are NOT in the Rust struct, so `SELECT *` must never be used.
 pub const SELECT_COLUMNS: &str = "\
     id, action, action_ref, config, env_vars, parent, enforcement, \
-    executor, status, result, started_at, workflow_task, created, updated";
+    executor, worker, status, result, started_at, workflow_task, created, updated";
 
 pub struct ExecutionRepository;
 
@@ -93,6 +94,7 @@ pub struct CreateExecutionInput {
     pub parent: Option<Id>,
     pub enforcement: Option<Id>,
     pub executor: Option<Id>,
+    pub worker: Option<Id>,
     pub status: ExecutionStatus,
     pub result: Option<JsonDict>,
     pub workflow_task: Option<WorkflowTaskMetadata>,
@@ -103,6 +105,7 @@ pub struct UpdateExecutionInput {
     pub status: Option<ExecutionStatus>,
     pub result: Option<JsonDict>,
     pub executor: Option<Id>,
+    pub worker: Option<Id>,
     pub started_at: Option<DateTime<Utc>>,
     pub workflow_task: Option<WorkflowTaskMetadata>,
 }
@@ -113,6 +116,7 @@ impl From<Execution> for UpdateExecutionInput {
             status: Some(execution.status),
             result: execution.result,
             executor: execution.executor,
+            worker: execution.worker,
             started_at: execution.started_at,
             workflow_task: execution.workflow_task,
         }
@@ -158,8 +162,8 @@ impl Create for ExecutionRepository {
     {
         let sql = format!(
             "INSERT INTO execution \
-             (action, action_ref, config, env_vars, parent, enforcement, executor, status, result, workflow_task) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             (action, action_ref, config, env_vars, parent, enforcement, executor, worker, status, result, workflow_task) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
              RETURNING {SELECT_COLUMNS}"
         );
         sqlx::query_as::<_, Execution>(&sql)
@@ -170,6 +174,7 @@ impl Create for ExecutionRepository {
             .bind(input.parent)
             .bind(input.enforcement)
             .bind(input.executor)
+            .bind(input.worker)
             .bind(input.status)
             .bind(&input.result)
             .bind(sqlx::types::Json(&input.workflow_task))
@@ -206,6 +211,13 @@ impl Update for ExecutionRepository {
                 query.push(", ");
             }
             query.push("executor = ").push_bind(executor_id);
+            has_updates = true;
+        }
+        if let Some(worker_id) = input.worker {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("worker = ").push_bind(worker_id);
             has_updates = true;
         }
         if let Some(started_at) = input.started_at {

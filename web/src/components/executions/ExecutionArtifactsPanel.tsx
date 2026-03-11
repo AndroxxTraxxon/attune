@@ -337,11 +337,16 @@ function TextFileDetail({
 
 interface ProgressDetailProps {
   artifactId: number;
+  isRunning?: boolean;
   onClose: () => void;
 }
 
-function ProgressDetail({ artifactId, onClose }: ProgressDetailProps) {
-  const { data: artifactData, isLoading } = useArtifact(artifactId);
+function ProgressDetail({
+  artifactId,
+  isRunning = false,
+  onClose,
+}: ProgressDetailProps) {
+  const { data: artifactData, isLoading } = useArtifact(artifactId, isRunning);
   const artifact = artifactData?.data;
 
   const progressEntries = useMemo(() => {
@@ -707,6 +712,7 @@ export default function ExecutionArtifactsPanel({
                       <div className="px-3">
                         <ProgressDetail
                           artifactId={artifact.id}
+                          isRunning={isRunning}
                           onClose={() => setExpandedProgressId(null)}
                         />
                       </div>

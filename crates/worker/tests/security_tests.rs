@@ -4,10 +4,9 @@
 //! or command-line arguments, ensuring secure secret passing via stdin.
 
 use attune_common::models::runtime::{
-    InlineExecutionConfig, InterpreterConfig, RuntimeExecutionConfig,
+    InlineExecutionConfig, InlineExecutionStrategy, InterpreterConfig, RuntimeExecutionConfig,
 };
 use attune_worker::runtime::process::ProcessRuntime;
-use attune_worker::runtime::shell::ShellRuntime;
 use attune_worker::runtime::{ExecutionContext, Runtime};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -31,6 +30,34 @@ fn make_python_process_runtime(packs_base_dir: PathBuf) -> ProcessRuntime {
         .join("runtime_envs");
     ProcessRuntime::new(
         "python".to_string(),
+        config,
+        packs_base_dir,
+        runtime_envs_dir,
+    )
+}
+
+fn make_shell_process_runtime(packs_base_dir: PathBuf) -> ProcessRuntime {
+    let config = RuntimeExecutionConfig {
+        interpreter: InterpreterConfig {
+            binary: "/bin/bash".to_string(),
+            args: vec![],
+            file_extension: Some(".sh".to_string()),
+        },
+        inline_execution: InlineExecutionConfig {
+            strategy: InlineExecutionStrategy::TempFile,
+            extension: Some(".sh".to_string()),
+            inject_shell_helpers: true,
+        },
+        environment: None,
+        dependencies: None,
+        env_vars: std::collections::HashMap::new(),
+    };
+    let runtime_envs_dir = packs_base_dir
+        .parent()
+        .unwrap_or(&packs_base_dir)
+        .join("runtime_envs");
+    ProcessRuntime::new(
+        "shell".to_string(),
         config,
         packs_base_dir,
         runtime_envs_dir,
@@ -117,7 +144,8 @@ print(json.dumps(result))
 
 #[tokio::test]
 async fn test_shell_secrets_not_in_environ() {
-    let runtime = ShellRuntime::new();
+    let tmp = TempDir::new().unwrap();
+    let runtime = make_shell_process_runtime(tmp.path().to_path_buf());
 
     let context = ExecutionContext {
         execution_id: 2,
@@ -154,21 +182,21 @@ if printenv | grep -q "SECRET_API_KEY"; then
     exit 1
 fi
 
-# But secrets SHOULD be accessible via get_secret function
-api_key=$(get_secret 'api_key')
-password=$(get_secret 'password')
+# Shell inline execution receives the merged input set as ordinary variables
+api_key="$api_key"
+password="$password"
 
 if [ "$api_key" != "super_secret_key_do_not_expose" ]; then
-    echo "ERROR: Secret not accessible via get_secret"
+    echo "ERROR: Secret not accessible via merged inputs"
     exit 1
 fi
 
 if [ "$password" != "secret_pass_123" ]; then
-    echo "ERROR: Password not accessible via get_secret"
+    echo "ERROR: Password not accessible via merged inputs"
     exit 1
 fi
 
-echo "SECURITY_PASS: Secrets not in environment but accessible via get_secret"
+echo "SECURITY_PASS: Secrets not in inherited environment and accessible via merged inputs"
 "#
             .to_string(),
         ),
@@ -366,7 +394,8 @@ print("ok")
 
 #[tokio::test]
 async fn test_shell_empty_secrets() {
-    let runtime = ShellRuntime::new();
+    let tmp = TempDir::new().unwrap();
+    let runtime = make_shell_process_runtime(tmp.path().to_path_buf());
 
     let context = ExecutionContext {
         execution_id: 6,
@@ -379,12 +408,11 @@ async fn test_shell_empty_secrets() {
         entry_point: "shell".to_string(),
         code: Some(
             r#"
-# get_secret should return empty string for non-existent secrets
-result=$(get_secret 'nonexistent')
-if [ -z "$result" ]; then
-    echo "PASS: Empty secret returns empty string"
+# Unset merged inputs should expand to empty string
+if [ -z "$nonexistent" ] && [ -z "$PARAM_NONEXISTENT" ]; then
+    echo "PASS: Missing input expands to empty string"
 else
-    echo "FAIL: Expected empty string"
+    echo "FAIL: Expected empty string for missing input"
     exit 1
 fi
 "#

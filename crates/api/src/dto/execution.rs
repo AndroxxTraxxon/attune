@@ -52,9 +52,13 @@ pub struct ExecutionResponse {
     #[schema(example = 1)]
     pub enforcement: Option<i64>,
 
-    /// Executor ID (worker/executor that ran this)
+    /// Identity ID that initiated this execution
     #[schema(example = 1)]
     pub executor: Option<i64>,
+
+    /// Worker ID currently assigned to this execution
+    #[schema(example = 1)]
+    pub worker: Option<i64>,
 
     /// Execution status
     #[schema(example = "succeeded")]
@@ -216,6 +220,7 @@ impl From<attune_common::models::execution::Execution> for ExecutionResponse {
             parent: execution.parent,
             enforcement: execution.enforcement,
             executor: execution.executor,
+            worker: execution.worker,
             status: execution.status,
             result: execution
                 .result

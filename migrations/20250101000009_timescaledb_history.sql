@@ -196,7 +196,7 @@ COMMENT ON TABLE execution IS 'Executions represent action runs with workflow su
 
 -- ----------------------------------------------------------------------------
 -- execution history trigger
--- Tracked fields: status, result, executor, workflow_task, env_vars, started_at
+-- Tracked fields: status, result, executor, worker, workflow_task, env_vars, started_at
 -- Note: result uses _jsonb_digest_summary() to avoid storing large payloads
 -- ----------------------------------------------------------------------------
 
@@ -214,6 +214,7 @@ BEGIN
                     'status', NEW.status,
                     'action_ref', NEW.action_ref,
                     'executor', NEW.executor,
+                    'worker', NEW.worker,
                     'parent', NEW.parent,
                     'enforcement', NEW.enforcement,
                     'started_at', NEW.started_at
@@ -247,6 +248,12 @@ BEGIN
         changed := array_append(changed, 'executor');
         old_vals := old_vals || jsonb_build_object('executor', OLD.executor);
         new_vals := new_vals || jsonb_build_object('executor', NEW.executor);
+    END IF;
+
+    IF OLD.worker IS DISTINCT FROM NEW.worker THEN
+        changed := array_append(changed, 'worker');
+        old_vals := old_vals || jsonb_build_object('worker', OLD.worker);
+        new_vals := new_vals || jsonb_build_object('worker', NEW.worker);
     END IF;
 
     IF OLD.workflow_task IS DISTINCT FROM NEW.workflow_task THEN

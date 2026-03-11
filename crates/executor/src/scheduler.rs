@@ -230,9 +230,11 @@ impl ExecutionScheduler {
             }
         };
 
-        // Update execution status to scheduled
+        // Persist the selected worker so later cancellation requests can be
+        // routed to the correct per-worker cancel queue.
         let mut execution_for_update = execution;
         execution_for_update.status = ExecutionStatus::Scheduled;
+        execution_for_update.worker = Some(worker.id);
         ExecutionRepository::update(pool, execution_for_update.id, execution_for_update.into())
             .await?;
 
@@ -529,6 +531,7 @@ impl ExecutionScheduler {
                 parent: Some(parent_execution.id),
                 enforcement: parent_execution.enforcement,
                 executor: None,
+                worker: None,
                 status: ExecutionStatus::Requested,
                 result: None,
                 workflow_task: Some(workflow_task),
@@ -689,6 +692,7 @@ impl ExecutionScheduler {
                     parent: Some(parent_execution.id),
                     enforcement: parent_execution.enforcement,
                     executor: None,
+                    worker: None,
                     status: ExecutionStatus::Requested,
                     result: None,
                     workflow_task: Some(workflow_task),
@@ -1885,5 +1889,33 @@ mod tests {
             params,
             serde_json::json!({"parameters": {"n": 5}, "context": {"rule": "test"}})
         );
+    }
+
+    #[test]
+    fn test_scheduling_persists_selected_worker() {
+        let mut execution = attune_common::models::Execution {
+            id: 42,
+            action: Some(7),
+            action_ref: "core.sleep".to_string(),
+            config: None,
+            env_vars: None,
+            parent: None,
+            enforcement: None,
+            executor: None,
+            worker: None,
+            status: ExecutionStatus::Requested,
+            result: None,
+            started_at: None,
+            workflow_task: None,
+            created: Utc::now(),
+            updated: Utc::now(),
+        };
+
+        execution.status = ExecutionStatus::Scheduled;
+        execution.worker = Some(99);
+
+        let update: UpdateExecutionInput = execution.into();
+        assert_eq!(update.status, Some(ExecutionStatus::Scheduled));
+        assert_eq!(update.worker, Some(99));
     }
 }

@@ -1133,6 +1133,7 @@ pub mod execution {
 
         pub enforcement: Option<Id>,
         pub executor: Option<Id>,
+        pub worker: Option<Id>,
         pub status: ExecutionStatus,
         pub result: Option<JsonDict>,
 

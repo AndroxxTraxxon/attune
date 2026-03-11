@@ -123,6 +123,7 @@ pub async fn create_execution(
         parent: None,
         enforcement: None,
         executor: None,
+        worker: None,
         status: ExecutionStatus::Requested,
         result: None,
         workflow_task: None, // Non-workflow execution
@@ -510,11 +511,11 @@ pub async fn cancel_execution(
     .await;
 
     // Send cancel request to the worker via MQ
-    if let Some(worker_id) = execution.executor {
+    if let Some(worker_id) = execution.worker {
         send_cancel_to_worker(publisher.as_deref(), id, worker_id).await;
     } else {
         tracing::warn!(
-            "Execution {} has no executor/worker assigned; marked as canceling but no MQ message sent",
+            "Execution {} has no worker assigned; marked as canceling but no MQ message sent",
             id
         );
     }
@@ -754,7 +755,7 @@ async fn cancel_workflow_children_with_policy(
                         }
                     }
 
-                    if let Some(worker_id) = child.executor {
+                    if let Some(worker_id) = child.worker {
                         send_cancel_to_worker(publisher, child_id, worker_id).await;
                     }
                 }

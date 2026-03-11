@@ -292,6 +292,7 @@ impl EnforcementProcessor {
             parent: None,   // TODO: Handle workflow parent-child relationships
             enforcement: Some(enforcement.id),
             executor: None, // Will be assigned during scheduling
+            worker: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
             workflow_task: None, // Non-workflow execution

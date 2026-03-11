@@ -14,6 +14,7 @@
 
 use super::{BoundedLogWriter, ExecutionResult, OutputFormat, RuntimeResult};
 use std::collections::HashMap;
+use std::io;
 use std::path::Path;
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -94,6 +95,8 @@ pub async fn execute_streaming_cancellable(
     cancel_token: Option<CancellationToken>,
 ) -> RuntimeResult<ExecutionResult> {
     let start = Instant::now();
+
+    configure_child_process(&mut cmd)?;
 
     // Spawn process with piped I/O
     let mut child = cmd
@@ -177,55 +180,56 @@ pub async fn execute_streaming_cancellable(
 
     // Build the wait future that handles timeout, cancellation, and normal completion.
     //
-    // The result is a tuple: (wait_result, was_cancelled)
-    //   - wait_result mirrors the original type: Result<Result<ExitStatus, io::Error>, Elapsed>
-    //   - was_cancelled indicates the process was stopped by a cancel request
+    // The result is a tuple: (exit_status, was_cancelled, was_timed_out)
     let wait_future = async {
-        // Inner future: wait for the child process to exit
-        let wait_child = child.wait();
-
-        // Apply optional timeout wrapping
-        let timed_wait = async {
-            if let Some(timeout_secs) = timeout_secs {
-                timeout(std::time::Duration::from_secs(timeout_secs), wait_child).await
-            } else {
-                Ok(wait_child.await)
-            }
-        };
-
-        // If we have a cancel token, race it against the (possibly-timed) wait
-        if let Some(ref token) = cancel_token {
-            tokio::select! {
-                result = timed_wait => (result, false),
-                _ = token.cancelled() => {
-                    // Cancellation requested — terminate the child process promptly.
-                    info!("Cancel signal received, sending SIGTERM to process");
-                    if let Some(pid) = child_pid {
-                        send_signal(pid, libc::SIGTERM);
-                    }
-
-                    // Grace period: wait up to 5s for the process to exit after SIGTERM.
-                    match timeout(std::time::Duration::from_secs(5), child.wait()).await {
-                        Ok(status) => (Ok(status), true),
-                        Err(_) => {
-                            // Last resort — SIGKILL
-                            warn!("Process did not exit after SIGTERM + 5s, sending SIGKILL");
-                            if let Some(pid) = child_pid {
-                                send_signal(pid, libc::SIGKILL);
-                            }
-                            // Wait indefinitely for the SIGKILL to take effect
-                            (Ok(child.wait().await), true)
+        match (cancel_token.as_ref(), timeout_secs) {
+            (Some(token), Some(timeout_secs)) => {
+                tokio::select! {
+                    result = child.wait() => (result, false, false),
+                    _ = token.cancelled() => {
+                        if let Some(pid) = child_pid {
+                            terminate_process(pid, "cancel");
                         }
+                        (wait_for_terminated_child(&mut child).await, true, false)
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
+                        if let Some(pid) = child_pid {
+                            warn!("Process timed out after {} seconds, terminating", timeout_secs);
+                            terminate_process(pid, "timeout");
+                        }
+                        (wait_for_terminated_child(&mut child).await, false, true)
                     }
                 }
             }
-        } else {
-            (timed_wait.await, false)
+            (Some(token), None) => {
+                tokio::select! {
+                    result = child.wait() => (result, false, false),
+                    _ = token.cancelled() => {
+                        if let Some(pid) = child_pid {
+                            terminate_process(pid, "cancel");
+                        }
+                        (wait_for_terminated_child(&mut child).await, true, false)
+                    }
+                }
+            }
+            (None, Some(timeout_secs)) => {
+                tokio::select! {
+                    result = child.wait() => (result, false, false),
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
+                        if let Some(pid) = child_pid {
+                            warn!("Process timed out after {} seconds, terminating", timeout_secs);
+                            terminate_process(pid, "timeout");
+                        }
+                        (wait_for_terminated_child(&mut child).await, false, true)
+                    }
+                }
+            }
+            (None, None) => (child.wait().await, false, false),
         }
     };
 
     // Wait for both streams and the process
-    let (stdout_writer, stderr_writer, (wait_result, was_cancelled)) =
+    let (stdout_writer, stderr_writer, (wait_result, was_cancelled, was_timed_out)) =
         tokio::join!(stdout_task, stderr_task, wait_future);
 
     let duration_ms = start.elapsed().as_millis() as u64;
@@ -236,30 +240,30 @@ pub async fn execute_streaming_cancellable(
 
     // Handle process wait result
     let (exit_code, process_error) = match wait_result {
-        Ok(Ok(status)) => (status.code().unwrap_or(-1), None),
-        Ok(Err(e)) => {
+        Ok(status) => (status.code().unwrap_or(-1), None),
+        Err(e) => {
             warn!("Process wait failed but captured output: {}", e);
             (-1, Some(format!("Process wait failed: {}", e)))
         }
-        Err(_) => {
-            // Timeout occurred
-            return Ok(ExecutionResult {
-                exit_code: -1,
-                stdout: stdout_result.content.clone(),
-                stderr: stderr_result.content.clone(),
-                result: None,
-                duration_ms,
-                error: Some(format!(
-                    "Execution timed out after {} seconds",
-                    timeout_secs.unwrap()
-                )),
-                stdout_truncated: stdout_result.truncated,
-                stderr_truncated: stderr_result.truncated,
-                stdout_bytes_truncated: stdout_result.bytes_truncated,
-                stderr_bytes_truncated: stderr_result.bytes_truncated,
-            });
-        }
     };
+
+    if was_timed_out {
+        return Ok(ExecutionResult {
+            exit_code: -1,
+            stdout: stdout_result.content.clone(),
+            stderr: stderr_result.content.clone(),
+            result: None,
+            duration_ms,
+            error: Some(format!(
+                "Execution timed out after {} seconds",
+                timeout_secs.unwrap()
+            )),
+            stdout_truncated: stdout_result.truncated,
+            stderr_truncated: stderr_result.truncated,
+            stdout_bytes_truncated: stdout_result.bytes_truncated,
+            stderr_bytes_truncated: stderr_result.bytes_truncated,
+        });
+    }
 
     // If the process was cancelled, return a specific result
     if was_cancelled {
@@ -348,14 +352,65 @@ pub async fn execute_streaming_cancellable(
 }
 
 /// Parse stdout content according to the specified output format.
-/// Send a Unix signal to a process by PID.
-///
-/// Uses raw `libc::kill()` to deliver signals for graceful process termination.
-/// This is safe because we only send signals to child processes we spawned.
-fn send_signal(pid: u32, signal: i32) {
-    // Safety: we're sending a signal to a known child process PID.
-    // The PID is valid because we obtained it from `child.id()` before the
-    // child exited.
+fn configure_child_process(cmd: &mut Command) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        // Run each action in its own process group so cancellation and timeout
+        // can terminate shell wrappers and any children they spawned.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setpgid(0, 0) == -1 {
+                    Err(io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
+    }
+
+    Ok(())
+}
+
+async fn wait_for_terminated_child(
+    child: &mut tokio::process::Child,
+) -> io::Result<std::process::ExitStatus> {
+    match timeout(std::time::Duration::from_secs(5), child.wait()).await {
+        Ok(status) => status,
+        Err(_) => {
+            warn!("Process did not exit after SIGTERM + 5s, sending SIGKILL");
+            if let Some(pid) = child.id() {
+                kill_process_group_or_process(pid, libc::SIGKILL);
+            }
+            child.wait().await
+        }
+    }
+}
+
+fn terminate_process(pid: u32, reason: &str) {
+    info!("Sending SIGTERM to {} process group {}", reason, pid);
+    kill_process_group_or_process(pid, libc::SIGTERM);
+}
+
+fn kill_process_group_or_process(pid: u32, signal: i32) {
+    #[cfg(unix)]
+    {
+        // Negative PID targets the process group created with setpgid(0, 0).
+        let pgid = -(pid as i32);
+        // Safety: we only signal processes we spawned.
+        let rc = unsafe { libc::kill(pgid, signal) };
+        if rc == 0 {
+            return;
+        }
+
+        let err = io::Error::last_os_error();
+        warn!(
+            "Failed to signal process group {} with signal {}: {}. Falling back to PID {}",
+            pid, signal, err, pid
+        );
+    }
+
+    // Safety: fallback to the direct child PID if the process group signal fails
+    // or on non-Unix targets where process groups are unavailable.
     unsafe {
         libc::kill(pid as i32, signal);
     }
@@ -479,6 +534,9 @@ pub fn build_inline_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
+    use tokio::fs;
+    use tokio::time::{sleep, Duration};
 
     #[test]
     fn test_parse_output_text() {
@@ -607,5 +665,87 @@ mod tests {
 
         // We can't easily inspect Command internals, but at least verify it builds without panic
         let _ = cmd;
+    }
+
+    #[tokio::test]
+    async fn test_execute_streaming_cancellation_kills_shell_child_process() {
+        let script = NamedTempFile::new().unwrap();
+        fs::write(
+            script.path(),
+            "#!/bin/sh\nsleep 30\nprintf 'unexpected completion\\n'\n",
+        )
+        .await
+        .unwrap();
+
+        let mut perms = fs::metadata(script.path()).await.unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            perms.set_mode(0o755);
+        }
+        fs::set_permissions(script.path(), perms).await.unwrap();
+
+        let cancel_token = CancellationToken::new();
+        let trigger = cancel_token.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(200)).await;
+            trigger.cancel();
+        });
+
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg(script.path());
+
+        let result = execute_streaming_cancellable(
+            cmd,
+            &HashMap::new(),
+            None,
+            Some(60),
+            1024 * 1024,
+            1024 * 1024,
+            OutputFormat::Text,
+            Some(cancel_token),
+        )
+        .await
+        .unwrap();
+
+        assert!(result
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("cancelled")));
+        assert!(
+            result.duration_ms < 5_000,
+            "expected prompt cancellation, got {}ms",
+            result.duration_ms
+        );
+        assert!(!result.stdout.contains("unexpected completion"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_streaming_timeout_terminates_process() {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg("-c").arg("sleep 30");
+
+        let result = execute_streaming(
+            cmd,
+            &HashMap::new(),
+            None,
+            Some(1),
+            1024 * 1024,
+            1024 * 1024,
+            OutputFormat::Text,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, -1);
+        assert!(result
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("timed out after 1 seconds")));
+        assert!(
+            result.duration_ms < 7_000,
+            "expected timeout termination, got {}ms",
+            result.duration_ms
+        );
     }
 }

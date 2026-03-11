@@ -126,6 +126,7 @@ async fn create_test_execution(
         parent: None,
         enforcement: None,
         executor: None,
+        worker: None,
         status,
         result: None,
         workflow_task: None,

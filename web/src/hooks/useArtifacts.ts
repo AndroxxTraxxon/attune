@@ -147,15 +147,18 @@ export function useExecutionArtifacts(
       return response;
     },
     enabled: !!executionId,
-    staleTime: isRunning ? 3000 : 10000,
-    refetchInterval: isRunning ? 3000 : 10000,
+    staleTime: isRunning ? 3000 : 30000,
+    refetchInterval: isRunning ? 3000 : false,
   });
 }
 
 /**
  * Fetch a single artifact by ID (includes data field for progress artifacts).
+ *
+ * @param isRunning - When true, polls every 3s for live updates. When false,
+ *   uses a longer stale time and disables automatic polling.
  */
-export function useArtifact(id: number | undefined) {
+export function useArtifact(id: number | undefined, isRunning = false) {
   return useQuery({
     queryKey: ["artifacts", id],
     queryFn: async () => {
@@ -169,8 +172,8 @@ export function useArtifact(id: number | undefined) {
       return response;
     },
     enabled: !!id,
-    staleTime: 3000,
-    refetchInterval: 3000,
+    staleTime: isRunning ? 3000 : 30000,
+    refetchInterval: isRunning ? 3000 : false,
   });
 }
 

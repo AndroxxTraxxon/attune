@@ -199,10 +199,10 @@ export default function ExecutionDetailPage() {
     execution.status === ExecutionStatus.RUNNING ||
     execution.status === ExecutionStatus.SCHEDULING ||
     execution.status === ExecutionStatus.SCHEDULED ||
-    execution.status === ExecutionStatus.REQUESTED;
+    execution.status === ExecutionStatus.REQUESTED ||
+    execution.status === ExecutionStatus.CANCELING;
 
-  const isCancellable =
-    isRunning || execution.status === ExecutionStatus.CANCELING;
+  const isCancellable = isRunning;
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -392,10 +392,20 @@ export default function ExecutionDetailPage() {
               {execution.executor && (
                 <div>
                   <dt className="text-sm font-medium text-gray-500">
-                    Executor ID
+                    Initiated By
                   </dt>
                   <dd className="mt-1 text-sm text-gray-900">
                     {execution.executor}
+                  </dd>
+                </div>
+              )}
+              {execution.worker && (
+                <div>
+                  <dt className="text-sm font-medium text-gray-500">
+                    Worker ID
+                  </dt>
+                  <dd className="mt-1 text-sm text-gray-900">
+                    {execution.worker}
                   </dd>
                 </div>
               )}

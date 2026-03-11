@@ -28,7 +28,7 @@ export type ExecutionResponse = {
    */
   enforcement?: number | null;
   /**
-   * Executor ID (worker/executor that ran this)
+   * Identity ID that initiated this execution
    */
   executor?: number | null;
   /**
@@ -39,6 +39,10 @@ export type ExecutionResponse = {
    * Parent execution ID (for nested/child executions)
    */
   parent?: number | null;
+  /**
+   * Worker ID currently assigned to this execution
+   */
+  worker?: number | null;
   /**
    * Execution result/output
    */

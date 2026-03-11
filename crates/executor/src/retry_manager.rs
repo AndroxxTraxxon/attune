@@ -298,6 +298,7 @@ impl RetryManager {
             parent: original.parent,
             enforcement: original.enforcement,
             executor: None, // Will be assigned by scheduler
+            worker: None,
             status: ExecutionStatus::Requested,
             result: None,
             workflow_task: original.workflow_task.clone(),

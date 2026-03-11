@@ -247,7 +247,7 @@ impl ExecutionManager {
                             ExecutionRepository::update(pool, child_id, update).await?;
                         }
 
-                        if let Some(worker_id) = child.executor {
+                        if let Some(worker_id) = child.worker {
                             Self::send_cancel_to_worker(publisher, child_id, worker_id).await?;
                         } else {
                             warn!(
@@ -423,6 +423,7 @@ impl ExecutionManager {
                 parent: Some(parent.id),       // Link to parent execution
                 enforcement: parent.enforcement,
                 executor: None, // Will be assigned during scheduling
+                worker: None,
                 status: ExecutionStatus::Requested,
                 result: None,
                 workflow_task: None, // Non-workflow execution

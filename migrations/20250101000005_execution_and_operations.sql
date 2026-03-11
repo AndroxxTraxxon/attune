@@ -26,6 +26,7 @@ CREATE TABLE execution (
     parent BIGINT,          -- self-reference; no FK because execution becomes a hypertable
     enforcement BIGINT,     -- references enforcement(id); no FK (both are hypertables)
     executor BIGINT,        -- references identity(id); no FK because execution becomes a hypertable
+    worker BIGINT,          -- references worker(id); no FK because execution becomes a hypertable
     status execution_status_enum NOT NULL DEFAULT 'requested',
     result JSONB,
     started_at TIMESTAMPTZ,         -- set when execution transitions to 'running'
@@ -49,6 +50,7 @@ CREATE INDEX idx_execution_action_ref ON execution(action_ref);
 CREATE INDEX idx_execution_parent ON execution(parent);
 CREATE INDEX idx_execution_enforcement ON execution(enforcement);
 CREATE INDEX idx_execution_executor ON execution(executor);
+CREATE INDEX idx_execution_worker ON execution(worker);
 CREATE INDEX idx_execution_status ON execution(status);
 CREATE INDEX idx_execution_created ON execution(created DESC);
 CREATE INDEX idx_execution_updated ON execution(updated DESC);
@@ -56,6 +58,7 @@ CREATE INDEX idx_execution_status_created ON execution(status, created DESC);
 CREATE INDEX idx_execution_status_updated ON execution(status, updated DESC);
 CREATE INDEX idx_execution_action_status ON execution(action, status);
 CREATE INDEX idx_execution_executor_created ON execution(executor, created DESC);
+CREATE INDEX idx_execution_worker_created ON execution(worker, created DESC);
 CREATE INDEX idx_execution_parent_created ON execution(parent, created DESC);
 CREATE INDEX idx_execution_result_gin ON execution USING GIN (result);
 CREATE INDEX idx_execution_env_vars_gin ON execution USING GIN (env_vars);
@@ -77,6 +80,7 @@ COMMENT ON COLUMN execution.env_vars IS 'Environment variables for this executio
 COMMENT ON COLUMN execution.parent IS 'Parent execution ID for workflow hierarchies (no FK — execution is a hypertable)';
 COMMENT ON COLUMN execution.enforcement IS 'Enforcement that triggered this execution (no FK — both are hypertables)';
 COMMENT ON COLUMN execution.executor IS 'Identity that initiated the execution (no FK — execution is a hypertable)';
+COMMENT ON COLUMN execution.worker IS 'Assigned worker handling this execution (no FK — execution is a hypertable)';
 COMMENT ON COLUMN execution.status IS 'Current execution lifecycle status';
 COMMENT ON COLUMN execution.result IS 'Execution output/results';
 COMMENT ON COLUMN execution.retry_count IS 'Current retry attempt number (0 = first attempt, 1 = first retry, etc.)';

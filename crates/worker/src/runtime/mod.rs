@@ -29,13 +29,11 @@ pub mod native;
 pub mod parameter_passing;
 pub mod process;
 pub mod process_executor;
-pub mod shell;
 
 // Re-export runtime implementations
 pub use local::LocalRuntime;
 pub use native::NativeRuntime;
 pub use process::ProcessRuntime;
-pub use shell::ShellRuntime;
 
 use async_trait::async_trait;
 use attune_common::models::runtime::RuntimeExecutionConfig;

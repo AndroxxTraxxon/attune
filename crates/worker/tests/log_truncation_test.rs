@@ -4,10 +4,10 @@
 //! configured size limits, preventing OOM issues with large output.
 
 use attune_common::models::runtime::{
-    InlineExecutionConfig, InterpreterConfig, RuntimeExecutionConfig,
+    InlineExecutionConfig, InlineExecutionStrategy, InterpreterConfig, RuntimeExecutionConfig,
 };
 use attune_worker::runtime::process::ProcessRuntime;
-use attune_worker::runtime::{ExecutionContext, Runtime, ShellRuntime};
+use attune_worker::runtime::{ExecutionContext, Runtime};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -26,6 +26,30 @@ fn make_python_process_runtime(packs_base_dir: PathBuf) -> ProcessRuntime {
     };
     ProcessRuntime::new(
         "python".to_string(),
+        config,
+        packs_base_dir.clone(),
+        packs_base_dir.join("../runtime_envs"),
+    )
+}
+
+fn make_shell_process_runtime(packs_base_dir: PathBuf) -> ProcessRuntime {
+    let config = RuntimeExecutionConfig {
+        interpreter: InterpreterConfig {
+            binary: "/bin/bash".to_string(),
+            args: vec![],
+            file_extension: Some(".sh".to_string()),
+        },
+        inline_execution: InlineExecutionConfig {
+            strategy: InlineExecutionStrategy::TempFile,
+            extension: Some(".sh".to_string()),
+            inject_shell_helpers: true,
+        },
+        environment: None,
+        dependencies: None,
+        env_vars: std::collections::HashMap::new(),
+    };
+    ProcessRuntime::new(
+        "shell".to_string(),
         config,
         packs_base_dir.clone(),
         packs_base_dir.join("../runtime_envs"),
@@ -113,7 +137,8 @@ async fn test_python_stderr_truncation() {
 
 #[tokio::test]
 async fn test_shell_stdout_truncation() {
-    let runtime = ShellRuntime::new();
+    let tmp = TempDir::new().unwrap();
+    let runtime = make_shell_process_runtime(tmp.path().to_path_buf());
 
     // Shell script that outputs more than the limit
     let code = r#"

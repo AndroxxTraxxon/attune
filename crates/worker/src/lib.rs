@@ -19,7 +19,7 @@ pub use heartbeat::HeartbeatManager;
 pub use registration::WorkerRegistration;
 pub use runtime::{
     ExecutionContext, ExecutionResult, LocalRuntime, NativeRuntime, ProcessRuntime, Runtime,
-    RuntimeError, RuntimeResult, ShellRuntime,
+    RuntimeError, RuntimeResult,
 };
 pub use secrets::SecretManager;
 pub use service::WorkerService;

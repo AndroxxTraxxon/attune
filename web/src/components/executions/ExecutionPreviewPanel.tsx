@@ -69,9 +69,10 @@ const ExecutionPreviewPanel = memo(function ExecutionPreviewPanel({
     execution?.status === "running" ||
     execution?.status === "scheduling" ||
     execution?.status === "scheduled" ||
-    execution?.status === "requested";
+    execution?.status === "requested" ||
+    execution?.status === "canceling";
 
-  const isCancellable = isRunning || execution?.status === "canceling";
+  const isCancellable = isRunning;
 
   const startedAt = execution?.started_at
     ? new Date(execution.started_at)
@@ -241,10 +242,20 @@ const ExecutionPreviewPanel = memo(function ExecutionPreviewPanel({
               {execution.executor && (
                 <div>
                   <dt className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                    Executor
+                    Initiated By
                   </dt>
                   <dd className="mt-0.5 text-sm text-gray-900 font-mono">
                     #{execution.executor}
+                  </dd>
+                </div>
+              )}
+              {execution.worker && (
+                <div>
+                  <dt className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                    Worker
+                  </dt>
+                  <dd className="mt-0.5 text-sm text-gray-900 font-mono">
+                    #{execution.worker}
                   </dd>
                 </div>
               )}

@@ -205,6 +205,11 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
         },
       );
 
+      queryClient.invalidateQueries({
+        queryKey: ["history", "execution", executionNotification.entity_id],
+        exact: false,
+      });
+
       // Update execution list queries by modifying existing data.
       // We need to iterate manually to access query keys for filtering.
       const queries = queryClient
