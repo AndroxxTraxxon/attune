@@ -1,0 +1,252 @@
+name: Publish Images And Chart
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+
+env:
+  REGISTRY_HOST: ${{ vars.GITEA_REGISTRY_HOST }}
+  REGISTRY_NAMESPACE: ${{ vars.GITEA_REGISTRY_NAMESPACE }}
+  CHART_NAME: attune
+
+jobs:
+  metadata:
+    name: Resolve Publish Metadata
+    runs-on: ubuntu-latest
+    outputs:
+      registry: ${{ steps.meta.outputs.registry }}
+      namespace: ${{ steps.meta.outputs.namespace }}
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      image_tags: ${{ steps.meta.outputs.image_tags }}
+      chart_version: ${{ steps.meta.outputs.chart_version }}
+      app_version: ${{ steps.meta.outputs.app_version }}
+      release_channel: ${{ steps.meta.outputs.release_channel }}
+    steps:
+      - name: Resolve tags and registry paths
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          registry="${REGISTRY_HOST}"
+          namespace="${REGISTRY_NAMESPACE}"
+
+          if [ -z "$registry" ]; then
+            echo "GITEA_REGISTRY_HOST repository variable is required"
+            exit 1
+          fi
+
+          if [ -z "$namespace" ]; then
+            namespace="${{ github.repository_owner }}"
+          fi
+
+          short_sha="$(printf '%s' "${{ github.sha }}" | cut -c1-12)"
+          ref_type="${{ github.ref_type }}"
+          ref_name="${{ github.ref_name }}"
+
+          if [ "$ref_type" = "tag" ] && printf '%s' "$ref_name" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.].*)?$'; then
+            version="${ref_name#v}"
+            image_tags="${version},latest,sha-${short_sha}"
+            chart_version="$version"
+            release_channel="release"
+          else
+            version="sha-${short_sha}"
+            image_tags="edge,sha-${short_sha}"
+            chart_version="0.0.0-dev.${{ github.run_number }}"
+            release_channel="edge"
+          fi
+
+          {
+            echo "registry=$registry"
+            echo "namespace=$namespace"
+            echo "image_tag=$version"
+            echo "image_tags=$image_tags"
+            echo "chart_version=$chart_version"
+            echo "app_version=$version"
+            echo "release_channel=$release_channel"
+          } >> "$GITHUB_OUTPUT"
+
+  publish-images:
+    name: Publish ${{ matrix.image.name }}
+    runs-on: ubuntu-latest
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: api
+            repository: attune-api
+            dockerfile: docker/Dockerfile.optimized
+            context: .
+            target: ""
+            build_args: |
+              SERVICE=api
+          - name: executor
+            repository: attune-executor
+            dockerfile: docker/Dockerfile.optimized
+            context: .
+            target: ""
+            build_args: |
+              SERVICE=executor
+          - name: notifier
+            repository: attune-notifier
+            dockerfile: docker/Dockerfile.optimized
+            context: .
+            target: ""
+            build_args: |
+              SERVICE=notifier
+          - name: sensor
+            repository: attune-sensor
+            dockerfile: docker/Dockerfile.sensor.optimized
+            context: .
+            target: sensor-full
+            build_args: ""
+          - name: worker
+            repository: attune-worker
+            dockerfile: docker/Dockerfile.worker.optimized
+            context: .
+            target: worker-full
+            build_args: ""
+          - name: web
+            repository: attune-web
+            dockerfile: docker/Dockerfile.web
+            context: .
+            target: ""
+            build_args: ""
+          - name: migrations
+            repository: attune-migrations
+            dockerfile: docker/Dockerfile.migrations
+            context: .
+            target: ""
+            build_args: ""
+          - name: init-user
+            repository: attune-init-user
+            dockerfile: docker/Dockerfile.init-user
+            context: .
+            target: ""
+            build_args: ""
+          - name: init-packs
+            repository: attune-init-packs
+            dockerfile: docker/Dockerfile.init-packs
+            context: .
+            target: ""
+            build_args: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Gitea OCI registry
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.GITEA_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.GITEA_REGISTRY_PASSWORD }}
+          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          username="${REGISTRY_USERNAME:-${{ github.actor }}}"
+          password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
+
+          if [ -z "$password" ]; then
+            echo "Set GITEA_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
+            exit 1
+          fi
+
+          printf '%s' "$password" | docker login "${{ needs.metadata.outputs.registry }}" \
+            --username "$username" \
+            --password-stdin
+
+      - name: Prepare image tags
+        id: tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_ref_base="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/${{ matrix.image.repository }}"
+          tag_lines=""
+          IFS=',' read -ra tags <<< "${{ needs.metadata.outputs.image_tags }}"
+          for tag in "${tags[@]}"; do
+            tag_lines="${tag_lines}${image_ref_base}:${tag}"$'\n'
+          done
+          printf 'tags<<EOF\n%sEOF\n' "$tag_lines" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_cmd=(
+            docker buildx build
+            "${{ matrix.image.context }}"
+            --file "${{ matrix.image.dockerfile }}"
+            --push
+          )
+
+          if [ -n "${{ matrix.image.target }}" ]; then
+            build_cmd+=(--target "${{ matrix.image.target }}")
+          fi
+
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && build_cmd+=(--tag "$tag")
+          done <<< "${{ steps.tags.outputs.tags }}"
+
+          while IFS= read -r build_arg; do
+            [ -n "$build_arg" ] && build_cmd+=(--build-arg "$build_arg")
+          done <<< "${{ matrix.image.build_args }}"
+
+          "${build_cmd[@]}"
+
+  publish-chart:
+    name: Publish Helm Chart
+    runs-on: ubuntu-latest
+    needs:
+      - metadata
+      - publish-images
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Log in to Gitea OCI registry
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.GITEA_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.GITEA_REGISTRY_PASSWORD }}
+          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          registry_username="${REGISTRY_USERNAME:-${{ github.actor }}}"
+          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
+
+          if [ -z "$registry_password" ]; then
+            echo "Set GITEA_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
+            exit 1
+          fi
+
+          printf '%s' "$registry_password" | helm registry login "${{ needs.metadata.outputs.registry }}" \
+            --username "$registry_username" \
+            --password-stdin
+
+      - name: Lint chart
+        run: |
+          helm lint charts/attune
+
+      - name: Package chart
+        run: |
+          mkdir -p dist
+          helm package charts/attune \
+            --destination dist \
+            --version "${{ needs.metadata.outputs.chart_version }}" \
+            --app-version "${{ needs.metadata.outputs.app_version }}"
+
+      - name: Push chart to OCI registry
+        run: |
+          helm push "dist/${CHART_NAME}-${{ needs.metadata.outputs.chart_version }}.tgz" \
+            "oci://${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/helm"

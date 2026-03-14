@@ -1,0 +1,193 @@
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  imageRegistry: ""
+  imageNamespace: ""
+  imageTag: edge
+  imagePullSecrets: []
+
+security:
+  existingSecret: ""
+  jwtSecret: change-me-in-production
+  encryptionKey: change-me-in-production-32-bytes-minimum
+
+database:
+  schema: public
+  username: attune
+  password: attune
+  database: attune
+  host: ""
+  port: 5432
+  url: ""
+  postgresql:
+    enabled: true
+    image:
+      repository: timescale/timescaledb
+      tag: 2.17.2-pg16
+    persistence:
+      enabled: true
+      accessModes:
+        - ReadWriteOnce
+      size: 20Gi
+      storageClassName: ""
+    resources: {}
+
+rabbitmq:
+  username: attune
+  password: attune
+  host: ""
+  port: 5672
+  url: ""
+  managementPort: 15672
+  enabled: true
+  image:
+    repository: rabbitmq
+    tag: 3.13-management-alpine
+  persistence:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    size: 8Gi
+    storageClassName: ""
+  resources: {}
+
+redis:
+  enabled: true
+  host: ""
+  port: 6379
+  url: ""
+  image:
+    repository: redis
+    tag: 7-alpine
+  persistence:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    size: 8Gi
+    storageClassName: ""
+  resources: {}
+
+bootstrap:
+  testUser:
+    login: test@attune.local
+    displayName: Test User
+    password: TestPass123!
+
+sharedStorage:
+  packs:
+    enabled: true
+    accessModes:
+      - ReadWriteMany
+    size: 2Gi
+    storageClassName: ""
+  runtimeEnvs:
+    enabled: true
+    accessModes:
+      - ReadWriteMany
+    size: 10Gi
+    storageClassName: ""
+  artifacts:
+    enabled: true
+    accessModes:
+      - ReadWriteMany
+    size: 20Gi
+    storageClassName: ""
+
+images:
+  api:
+    repository: attune-api
+    tag: ""
+    pullPolicy: IfNotPresent
+  executor:
+    repository: attune-executor
+    tag: ""
+    pullPolicy: IfNotPresent
+  worker:
+    repository: attune-worker
+    tag: ""
+    pullPolicy: IfNotPresent
+  sensor:
+    repository: attune-sensor
+    tag: ""
+    pullPolicy: IfNotPresent
+  notifier:
+    repository: attune-notifier
+    tag: ""
+    pullPolicy: IfNotPresent
+  web:
+    repository: attune-web
+    tag: ""
+    pullPolicy: IfNotPresent
+  migrations:
+    repository: attune-migrations
+    tag: ""
+    pullPolicy: IfNotPresent
+  initUser:
+    repository: attune-init-user
+    tag: ""
+    pullPolicy: IfNotPresent
+  initPacks:
+    repository: attune-init-packs
+    tag: ""
+    pullPolicy: IfNotPresent
+
+jobs:
+  migrations:
+    ttlSecondsAfterFinished: 300
+    resources: {}
+  initUser:
+    ttlSecondsAfterFinished: 300
+    resources: {}
+  initPacks:
+    ttlSecondsAfterFinished: 300
+    resources: {}
+
+api:
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 8080
+  resources: {}
+
+executor:
+  replicaCount: 1
+  resources: {}
+
+worker:
+  replicaCount: 1
+  runtimes: shell,python,node,native
+  name: worker-full-01
+  resources: {}
+
+sensor:
+  replicaCount: 1
+  resources: {}
+
+notifier:
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 8081
+  resources: {}
+
+web:
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 80
+  config:
+    environment: kubernetes
+    apiUrl: http://localhost:8080
+    wsUrl: ws://localhost:8081
+  resources: {}
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: attune.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []

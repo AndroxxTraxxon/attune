@@ -1,0 +1,7 @@
+FROM postgres:16-alpine
+
+COPY docker/init-user.sh /init-user.sh
+
+RUN chmod +x /init-user.sh
+
+CMD ["/bin/sh", "/init-user.sh"]
