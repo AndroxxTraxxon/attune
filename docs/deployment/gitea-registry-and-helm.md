@@ -28,12 +28,12 @@ The Helm chart is pushed as an OCI chart to:
 
 Set these repository variables:
 
-- `GITEA_REGISTRY_HOST`: Registry hostname only, for example `gitea.example.com`
-- `GITEA_REGISTRY_NAMESPACE`: Optional override for the registry namespace. If omitted, the workflow uses the repository owner.
+- `CONTAINER_REGISTRY_HOST`: Registry hostname only, for example `gitea.example.com`
+- `CONTAINER_REGISTRY_NAMESPACE`: Optional override for the registry namespace. If omitted, the workflow uses the repository owner.
 
 Set one of these authentication options:
 
-- Preferred: `GITEA_REGISTRY_USERNAME` and `GITEA_REGISTRY_PASSWORD`
+- Preferred: `CONTAINER_REGISTRY_USERNAME` and `CONTAINER_REGISTRY_PASSWORD`
 - Fallback: allow the workflow `GITHUB_TOKEN` or Gitea-provided token to push packages
 
 ## Publish Behavior

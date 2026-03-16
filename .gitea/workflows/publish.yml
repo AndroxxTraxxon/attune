@@ -10,8 +10,8 @@ on:
       - "v*"
 
 env:
-  REGISTRY_HOST: ${{ vars.GITEA_REGISTRY_HOST }}
-  REGISTRY_NAMESPACE: ${{ vars.GITEA_REGISTRY_NAMESPACE }}
+  REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST }}
+  REGISTRY_NAMESPACE: ${{ vars.CONTAINER_REGISTRY_NAMESPACE }}
   CHART_NAME: attune
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
           namespace="${REGISTRY_NAMESPACE}"
 
           if [ -z "$registry" ]; then
-            echo "GITEA_REGISTRY_HOST repository variable is required"
+            echo "CONTAINER_REGISTRY_HOST repository variable is required"
             exit 1
           fi
 
@@ -146,8 +146,8 @@ jobs:
       - name: Log in to Gitea OCI registry
         shell: bash
         env:
-          REGISTRY_USERNAME: ${{ secrets.GITEA_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.GITEA_REGISTRY_PASSWORD }}
+          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
           GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -155,7 +155,7 @@ jobs:
           password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
 
           if [ -z "$password" ]; then
-            echo "Set GITEA_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
+            echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
             exit 1
           fi
 
@@ -217,8 +217,8 @@ jobs:
       - name: Log in to Gitea OCI registry
         shell: bash
         env:
-          REGISTRY_USERNAME: ${{ secrets.GITEA_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.GITEA_REGISTRY_PASSWORD }}
+          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
           GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -226,7 +226,7 @@ jobs:
           registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
 
           if [ -z "$registry_password" ]; then
-            echo "Set GITEA_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
+            echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
             exit 1
           fi
 
