@@ -61,6 +61,7 @@ config.example.yaml
 
 # Scripts (not needed in runtime)
 scripts/
+!scripts/load_core_pack.py
 
 # Cargo lock (workspace handles this)
 # Uncomment if you want deterministic builds:
