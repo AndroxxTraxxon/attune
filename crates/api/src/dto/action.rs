@@ -76,9 +76,8 @@ pub struct UpdateActionRequest {
     #[schema(example = 1)]
     pub runtime: Option<i64>,
 
-    /// Optional semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0")
-    #[schema(example = ">=3.12", nullable = true)]
-    pub runtime_version_constraint: Option<Option<String>>,
+    /// Optional semver version constraint patch for the runtime.
+    pub runtime_version_constraint: Option<RuntimeVersionConstraintPatch>,
 
     /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
@@ -87,6 +86,14 @@ pub struct UpdateActionRequest {
     /// Output schema
     #[schema(value_type = Object, nullable = true)]
     pub out_schema: Option<JsonValue>,
+}
+
+/// Explicit patch operation for a nullable runtime version constraint.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "op", content = "value", rename_all = "snake_case")]
+pub enum RuntimeVersionConstraintPatch {
+    Set(String),
+    Clear,
 }
 
 /// Response DTO for action information

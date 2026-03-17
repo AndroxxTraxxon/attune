@@ -1,7 +1,7 @@
 /* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
- 
+/* eslint-disable */
 import type { TriggerResponse } from '../models/TriggerResponse';
 import type { WebhookReceiverRequest } from '../models/WebhookReceiverRequest';
 import type { WebhookReceiverResponse } from '../models/WebhookReceiverResponse';

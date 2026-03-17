@@ -1,7 +1,7 @@
 /* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
- 
+/* eslint-disable */
 import type { i64 } from './i64';
 import type { OwnerType } from './OwnerType';
 /**
@@ -9,7 +9,7 @@ import type { OwnerType } from './OwnerType';
  */
 export type CreateKeyRequest = {
     /**
-     * Whether to encrypt the value (recommended: true)
+     * Whether to encrypt the value at rest (default: false; use --encrypt / -e from CLI)
      */
     encrypted?: boolean;
     /**
@@ -45,8 +45,8 @@ export type CreateKeyRequest = {
      */
     ref: string;
     /**
-     * The secret value to store
+     * The secret value to store. Can be a string, object, array, number, or boolean.
      */
-    value: string;
+    value: any;
 };
 

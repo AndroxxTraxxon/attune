@@ -8,7 +8,7 @@ mod helpers;
 use attune_common::{
     repositories::{
         trigger::{CreateTriggerInput, TriggerRepository, UpdateTriggerInput},
-        Create, Delete, FindById, FindByRef, List, Update,
+        Create, Delete, FindById, FindByRef, List, Patch, Update,
     },
     Error,
 };
@@ -477,7 +477,7 @@ async fn test_update_trigger() {
 
     let update_input = UpdateTriggerInput {
         label: Some("Updated Label".to_string()),
-        description: Some("Updated description".to_string()),
+        description: Some(Patch::Set("Updated description".to_string())),
         enabled: Some(false),
         param_schema: None,
         out_schema: None,
@@ -571,8 +571,8 @@ async fn test_update_trigger_schemas() {
         label: None,
         description: None,
         enabled: None,
-        param_schema: Some(new_param_schema.clone()),
-        out_schema: Some(new_out_schema.clone()),
+        param_schema: Some(Patch::Set(new_param_schema.clone())),
+        out_schema: Some(Patch::Set(new_out_schema.clone())),
     };
 
     let updated = TriggerRepository::update(&pool, trigger.id, update_input)

@@ -42,7 +42,6 @@ use crate::repositories::action::{ActionRepository, UpdateActionInput};
 use crate::repositories::identity::{
     CreatePermissionSetInput, PermissionSetRepository, UpdatePermissionSetInput,
 };
-use crate::repositories::runtime::{CreateRuntimeInput, RuntimeRepository, UpdateRuntimeInput};
 use crate::repositories::runtime_version::{
     CreateRuntimeVersionInput, RuntimeVersionRepository, UpdateRuntimeVersionInput,
 };
@@ -53,7 +52,10 @@ use crate::repositories::trigger::{
 use crate::repositories::workflow::{
     CreateWorkflowDefinitionInput, UpdateWorkflowDefinitionInput, WorkflowDefinitionRepository,
 };
-use crate::repositories::{Create, Delete, FindById, FindByRef, Update};
+use crate::repositories::{
+    runtime::{CreateRuntimeInput, RuntimeRepository, UpdateRuntimeInput},
+    Create, Delete, FindById, FindByRef, Patch, Update,
+};
 use crate::version_matching::extract_version_components;
 use crate::workflow::parser::parse_workflow_yaml;
 
@@ -405,10 +407,16 @@ impl<'a> PackComponentLoader<'a> {
             // Check if runtime already exists — update in place if so
             if let Some(existing) = RuntimeRepository::find_by_ref(self.pool, &runtime_ref).await? {
                 let update_input = UpdateRuntimeInput {
-                    description,
+                    description: Some(match description {
+                        Some(description) => Patch::Set(description),
+                        None => Patch::Clear,
+                    }),
                     name: Some(name),
                     distributions: Some(distributions),
-                    installation,
+                    installation: Some(match installation {
+                        Some(installation) => Patch::Set(installation),
+                        None => Patch::Clear,
+                    }),
                     execution_config: Some(execution_config),
                 };
 
@@ -547,9 +555,18 @@ impl<'a> PackComponentLoader<'a> {
             {
                 let update_input = UpdateRuntimeVersionInput {
                     version: None, // version string doesn't change
-                    version_major: Some(version_major),
-                    version_minor: Some(version_minor),
-                    version_patch: Some(version_patch),
+                    version_major: Some(match version_major {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
+                    version_minor: Some(match version_minor {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
+                    version_patch: Some(match version_patch {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
                     execution_config: Some(execution_config),
                     distributions: Some(distributions),
                     is_default: Some(is_default),
@@ -713,10 +730,16 @@ impl<'a> PackComponentLoader<'a> {
             if let Some(existing) = TriggerRepository::find_by_ref(self.pool, &trigger_ref).await? {
                 let update_input = UpdateTriggerInput {
                     label: Some(label),
-                    description: Some(description),
+                    description: Some(Patch::Set(description)),
                     enabled: Some(enabled),
-                    param_schema,
-                    out_schema,
+                    param_schema: Some(match param_schema {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
+                    out_schema: Some(match out_schema {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
                 };
 
                 match TriggerRepository::update(self.pool, existing.id, update_input).await {
@@ -921,7 +944,10 @@ impl<'a> PackComponentLoader<'a> {
                     description: Some(description),
                     entrypoint: Some(entrypoint),
                     runtime: runtime_id,
-                    runtime_version_constraint: Some(runtime_version_constraint),
+                    runtime_version_constraint: Some(match runtime_version_constraint {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
                     param_schema,
                     out_schema,
                     parameter_delivery: Some(parameter_delivery),
@@ -1310,11 +1336,17 @@ impl<'a> PackComponentLoader<'a> {
                     entrypoint: Some(entrypoint),
                     runtime: Some(sensor_runtime_id),
                     runtime_ref: Some(sensor_runtime_ref.clone()),
-                    runtime_version_constraint: Some(runtime_version_constraint.clone()),
+                    runtime_version_constraint: Some(match runtime_version_constraint.clone() {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
                     trigger: Some(trigger_id.unwrap_or(existing.trigger)),
                     trigger_ref: Some(trigger_ref.unwrap_or(existing.trigger_ref.clone())),
                     enabled: Some(enabled),
-                    param_schema,
+                    param_schema: Some(match param_schema {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
                     config: Some(config),
                 };
 

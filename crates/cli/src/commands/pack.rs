@@ -1776,18 +1776,25 @@ async fn handle_update(
     }
 
     #[derive(Serialize)]
+    #[serde(tag = "op", content = "value", rename_all = "snake_case")]
+    enum PackDescriptionPatch {
+        Set(String),
+        Clear,
+    }
+
+    #[derive(Serialize)]
     struct UpdatePackRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         label: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
+        description: Option<PackDescriptionPatch>,
         #[serde(skip_serializing_if = "Option::is_none")]
         version: Option<String>,
     }
 
     let request = UpdatePackRequest {
         label,
-        description,
+        description: description.map(PackDescriptionPatch::Set),
         version,
     };
 

@@ -8,7 +8,7 @@ use crate::models::{
 use crate::Result;
 use sqlx::{Executor, Postgres, QueryBuilder};
 
-use super::{Create, Delete, FindById, FindByRef, List, Repository, Update};
+use super::{Create, Delete, FindById, FindByRef, List, Patch, Repository, Update};
 
 // ============================================================================
 // ArtifactRepository
@@ -48,12 +48,12 @@ pub struct UpdateArtifactInput {
     pub visibility: Option<ArtifactVisibility>,
     pub retention_policy: Option<RetentionPolicyType>,
     pub retention_limit: Option<i32>,
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub content_type: Option<String>,
+    pub name: Option<Patch<String>>,
+    pub description: Option<Patch<String>>,
+    pub content_type: Option<Patch<String>>,
     pub size_bytes: Option<i64>,
-    pub execution: Option<Option<i64>>,
-    pub data: Option<serde_json::Value>,
+    pub execution: Option<Patch<i64>>,
+    pub data: Option<Patch<serde_json::Value>>,
 }
 
 /// Filters for searching artifacts
@@ -186,20 +186,62 @@ impl Update for ArtifactRepository {
         push_field!(input.visibility, "visibility");
         push_field!(input.retention_policy, "retention_policy");
         push_field!(input.retention_limit, "retention_limit");
-        push_field!(&input.name, "name");
-        push_field!(&input.description, "description");
-        push_field!(&input.content_type, "content_type");
+        if let Some(name) = &input.name {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("name = ");
+            match name {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<String>::None),
+            };
+            has_updates = true;
+        }
+        if let Some(description) = &input.description {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("description = ");
+            match description {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<String>::None),
+            };
+            has_updates = true;
+        }
+        if let Some(content_type) = &input.content_type {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("content_type = ");
+            match content_type {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<String>::None),
+            };
+            has_updates = true;
+        }
         push_field!(input.size_bytes, "size_bytes");
-        // execution is Option<Option<i64>> — outer Option = "was field provided?",
-        // inner Option = nullable column value
         if let Some(exec_val) = input.execution {
             if has_updates {
                 query.push(", ");
             }
-            query.push("execution = ").push_bind(exec_val);
+            query.push("execution = ");
+            match exec_val {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<i64>::None),
+            };
             has_updates = true;
         }
-        push_field!(&input.data, "data");
+        if let Some(data) = &input.data {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("data = ");
+            match data {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<serde_json::Value>::None),
+            };
+            has_updates = true;
+        }
 
         if !has_updates {
             return Self::get_by_id(executor, id).await;

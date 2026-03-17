@@ -36,15 +36,16 @@ use attune_common::repositories::{
         ArtifactRepository, ArtifactSearchFilters, ArtifactVersionRepository, CreateArtifactInput,
         CreateArtifactVersionInput, UpdateArtifactInput,
     },
-    Create, Delete, FindById, FindByRef, Update,
+    Create, Delete, FindById, FindByRef, Patch, Update,
 };
 
 use crate::{
     auth::middleware::RequireAuth,
     dto::{
         artifact::{
-            AllocateFileVersionByRefRequest, AppendProgressRequest, ArtifactQueryParams,
-            ArtifactResponse, ArtifactSummary, ArtifactVersionResponse, ArtifactVersionSummary,
+            AllocateFileVersionByRefRequest, AppendProgressRequest, ArtifactExecutionPatch,
+            ArtifactJsonPatch, ArtifactQueryParams, ArtifactResponse, ArtifactStringPatch,
+            ArtifactSummary, ArtifactVersionResponse, ArtifactVersionSummary,
             CreateArtifactRequest, CreateFileVersionRequest, CreateVersionJsonRequest,
             SetDataRequest, UpdateArtifactRequest,
         },
@@ -257,12 +258,27 @@ pub async fn update_artifact(
         visibility: request.visibility,
         retention_policy: request.retention_policy,
         retention_limit: request.retention_limit,
-        name: request.name,
-        description: request.description,
-        content_type: request.content_type,
+        name: request.name.map(|patch| match patch {
+            ArtifactStringPatch::Set(value) => Patch::Set(value),
+            ArtifactStringPatch::Clear => Patch::Clear,
+        }),
+        description: request.description.map(|patch| match patch {
+            ArtifactStringPatch::Set(value) => Patch::Set(value),
+            ArtifactStringPatch::Clear => Patch::Clear,
+        }),
+        content_type: request.content_type.map(|patch| match patch {
+            ArtifactStringPatch::Set(value) => Patch::Set(value),
+            ArtifactStringPatch::Clear => Patch::Clear,
+        }),
         size_bytes: None, // Managed by version creation trigger
-        execution: request.execution.map(Some),
-        data: request.data,
+        execution: request.execution.map(|patch| match patch {
+            ArtifactExecutionPatch::Set(value) => Patch::Set(value),
+            ArtifactExecutionPatch::Clear => Patch::Clear,
+        }),
+        data: request.data.map(|patch| match patch {
+            ArtifactJsonPatch::Set(value) => Patch::Set(value),
+            ArtifactJsonPatch::Clear => Patch::Clear,
+        }),
     };
 
     let updated = ArtifactRepository::update(&state.db, id, input).await?;
@@ -1155,7 +1171,7 @@ pub async fn upload_version_by_ref(
                     description: None,
                     content_type: None,
                     size_bytes: None,
-                    execution: execution_id.map(Some),
+                    execution: execution_id.map(Patch::Set),
                     data: None,
                 };
                 ArtifactRepository::update(&state.db, existing.id, update_input).await?
@@ -1303,7 +1319,7 @@ pub async fn allocate_file_version_by_ref(
                     description: None,
                     content_type: None,
                     size_bytes: None,
-                    execution: request.execution.map(Some),
+                    execution: request.execution.map(Patch::Set),
                     data: None,
                 };
                 ArtifactRepository::update(&state.db, existing.id, update_input).await?

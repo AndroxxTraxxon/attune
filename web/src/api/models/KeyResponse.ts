@@ -1,7 +1,7 @@
 /* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
- 
+/* eslint-disable */
 import type { i64 } from './i64';
 import type { OwnerType } from './OwnerType';
 /**
@@ -57,8 +57,8 @@ export type KeyResponse = {
      */
     updated: string;
     /**
-     * The secret value (decrypted if encrypted)
+     * The secret value (decrypted if encrypted). Can be a string, object, array, number, or boolean.
      */
-    value: string;
+    value: any;
 };
 

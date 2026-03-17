@@ -54,19 +54,33 @@ pub struct UpdateTriggerRequest {
 
     /// Trigger description
     #[schema(example = "Updated webhook trigger description")]
-    pub description: Option<String>,
+    pub description: Option<TriggerStringPatch>,
 
     /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
-    pub param_schema: Option<JsonValue>,
+    pub param_schema: Option<TriggerJsonPatch>,
 
     /// Output schema
     #[schema(value_type = Object, nullable = true)]
-    pub out_schema: Option<JsonValue>,
+    pub out_schema: Option<TriggerJsonPatch>,
 
     /// Whether the trigger is enabled
     #[schema(example = true)]
     pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "op", content = "value", rename_all = "snake_case")]
+pub enum TriggerStringPatch {
+    Set(String),
+    Clear,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "op", content = "value", rename_all = "snake_case")]
+pub enum TriggerJsonPatch {
+    Set(JsonValue),
+    Clear,
 }
 
 /// Response DTO for trigger information
@@ -244,11 +258,18 @@ pub struct UpdateSensorRequest {
 
     /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
-    pub param_schema: Option<JsonValue>,
+    pub param_schema: Option<SensorJsonPatch>,
 
     /// Whether the sensor is enabled
     #[schema(example = false)]
     pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "op", content = "value", rename_all = "snake_case")]
+pub enum SensorJsonPatch {
+    Set(JsonValue),
+    Clear,
 }
 
 /// Response DTO for sensor information

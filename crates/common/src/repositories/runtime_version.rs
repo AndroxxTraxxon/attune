@@ -5,7 +5,7 @@
 
 use crate::error::Result;
 use crate::models::{Id, RuntimeVersion};
-use crate::repositories::{Create, Delete, FindById, List, Repository, Update};
+use crate::repositories::{Create, Delete, FindById, List, Patch, Repository, Update};
 use sqlx::{Executor, Postgres, QueryBuilder};
 
 /// Repository for runtime version database operations
@@ -39,14 +39,14 @@ pub struct CreateRuntimeVersionInput {
 #[derive(Debug, Clone, Default)]
 pub struct UpdateRuntimeVersionInput {
     pub version: Option<String>,
-    pub version_major: Option<Option<i32>>,
-    pub version_minor: Option<Option<i32>>,
-    pub version_patch: Option<Option<i32>>,
+    pub version_major: Option<Patch<i32>>,
+    pub version_minor: Option<Patch<i32>>,
+    pub version_patch: Option<Patch<i32>>,
     pub execution_config: Option<serde_json::Value>,
     pub distributions: Option<serde_json::Value>,
     pub is_default: Option<bool>,
     pub available: Option<bool>,
-    pub verified_at: Option<Option<chrono::DateTime<chrono::Utc>>>,
+    pub verified_at: Option<Patch<chrono::DateTime<chrono::Utc>>>,
     pub meta: Option<serde_json::Value>,
 }
 
@@ -154,7 +154,10 @@ impl Update for RuntimeVersionRepository {
                 query.push(", ");
             }
             query.push("version_major = ");
-            query.push_bind(*version_major);
+            match version_major {
+                Patch::Set(value) => query.push_bind(*value),
+                Patch::Clear => query.push_bind(Option::<i32>::None),
+            };
             has_updates = true;
         }
 
@@ -163,7 +166,10 @@ impl Update for RuntimeVersionRepository {
                 query.push(", ");
             }
             query.push("version_minor = ");
-            query.push_bind(*version_minor);
+            match version_minor {
+                Patch::Set(value) => query.push_bind(*value),
+                Patch::Clear => query.push_bind(Option::<i32>::None),
+            };
             has_updates = true;
         }
 
@@ -172,7 +178,10 @@ impl Update for RuntimeVersionRepository {
                 query.push(", ");
             }
             query.push("version_patch = ");
-            query.push_bind(*version_patch);
+            match version_patch {
+                Patch::Set(value) => query.push_bind(*value),
+                Patch::Clear => query.push_bind(Option::<i32>::None),
+            };
             has_updates = true;
         }
 
@@ -217,7 +226,10 @@ impl Update for RuntimeVersionRepository {
                 query.push(", ");
             }
             query.push("verified_at = ");
-            query.push_bind(*verified_at);
+            match verified_at {
+                Patch::Set(value) => query.push_bind(*value),
+                Patch::Clear => query.push_bind(Option::<chrono::DateTime<chrono::Utc>>::None),
+            };
             has_updates = true;
         }
 

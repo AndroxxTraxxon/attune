@@ -66,6 +66,14 @@ pub use runtime_version::RuntimeVersionRepository;
 pub use trigger::{SensorRepository, TriggerRepository};
 pub use workflow::{WorkflowDefinitionRepository, WorkflowExecutionRepository};
 
+/// Explicit patch operation for update inputs where callers must distinguish
+/// between "leave unchanged", "set value", and "clear to NULL".
+#[derive(Debug, Clone, PartialEq)]
+pub enum Patch<T> {
+    Set(T),
+    Clear,
+}
+
 /// Type alias for database connection/transaction
 pub type DbConnection<'c> = &'c mut Transaction<'c, Postgres>;
 

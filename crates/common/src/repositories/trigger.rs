@@ -7,7 +7,7 @@ use crate::Result;
 use serde_json::Value as JsonValue;
 use sqlx::{Executor, Postgres, QueryBuilder};
 
-use super::{Create, Delete, FindById, FindByRef, List, Repository, Update};
+use super::{Create, Delete, FindById, FindByRef, List, Patch, Repository, Update};
 
 // ============================================================================
 // Trigger Search
@@ -88,10 +88,10 @@ pub struct CreateTriggerInput {
 #[derive(Debug, Clone, Default)]
 pub struct UpdateTriggerInput {
     pub label: Option<String>,
-    pub description: Option<String>,
+    pub description: Option<Patch<String>>,
     pub enabled: Option<bool>,
-    pub param_schema: Option<JsonSchema>,
-    pub out_schema: Option<JsonSchema>,
+    pub param_schema: Option<Patch<JsonSchema>>,
+    pub out_schema: Option<Patch<JsonSchema>>,
 }
 
 #[async_trait::async_trait]
@@ -229,7 +229,10 @@ impl Update for TriggerRepository {
                 query.push(", ");
             }
             query.push("description = ");
-            query.push_bind(description);
+            match description {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<String>::None),
+            };
             has_updates = true;
         }
 
@@ -247,7 +250,10 @@ impl Update for TriggerRepository {
                 query.push(", ");
             }
             query.push("param_schema = ");
-            query.push_bind(param_schema);
+            match param_schema {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<JsonSchema>::None),
+            };
             has_updates = true;
         }
 
@@ -256,7 +262,10 @@ impl Update for TriggerRepository {
                 query.push(", ");
             }
             query.push("out_schema = ");
-            query.push_bind(out_schema);
+            match out_schema {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<JsonSchema>::None),
+            };
             has_updates = true;
         }
 
@@ -676,11 +685,11 @@ pub struct UpdateSensorInput {
     pub entrypoint: Option<String>,
     pub runtime: Option<Id>,
     pub runtime_ref: Option<String>,
-    pub runtime_version_constraint: Option<Option<String>>,
+    pub runtime_version_constraint: Option<Patch<String>>,
     pub trigger: Option<Id>,
     pub trigger_ref: Option<String>,
     pub enabled: Option<bool>,
-    pub param_schema: Option<JsonSchema>,
+    pub param_schema: Option<Patch<JsonSchema>>,
     pub config: Option<JsonValue>,
 }
 
@@ -866,7 +875,10 @@ impl Update for SensorRepository {
                 query.push(", ");
             }
             query.push("runtime_version_constraint = ");
-            query.push_bind(runtime_version_constraint);
+            match runtime_version_constraint {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<String>::None),
+            };
             has_updates = true;
         }
 
@@ -893,7 +905,10 @@ impl Update for SensorRepository {
                 query.push(", ");
             }
             query.push("param_schema = ");
-            query.push_bind(param_schema);
+            match param_schema {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<JsonSchema>::None),
+            };
             has_updates = true;
         }
 

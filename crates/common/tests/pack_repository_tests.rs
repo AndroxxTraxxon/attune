@@ -6,7 +6,9 @@
 mod helpers;
 
 use attune_common::repositories::pack::{self, PackRepository};
-use attune_common::repositories::{Create, Delete, FindById, FindByRef, List, Pagination, Update};
+use attune_common::repositories::{
+    Create, Delete, FindById, FindByRef, List, Pagination, Patch, Update,
+};
 use attune_common::Error;
 use helpers::*;
 use serde_json::json;
@@ -214,7 +216,7 @@ async fn test_update_pack() {
     let update_input = pack::UpdatePackInput {
         label: Some("Updated Label".to_string()),
         version: Some("2.0.0".to_string()),
-        description: Some("Updated description".to_string()),
+        description: Some(Patch::Set("Updated description".to_string())),
         ..Default::default()
     };
 

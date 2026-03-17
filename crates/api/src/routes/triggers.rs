@@ -17,7 +17,7 @@ use attune_common::repositories::{
         CreateSensorInput, CreateTriggerInput, SensorRepository, SensorSearchFilters,
         TriggerRepository, TriggerSearchFilters, UpdateSensorInput, UpdateTriggerInput,
     },
-    Create, Delete, FindByRef, Update,
+    Create, Delete, FindByRef, Patch, Update,
 };
 
 use crate::{
@@ -25,8 +25,9 @@ use crate::{
     dto::{
         common::{PaginatedResponse, PaginationParams},
         trigger::{
-            CreateSensorRequest, CreateTriggerRequest, SensorResponse, SensorSummary,
-            TriggerResponse, TriggerSummary, UpdateSensorRequest, UpdateTriggerRequest,
+            CreateSensorRequest, CreateTriggerRequest, SensorJsonPatch, SensorResponse,
+            SensorSummary, TriggerJsonPatch, TriggerResponse, TriggerStringPatch,
+            TriggerSummary, UpdateSensorRequest, UpdateTriggerRequest,
         },
         ApiResponse, SuccessResponse,
     },
@@ -274,10 +275,19 @@ pub async fn update_trigger(
     // Create update input
     let update_input = UpdateTriggerInput {
         label: request.label,
-        description: request.description,
+        description: request.description.map(|patch| match patch {
+            TriggerStringPatch::Set(value) => Patch::Set(value),
+            TriggerStringPatch::Clear => Patch::Clear,
+        }),
         enabled: request.enabled,
-        param_schema: request.param_schema,
-        out_schema: request.out_schema,
+        param_schema: request.param_schema.map(|patch| match patch {
+            TriggerJsonPatch::Set(value) => Patch::Set(value),
+            TriggerJsonPatch::Clear => Patch::Clear,
+        }),
+        out_schema: request.out_schema.map(|patch| match patch {
+            TriggerJsonPatch::Set(value) => Patch::Set(value),
+            TriggerJsonPatch::Clear => Patch::Clear,
+        }),
     };
 
     let trigger = TriggerRepository::update(&state.db, existing_trigger.id, update_input).await?;
@@ -722,7 +732,10 @@ pub async fn update_sensor(
         trigger: None,
         trigger_ref: None,
         enabled: request.enabled,
-        param_schema: request.param_schema,
+        param_schema: request.param_schema.map(|patch| match patch {
+            SensorJsonPatch::Set(value) => Patch::Set(value),
+            SensorJsonPatch::Clear => Patch::Clear,
+        }),
         config: None,
     };
 

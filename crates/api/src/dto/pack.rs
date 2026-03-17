@@ -129,7 +129,7 @@ pub struct UpdatePackRequest {
 
     /// Pack description
     #[schema(example = "Enhanced Slack integration with new features")]
-    pub description: Option<String>,
+    pub description: Option<PackDescriptionPatch>,
 
     /// Pack version
     #[validate(length(min = 1, max = 50))]
@@ -163,6 +163,13 @@ pub struct UpdatePackRequest {
     /// Whether this is a standard pack
     #[schema(example = false)]
     pub is_standard: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "op", content = "value", rename_all = "snake_case")]
+pub enum PackDescriptionPatch {
+    Set(String),
+    Clear,
 }
 
 /// Response DTO for pack information

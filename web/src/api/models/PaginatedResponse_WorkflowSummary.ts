@@ -1,7 +1,7 @@
 /* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
- 
+/* eslint-disable */
 import type { PaginationMeta } from './PaginationMeta';
 /**
  * Paginated response wrapper
@@ -53,3 +53,4 @@ export type PaginatedResponse_WorkflowSummary = {
      */
     pagination: PaginationMeta;
 };
+

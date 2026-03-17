@@ -31,6 +31,7 @@ use crate::dto::{
         IdentitySummary, PermissionAssignmentResponse, PermissionSetSummary, UpdateIdentityRequest,
     },
     rule::{CreateRuleRequest, RuleResponse, RuleSummary, UpdateRuleRequest},
+    runtime::{CreateRuntimeRequest, RuntimeResponse, RuntimeSummary, UpdateRuntimeRequest},
     trigger::{
         CreateSensorRequest, CreateTriggerRequest, SensorResponse, SensorSummary, TriggerResponse,
         TriggerSummary, UpdateSensorRequest, UpdateTriggerRequest,
@@ -95,6 +96,14 @@ use crate::dto::{
         crate::routes::actions::update_action,
         crate::routes::actions::delete_action,
         crate::routes::actions::get_queue_stats,
+
+        // Runtimes
+        crate::routes::runtimes::list_runtimes,
+        crate::routes::runtimes::list_runtimes_by_pack,
+        crate::routes::runtimes::get_runtime,
+        crate::routes::runtimes::create_runtime,
+        crate::routes::runtimes::update_runtime,
+        crate::routes::runtimes::delete_runtime,
 
         // Triggers
         crate::routes::triggers::list_triggers,
@@ -197,6 +206,7 @@ use crate::dto::{
             ApiResponse<PackResponse>,
             ApiResponse<PackInstallResponse>,
             ApiResponse<ActionResponse>,
+            ApiResponse<RuntimeResponse>,
             ApiResponse<TriggerResponse>,
             ApiResponse<SensorResponse>,
             ApiResponse<RuleResponse>,
@@ -211,6 +221,7 @@ use crate::dto::{
             ApiResponse<QueueStatsResponse>,
             PaginatedResponse<PackSummary>,
             PaginatedResponse<ActionSummary>,
+            PaginatedResponse<RuntimeSummary>,
             PaginatedResponse<TriggerSummary>,
             PaginatedResponse<SensorSummary>,
             PaginatedResponse<RuleSummary>,
@@ -258,6 +269,12 @@ use crate::dto::{
             PermissionSetSummary,
             PermissionAssignmentResponse,
             CreatePermissionAssignmentRequest,
+
+            // Runtime DTOs
+            CreateRuntimeRequest,
+            UpdateRuntimeRequest,
+            RuntimeResponse,
+            RuntimeSummary,
             IdentitySummary,
 
             // Action DTOs

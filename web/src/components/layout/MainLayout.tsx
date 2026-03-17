@@ -17,6 +17,7 @@ import {
   KeyRound,
   Home,
   FolderArchive,
+  TerminalSquare,
 } from "lucide-react";
 
 // Color mappings for navigation items — defined outside component for stable reference
@@ -73,6 +74,12 @@ const navSections = [
     // Component Management - Cool colors (cyan -> blue -> violet)
     items: [
       { to: "/actions", label: "Actions", icon: SquarePlay, color: "cyan" },
+      {
+        to: "/runtimes",
+        label: "Runtimes",
+        icon: TerminalSquare,
+        color: "blue",
+      },
       { to: "/rules", label: "Rules", icon: SquareArrowRight, color: "blue" },
       {
         to: "/triggers",

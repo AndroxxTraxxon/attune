@@ -8,7 +8,7 @@ mod helpers;
 use attune_common::{
     repositories::{
         trigger::{CreateSensorInput, SensorRepository, UpdateSensorInput},
-        Create, Delete, FindById, FindByRef, List, Update,
+        Create, Delete, FindById, FindByRef, List, Patch, Update,
     },
     Error,
 };
@@ -888,7 +888,7 @@ async fn test_update_param_schema() {
     });
 
     let input = UpdateSensorInput {
-        param_schema: Some(new_schema.clone()),
+        param_schema: Some(Patch::Set(new_schema.clone())),
         ..Default::default()
     };
 
@@ -937,7 +937,7 @@ async fn test_update_multiple_fields() {
         description: Some("Updated multiple fields".to_string()),
         entrypoint: Some("sensors/multi.py".to_string()),
         enabled: Some(false),
-        param_schema: Some(json!({"type": "object"})),
+        param_schema: Some(Patch::Set(json!({"type": "object"}))),
         ..Default::default()
     };
 
@@ -1766,7 +1766,7 @@ async fn test_param_schema_can_be_null() {
     // Update to add schema
     let schema = json!({"type": "object"});
     let input = UpdateSensorInput {
-        param_schema: Some(schema.clone()),
+        param_schema: Some(Patch::Set(schema.clone())),
         ..Default::default()
     };
 

@@ -15,7 +15,7 @@ use attune_common::repositories::{
     action::{ActionRepository, ActionSearchFilters, CreateActionInput, UpdateActionInput},
     pack::PackRepository,
     queue_stats::QueueStatsRepository,
-    Create, Delete, FindByRef, Update,
+    Create, Delete, FindByRef, Patch, Update,
 };
 
 use crate::{
@@ -24,7 +24,7 @@ use crate::{
     dto::{
         action::{
             ActionResponse, ActionSummary, CreateActionRequest, QueueStatsResponse,
-            UpdateActionRequest,
+            RuntimeVersionConstraintPatch, UpdateActionRequest,
         },
         common::{PaginatedResponse, PaginationParams},
         ApiResponse, SuccessResponse,
@@ -280,7 +280,10 @@ pub async fn update_action(
         description: request.description,
         entrypoint: request.entrypoint,
         runtime: request.runtime,
-        runtime_version_constraint: request.runtime_version_constraint,
+        runtime_version_constraint: request.runtime_version_constraint.map(|patch| match patch {
+            RuntimeVersionConstraintPatch::Set(value) => Patch::Set(value),
+            RuntimeVersionConstraintPatch::Clear => Patch::Clear,
+        }),
         param_schema: request.param_schema,
         out_schema: request.out_schema,
         parameter_delivery: None,

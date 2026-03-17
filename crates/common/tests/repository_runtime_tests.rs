@@ -6,7 +6,7 @@
 use attune_common::repositories::runtime::{
     CreateRuntimeInput, RuntimeRepository, UpdateRuntimeInput,
 };
-use attune_common::repositories::{Create, Delete, FindById, FindByRef, List, Update};
+use attune_common::repositories::{Create, Delete, FindById, FindByRef, List, Patch, Update};
 use serde_json::json;
 use sqlx::PgPool;
 use std::collections::hash_map::DefaultHasher;
@@ -259,14 +259,14 @@ async fn test_update_runtime() {
         .expect("Failed to create runtime");
 
     let update_input = UpdateRuntimeInput {
-        description: Some("Updated description".to_string()),
+        description: Some(Patch::Set("Updated description".to_string())),
         name: Some("updated_name".to_string()),
         distributions: Some(json!({
             "linux": { "supported": false }
         })),
-        installation: Some(json!({
+        installation: Some(Patch::Set(json!({
             "method": "npm"
-        })),
+        }))),
         execution_config: None,
     };
 
@@ -275,10 +275,10 @@ async fn test_update_runtime() {
         .expect("Failed to update runtime");
 
     assert_eq!(updated.id, created.id);
-    assert_eq!(updated.description, update_input.description);
+    assert_eq!(updated.description, Some("Updated description".to_string()));
     assert_eq!(updated.name, update_input.name.unwrap());
     assert_eq!(updated.distributions, update_input.distributions.unwrap());
-    assert_eq!(updated.installation, update_input.installation);
+    assert_eq!(updated.installation, Some(json!({ "method": "npm" })));
     assert!(updated.updated > created.updated);
 }
 
@@ -294,7 +294,7 @@ async fn test_update_runtime_partial() {
         .expect("Failed to create runtime");
 
     let update_input = UpdateRuntimeInput {
-        description: Some("Only description changed".to_string()),
+        description: Some(Patch::Set("Only description changed".to_string())),
         name: None,
         distributions: None,
         installation: None,
@@ -305,7 +305,10 @@ async fn test_update_runtime_partial() {
         .await
         .expect("Failed to update runtime");
 
-    assert_eq!(updated.description, update_input.description);
+    assert_eq!(
+        updated.description,
+        Some("Only description changed".to_string())
+    );
     assert_eq!(updated.name, created.name);
     assert_eq!(updated.distributions, created.distributions);
     assert_eq!(updated.installation, created.installation);
@@ -610,7 +613,7 @@ async fn test_update_changes_timestamp() {
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     let update_input = UpdateRuntimeInput {
-        description: Some("Updated".to_string()),
+        description: Some(Patch::Set("Updated".to_string())),
         ..Default::default()
     };
 

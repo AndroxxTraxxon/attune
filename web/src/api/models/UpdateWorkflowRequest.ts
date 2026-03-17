@@ -35,3 +35,4 @@ export type UpdateWorkflowRequest = {
      */
     version?: string | null;
 };
+

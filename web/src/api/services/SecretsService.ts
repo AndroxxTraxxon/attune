@@ -1,7 +1,7 @@
 /* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
- 
+/* eslint-disable */
 import type { CreateKeyRequest } from '../models/CreateKeyRequest';
 import type { i64 } from '../models/i64';
 import type { OwnerType } from '../models/OwnerType';
@@ -114,9 +114,9 @@ export class SecretsService {
              */
             updated: string;
             /**
-             * The secret value (decrypted if encrypted)
+             * The secret value (decrypted if encrypted). Can be a string, object, array, number, or boolean.
              */
-            value: string;
+            value: any;
         };
         /**
          * Optional message
@@ -200,9 +200,9 @@ export class SecretsService {
              */
             updated: string;
             /**
-             * The secret value (decrypted if encrypted)
+             * The secret value (decrypted if encrypted). Can be a string, object, array, number, or boolean.
              */
-            value: string;
+            value: any;
         };
         /**
          * Optional message
@@ -288,9 +288,9 @@ export class SecretsService {
              */
             updated: string;
             /**
-             * The secret value (decrypted if encrypted)
+             * The secret value (decrypted if encrypted). Can be a string, object, array, number, or boolean.
              */
-            value: string;
+            value: any;
         };
         /**
          * Optional message

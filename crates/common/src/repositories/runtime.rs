@@ -10,7 +10,7 @@ use crate::models::{
 use crate::Result;
 use sqlx::{Executor, Postgres, QueryBuilder};
 
-use super::{Create, Delete, FindById, FindByRef, List, Repository, Update};
+use super::{Create, Delete, FindById, FindByRef, List, Patch, Repository, Update};
 
 /// Repository for Runtime operations
 pub struct RuntimeRepository;
@@ -39,10 +39,10 @@ pub struct CreateRuntimeInput {
 /// Input for updating a runtime
 #[derive(Debug, Clone, Default)]
 pub struct UpdateRuntimeInput {
-    pub description: Option<String>,
+    pub description: Option<Patch<String>>,
     pub name: Option<String>,
     pub distributions: Option<JsonDict>,
-    pub installation: Option<JsonDict>,
+    pub installation: Option<Patch<JsonDict>>,
     pub execution_config: Option<JsonDict>,
 }
 
@@ -163,7 +163,10 @@ impl Update for RuntimeRepository {
 
         if let Some(description) = &input.description {
             query.push("description = ");
-            query.push_bind(description);
+            match description {
+                Patch::Set(description) => query.push_bind(description),
+                Patch::Clear => query.push_bind(Option::<String>::None),
+            };
             has_updates = true;
         }
 
@@ -190,7 +193,10 @@ impl Update for RuntimeRepository {
                 query.push(", ");
             }
             query.push("installation = ");
-            query.push_bind(installation);
+            match installation {
+                Patch::Set(installation) => query.push_bind(installation),
+                Patch::Clear => query.push_bind(Option::<JsonDict>::None),
+            };
             has_updates = true;
         }
 

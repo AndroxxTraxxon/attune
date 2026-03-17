@@ -6,7 +6,7 @@ use crate::models::{pack::Pack, JsonDict, JsonSchema};
 use crate::{Error, Result};
 use sqlx::{Executor, Postgres, QueryBuilder};
 
-use super::{Create, Delete, FindById, FindByRef, List, Pagination, Repository, Update};
+use super::{Create, Delete, FindById, FindByRef, List, Pagination, Patch, Repository, Update};
 
 /// Repository for Pack operations
 pub struct PackRepository;
@@ -40,7 +40,7 @@ pub struct CreatePackInput {
 #[derive(Debug, Clone, Default)]
 pub struct UpdatePackInput {
     pub label: Option<String>,
-    pub description: Option<String>,
+    pub description: Option<Patch<String>>,
     pub version: Option<String>,
     pub conf_schema: Option<JsonSchema>,
     pub config: Option<JsonDict>,
@@ -186,7 +186,10 @@ impl Update for PackRepository {
                 query.push(", ");
             }
             query.push("description = ");
-            query.push_bind(description);
+            match description {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<String>::None),
+            };
             has_updates = true;
         }
 

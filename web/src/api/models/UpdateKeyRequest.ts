@@ -1,7 +1,7 @@
 /* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
- 
+/* eslint-disable */
 /**
  * Request to update an existing key/secret
  */
@@ -15,8 +15,8 @@ export type UpdateKeyRequest = {
      */
     name?: string | null;
     /**
-     * Update the secret value
+     * Update the secret value. Can be a string, object, array, number, or boolean.
      */
-    value?: string | null;
+    value?: any;
 };
 

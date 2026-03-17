@@ -1,7 +1,7 @@
 /* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
- 
+/* eslint-disable */
 import type { TestSuiteResult } from './TestSuiteResult';
 /**
  * Pack test result structure (not from DB, used for test execution)

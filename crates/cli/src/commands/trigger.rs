@@ -255,18 +255,25 @@ async fn handle_update(
     }
 
     #[derive(Serialize)]
+    #[serde(tag = "op", content = "value", rename_all = "snake_case")]
+    enum TriggerDescriptionPatch {
+        Set(String),
+        Clear,
+    }
+
+    #[derive(Serialize)]
     struct UpdateTriggerRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         label: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
+        description: Option<TriggerDescriptionPatch>,
         #[serde(skip_serializing_if = "Option::is_none")]
         enabled: Option<bool>,
     }
 
     let request = UpdateTriggerRequest {
         label,
-        description,
+        description: description.map(TriggerDescriptionPatch::Set),
         enabled,
     };
 

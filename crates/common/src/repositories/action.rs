@@ -6,7 +6,7 @@ use crate::models::{action::*, enums::PolicyMethod, Id, JsonSchema};
 use crate::{Error, Result};
 use sqlx::{Executor, Postgres, QueryBuilder};
 
-use super::{Create, Delete, FindById, FindByRef, List, Repository, Update};
+use super::{Create, Delete, FindById, FindByRef, List, Patch, Repository, Update};
 
 /// Columns selected in all Action queries. Must match the `Action` model's `FromRow` fields.
 pub const ACTION_COLUMNS: &str = "id, ref, pack, pack_ref, label, description, entrypoint, \
@@ -67,7 +67,7 @@ pub struct UpdateActionInput {
     pub description: Option<String>,
     pub entrypoint: Option<String>,
     pub runtime: Option<Id>,
-    pub runtime_version_constraint: Option<Option<String>>,
+    pub runtime_version_constraint: Option<Patch<String>>,
     pub param_schema: Option<JsonSchema>,
     pub out_schema: Option<JsonSchema>,
     pub parameter_delivery: Option<String>,
@@ -237,7 +237,10 @@ impl Update for ActionRepository {
                 query.push(", ");
             }
             query.push("runtime_version_constraint = ");
-            query.push_bind(runtime_version_constraint);
+            match runtime_version_constraint {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<String>::None),
+            };
             has_updates = true;
         }
 

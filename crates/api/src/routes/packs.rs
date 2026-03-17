@@ -16,7 +16,8 @@ use attune_common::mq::{MessageEnvelope, MessageType, PackRegisteredPayload};
 use attune_common::rbac::{Action, AuthorizationContext, Resource};
 use attune_common::repositories::{
     pack::{CreatePackInput, UpdatePackInput},
-    Create, Delete, FindById, FindByRef, PackRepository, PackTestRepository, Pagination, Update,
+    Create, Delete, FindById, FindByRef, PackRepository, PackTestRepository, Pagination, Patch,
+    Update,
 };
 use attune_common::workflow::{PackWorkflowService, PackWorkflowServiceConfig};
 
@@ -29,8 +30,9 @@ use crate::{
             BuildPackEnvsRequest, BuildPackEnvsResponse, CreatePackRequest, DownloadPacksRequest,
             DownloadPacksResponse, GetPackDependenciesRequest, GetPackDependenciesResponse,
             InstallPackRequest, PackInstallResponse, PackResponse, PackSummary,
-            PackWorkflowSyncResponse, PackWorkflowValidationResponse, RegisterPackRequest,
-            RegisterPacksRequest, RegisterPacksResponse, UpdatePackRequest, WorkflowSyncResult,
+            PackDescriptionPatch, PackWorkflowSyncResponse, PackWorkflowValidationResponse,
+            RegisterPackRequest, RegisterPacksRequest, RegisterPacksResponse, UpdatePackRequest,
+            WorkflowSyncResult,
         },
         ApiResponse, SuccessResponse,
     },
@@ -258,7 +260,10 @@ pub async fn update_pack(
     // Create update input
     let update_input = UpdatePackInput {
         label: request.label,
-        description: request.description,
+        description: request.description.map(|patch| match patch {
+            PackDescriptionPatch::Set(value) => Patch::Set(value),
+            PackDescriptionPatch::Clear => Patch::Clear,
+        }),
         version: request.version,
         conf_schema: request.conf_schema,
         config: request.config,
@@ -876,7 +881,10 @@ async fn register_pack_internal(
         // Update existing pack in place — preserves pack ID and all child entity IDs
         let update_input = UpdatePackInput {
             label: Some(label),
-            description: Some(description.unwrap_or_default()),
+            description: Some(match description {
+                Some(value) => Patch::Set(value),
+                None => Patch::Clear,
+            }),
             version: Some(version.clone()),
             conf_schema: Some(conf_schema),
             config: None, // preserve user-set config

@@ -97,19 +97,41 @@ pub struct UpdateArtifactRequest {
     pub retention_limit: Option<i32>,
 
     /// Updated name
-    pub name: Option<String>,
+    pub name: Option<ArtifactStringPatch>,
 
     /// Updated description
-    pub description: Option<String>,
+    pub description: Option<ArtifactStringPatch>,
 
     /// Updated content type
-    pub content_type: Option<String>,
+    pub content_type: Option<ArtifactStringPatch>,
 
-    /// Updated execution ID (re-links artifact to a different execution)
-    pub execution: Option<i64>,
+    /// Updated execution patch (set a new execution ID or clear the link)
+    pub execution: Option<ArtifactExecutionPatch>,
 
     /// Updated structured data (replaces existing data entirely)
-    pub data: Option<JsonValue>,
+    pub data: Option<ArtifactJsonPatch>,
+}
+
+/// Explicit patch operation for a nullable execution link.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "op", content = "value", rename_all = "snake_case")]
+pub enum ArtifactExecutionPatch {
+    Set(i64),
+    Clear,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "op", content = "value", rename_all = "snake_case")]
+pub enum ArtifactStringPatch {
+    Set(String),
+    Clear,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "op", content = "value", rename_all = "snake_case")]
+pub enum ArtifactJsonPatch {
+    Set(JsonValue),
+    Clear,
 }
 
 /// Request DTO for appending to a progress-type artifact

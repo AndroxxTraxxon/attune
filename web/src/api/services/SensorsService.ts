@@ -1,7 +1,7 @@
 /* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
- 
+/* eslint-disable */
 import type { ApiResponse_SensorResponse } from '../models/ApiResponse_SensorResponse';
 import type { CreateSensorRequest } from '../models/CreateSensorRequest';
 import type { PaginatedResponse_SensorSummary } from '../models/PaginatedResponse_SensorSummary';

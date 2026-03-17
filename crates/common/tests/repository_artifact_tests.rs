@@ -9,7 +9,7 @@ use attune_common::models::enums::{
 use attune_common::repositories::artifact::{
     ArtifactRepository, CreateArtifactInput, UpdateArtifactInput,
 };
-use attune_common::repositories::{Create, Delete, FindById, FindByRef, List, Update};
+use attune_common::repositories::{Create, Delete, FindById, FindByRef, List, Patch, Update};
 use attune_common::Error;
 use sqlx::PgPool;
 use std::collections::hash_map::DefaultHasher;
@@ -267,11 +267,11 @@ async fn test_update_artifact_all_fields() {
         visibility: Some(ArtifactVisibility::Public),
         retention_policy: Some(RetentionPolicyType::Days),
         retention_limit: Some(30),
-        name: Some("Updated Name".to_string()),
-        description: Some("Updated description".to_string()),
-        content_type: Some("image/png".to_string()),
+        name: Some(Patch::Set("Updated Name".to_string())),
+        description: Some(Patch::Set("Updated description".to_string())),
+        content_type: Some(Patch::Set("image/png".to_string())),
         size_bytes: Some(12345),
-        data: Some(serde_json::json!({"key": "value"})),
+        data: Some(Patch::Set(serde_json::json!({"key": "value"}))),
         execution: None,
     };
 

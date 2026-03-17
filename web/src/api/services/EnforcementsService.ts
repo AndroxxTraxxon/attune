@@ -1,7 +1,7 @@
 /* generated using openapi-typescript-codegen -- do not edit */
 /* istanbul ignore file */
 /* tslint:disable */
- 
+/* eslint-disable */
 import type { ApiResponse_EnforcementResponse } from '../models/ApiResponse_EnforcementResponse';
 import type { EnforcementStatus } from '../models/EnforcementStatus';
 import type { i64 } from '../models/i64';
@@ -20,6 +20,7 @@ export class EnforcementsService {
         event,
         status,
         triggerRef,
+        ruleRef,
         page,
         perPage,
     }: {
@@ -40,6 +41,10 @@ export class EnforcementsService {
          */
         triggerRef?: string | null,
         /**
+         * Filter by rule reference
+         */
+        ruleRef?: string | null,
+        /**
          * Page number (1-indexed)
          */
         page?: number,
@@ -56,6 +61,7 @@ export class EnforcementsService {
                 'event': event,
                 'status': status,
                 'trigger_ref': triggerRef,
+                'rule_ref': ruleRef,
                 'page': page,
                 'per_page': perPage,
             },
