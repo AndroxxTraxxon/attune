@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePacks } from "@/hooks/usePacks";
 import { useCreateRuntime, useUpdateRuntime } from "@/hooks/useRuntimes";
@@ -15,7 +15,15 @@ interface RuntimeFormProps {
   onCancel?: () => void;
 }
 
-type JsonObject = Record<string, any>;
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: JsonValue }
+  | JsonValue[];
+type JsonObject = { [key: string]: JsonValue };
+type NonNullJsonValue = Exclude<JsonValue, null>;
 
 function prettyJson(value: unknown): string {
   return JSON.stringify(value ?? {}, null, 2);
@@ -40,7 +48,11 @@ function validateObjectJson(label: string, raw: string): JsonObject {
   }
 }
 
-function validateJsonValue(label: string, raw: string, required = true): any {
+function validateJsonValue(
+  label: string,
+  raw: string,
+  required = true,
+): NonNullJsonValue | null {
   if (!raw.trim()) {
     if (required) {
       throw new Error(`${label} is required`);
@@ -49,7 +61,7 @@ function validateJsonValue(label: string, raw: string, required = true): any {
   }
 
   try {
-    return JSON.parse(raw) as any;
+    return JSON.parse(raw) as NonNullJsonValue;
   } catch {
     throw new Error(`${label} must be valid JSON`);
   }
@@ -66,30 +78,22 @@ export default function RuntimeForm({
   const createRuntime = useCreateRuntime();
   const updateRuntime = useUpdateRuntime();
 
-  const [ref, setRef] = useState("");
-  const [packRef, setPackRef] = useState("");
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [distributions, setDistributions] = useState("{}");
-  const [installation, setInstallation] = useState("");
-  const [executionConfig, setExecutionConfig] = useState("{}");
+  const [ref, setRef] = useState(() => initialData?.ref ?? "");
+  const [packRef, setPackRef] = useState(() => initialData?.pack_ref ?? "");
+  const [name, setName] = useState(() => initialData?.name ?? "");
+  const [description, setDescription] = useState(
+    () => initialData?.description ?? "",
+  );
+  const [distributions, setDistributions] = useState(() =>
+    prettyJson(initialData?.distributions ?? {}),
+  );
+  const [installation, setInstallation] = useState(() =>
+    initialData?.installation == null ? "" : prettyJson(initialData.installation),
+  );
+  const [executionConfig, setExecutionConfig] = useState(() =>
+    prettyJson(initialData?.execution_config ?? {}),
+  );
   const [errors, setErrors] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    if (!initialData) {
-      return;
-    }
-
-    setRef(initialData.ref);
-    setPackRef(initialData.pack_ref ?? "");
-    setName(initialData.name);
-    setDescription(initialData.description ?? "");
-    setDistributions(prettyJson(initialData.distributions));
-    setInstallation(
-      initialData.installation == null ? "" : prettyJson(initialData.installation),
-    );
-    setExecutionConfig(prettyJson(initialData.execution_config));
-  }, [initialData]);
 
   const canEditRef = !isEditing;
   const isSubmitting = createRuntime.isPending || updateRuntime.isPending;
@@ -113,7 +117,7 @@ export default function RuntimeForm({
 
     let parsedDistributions: JsonObject | undefined;
     let parsedExecutionConfig: JsonObject | undefined;
-    let parsedInstallation: any = null;
+    let parsedInstallation: NonNullJsonValue | null = null;
 
     try {
       parsedDistributions = validateObjectJson("Distributions", distributions);
@@ -146,6 +150,11 @@ export default function RuntimeForm({
 
     try {
       if (isEditing && initialData) {
+        const installationPatch =
+          installation.trim().length > 0 && parsedInstallation !== null
+            ? { op: NullableJsonPatch.op.SET, value: parsedInstallation }
+            : null;
+
         await updateRuntime.mutateAsync({
           ref: initialData.ref,
           data: {
@@ -154,10 +163,7 @@ export default function RuntimeForm({
               : null,
             name: name.trim(),
             distributions: parsedDistributions,
-            installation:
-              installation.trim().length > 0
-                ? { op: NullableJsonPatch.op.SET, value: parsedInstallation }
-                : null,
+            installation: installationPatch,
             execution_config: parsedExecutionConfig,
           },
         });

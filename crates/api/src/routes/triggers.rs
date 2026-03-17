@@ -26,8 +26,8 @@ use crate::{
         common::{PaginatedResponse, PaginationParams},
         trigger::{
             CreateSensorRequest, CreateTriggerRequest, SensorJsonPatch, SensorResponse,
-            SensorSummary, TriggerJsonPatch, TriggerResponse, TriggerStringPatch,
-            TriggerSummary, UpdateSensorRequest, UpdateTriggerRequest,
+            SensorSummary, TriggerJsonPatch, TriggerResponse, TriggerStringPatch, TriggerSummary,
+            UpdateSensorRequest, UpdateTriggerRequest,
         },
         ApiResponse, SuccessResponse,
     },

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Code2, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import type { RuntimeSummary } from "@/api";
@@ -144,7 +144,7 @@ export default function RuntimesPage() {
         {ref === "new" ? (
           <RuntimeForm />
         ) : ref ? (
-          <RuntimeDetail runtimeRef={ref} />
+          <RuntimeDetail key={ref} runtimeRef={ref} />
         ) : (
           <div className="flex items-center justify-center h-full">
             <div className="text-center text-gray-500">
@@ -168,10 +168,6 @@ function RuntimeDetail({ runtimeRef }: { runtimeRef: string }) {
   const { data, isLoading, error } = useRuntime(runtimeRef);
   const deleteRuntime = useDeleteRuntime();
   const [isEditing, setIsEditing] = useState(false);
-
-  useEffect(() => {
-    setIsEditing(false);
-  }, [runtimeRef]);
 
   if (isLoading) {
     return (
