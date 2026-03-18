@@ -1,7 +1,9 @@
 //! Authentication routes
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
+    http::HeaderMap,
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -21,11 +23,16 @@ use crate::{
             TokenType,
         },
         middleware::RequireAuth,
+        oidc::{
+            apply_cookies_to_headers, build_login_redirect, build_logout_redirect,
+            cookie_authenticated_user, get_cookie_value, oidc_callback_redirect_response,
+            OidcCallbackQuery, REFRESH_COOKIE_NAME,
+        },
         verify_password,
     },
     dto::{
-        ApiResponse, ChangePasswordRequest, CurrentUserResponse, LoginRequest, RefreshTokenRequest,
-        RegisterRequest, SuccessResponse, TokenResponse,
+        ApiResponse, AuthSettingsResponse, ChangePasswordRequest, CurrentUserResponse,
+        LoginRequest, RefreshTokenRequest, RegisterRequest, SuccessResponse, TokenResponse,
     },
     middleware::error::ApiError,
     state::SharedState,
@@ -63,13 +70,55 @@ pub struct SensorTokenResponse {
 /// Create authentication routes
 pub fn routes() -> Router<SharedState> {
     Router::new()
+        .route("/settings", get(auth_settings))
         .route("/login", post(login))
+        .route("/oidc/login", get(oidc_login))
+        .route("/callback", get(oidc_callback))
+        .route("/logout", get(logout))
         .route("/register", post(register))
         .route("/refresh", post(refresh_token))
         .route("/me", get(get_current_user))
         .route("/change-password", post(change_password))
         .route("/sensor-token", post(create_sensor_token))
         .route("/internal/sensor-token", post(create_sensor_token_internal))
+}
+
+/// Authentication settings endpoint
+///
+/// GET /auth/settings
+#[utoipa::path(
+    get,
+    path = "/auth/settings",
+    tag = "auth",
+    responses(
+        (status = 200, description = "Authentication settings", body = inline(ApiResponse<AuthSettingsResponse>))
+    )
+)]
+pub async fn auth_settings(
+    State(state): State<SharedState>,
+) -> Result<Json<ApiResponse<AuthSettingsResponse>>, ApiError> {
+    let oidc = state
+        .config
+        .security
+        .oidc
+        .as_ref()
+        .filter(|oidc| oidc.enabled);
+
+    let response = AuthSettingsResponse {
+        authentication_enabled: state.config.security.enable_auth,
+        local_password_enabled: state.config.security.enable_auth,
+        local_password_visible_by_default: state.config.security.enable_auth
+            && state.config.security.login_page.show_local_login,
+        oidc_enabled: oidc.is_some(),
+        oidc_visible_by_default: oidc.is_some() && state.config.security.login_page.show_oidc_login,
+        oidc_provider_name: oidc.map(|oidc| oidc.provider_name.clone()),
+        oidc_provider_label: oidc
+            .map(|oidc| oidc.provider_label.clone().unwrap_or_else(|| oidc.provider_name.clone())),
+        oidc_provider_icon_url: oidc.and_then(|oidc| oidc.provider_icon_url.clone()),
+        self_registration_enabled: state.config.security.allow_self_registration,
+    };
+
+    Ok(Json(ApiResponse::new(response)))
 }
 
 /// Login endpoint
@@ -221,15 +270,22 @@ pub async fn register(
 )]
 pub async fn refresh_token(
     State(state): State<SharedState>,
-    Json(payload): Json<RefreshTokenRequest>,
-) -> Result<Json<ApiResponse<TokenResponse>>, ApiError> {
-    // Validate request
-    payload
-        .validate()
-        .map_err(|e| ApiError::ValidationError(format!("Invalid refresh token request: {}", e)))?;
+    headers: HeaderMap,
+    payload: Option<Json<RefreshTokenRequest>>,
+) -> Result<Response, ApiError> {
+    let browser_cookie_refresh = payload.is_none();
+    let refresh_token = if let Some(Json(payload)) = payload {
+        payload.validate().map_err(|e| {
+            ApiError::ValidationError(format!("Invalid refresh token request: {}", e))
+        })?;
+        payload.refresh_token
+    } else {
+        get_cookie_value(&headers, REFRESH_COOKIE_NAME)
+            .ok_or_else(|| ApiError::Unauthorized("Missing refresh token".to_string()))?
+    };
 
     // Validate refresh token
-    let claims = validate_token(&payload.refresh_token, &state.jwt_config)
+    let claims = validate_token(&refresh_token, &state.jwt_config)
         .map_err(|_| ApiError::Unauthorized("Invalid or expired refresh token".to_string()))?;
 
     // Ensure it's a refresh token
@@ -257,8 +313,18 @@ pub async fn refresh_token(
         refresh_token,
         state.jwt_config.access_token_expiration,
     );
+    let response_body = Json(ApiResponse::new(response.clone()));
 
-    Ok(Json(ApiResponse::new(response)))
+    if browser_cookie_refresh {
+        let mut http_response = response_body.into_response();
+        apply_cookies_to_headers(
+            http_response.headers_mut(),
+            &crate::auth::oidc::build_auth_cookies(&state, &response, ""),
+        )?;
+        return Ok(http_response);
+    }
+
+    Ok(response_body.into_response())
 }
 
 /// Get current user endpoint
@@ -279,9 +345,15 @@ pub async fn refresh_token(
 )]
 pub async fn get_current_user(
     State(state): State<SharedState>,
-    RequireAuth(user): RequireAuth,
+    headers: HeaderMap,
+    user: Result<RequireAuth, crate::auth::middleware::AuthError>,
 ) -> Result<Json<ApiResponse<CurrentUserResponse>>, ApiError> {
-    let identity_id = user.identity_id()?;
+    let authenticated_user = match user {
+        Ok(RequireAuth(user)) => user,
+        Err(_) => cookie_authenticated_user(&headers, &state)?
+            .ok_or_else(|| ApiError::Unauthorized("Unauthorized".to_string()))?,
+    };
+    let identity_id = authenticated_user.identity_id()?;
 
     // Fetch identity from database
     let identity = IdentityRepository::find_by_id(&state.db, identity_id)
@@ -295,6 +367,67 @@ pub async fn get_current_user(
     };
 
     Ok(Json(ApiResponse::new(response)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OidcLoginParams {
+    pub redirect_to: Option<String>,
+}
+
+/// Begin browser OIDC login by redirecting to the provider.
+pub async fn oidc_login(
+    State(state): State<SharedState>,
+    Query(params): Query<OidcLoginParams>,
+) -> Result<Response, ApiError> {
+    let login_redirect = build_login_redirect(&state, params.redirect_to.as_deref()).await?;
+    let mut response = Redirect::temporary(&login_redirect.authorization_url).into_response();
+    apply_cookies_to_headers(response.headers_mut(), &login_redirect.cookies)?;
+    Ok(response)
+}
+
+/// Handle the OIDC authorization code callback.
+pub async fn oidc_callback(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Query(query): Query<OidcCallbackQuery>,
+) -> Result<Response, ApiError> {
+    let redirect_to = get_cookie_value(&headers, crate::auth::oidc::OIDC_REDIRECT_COOKIE_NAME);
+    let authenticated = crate::auth::oidc::handle_callback(&state, &headers, &query).await?;
+    oidc_callback_redirect_response(
+        &state,
+        &authenticated.token_response,
+        redirect_to,
+        &authenticated.id_token,
+    )
+}
+
+/// Logout the current browser session and optionally redirect through the provider logout flow.
+pub async fn logout(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let oidc_enabled = state
+        .config
+        .security
+        .oidc
+        .as_ref()
+        .is_some_and(|oidc| oidc.enabled);
+
+    let response = if oidc_enabled {
+        let logout_redirect = build_logout_redirect(&state, &headers).await?;
+        let mut response = Redirect::temporary(&logout_redirect.redirect_url).into_response();
+        apply_cookies_to_headers(response.headers_mut(), &logout_redirect.cookies)?;
+        response
+    } else {
+        let mut response = Redirect::temporary("/login").into_response();
+        apply_cookies_to_headers(
+            response.headers_mut(),
+            &crate::auth::oidc::clear_auth_cookies(&state),
+        )?;
+        response
+    };
+
+    Ok(response)
 }
 
 /// Change password endpoint

@@ -10,8 +10,8 @@ use crate::dto::{
         ActionResponse, ActionSummary, CreateActionRequest, QueueStatsResponse, UpdateActionRequest,
     },
     auth::{
-        ChangePasswordRequest, CurrentUserResponse, LoginRequest, RefreshTokenRequest,
-        RegisterRequest, TokenResponse,
+        AuthSettingsResponse, ChangePasswordRequest, CurrentUserResponse, LoginRequest,
+        RefreshTokenRequest, RegisterRequest, TokenResponse,
     },
     common::{ApiResponse, PaginatedResponse, PaginationMeta, SuccessResponse},
     event::{EnforcementResponse, EnforcementSummary, EventResponse, EventSummary},
@@ -68,6 +68,7 @@ use crate::dto::{
         crate::routes::health::liveness,
 
         // Authentication
+        crate::routes::auth::auth_settings,
         crate::routes::auth::login,
         crate::routes::auth::register,
         crate::routes::auth::refresh_token,
@@ -202,6 +203,7 @@ use crate::dto::{
         schemas(
             // Common types
             ApiResponse<TokenResponse>,
+            ApiResponse<AuthSettingsResponse>,
             ApiResponse<CurrentUserResponse>,
             ApiResponse<PackResponse>,
             ApiResponse<PackInstallResponse>,

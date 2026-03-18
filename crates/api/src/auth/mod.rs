@@ -2,6 +2,7 @@
 
 pub mod jwt;
 pub mod middleware;
+pub mod oidc;
 pub mod password;
 
 pub use jwt::{generate_token, validate_token, Claims};

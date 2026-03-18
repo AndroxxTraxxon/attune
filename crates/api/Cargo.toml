@@ -27,6 +27,8 @@ futures = { workspace = true }
 
 # Web framework
 axum = { workspace = true, features = ["multipart"] }
+axum-extra = { version = "0.10", features = ["cookie"] }
+cookie = "0.18"
 tower = { workspace = true }
 tower-http = { workspace = true }
 
@@ -67,6 +69,8 @@ jsonschema = { workspace = true }
 
 # HTTP client
 reqwest = { workspace = true }
+openidconnect = "4.0"
+url = { workspace = true }
 
 # Archive/compression
 tar = { workspace = true }
@@ -88,6 +92,7 @@ hex = "0.4"
 # OpenAPI/Swagger
 utoipa = { workspace = true, features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
+jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
 
 [dev-dependencies]
 mockall = { workspace = true }

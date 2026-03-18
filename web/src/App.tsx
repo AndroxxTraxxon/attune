@@ -9,6 +9,7 @@ import MainLayout from "@/components/layout/MainLayout";
 
 // Lazy-loaded page components for code splitting
 const LoginPage = lazy(() => import("@/pages/auth/LoginPage"));
+const OidcCallbackPage = lazy(() => import("@/pages/auth/OidcCallbackPage"));
 const DashboardPage = lazy(() => import("@/pages/dashboard/DashboardPage"));
 const PacksPage = lazy(() => import("@/pages/packs/PacksPage"));
 const PackCreatePage = lazy(() => import("@/pages/packs/PackCreatePage"));
@@ -68,6 +69,7 @@ function App() {
               <Routes>
                 {/* Public routes */}
                 <Route path="/login" element={<LoginPage />} />
+                <Route path="/login/callback" element={<OidcCallbackPage />} />
 
                 {/* Protected routes */}
                 <Route

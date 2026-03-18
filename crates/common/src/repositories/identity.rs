@@ -159,6 +159,27 @@ impl IdentityRepository {
             "SELECT id, login, display_name, password_hash, attributes, created, updated FROM identity WHERE login = $1"
         ).bind(login).fetch_optional(executor).await.map_err(Into::into)
     }
+
+    pub async fn find_by_oidc_subject<'e, E>(
+        executor: E,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<Option<Identity>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, Identity>(
+            "SELECT id, login, display_name, password_hash, attributes, created, updated
+             FROM identity
+             WHERE attributes->'oidc'->>'issuer' = $1
+               AND attributes->'oidc'->>'sub' = $2",
+        )
+        .bind(issuer)
+        .bind(subject)
+        .fetch_optional(executor)
+        .await
+        .map_err(Into::into)
+    }
 }
 
 // Permission Set Repository

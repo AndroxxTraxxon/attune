@@ -4,7 +4,12 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+    # jsonwebtoken's RSA support is required for verifying external RS256 OIDC ID tokens.
+    # No patched rsa release is available yet for RUSTSEC-2023-0071, so tolerate it until
+    # the upstream ecosystem provides a safe replacement or fix.
+    "RUSTSEC-2023-0071",
+]
 
 [licenses]
 version = 2
@@ -30,7 +35,14 @@ multiple-versions = "warn"
 wildcards = "allow"
 highlight = "all"
 deny = []
-skip = []
+skip = [
+    "winnow@0.6.26",
+    "winnow@0.7.15",
+    "windows_x86_64_msvc@0.42.2",
+    "windows_x86_64_msvc@0.48.5",
+    "windows_x86_64_msvc@0.52.6",
+    "windows_x86_64_msvc@0.53.1",
+]
 skip-tree = []
 
 [sources]

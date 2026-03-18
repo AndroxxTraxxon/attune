@@ -299,6 +299,14 @@ pub struct SecurityConfig {
     /// Allow unauthenticated self-service user registration
     #[serde(default)]
     pub allow_self_registration: bool,
+
+    /// Login page visibility defaults for the web UI.
+    #[serde(default)]
+    pub login_page: LoginPageConfig,
+
+    /// Optional OpenID Connect configuration for browser login.
+    #[serde(default)]
+    pub oidc: Option<OidcConfig>,
 }
 
 fn default_jwt_access_expiration() -> u64 {
@@ -307,6 +315,68 @@ fn default_jwt_access_expiration() -> u64 {
 
 fn default_jwt_refresh_expiration() -> u64 {
     604800 // 7 days
+}
+
+/// Web login page configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginPageConfig {
+    /// Show the local username/password form by default.
+    #[serde(default = "default_true")]
+    pub show_local_login: bool,
+
+    /// Show the OIDC/SSO option by default when configured.
+    #[serde(default = "default_true")]
+    pub show_oidc_login: bool,
+}
+
+impl Default for LoginPageConfig {
+    fn default() -> Self {
+        Self {
+            show_local_login: true,
+            show_oidc_login: true,
+        }
+    }
+}
+
+/// OpenID Connect configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OidcConfig {
+    /// Enable OpenID Connect login flow.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// OpenID Provider discovery document URL.
+    pub discovery_url: String,
+
+    /// Confidential client ID.
+    pub client_id: String,
+
+    /// Provider name used in login-page overrides such as `?auth=<provider_name>`.
+    #[serde(default = "default_oidc_provider_name")]
+    pub provider_name: String,
+
+    /// User-facing provider label shown on the login page.
+    pub provider_label: Option<String>,
+
+    /// Optional icon URL shown beside the provider label on the login page.
+    pub provider_icon_url: Option<String>,
+
+    /// Confidential client secret.
+    pub client_secret: Option<String>,
+
+    /// Redirect URI registered with the provider.
+    pub redirect_uri: String,
+
+    /// Optional post-logout redirect URI.
+    pub post_logout_redirect_uri: Option<String>,
+
+    /// Optional requested scopes in addition to `openid email profile`.
+    #[serde(default)]
+    pub scopes: Vec<String>,
+}
+
+fn default_oidc_provider_name() -> String {
+    "oidc".to_string()
 }
 
 /// Worker configuration
@@ -681,6 +751,8 @@ impl Default for SecurityConfig {
             encryption_key: None,
             enable_auth: true,
             allow_self_registration: false,
+            login_page: LoginPageConfig::default(),
+            oidc: None,
         }
     }
 }
@@ -798,6 +870,37 @@ impl Config {
             return Err(crate::Error::validation(
                 "JWT secret is required when authentication is enabled",
             ));
+        }
+
+        if let Some(oidc) = &self.security.oidc {
+            if oidc.enabled {
+                if oidc.discovery_url.trim().is_empty() {
+                    return Err(crate::Error::validation(
+                        "OIDC discovery URL cannot be empty when OIDC is enabled",
+                    ));
+                }
+                if oidc.client_id.trim().is_empty() {
+                    return Err(crate::Error::validation(
+                        "OIDC client ID cannot be empty when OIDC is enabled",
+                    ));
+                }
+                if oidc
+                    .client_secret
+                    .as_deref()
+                    .unwrap_or("")
+                    .trim()
+                    .is_empty()
+                {
+                    return Err(crate::Error::validation(
+                        "OIDC client secret is required when OIDC is enabled",
+                    ));
+                }
+                if oidc.redirect_uri.trim().is_empty() {
+                    return Err(crate::Error::validation(
+                        "OIDC redirect URI cannot be empty when OIDC is enabled",
+                    ));
+                }
+            }
         }
 
         // Validate encryption key if provided
@@ -930,6 +1033,8 @@ mod tests {
                 encryption_key: Some("a".repeat(32)),
                 enable_auth: true,
                 allow_self_registration: false,
+                login_page: LoginPageConfig::default(),
+                oidc: None,
             },
             worker: None,
             sensor: None,

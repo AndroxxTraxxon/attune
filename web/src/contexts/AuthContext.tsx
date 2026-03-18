@@ -7,7 +7,7 @@ import {
   ReactNode,
 } from "react";
 import { AuthService, ApiError } from "@/api";
-import type { UserInfo, LoginRequest } from "@/api";
+import type { UserInfo } from "@/api";
 import {
   startTokenRefreshMonitor,
   stopTokenRefreshMonitor,
@@ -17,10 +17,14 @@ interface AuthContextType {
   user: UserInfo | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (credentials: LoginRequest) => Promise<void>;
+  login: (redirectTo?: string) => void;
   logout: () => void;
   refreshUser: () => Promise<void>;
   getToken: () => string | null;
+  completeLogin: (params: {
+    accessToken: string;
+    refreshToken: string;
+  }) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -73,29 +77,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   };
 
-  const login = async (credentials: LoginRequest) => {
-    try {
-      const response = await AuthService.login({
-        requestBody: credentials,
-      });
-
-      const { access_token, refresh_token, user: userInfo } = response.data;
-      localStorage.setItem("access_token", access_token);
-      localStorage.setItem("refresh_token", refresh_token);
-
-      // If user info is included in response, use it; otherwise load it
-      if (userInfo) {
-        setUser(userInfo);
-      } else {
-        await loadUser();
-      }
-    } catch (error) {
-      console.error("Login failed:", error);
-      if (error instanceof ApiError) {
-        console.error(`API Error ${error.status}: ${error.message}`);
-      }
-      throw error;
-    }
+  const login = (redirectTo?: string) => {
+    const redirectParam = redirectTo
+      ? `?redirect_to=${encodeURIComponent(redirectTo)}`
+      : "";
+    window.location.href = `/auth/oidc/login${redirectParam}`;
   };
 
   const logout = () => {
@@ -103,6 +89,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     localStorage.removeItem("refresh_token");
     stopTokenRefreshMonitor();
     setUser(null);
+    window.location.href = "/auth/logout";
   };
 
   const refreshUser = async () => {
@@ -113,6 +100,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return localStorage.getItem("access_token");
   };
 
+  const completeLogin = async ({
+    accessToken,
+    refreshToken,
+  }: {
+    accessToken: string;
+    refreshToken: string;
+  }) => {
+    localStorage.setItem("access_token", accessToken);
+    localStorage.setItem("refresh_token", refreshToken);
+    await loadUser();
+  };
+
   const value: AuthContextType = {
     user,
     isAuthenticated: !!user,
@@ -121,6 +120,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     logout,
     refreshUser,
     getToken,
+    completeLogin,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

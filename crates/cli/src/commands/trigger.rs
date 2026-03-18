@@ -258,7 +258,6 @@ async fn handle_update(
     #[serde(tag = "op", content = "value", rename_all = "snake_case")]
     enum TriggerDescriptionPatch {
         Set(String),
-        Clear,
     }
 
     #[derive(Serialize)]

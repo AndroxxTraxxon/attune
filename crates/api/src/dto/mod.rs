@@ -30,8 +30,8 @@ pub use artifact::{
     CreateVersionJsonRequest, SetDataRequest, UpdateArtifactRequest,
 };
 pub use auth::{
-    ChangePasswordRequest, CurrentUserResponse, LoginRequest, RefreshTokenRequest, RegisterRequest,
-    TokenResponse,
+    AuthSettingsResponse, ChangePasswordRequest, CurrentUserResponse, LoginRequest,
+    RefreshTokenRequest, RegisterRequest, TokenResponse,
 };
 pub use common::{
     ApiResponse, PaginatedResponse, PaginationMeta, PaginationParams, SuccessResponse,

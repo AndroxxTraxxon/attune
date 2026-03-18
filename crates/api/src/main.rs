@@ -115,8 +115,9 @@ async fn mq_reconnect_loop(state: Arc<AppState>, mq_url: String) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Install HMAC-only JWT crypto provider (must be before any token operations)
-    attune_common::auth::install_crypto_provider();
+    // Install a JWT crypto provider that supports both Attune's HS tokens
+    // and external RS256 OIDC identity tokens.
+    let _ = jsonwebtoken::crypto::rust_crypto::DEFAULT_PROVIDER.install_default();
 
     // Initialize tracing subscriber
     tracing_subscriber::fmt()

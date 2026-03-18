@@ -86,6 +86,27 @@ security:
   # Enable authentication
   enable_auth: true
 
+  # Login page defaults for the web UI. Users can still override with:
+  #   /login?auth=direct
+  #   /login?auth=<provider_name>
+  login_page:
+    show_local_login: true
+    show_oidc_login: true
+
+  # Optional OIDC browser login configuration
+  oidc:
+    enabled: false
+    discovery_url: https://auth.example.com/.well-known/openid-configuration
+    client_id: your-confidential-client-id
+    provider_name: sso
+    provider_label: Example SSO
+    provider_icon_url: https://auth.example.com/assets/logo.svg
+    client_secret: your-confidential-client-secret
+    redirect_uri: http://localhost:3000/auth/callback
+    post_logout_redirect_uri: http://localhost:3000/login
+    scopes:
+      - groups
+
 # Worker configuration (optional, for worker services)
 # Uncomment and configure if running worker processes
 # worker:

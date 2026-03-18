@@ -2,7 +2,7 @@
 
 use axum::{
     extract::{Request, State},
-    http::{header::AUTHORIZATION, StatusCode},
+    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
@@ -13,6 +13,8 @@ use std::sync::Arc;
 use attune_common::auth::jwt::{
     extract_token_from_header, validate_token, Claims, JwtConfig, TokenType,
 };
+
+use super::oidc::{cookie_authenticated_user, ACCESS_COOKIE_NAME};
 
 /// Authentication middleware state
 #[derive(Clone)]
@@ -50,21 +52,7 @@ pub async fn require_auth(
     mut request: Request,
     next: Next,
 ) -> Result<Response, AuthError> {
-    // Extract Authorization header
-    let auth_header = request
-        .headers()
-        .get(AUTHORIZATION)
-        .and_then(|h| h.to_str().ok())
-        .ok_or(AuthError::MissingToken)?;
-
-    // Extract token from Bearer scheme
-    let token = extract_token_from_header(auth_header).ok_or(AuthError::InvalidToken)?;
-
-    // Validate token
-    let claims = validate_token(token, &auth.jwt_config).map_err(|e| match e {
-        super::jwt::JwtError::Expired => AuthError::ExpiredToken,
-        _ => AuthError::InvalidToken,
-    })?;
+    let claims = extract_claims(request.headers(), &auth.jwt_config)?;
 
     // Add claims to request extensions
     request
@@ -90,22 +78,13 @@ impl axum::extract::FromRequestParts<crate::state::SharedState> for RequireAuth 
             return Ok(RequireAuth(user.clone()));
         }
 
-        // Otherwise, extract and validate token directly from header
-        // Extract Authorization header
-        let auth_header = parts
-            .headers
-            .get(AUTHORIZATION)
-            .and_then(|h| h.to_str().ok())
-            .ok_or(AuthError::MissingToken)?;
-
-        // Extract token from Bearer scheme
-        let token = extract_token_from_header(auth_header).ok_or(AuthError::InvalidToken)?;
-
-        // Validate token using jwt_config from app state
-        let claims = validate_token(token, &state.jwt_config).map_err(|e| match e {
-            super::jwt::JwtError::Expired => AuthError::ExpiredToken,
-            _ => AuthError::InvalidToken,
-        })?;
+        let claims = if let Some(user) =
+            cookie_authenticated_user(&parts.headers, state).map_err(map_cookie_auth_error)?
+        {
+            user.claims
+        } else {
+            extract_claims(&parts.headers, &state.jwt_config)?
+        };
 
         // Allow access, sensor, and execution-scoped tokens
         if claims.token_type != TokenType::Access
@@ -116,6 +95,33 @@ impl axum::extract::FromRequestParts<crate::state::SharedState> for RequireAuth 
         }
 
         Ok(RequireAuth(AuthenticatedUser { claims }))
+    }
+}
+
+fn extract_claims(headers: &HeaderMap, jwt_config: &JwtConfig) -> Result<Claims, AuthError> {
+    if let Some(auth_header) = headers.get(AUTHORIZATION).and_then(|h| h.to_str().ok()) {
+        let token = extract_token_from_header(auth_header).ok_or(AuthError::InvalidToken)?;
+        return validate_token(token, jwt_config).map_err(|e| match e {
+            super::jwt::JwtError::Expired => AuthError::ExpiredToken,
+            _ => AuthError::InvalidToken,
+        });
+    }
+
+    if headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|cookies| cookies.contains(ACCESS_COOKIE_NAME))
+    {
+        return Err(AuthError::InvalidToken);
+    }
+
+    Err(AuthError::MissingToken)
+}
+
+fn map_cookie_auth_error(error: crate::middleware::error::ApiError) -> AuthError {
+    match error {
+        crate::middleware::error::ApiError::Unauthorized(_) => AuthError::InvalidToken,
+        _ => AuthError::InvalidToken,
     }
 }
 

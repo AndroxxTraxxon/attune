@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Link, Outlet, useNavigate, useLocation } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   Package,
@@ -180,7 +180,6 @@ function NavLink({
 
 export default function MainLayout() {
   const { user, logout } = useAuth();
-  const navigate = useNavigate();
   const location = useLocation();
   const [isCollapsed, setIsCollapsed] = useState(() => {
     // Initialize from localStorage
@@ -206,7 +205,6 @@ export default function MainLayout() {
 
   const handleLogout = () => {
     logout();
-    navigate("/login");
   };
 
   return (

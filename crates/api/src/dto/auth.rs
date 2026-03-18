@@ -136,3 +136,43 @@ pub struct CurrentUserResponse {
     #[schema(example = "Administrator")]
     pub display_name: Option<String>,
 }
+
+/// Public authentication settings for the login page.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AuthSettingsResponse {
+    /// Whether authentication is enabled for the server.
+    #[schema(example = true)]
+    pub authentication_enabled: bool,
+
+    /// Whether local username/password login is configured.
+    #[schema(example = true)]
+    pub local_password_enabled: bool,
+
+    /// Whether local username/password login should be shown by default.
+    #[schema(example = true)]
+    pub local_password_visible_by_default: bool,
+
+    /// Whether OIDC login is configured and enabled.
+    #[schema(example = false)]
+    pub oidc_enabled: bool,
+
+    /// Whether OIDC login should be shown by default.
+    #[schema(example = false)]
+    pub oidc_visible_by_default: bool,
+
+    /// Provider name for `?auth=<provider>`.
+    #[schema(example = "sso")]
+    pub oidc_provider_name: Option<String>,
+
+    /// User-facing provider label for the login button.
+    #[schema(example = "Example SSO")]
+    pub oidc_provider_label: Option<String>,
+
+    /// Optional icon URL shown beside the provider label.
+    #[schema(example = "https://auth.example.com/assets/logo.svg")]
+    pub oidc_provider_icon_url: Option<String>,
+
+    /// Whether unauthenticated self-service registration is allowed.
+    #[schema(example = false)]
+    pub self_registration_enabled: bool,
+}
