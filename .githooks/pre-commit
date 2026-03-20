@@ -1,0 +1,15 @@
+#!/bin/bash
+
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+echo "Formatting Rust code..."
+cargo fmt --all
+
+echo "Refreshing staged Rust files..."
+git add --all '*.rs'
+
+echo "Running pre-commit checks..."
+make pre-commit

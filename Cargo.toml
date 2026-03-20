@@ -52,17 +52,17 @@ config = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
 
 # UUID
-uuid = { version = "1.21", features = ["v4", "serde"] }
+uuid = { version = "1.22", features = ["v4", "serde"] }
 
 # Validation
 validator = { version = "0.20", features = ["derive"] }
 
 # CLI
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 
 # Message queue / PubSub
 # RabbitMQ
-lapin = "4.1"
+lapin = "4.3"
 # Redis
 redis = { version = "1.0", features = ["tokio-comp", "connection-manager"] }
 
@@ -114,7 +114,7 @@ futures = "0.3"
 semver = { version = "1.0", features = ["serde"] }
 
 # Temp files
-tempfile = "3.26"
+tempfile = "3.27"
 
 # Testing
 mockall = "0.14"

@@ -3,7 +3,8 @@
         docker-up docker-down docker-cache-warm docker-stop-system-services dev watch generate-agents-index \
         docker-build-workers docker-build-worker-base docker-build-worker-python \
         docker-build-worker-node docker-build-worker-full deny ci-rust ci-web-blocking ci-web-advisory \
-        ci-security-blocking ci-security-advisory ci-blocking ci-advisory
+        ci-security-blocking ci-security-advisory ci-blocking ci-advisory \
+        fmt-check pre-commit install-git-hooks
 
 # Default target
 help:
@@ -25,8 +26,12 @@ help:
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  make fmt            - Format all code"
+	@echo "  make fmt-check      - Verify formatting without changing files"
 	@echo "  make clippy         - Run linter"
 	@echo "  make lint           - Run both fmt and clippy"
+	@echo "  make deny           - Run cargo-deny checks"
+	@echo "  make pre-commit     - Run the git pre-commit checks locally"
+	@echo "  make install-git-hooks - Configure git to use the repo hook scripts"
 	@echo ""
 	@echo "Running Services:"
 	@echo "  make run-api        - Run API service"
@@ -110,6 +115,9 @@ check:
 
 fmt:
 	cargo fmt --all
+
+fmt-check:
+	cargo fmt --all -- --check
 
 clippy:
 	cargo clippy --all-features -- -D warnings
@@ -381,9 +389,14 @@ licenses:
 	cargo license --json > licenses.json
 	@echo "License information saved to licenses.json"
 
-# All-in-one check before committing
-pre-commit: fmt clippy test
-	@echo "✅ All checks passed! Ready to commit."
+# All blocking checks run by the git pre-commit hook after formatting
+pre-commit: deny ci-web-blocking ci-security-blocking
+	@echo "✅ Pre-commit checks passed."
+
+install-git-hooks:
+	git config core.hooksPath .githooks
+	chmod +x .githooks/pre-commit
+	@echo "✅ Git hooks configured to use .githooks/"
 
 # CI simulation
 ci: ci-blocking ci-advisory

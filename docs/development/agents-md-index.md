@@ -153,17 +153,24 @@ Adjust `max_files` to show more/fewer files before truncation:
 
 ### Pre-commit Hook (Optional)
 
-Add to `.git/hooks/pre-commit`:
+The repository now includes a versioned hook at `.githooks/pre-commit`.
+
+Install it once per clone:
 
 ```bash
-#!/bin/bash
-# Regenerate AGENTS.md if documentation changed
-if git diff --cached --name-only | grep -qE '^(docs|scripts|work-summary)/'; then
-    echo "Regenerating AGENTS.md..."
-    make generate-agents-index
-    git add AGENTS.md
-fi
+make install-git-hooks
 ```
+
+The hook currently runs:
+
+```bash
+make pre-commit
+```
+
+That checks:
+
+- `cargo fmt --all -- --check`
+- `cargo deny check`
 
 ### CI/CD Integration
 
