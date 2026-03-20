@@ -19,6 +19,11 @@ interface AuthSettingsResponse {
   oidc_provider_name: string | null;
   oidc_provider_label: string | null;
   oidc_provider_icon_url: string | null;
+  ldap_enabled: boolean;
+  ldap_visible_by_default: boolean;
+  ldap_provider_name: string | null;
+  ldap_provider_label: string | null;
+  ldap_provider_icon_url: string | null;
   self_registration_enabled: boolean;
 }
 
@@ -33,6 +38,12 @@ export default function LoginPage() {
   const [isLoadingSettings, setIsLoadingSettings] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [credentials, setCredentials] = useState({ login: "", password: "" });
+  const [ldapCredentials, setLdapCredentials] = useState({
+    login: "",
+    password: "",
+  });
+  const [ldapError, setLdapError] = useState<string | null>(null);
+  const [isLdapSubmitting, setIsLdapSubmitting] = useState(false);
 
   const redirectPath = sessionStorage.getItem("redirect_after_login");
   const from =
@@ -67,19 +78,36 @@ export default function LoginPage() {
   const providerName = settings?.oidc_provider_name?.toLowerCase() ?? null;
   const providerLabel =
     settings?.oidc_provider_label ?? settings?.oidc_provider_name ?? "SSO";
+  const ldapEnabled = settings?.ldap_enabled ?? false;
+  const ldapProviderName = settings?.ldap_provider_name?.toLowerCase() ?? null;
+  const ldapProviderLabel =
+    settings?.ldap_provider_label ?? settings?.ldap_provider_name ?? "LDAP";
 
   let showLocal = settings?.local_password_visible_by_default ?? false;
   let showOidc = settings?.oidc_visible_by_default ?? false;
+  let showLdap = settings?.ldap_visible_by_default ?? false;
 
   if (authOverride === "direct") {
     if (localEnabled) {
       showLocal = true;
       showOidc = false;
+      showLdap = false;
     }
   } else if (authOverride && providerName && authOverride === providerName) {
     if (oidcEnabled) {
       showLocal = false;
       showOidc = true;
+      showLdap = false;
+    }
+  } else if (
+    authOverride &&
+    ldapProviderName &&
+    authOverride === ldapProviderName
+  ) {
+    if (ldapEnabled) {
+      showLocal = false;
+      showOidc = false;
+      showLdap = true;
     }
   }
 
@@ -107,10 +135,29 @@ export default function LoginPage() {
       return;
     }
 
+    if (ldapProviderName && authOverride === ldapProviderName) {
+      setOverrideError(
+        ldapEnabled
+          ? null
+          : `${ldapProviderLabel} was requested, but it is not available on this server.`,
+      );
+      return;
+    }
+
     setOverrideError(
       `Unknown authentication override '${authOverride}'. Falling back to the server defaults.`,
     );
-  }, [authOverride, localEnabled, oidcEnabled, providerLabel, providerName, settings]);
+  }, [
+    authOverride,
+    localEnabled,
+    oidcEnabled,
+    providerLabel,
+    providerName,
+    ldapEnabled,
+    ldapProviderLabel,
+    ldapProviderName,
+    settings,
+  ]);
 
   const handleOidcLogin = () => {
     sessionStorage.setItem("redirect_after_login", from);
@@ -140,6 +187,37 @@ export default function LoginPage() {
       }
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleLdapLogin = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setLdapError(null);
+    setIsLdapSubmitting(true);
+
+    try {
+      const response = await apiClient.post<{
+        data: { access_token: string; refresh_token: string };
+      }>("/auth/ldap/login", ldapCredentials);
+      await completeLogin({
+        accessToken: response.data.data.access_token,
+        refreshToken: response.data.data.refresh_token,
+      });
+      sessionStorage.removeItem("redirect_after_login");
+      navigate(from, { replace: true });
+    } catch (error) {
+      if (error && typeof error === "object" && "response" in error) {
+        const axiosError = error as {
+          response?: { data?: { message?: string } };
+        };
+        setLdapError(
+          axiosError.response?.data?.message ?? "LDAP authentication failed.",
+        );
+      } else {
+        setLdapError("LDAP authentication failed.");
+      }
+    } finally {
+      setIsLdapSubmitting(false);
     }
   };
 
@@ -272,12 +350,93 @@ export default function LoginPage() {
                 </>
               ) : null}
 
-              {!settingsError && authEnabled && !showLocal && !showOidc ? (
+              {authEnabled && (showLocal || showOidc) && showLdap ? (
+                <div className="my-6 flex items-center gap-3 text-xs uppercase tracking-[0.24em] text-gray-400">
+                  <div className="h-px flex-1 bg-gray-200" />
+                  or
+                  <div className="h-px flex-1 bg-gray-200" />
+                </div>
+              ) : null}
+
+              {authEnabled && showLdap ? (
+                <>
+                  <p className="mb-4 text-sm text-gray-600">
+                    Sign in with {ldapProviderLabel}.
+                  </p>
+                  <form className="space-y-4" onSubmit={handleLdapLogin}>
+                    <div>
+                      <label
+                        htmlFor="ldap-login"
+                        className="block text-sm font-medium text-gray-700"
+                      >
+                        {ldapProviderLabel} Login
+                      </label>
+                      <input
+                        id="ldap-login"
+                        type="text"
+                        autoComplete="username"
+                        value={ldapCredentials.login}
+                        onChange={(event) =>
+                          setLdapCredentials((current) => ({
+                            ...current,
+                            login: event.target.value,
+                          }))
+                        }
+                        className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="ldap-password"
+                        className="block text-sm font-medium text-gray-700"
+                      >
+                        Password
+                      </label>
+                      <input
+                        id="ldap-password"
+                        type="password"
+                        autoComplete="current-password"
+                        value={ldapCredentials.password}
+                        onChange={(event) =>
+                          setLdapCredentials((current) => ({
+                            ...current,
+                            password: event.target.value,
+                          }))
+                        }
+                        className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        required
+                      />
+                    </div>
+                    {ldapError ? (
+                      <div className="rounded-lg bg-red-50 p-4 text-sm text-red-700">
+                        {ldapError}
+                      </div>
+                    ) : null}
+                    <button
+                      type="submit"
+                      disabled={isLdapSubmitting}
+                      className="w-full rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isLdapSubmitting
+                        ? "Signing in..."
+                        : `Sign in with ${ldapProviderLabel}`}
+                    </button>
+                  </form>
+                </>
+              ) : null}
+
+              {!settingsError &&
+              authEnabled &&
+              !showLocal &&
+              !showOidc &&
+              !showLdap ? (
                 <div className="rounded-lg bg-amber-50 p-4 text-sm text-amber-800">
                   No login method is shown by default for this server. Use
                   `?auth=direct`
-                  {providerName ? ` or ?auth=${providerName}` : ""} to choose
-                  a specific method.
+                  {providerName ? ` or ?auth=${providerName}` : ""}
+                  {ldapProviderName ? ` or ?auth=${ldapProviderName}` : ""} to
+                  choose a specific method.
                 </div>
               ) : null}
             </>

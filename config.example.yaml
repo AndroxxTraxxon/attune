@@ -92,6 +92,7 @@ security:
   login_page:
     show_local_login: true
     show_oidc_login: true
+    show_ldap_login: true
 
   # Optional OIDC browser login configuration
   oidc:
@@ -106,6 +107,26 @@ security:
     post_logout_redirect_uri: http://localhost:3000/login
     scopes:
       - groups
+
+  # Optional LDAP authentication configuration
+  ldap:
+    enabled: false
+    url: ldap://ldap.example.com:389
+    # Direct-bind mode: construct DN from template
+    # bind_dn_template: "uid={login},ou=users,dc=example,dc=com"
+    # Search-and-bind mode: search for user with a service account
+    user_search_base: "ou=users,dc=example,dc=com"
+    user_filter: "(uid={login})"
+    search_bind_dn: "cn=readonly,dc=example,dc=com"
+    search_bind_password: "readonly-password"
+    login_attr: uid
+    email_attr: mail
+    display_name_attr: cn
+    group_attr: memberOf
+    starttls: false
+    danger_skip_tls_verify: false
+    provider_name: ldap
+    provider_label: Company LDAP
 
 # Worker configuration (optional, for worker services)
 # Uncomment and configure if running worker processes

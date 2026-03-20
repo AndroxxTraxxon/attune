@@ -74,6 +74,7 @@ pub fn routes() -> Router<SharedState> {
         .route("/login", post(login))
         .route("/oidc/login", get(oidc_login))
         .route("/callback", get(oidc_callback))
+        .route("/ldap/login", post(ldap_login))
         .route("/logout", get(logout))
         .route("/register", post(register))
         .route("/refresh", post(refresh_token))
@@ -104,6 +105,13 @@ pub async fn auth_settings(
         .as_ref()
         .filter(|oidc| oidc.enabled);
 
+    let ldap = state
+        .config
+        .security
+        .ldap
+        .as_ref()
+        .filter(|ldap| ldap.enabled);
+
     let response = AuthSettingsResponse {
         authentication_enabled: state.config.security.enable_auth,
         local_password_enabled: state.config.security.enable_auth,
@@ -112,9 +120,21 @@ pub async fn auth_settings(
         oidc_enabled: oidc.is_some(),
         oidc_visible_by_default: oidc.is_some() && state.config.security.login_page.show_oidc_login,
         oidc_provider_name: oidc.map(|oidc| oidc.provider_name.clone()),
-        oidc_provider_label: oidc
-            .map(|oidc| oidc.provider_label.clone().unwrap_or_else(|| oidc.provider_name.clone())),
+        oidc_provider_label: oidc.map(|oidc| {
+            oidc.provider_label
+                .clone()
+                .unwrap_or_else(|| oidc.provider_name.clone())
+        }),
         oidc_provider_icon_url: oidc.and_then(|oidc| oidc.provider_icon_url.clone()),
+        ldap_enabled: ldap.is_some(),
+        ldap_visible_by_default: ldap.is_some() && state.config.security.login_page.show_ldap_login,
+        ldap_provider_name: ldap.map(|ldap| ldap.provider_name.clone()),
+        ldap_provider_label: ldap.map(|ldap| {
+            ldap.provider_label
+                .clone()
+                .unwrap_or_else(|| ldap.provider_name.clone())
+        }),
+        ldap_provider_icon_url: ldap.and_then(|ldap| ldap.provider_icon_url.clone()),
         self_registration_enabled: state.config.security.allow_self_registration,
     };
 
@@ -369,6 +389,17 @@ pub async fn get_current_user(
     Ok(Json(ApiResponse::new(response)))
 }
 
+/// Request body for LDAP login.
+#[derive(Debug, Serialize, Deserialize, Validate, ToSchema)]
+pub struct LdapLoginRequest {
+    /// User login name (uid, sAMAccountName, etc.)
+    #[validate(length(min = 1, max = 255))]
+    pub login: String,
+    /// User password
+    #[validate(length(min = 1, max = 512))]
+    pub password: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct OidcLoginParams {
     pub redirect_to: Option<String>,
@@ -399,6 +430,34 @@ pub async fn oidc_callback(
         redirect_to,
         &authenticated.id_token,
     )
+}
+
+/// Authenticate via LDAP directory.
+///
+/// POST /auth/ldap/login
+#[utoipa::path(
+    post,
+    path = "/auth/ldap/login",
+    tag = "auth",
+    request_body = LdapLoginRequest,
+    responses(
+        (status = 200, description = "Successfully authenticated via LDAP", body = inline(ApiResponse<TokenResponse>)),
+        (status = 401, description = "Invalid LDAP credentials"),
+        (status = 501, description = "LDAP not configured")
+    )
+)]
+pub async fn ldap_login(
+    State(state): State<SharedState>,
+    Json(payload): Json<LdapLoginRequest>,
+) -> Result<Json<ApiResponse<TokenResponse>>, ApiError> {
+    payload
+        .validate()
+        .map_err(|e| ApiError::ValidationError(format!("Invalid LDAP login request: {e}")))?;
+
+    let authenticated =
+        crate::auth::ldap::authenticate(&state, &payload.login, &payload.password).await?;
+
+    Ok(Json(ApiResponse::new(authenticated.token_response)))
 }
 
 /// Logout the current browser session and optionally redirect through the provider logout flow.

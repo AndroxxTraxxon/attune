@@ -305,6 +305,126 @@ async fn test_login_nonexistent_user() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
+// ── LDAP auth tests ──────────────────────────────────────────────────
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_ldap_login_returns_501_when_not_configured() {
+    let ctx = TestContext::new()
+        .await
+        .expect("Failed to create test context");
+
+    let response = ctx
+        .post(
+            "/auth/ldap/login",
+            json!({
+                "login": "jdoe",
+                "password": "secret"
+            }),
+            None,
+        )
+        .await
+        .expect("Failed to make request");
+
+    // LDAP is not configured in config.test.yaml, so the endpoint
+    // should return 501 Not Implemented.
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+}
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_ldap_login_validates_empty_login() {
+    let ctx = TestContext::new()
+        .await
+        .expect("Failed to create test context");
+
+    let response = ctx
+        .post(
+            "/auth/ldap/login",
+            json!({
+                "login": "",
+                "password": "secret"
+            }),
+            None,
+        )
+        .await
+        .expect("Failed to make request");
+
+    // Validation should fail before we even check LDAP config
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_ldap_login_validates_empty_password() {
+    let ctx = TestContext::new()
+        .await
+        .expect("Failed to create test context");
+
+    let response = ctx
+        .post(
+            "/auth/ldap/login",
+            json!({
+                "login": "jdoe",
+                "password": ""
+            }),
+            None,
+        )
+        .await
+        .expect("Failed to make request");
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_ldap_login_validates_missing_fields() {
+    let ctx = TestContext::new()
+        .await
+        .expect("Failed to create test context");
+
+    let response = ctx
+        .post("/auth/ldap/login", json!({}), None)
+        .await
+        .expect("Failed to make request");
+
+    // Missing required fields should return 422
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+// ── auth/settings LDAP field tests ──────────────────────────────────
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_auth_settings_includes_ldap_fields_disabled() {
+    let ctx = TestContext::new()
+        .await
+        .expect("Failed to create test context");
+
+    let response = ctx
+        .get("/auth/settings", None)
+        .await
+        .expect("Failed to make request");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await.expect("Failed to parse JSON");
+
+    // LDAP is not configured in config.test.yaml, so these should all
+    // reflect the disabled state.
+    assert_eq!(body["data"]["ldap_enabled"], false);
+    assert_eq!(body["data"]["ldap_visible_by_default"], false);
+    assert!(body["data"]["ldap_provider_name"].is_null());
+    assert!(body["data"]["ldap_provider_label"].is_null());
+    assert!(body["data"]["ldap_provider_icon_url"].is_null());
+
+    // Existing fields should still be present
+    assert!(body["data"]["authentication_enabled"].is_boolean());
+    assert!(body["data"]["local_password_enabled"].is_boolean());
+    assert!(body["data"]["oidc_enabled"].is_boolean());
+    assert!(body["data"]["self_registration_enabled"].is_boolean());
+}
+
 #[tokio::test]
 #[ignore = "integration test — requires database"]
 async fn test_get_current_user() {

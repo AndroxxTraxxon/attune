@@ -56,6 +56,12 @@ security:
     post_logout_redirect_uri: http://localhost:3000/login
     scopes:
       - groups
+  ldap:
+    enabled: false
+    url: ldap://localhost:389
+    bind_dn_template: "uid={login},ou=users,dc=example,dc=com"
+    provider_name: ldap
+    provider_label: Development LDAP
 
 # Packs directory (where pack action files are located)
 packs_base_dir: ./packs

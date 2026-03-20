@@ -70,6 +70,7 @@ use crate::dto::{
         // Authentication
         crate::routes::auth::auth_settings,
         crate::routes::auth::login,
+        crate::routes::auth::ldap_login,
         crate::routes::auth::register,
         crate::routes::auth::refresh_token,
         crate::routes::auth::get_current_user,
@@ -239,6 +240,7 @@ use crate::dto::{
 
             // Auth DTOs
             LoginRequest,
+            crate::routes::auth::LdapLoginRequest,
             RegisterRequest,
             RefreshTokenRequest,
             ChangePasswordRequest,
@@ -452,5 +454,44 @@ mod tests {
 
         println!("Total API paths: {}", path_count);
         println!("Total API operations: {}", operation_count);
+    }
+
+    #[test]
+    fn test_auth_endpoints_registered() {
+        let doc = ApiDoc::openapi();
+
+        let expected_auth_paths = vec![
+            "/auth/settings",
+            "/auth/login",
+            "/auth/ldap/login",
+            "/auth/register",
+            "/auth/refresh",
+            "/auth/me",
+            "/auth/change-password",
+        ];
+
+        for path in &expected_auth_paths {
+            assert!(
+                doc.paths.paths.contains_key(*path),
+                "Expected auth endpoint {} to be registered in OpenAPI spec, but it was missing. \
+                 Registered paths: {:?}",
+                path,
+                doc.paths.paths.keys().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn test_ldap_login_request_schema_registered() {
+        let doc = ApiDoc::openapi();
+
+        let components = doc.components.as_ref().expect("components should exist");
+
+        assert!(
+            components.schemas.contains_key("LdapLoginRequest"),
+            "Expected LdapLoginRequest schema to be registered in OpenAPI components. \
+             Registered schemas: {:?}",
+            components.schemas.keys().collect::<Vec<_>>()
+        );
     }
 }

@@ -479,3 +479,173 @@ async fn test_identity_login_case_sensitive() {
         .unwrap();
     assert_eq!(found_upper.id, identity2.id);
 }
+
+// ── LDAP-specific tests ──────────────────────────────────────────────────────
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_find_by_ldap_dn_found() {
+    let pool = create_test_pool().await.unwrap();
+
+    let login = unique_pack_ref("ldap_found");
+    let server_url = "ldap://ldap.example.com";
+    let dn = "uid=jdoe,ou=users,dc=example,dc=com";
+
+    let input = CreateIdentityInput {
+        login: login.clone(),
+        display_name: Some("LDAP User".to_string()),
+        attributes: json!({
+            "ldap": {
+                "server_url": server_url,
+                "dn": dn,
+                "login": "jdoe",
+                "email": "jdoe@example.com"
+            }
+        }),
+        password_hash: None,
+    };
+
+    let created = IdentityRepository::create(&pool, input).await.unwrap();
+
+    let found = IdentityRepository::find_by_ldap_dn(&pool, server_url, dn)
+        .await
+        .unwrap()
+        .expect("LDAP identity not found");
+
+    assert_eq!(found.id, created.id);
+    assert_eq!(found.login, login);
+    assert_eq!(found.attributes["ldap"]["server_url"], server_url);
+    assert_eq!(found.attributes["ldap"]["dn"], dn);
+}
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_find_by_ldap_dn_not_found() {
+    let pool = create_test_pool().await.unwrap();
+
+    let found = IdentityRepository::find_by_ldap_dn(
+        &pool,
+        "ldap://nonexistent.example.com",
+        "uid=nobody,ou=users,dc=example,dc=com",
+    )
+    .await
+    .unwrap();
+
+    assert!(found.is_none());
+}
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_find_by_ldap_dn_wrong_server() {
+    let pool = create_test_pool().await.unwrap();
+
+    let dn = "uid=jdoe,ou=users,dc=example,dc=com";
+
+    let input = CreateIdentityInput {
+        login: unique_pack_ref("ldap_wrong_srv"),
+        display_name: Some("Server A User".to_string()),
+        attributes: json!({
+            "ldap": {
+                "server_url": "ldap://server-a.example.com",
+                "dn": dn,
+                "login": "jdoe"
+            }
+        }),
+        password_hash: None,
+    };
+
+    IdentityRepository::create(&pool, input).await.unwrap();
+
+    // Search with same DN but different server — composite key must match both
+    let found = IdentityRepository::find_by_ldap_dn(&pool, "ldap://server-b.example.com", dn)
+        .await
+        .unwrap();
+
+    assert!(found.is_none());
+}
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_find_by_ldap_dn_multiple_identities_different_servers() {
+    let pool = create_test_pool().await.unwrap();
+
+    let dn = "uid=shared,ou=users,dc=example,dc=com";
+    let server_a = "ldap://multi-a.example.com";
+    let server_b = "ldap://multi-b.example.com";
+
+    let input_a = CreateIdentityInput {
+        login: unique_pack_ref("ldap_multi_a"),
+        display_name: Some("User on Server A".to_string()),
+        attributes: json!({
+            "ldap": {
+                "server_url": server_a,
+                "dn": dn,
+                "login": "shared_a"
+            }
+        }),
+        password_hash: None,
+    };
+    let identity_a = IdentityRepository::create(&pool, input_a).await.unwrap();
+
+    let input_b = CreateIdentityInput {
+        login: unique_pack_ref("ldap_multi_b"),
+        display_name: Some("User on Server B".to_string()),
+        attributes: json!({
+            "ldap": {
+                "server_url": server_b,
+                "dn": dn,
+                "login": "shared_b"
+            }
+        }),
+        password_hash: None,
+    };
+    let identity_b = IdentityRepository::create(&pool, input_b).await.unwrap();
+
+    // Query server A — should return identity_a
+    let found_a = IdentityRepository::find_by_ldap_dn(&pool, server_a, dn)
+        .await
+        .unwrap()
+        .expect("Identity for server A not found");
+    assert_eq!(found_a.id, identity_a.id);
+    assert_eq!(found_a.attributes["ldap"]["server_url"], server_a);
+
+    // Query server B — should return identity_b
+    let found_b = IdentityRepository::find_by_ldap_dn(&pool, server_b, dn)
+        .await
+        .unwrap()
+        .expect("Identity for server B not found");
+    assert_eq!(found_b.id, identity_b.id);
+    assert_eq!(found_b.attributes["ldap"]["server_url"], server_b);
+
+    // Confirm they are distinct identities
+    assert_ne!(found_a.id, found_b.id);
+}
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_find_by_ldap_dn_ignores_oidc_attributes() {
+    let pool = create_test_pool().await.unwrap();
+
+    // Create an identity with OIDC attributes (no "ldap" key)
+    let input = CreateIdentityInput {
+        login: unique_pack_ref("ldap_oidc"),
+        display_name: Some("OIDC User".to_string()),
+        attributes: json!({
+            "oidc": {
+                "issuer": "https://auth.example.com",
+                "subject": "abc123",
+                "email": "oidc@example.com"
+            }
+        }),
+        password_hash: None,
+    };
+
+    IdentityRepository::create(&pool, input).await.unwrap();
+
+    // Searching by LDAP DN should not match OIDC-only identities
+    let found = IdentityRepository::find_by_ldap_dn(&pool, "https://auth.example.com", "abc123")
+        .await
+        .unwrap();
+
+    assert!(found.is_none());
+}

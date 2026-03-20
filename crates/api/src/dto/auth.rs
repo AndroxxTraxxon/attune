@@ -172,6 +172,26 @@ pub struct AuthSettingsResponse {
     #[schema(example = "https://auth.example.com/assets/logo.svg")]
     pub oidc_provider_icon_url: Option<String>,
 
+    /// Whether LDAP login is configured and enabled.
+    #[schema(example = false)]
+    pub ldap_enabled: bool,
+
+    /// Whether LDAP login should be shown by default.
+    #[schema(example = false)]
+    pub ldap_visible_by_default: bool,
+
+    /// Provider name for `?auth=<provider>`.
+    #[schema(example = "ldap")]
+    pub ldap_provider_name: Option<String>,
+
+    /// User-facing provider label for the login button.
+    #[schema(example = "Company LDAP")]
+    pub ldap_provider_label: Option<String>,
+
+    /// Optional icon URL shown beside the provider label.
+    #[schema(example = "https://ldap.example.com/assets/logo.svg")]
+    pub ldap_provider_icon_url: Option<String>,
+
     /// Whether unauthenticated self-service registration is allowed.
     #[schema(example = false)]
     pub self_registration_enabled: bool,

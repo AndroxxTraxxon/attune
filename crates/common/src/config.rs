@@ -307,6 +307,10 @@ pub struct SecurityConfig {
     /// Optional OpenID Connect configuration for browser login.
     #[serde(default)]
     pub oidc: Option<OidcConfig>,
+
+    /// Optional LDAP configuration for username/password login against a directory.
+    #[serde(default)]
+    pub ldap: Option<LdapConfig>,
 }
 
 fn default_jwt_access_expiration() -> u64 {
@@ -327,6 +331,10 @@ pub struct LoginPageConfig {
     /// Show the OIDC/SSO option by default when configured.
     #[serde(default = "default_true")]
     pub show_oidc_login: bool,
+
+    /// Show the LDAP option by default when configured.
+    #[serde(default = "default_true")]
+    pub show_ldap_login: bool,
 }
 
 impl Default for LoginPageConfig {
@@ -334,6 +342,7 @@ impl Default for LoginPageConfig {
         Self {
             show_local_login: true,
             show_oidc_login: true,
+            show_ldap_login: true,
         }
     }
 }
@@ -377,6 +386,95 @@ pub struct OidcConfig {
 
 fn default_oidc_provider_name() -> String {
     "oidc".to_string()
+}
+
+/// LDAP authentication configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LdapConfig {
+    /// Enable LDAP login flow.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// LDAP server URL (e.g., "ldap://ldap.example.com:389" or "ldaps://ldap.example.com:636").
+    pub url: String,
+
+    /// Bind DN template. Use `{login}` as placeholder for the user-supplied login.
+    /// Example: "uid={login},ou=users,dc=example,dc=com"
+    /// If not set, an anonymous bind is attempted first to search for the user.
+    pub bind_dn_template: Option<String>,
+
+    /// Base DN for user searches when bind_dn_template is not set.
+    /// Example: "ou=users,dc=example,dc=com"
+    pub user_search_base: Option<String>,
+
+    /// LDAP search filter template. Use `{login}` as placeholder.
+    /// Default: "(uid={login})"
+    #[serde(default = "default_ldap_user_filter")]
+    pub user_filter: String,
+
+    /// DN of a service account used to search for users (required when using search-based auth).
+    pub search_bind_dn: Option<String>,
+
+    /// Password for the search service account.
+    pub search_bind_password: Option<String>,
+
+    /// LDAP attribute to use as the login name. Default: "uid"
+    #[serde(default = "default_ldap_login_attr")]
+    pub login_attr: String,
+
+    /// LDAP attribute to use as the email. Default: "mail"
+    #[serde(default = "default_ldap_email_attr")]
+    pub email_attr: String,
+
+    /// LDAP attribute to use as the display name. Default: "cn"
+    #[serde(default = "default_ldap_display_name_attr")]
+    pub display_name_attr: String,
+
+    /// LDAP attribute that contains group membership. Default: "memberOf"
+    #[serde(default = "default_ldap_group_attr")]
+    pub group_attr: String,
+
+    /// Whether to use STARTTLS. Default: false
+    #[serde(default)]
+    pub starttls: bool,
+
+    /// Whether to skip TLS certificate verification (insecure!). Default: false
+    #[serde(default)]
+    pub danger_skip_tls_verify: bool,
+
+    /// Provider name used in login-page overrides such as `?auth=<provider_name>`.
+    #[serde(default = "default_ldap_provider_name")]
+    pub provider_name: String,
+
+    /// User-facing provider label shown on the login page.
+    pub provider_label: Option<String>,
+
+    /// Optional icon URL shown beside the provider label on the login page.
+    pub provider_icon_url: Option<String>,
+}
+
+fn default_ldap_provider_name() -> String {
+    "ldap".to_string()
+}
+
+fn default_ldap_user_filter() -> String {
+    "(uid={login})".to_string()
+}
+
+fn default_ldap_login_attr() -> String {
+    "uid".to_string()
+}
+
+fn default_ldap_email_attr() -> String {
+    "mail".to_string()
+}
+
+fn default_ldap_display_name_attr() -> String {
+    "cn".to_string()
+}
+
+fn default_ldap_group_attr() -> String {
+    "memberOf".to_string()
 }
 
 /// Worker configuration
@@ -753,6 +851,7 @@ impl Default for SecurityConfig {
             allow_self_registration: false,
             login_page: LoginPageConfig::default(),
             oidc: None,
+            ldap: None,
         }
     }
 }
@@ -1035,6 +1134,7 @@ mod tests {
                 allow_self_registration: false,
                 login_page: LoginPageConfig::default(),
                 oidc: None,
+                ldap: None,
             },
             worker: None,
             sensor: None,
@@ -1056,5 +1156,103 @@ mod tests {
         config.security.encryption_key = Some("a".repeat(32));
         config.security.jwt_secret = None;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_ldap_config_defaults() {
+        let yaml = r#"
+enabled: true
+url: "ldap://localhost:389"
+client_id: "test"
+"#;
+        let cfg: LdapConfig = serde_yaml_ng::from_str(yaml).unwrap();
+
+        assert!(cfg.enabled);
+        assert_eq!(cfg.url, "ldap://localhost:389");
+        assert_eq!(cfg.user_filter, "(uid={login})");
+        assert_eq!(cfg.login_attr, "uid");
+        assert_eq!(cfg.email_attr, "mail");
+        assert_eq!(cfg.display_name_attr, "cn");
+        assert_eq!(cfg.group_attr, "memberOf");
+        assert_eq!(cfg.provider_name, "ldap");
+        assert!(!cfg.starttls);
+        assert!(!cfg.danger_skip_tls_verify);
+        assert!(cfg.bind_dn_template.is_none());
+        assert!(cfg.user_search_base.is_none());
+        assert!(cfg.search_bind_dn.is_none());
+        assert!(cfg.search_bind_password.is_none());
+        assert!(cfg.provider_label.is_none());
+        assert!(cfg.provider_icon_url.is_none());
+    }
+
+    #[test]
+    fn test_ldap_config_full_deserialization() {
+        let yaml = r#"
+enabled: true
+url: "ldaps://ldap.corp.com:636"
+bind_dn_template: "uid={login},ou=people,dc=corp,dc=com"
+user_search_base: "ou=people,dc=corp,dc=com"
+user_filter: "(sAMAccountName={login})"
+search_bind_dn: "cn=svc,dc=corp,dc=com"
+search_bind_password: "secret"
+login_attr: "sAMAccountName"
+email_attr: "userPrincipalName"
+display_name_attr: "displayName"
+group_attr: "memberOf"
+starttls: true
+danger_skip_tls_verify: true
+provider_name: "corpldap"
+provider_label: "Corporate Directory"
+provider_icon_url: "https://corp.com/icon.svg"
+"#;
+        let cfg: LdapConfig = serde_yaml_ng::from_str(yaml).unwrap();
+
+        assert!(cfg.enabled);
+        assert_eq!(cfg.url, "ldaps://ldap.corp.com:636");
+        assert_eq!(
+            cfg.bind_dn_template.as_deref(),
+            Some("uid={login},ou=people,dc=corp,dc=com")
+        );
+        assert_eq!(
+            cfg.user_search_base.as_deref(),
+            Some("ou=people,dc=corp,dc=com")
+        );
+        assert_eq!(cfg.user_filter, "(sAMAccountName={login})");
+        assert_eq!(cfg.search_bind_dn.as_deref(), Some("cn=svc,dc=corp,dc=com"));
+        assert_eq!(cfg.search_bind_password.as_deref(), Some("secret"));
+        assert_eq!(cfg.login_attr, "sAMAccountName");
+        assert_eq!(cfg.email_attr, "userPrincipalName");
+        assert_eq!(cfg.display_name_attr, "displayName");
+        assert_eq!(cfg.group_attr, "memberOf");
+        assert!(cfg.starttls);
+        assert!(cfg.danger_skip_tls_verify);
+        assert_eq!(cfg.provider_name, "corpldap");
+        assert_eq!(cfg.provider_label.as_deref(), Some("Corporate Directory"));
+        assert_eq!(
+            cfg.provider_icon_url.as_deref(),
+            Some("https://corp.com/icon.svg")
+        );
+    }
+
+    #[test]
+    fn test_security_config_ldap_none_by_default() {
+        let yaml = r#"jwt_secret: "s""#;
+        let cfg: SecurityConfig = serde_yaml_ng::from_str(yaml).unwrap();
+
+        assert!(cfg.ldap.is_none());
+    }
+
+    #[test]
+    fn test_login_page_show_ldap_default_true() {
+        let cfg: LoginPageConfig = serde_yaml_ng::from_str("{}").unwrap();
+
+        assert!(cfg.show_ldap_login);
+    }
+
+    #[test]
+    fn test_login_page_show_ldap_explicit_false() {
+        let cfg: LoginPageConfig = serde_yaml_ng::from_str("show_ldap_login: false").unwrap();
+
+        assert!(!cfg.show_ldap_login);
     }
 }

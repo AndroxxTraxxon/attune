@@ -10,8 +10,9 @@ on:
       - "v*"
 
 env:
-  REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST }}
+  REGISTRY_HOST: ${{ vars.CLUSTER_GITEA_HOST }}
   REGISTRY_NAMESPACE: ${{ vars.CONTAINER_REGISTRY_NAMESPACE }}
+  REGISTRY_PLAIN_HTTP: ${{ vars.CONTAINER_REGISTRY_INSECURE }}
   CHART_NAME: attune
 
 jobs:
@@ -21,6 +22,7 @@ jobs:
     outputs:
       registry: ${{ steps.meta.outputs.registry }}
       namespace: ${{ steps.meta.outputs.namespace }}
+      registry_plain_http: ${{ steps.meta.outputs.registry_plain_http }}
       image_tag: ${{ steps.meta.outputs.image_tag }}
       image_tags: ${{ steps.meta.outputs.image_tags }}
       chart_version: ${{ steps.meta.outputs.chart_version }}
@@ -35,15 +37,25 @@ jobs:
 
           registry="${REGISTRY_HOST}"
           namespace="${REGISTRY_NAMESPACE}"
+          registry_plain_http_raw="${REGISTRY_PLAIN_HTTP:-}"
 
           if [ -z "$registry" ]; then
-            echo "CONTAINER_REGISTRY_HOST repository variable is required"
+            echo "CLUSTER_GITEA_HOST app variable is required"
             exit 1
           fi
 
           if [ -z "$namespace" ]; then
             namespace="${{ github.repository_owner }}"
           fi
+
+          case "$(printf '%s' "$registry_plain_http_raw" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on)
+              registry_plain_http="true"
+              ;;
+            *)
+              registry_plain_http="false"
+              ;;
+          esac
 
           short_sha="$(printf '%s' "${{ github.sha }}" | cut -c1-12)"
           ref_type="${{ github.ref_type }}"
@@ -64,6 +76,7 @@ jobs:
           {
             echo "registry=$registry"
             echo "namespace=$namespace"
+            echo "registry_plain_http=$registry_plain_http"
             echo "image_tag=$version"
             echo "image_tags=$image_tags"
             echo "chart_version=$chart_version"
@@ -141,7 +154,17 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Docker Buildx
+        if: needs.metadata.outputs.registry_plain_http != 'true'
         uses: docker/setup-buildx-action@v3
+
+      - name: Setup Docker Buildx For Plain HTTP Registry
+        if: needs.metadata.outputs.registry_plain_http == 'true'
+        uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [registry."${{ needs.metadata.outputs.registry }}"]
+              http = true
+              insecure = true
 
       - name: Log in to Gitea OCI registry
         shell: bash
@@ -153,13 +176,18 @@ jobs:
           set -euo pipefail
           username="${REGISTRY_USERNAME:-${{ github.actor }}}"
           password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
+          registry="${{ needs.metadata.outputs.registry }}"
 
           if [ -z "$password" ]; then
             echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
             exit 1
           fi
 
-          printf '%s' "$password" | docker login "${{ needs.metadata.outputs.registry }}" \
+          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
+            registry="http://${registry}"
+          fi
+
+          printf '%s' "$password" | docker login "$registry" \
             --username "$username" \
             --password-stdin
 
@@ -224,14 +252,20 @@ jobs:
           set -euo pipefail
           registry_username="${REGISTRY_USERNAME:-${{ github.actor }}}"
           registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
+          login_args=()
 
           if [ -z "$registry_password" ]; then
             echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
             exit 1
           fi
 
+          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
+            login_args+=(--plain-http)
+          fi
+
           printf '%s' "$registry_password" | helm registry login "${{ needs.metadata.outputs.registry }}" \
             --username "$registry_username" \
+            "${login_args[@]}" \
             --password-stdin
 
       - name: Lint chart
@@ -248,5 +282,11 @@ jobs:
 
       - name: Push chart to OCI registry
         run: |
+          push_args=()
+          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
+            push_args+=(--plain-http)
+          fi
+
           helm push "dist/${CHART_NAME}-${{ needs.metadata.outputs.chart_version }}.tgz" \
-            "oci://${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/helm"
+            "oci://${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/helm" \
+            "${push_args[@]}"

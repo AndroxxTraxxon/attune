@@ -26,10 +26,11 @@ The Helm chart is pushed as an OCI chart to:
 
 ## Required Gitea Repository Configuration
 
-Set these repository variables:
+Set these variables:
 
-- `CONTAINER_REGISTRY_HOST`: Registry hostname only, for example `gitea.example.com`
+- `CLUSTER_GITEA_HOST`: Registry hostname only, for example `gitea.example.com`
 - `CONTAINER_REGISTRY_NAMESPACE`: Optional override for the registry namespace. If omitted, the workflow uses the repository owner.
+- `CONTAINER_REGISTRY_INSECURE`: Optional boolean toggle for plain HTTP registries. Set to `true` for cluster-internal registries such as `gitea-http.gitea.svc.cluster.local`.
 
 Set one of these authentication options:
 
@@ -61,6 +62,12 @@ Log in to the registry:
 
 ```bash
 helm registry login gitea.example.com --username <user>
+```
+
+For a plain HTTP internal registry:
+
+```bash
+helm registry login gitea-http.gitea.svc.cluster.local --username <user> --plain-http
 ```
 
 Install the chart:

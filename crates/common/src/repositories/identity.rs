@@ -180,6 +180,27 @@ impl IdentityRepository {
         .await
         .map_err(Into::into)
     }
+
+    pub async fn find_by_ldap_dn<'e, E>(
+        executor: E,
+        server_url: &str,
+        dn: &str,
+    ) -> Result<Option<Identity>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, Identity>(
+            "SELECT id, login, display_name, password_hash, attributes, created, updated
+             FROM identity
+             WHERE attributes->'ldap'->>'server_url' = $1
+               AND attributes->'ldap'->>'dn' = $2",
+        )
+        .bind(server_url)
+        .bind(dn)
+        .fetch_optional(executor)
+        .await
+        .map_err(Into::into)
+    }
 }
 
 // Permission Set Repository
