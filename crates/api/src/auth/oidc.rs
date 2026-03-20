@@ -551,8 +551,9 @@ async fn verify_id_token(
     oidc: &OidcConfig,
     expected_nonce: &str,
 ) -> Result<VerifiedIdTokenClaims, ApiError> {
-    let header = decode_header(raw_id_token)
-        .map_err(|err| ApiError::Unauthorized(format!("OIDC ID token header decode failed: {err}")))?;
+    let header = decode_header(raw_id_token).map_err(|err| {
+        ApiError::Unauthorized(format!("OIDC ID token header decode failed: {err}"))
+    })?;
 
     let algorithm = match header.alg {
         Algorithm::RS256 => Algorithm::RS256,
@@ -570,14 +571,19 @@ async fn verify_id_token(
         .map_err(|err| ApiError::InternalServerError(format!("Failed to fetch OIDC JWKS: {err}")))?
         .json::<JwkSet>()
         .await
-        .map_err(|err| ApiError::InternalServerError(format!("Failed to parse OIDC JWKS: {err}")))?;
+        .map_err(|err| {
+            ApiError::InternalServerError(format!("Failed to parse OIDC JWKS: {err}"))
+        })?;
 
     let jwk = jwks
         .keys
         .iter()
         .find(|jwk| {
             jwk.common.key_id == header.kid
-                && matches!(jwk.common.public_key_use, Some(jsonwebtoken::jwk::PublicKeyUse::Signature))
+                && matches!(
+                    jwk.common.public_key_use,
+                    Some(jsonwebtoken::jwk::PublicKeyUse::Signature)
+                )
                 && matches!(
                     jwk.algorithm,
                     AlgorithmParameters::RSA(_) | AlgorithmParameters::EllipticCurve(_)
