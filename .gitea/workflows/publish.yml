@@ -180,7 +180,7 @@ jobs:
               http = true
               insecure = true
 
-      - name: Log in to Gitea OCI registry
+      - name: Configure OCI registry auth
         shell: bash
         env:
           REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
@@ -191,20 +191,24 @@ jobs:
           username="${REGISTRY_USERNAME:-${{ github.actor }}}"
           password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
           registry="${{ needs.metadata.outputs.registry }}"
-          login_registry="$registry"
 
           if [ -z "$password" ]; then
             echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
             exit 1
           fi
 
-          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
-            login_registry="http://${registry}"
-          fi
+          mkdir -p "$HOME/.docker"
+          auth="$(printf '%s:%s' "$username" "$password" | base64 | tr -d '\n')"
 
-          printf '%s' "$password" | docker login "$login_registry" \
-            --username "$username" \
-            --password-stdin
+          cat > "$HOME/.docker/config.json" <<EOF
+          {
+            "auths": {
+              "${registry}": {
+                "auth": "${auth}"
+              }
+            }
+          }
+          EOF
 
       - name: Prepare image tags
         id: tags
