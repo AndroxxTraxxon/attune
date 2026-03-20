@@ -167,6 +167,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Configure Docker daemon for plain HTTP registry
+        if: needs.metadata.outputs.registry_plain_http == 'true'
+        uses: docker/setup-docker-action@v4
+        with:
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              },
+              "insecure-registries": [
+                "${{ needs.metadata.outputs.registry }}"
+              ]
+            }
+
       - name: Setup Docker Buildx
         if: needs.metadata.outputs.registry_plain_http != 'true'
         uses: docker/setup-buildx-action@v3
@@ -195,10 +209,6 @@ jobs:
           if [ -z "$password" ]; then
             echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
             exit 1
-          fi
-
-          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
-            registry="http://${registry}"
           fi
 
           printf '%s' "$password" | docker login "$registry" \
