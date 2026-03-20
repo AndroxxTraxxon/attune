@@ -227,11 +227,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          image_names_csv=""
           build_cmd=(
             docker buildx build
             "${{ matrix.image.context }}"
             --file "${{ matrix.image.dockerfile }}"
-            --push
           )
 
           if [ -n "${{ matrix.image.target }}" ]; then
@@ -239,12 +239,28 @@ jobs:
           fi
 
           while IFS= read -r tag; do
-            [ -n "$tag" ] && build_cmd+=(--tag "$tag")
+            if [ -n "$tag" ]; then
+              if [ -n "$image_names_csv" ]; then
+                image_names_csv="${image_names_csv},${tag}"
+              else
+                image_names_csv="${tag}"
+              fi
+
+              if [ "${{ needs.metadata.outputs.registry_plain_http }}" != "true" ]; then
+                build_cmd+=(--tag "$tag")
+              fi
+            fi
           done <<< "${{ steps.tags.outputs.tags }}"
 
           while IFS= read -r build_arg; do
             [ -n "$build_arg" ] && build_cmd+=(--build-arg "$build_arg")
           done <<< "${{ matrix.image.build_args }}"
+
+          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
+            build_cmd+=(--output "type=image,name=${image_names_csv},push=true,registry.insecure=true")
+          else
+            build_cmd+=(--push)
+          fi
 
           "${build_cmd[@]}"
 
