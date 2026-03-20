@@ -257,7 +257,7 @@ jobs:
           done <<< "${{ matrix.image.build_args }}"
 
           if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
-            build_cmd+=(--output "type=image,name=${image_names_csv},push=true,registry.insecure=true")
+            build_cmd+=(--output "type=image,\"name=${image_names_csv}\",push=true,registry.insecure=true")
           else
             build_cmd+=(--push)
           fi
