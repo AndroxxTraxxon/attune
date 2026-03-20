@@ -38,6 +38,8 @@ jobs:
           registry="${REGISTRY_HOST}"
           namespace="${REGISTRY_NAMESPACE}"
           registry_plain_http_raw="${REGISTRY_PLAIN_HTTP:-}"
+          registry_host_only="${registry%%:*}"
+          registry_plain_http_default="false"
 
           if [ -z "$registry" ]; then
             echo "CLUSTER_GITEA_HOST app variable is required"
@@ -48,14 +50,26 @@ jobs:
             namespace="${{ github.repository_owner }}"
           fi
 
-          case "$(printf '%s' "$registry_plain_http_raw" | tr '[:upper:]' '[:lower:]')" in
-            1|true|yes|on)
-              registry_plain_http="true"
-              ;;
-            *)
-              registry_plain_http="false"
-              ;;
-          esac
+          if printf '%s' "$registry_host_only" | grep -Eq '(^|[.])svc[.]cluster[.]local$'; then
+            registry_plain_http_default="true"
+          fi
+
+          if [ -n "$registry_plain_http_raw" ]; then
+            case "$(printf '%s' "$registry_plain_http_raw" | tr '[:upper:]' '[:lower:]')" in
+              1|true|yes|on)
+                registry_plain_http="true"
+                ;;
+              0|false|no|off)
+                registry_plain_http="false"
+                ;;
+              *)
+                echo "CONTAINER_REGISTRY_INSECURE must be a boolean when set"
+                exit 1
+                ;;
+            esac
+          else
+            registry_plain_http="$registry_plain_http_default"
+          fi
 
           short_sha="$(printf '%s' "${{ github.sha }}" | cut -c1-12)"
           ref_type="${{ github.ref_type }}"

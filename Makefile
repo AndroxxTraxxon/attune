@@ -349,6 +349,11 @@ ci-web-blocking:
 	cd web && npm run typecheck
 	cd web && npm run build
 
+ci-web-pre-commit:
+	cd web && npm ci
+	cd web && npm run lint
+	cd web && npm run typecheck
+
 ci-web-advisory:
 	cd web && npm ci
 	cd web && npm run knip
@@ -389,8 +394,9 @@ licenses:
 	cargo license --json > licenses.json
 	@echo "License information saved to licenses.json"
 
-# All blocking checks run by the git pre-commit hook after formatting
-pre-commit: deny ci-web-blocking ci-security-blocking
+# Blocking checks run by the git pre-commit hook after formatting.
+# Keep the local web step fast; full production builds stay in CI.
+pre-commit: deny ci-web-pre-commit ci-security-blocking
 	@echo "✅ Pre-commit checks passed."
 
 install-git-hooks:

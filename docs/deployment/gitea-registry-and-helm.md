@@ -30,7 +30,7 @@ Set these variables:
 
 - `CLUSTER_GITEA_HOST`: Registry hostname only, for example `gitea.example.com`
 - `CONTAINER_REGISTRY_NAMESPACE`: Optional override for the registry namespace. If omitted, the workflow uses the repository owner.
-- `CONTAINER_REGISTRY_INSECURE`: Optional boolean toggle for plain HTTP registries. Set to `true` for cluster-internal registries such as `gitea-http.gitea.svc.cluster.local`.
+- `CONTAINER_REGISTRY_INSECURE`: Optional boolean override for plain HTTP registry access. If omitted, the workflow auto-detects `*.svc.cluster.local` registry hosts and treats them as insecure/plain HTTP. Set this explicitly to force either behavior.
 
 Set one of these authentication options:
 
