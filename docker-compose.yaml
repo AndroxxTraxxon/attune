@@ -10,6 +10,10 @@
 #   Password: TestPass123!
 # See docs/testing/test-user-setup.md for custom users
 
+# Runtime config file selection:
+#   ATTUNE_DOCKER_CONFIG_PATH controls the host-side config YAML mounted into services.
+#   Default: ./config.docker.yaml
+
 services:
   # ============================================================================
   # Infrastructure Services
@@ -174,7 +178,7 @@ services:
     container_name: attune-api
     environment:
       RUST_LOG: info
-      ATTUNE_CONFIG: /opt/attune/config.yaml
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
       # Security - MUST set these in production via .env file
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
@@ -189,6 +193,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
       - packs_data:/opt/attune/packs:rw
       - ./packs.dev:/opt/attune/packs.dev:rw
       - runtime_envs:/opt/attune/runtime_envs
@@ -227,7 +232,7 @@ services:
     container_name: attune-executor
     environment:
       RUST_LOG: info
-      ATTUNE_CONFIG: /opt/attune/config.yaml
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
@@ -235,6 +240,7 @@ services:
       ATTUNE__CACHE__URL: redis://redis:6379
       ATTUNE__WORKER__WORKER_TYPE: container
     volumes:
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
       - packs_data:/opt/attune/packs:ro
       - ./packs.dev:/opt/attune/packs.dev:rw
       - artifacts_data:/opt/attune/artifacts:ro
@@ -276,7 +282,7 @@ services:
     stop_grace_period: 45s
     environment:
       RUST_LOG: info
-      ATTUNE_CONFIG: /opt/attune/config.yaml
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
       ATTUNE_WORKER_RUNTIMES: shell
       ATTUNE_WORKER_TYPE: container
       ATTUNE_WORKER_NAME: worker-shell-01
@@ -286,6 +292,7 @@ services:
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE_API_URL: http://attune-api:8080
     volumes:
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
       - packs_data:/opt/attune/packs:ro
       - ./packs.dev:/opt/attune/packs.dev:rw
       - runtime_envs:/opt/attune/runtime_envs
@@ -324,7 +331,7 @@ services:
     stop_grace_period: 45s
     environment:
       RUST_LOG: info
-      ATTUNE_CONFIG: /opt/attune/config.yaml
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
       ATTUNE_WORKER_RUNTIMES: shell,python
       ATTUNE_WORKER_TYPE: container
       ATTUNE_WORKER_NAME: worker-python-01
@@ -334,6 +341,7 @@ services:
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE_API_URL: http://attune-api:8080
     volumes:
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
       - packs_data:/opt/attune/packs:ro
       - ./packs.dev:/opt/attune/packs.dev:rw
       - runtime_envs:/opt/attune/runtime_envs
@@ -372,7 +380,7 @@ services:
     stop_grace_period: 45s
     environment:
       RUST_LOG: info
-      ATTUNE_CONFIG: /opt/attune/config.yaml
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
       ATTUNE_WORKER_RUNTIMES: shell,node
       ATTUNE_WORKER_TYPE: container
       ATTUNE_WORKER_NAME: worker-node-01
@@ -382,6 +390,7 @@ services:
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE_API_URL: http://attune-api:8080
     volumes:
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
       - packs_data:/opt/attune/packs:ro
       - ./packs.dev:/opt/attune/packs.dev:rw
       - runtime_envs:/opt/attune/runtime_envs
@@ -420,7 +429,7 @@ services:
     stop_grace_period: 45s
     environment:
       RUST_LOG: info
-      ATTUNE_CONFIG: /opt/attune/config.yaml
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
       ATTUNE_WORKER_RUNTIMES: shell,python,node,native
       ATTUNE_WORKER_TYPE: container
       ATTUNE_WORKER_NAME: worker-full-01
@@ -430,6 +439,7 @@ services:
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE_API_URL: http://attune-api:8080
     volumes:
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
       - packs_data:/opt/attune/packs:ro
       - ./packs.dev:/opt/attune/packs.dev:rw
       - runtime_envs:/opt/attune/runtime_envs
@@ -467,7 +477,7 @@ services:
     stop_grace_period: 45s
     environment:
       RUST_LOG: debug
-      ATTUNE_CONFIG: /opt/attune/config.yaml
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
@@ -478,6 +488,7 @@ services:
       ATTUNE_MQ_URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE_PACKS_BASE_DIR: /opt/attune/packs
     volumes:
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
       - packs_data:/opt/attune/packs:rw
       - ./packs.dev:/opt/attune/packs.dev:rw
       - runtime_envs:/opt/attune/runtime_envs
@@ -513,7 +524,7 @@ services:
     container_name: attune-notifier
     environment:
       RUST_LOG: info
-      ATTUNE_CONFIG: /opt/attune/config.yaml
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
@@ -522,6 +533,7 @@ services:
     ports:
       - "8081:8081"
     volumes:
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
       - notifier_logs:/opt/attune/logs
     depends_on:
       migrations:

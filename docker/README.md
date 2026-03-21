@@ -29,13 +29,16 @@ curl -X POST http://localhost:8080/auth/login \
 
 ### Dockerfiles
 
-- **`Dockerfile`** - Multi-stage Dockerfile for all Rust services (API, Executor, Worker, Sensor, Notifier)
+- **`Dockerfile.optimized`** - Multi-stage Dockerfile for Rust services (API, Executor, Notifier)
   - Uses build argument `SERVICE` to specify which service to build
-  - Example: `docker build --build-arg SERVICE=api -f docker/Dockerfile -t attune-api .`
+  - Example: `docker build --build-arg SERVICE=api -f docker/Dockerfile.optimized -t attune-api .`
 
-- **`Dockerfile.worker`** - Multi-stage Dockerfile for containerized workers with different runtime capabilities
+- **`Dockerfile.worker.optimized`** - Multi-stage Dockerfile for containerized workers with different runtime capabilities
   - Supports 4 variants: `worker-base`, `worker-python`, `worker-node`, `worker-full`
   - See [README.worker.md](./README.worker.md) for details
+
+- **`Dockerfile.sensor.optimized`** - Multi-stage Dockerfile for the sensor service
+  - Supports `sensor-base` and `sensor-full`
   
 - **`Dockerfile.web`** - Multi-stage Dockerfile for React Web UI
   - Builds with Node.js and serves with Nginx
@@ -130,7 +133,7 @@ docker compose build worker
 DOCKER_BUILDKIT=1 docker build \
   --build-arg SERVICE=api \
   --build-arg RUST_VERSION=1.92 \
-  -f docker/Dockerfile \
+  -f docker/Dockerfile.optimized \
   -t attune-api:custom \
   .
 ```
@@ -403,9 +406,9 @@ Caused by:
   lock file version `4` was found, but this version of Cargo does not understand this lock file
 ```
 
-Solution: Update Rust version in Dockerfile
+Solution: Update Rust version in the optimized Dockerfile
 ```bash
-# Edit docker/Dockerfile and change:
+# Edit docker/Dockerfile.optimized and change:
 ARG RUST_VERSION=1.75
 # to:
 ARG RUST_VERSION=1.92

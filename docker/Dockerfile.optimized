@@ -100,7 +100,7 @@ RUN apt-get update && apt-get install -y \
 # Create non-root user and directories
 # /opt/attune/packs is mounted as a volume at runtime, not copied in
 RUN useradd -m -u 1000 attune && \
-    mkdir -p /opt/attune/packs /opt/attune/logs /opt/attune/runtime_envs && \
+    mkdir -p /opt/attune/packs /opt/attune/logs /opt/attune/runtime_envs /opt/attune/config && \
     chown -R attune:attune /opt/attune
 
 WORKDIR /opt/attune
@@ -109,8 +109,7 @@ WORKDIR /opt/attune
 # This avoids the circular dependency Docker hits when using ARG in --from paths
 COPY --from=builder /build/attune-service-binary /usr/local/bin/attune-service
 
-# Copy configuration and migrations
-COPY config.docker.yaml ./config.yaml
+# Copy migrations only. Runtime config is mounted via Docker Compose.
 COPY migrations/ ./migrations/
 
 RUN chown -R attune:attune /opt/attune
@@ -118,7 +117,7 @@ RUN chown -R attune:attune /opt/attune
 USER attune
 
 ENV RUST_LOG=info
-ENV ATTUNE_CONFIG=/opt/attune/config.yaml
+ENV ATTUNE_CONFIG=/opt/attune/config/config.yaml
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1

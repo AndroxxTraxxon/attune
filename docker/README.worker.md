@@ -67,7 +67,7 @@ make docker-build-worker-full
 DOCKER_BUILDKIT=1 docker build \
   --target worker-python \
   -t attune-worker:python \
-  -f docker/Dockerfile.worker \
+  -f docker/Dockerfile.worker.optimized \
   .
 ```
 
@@ -202,7 +202,7 @@ ENV ATTUNE_WORKER_RUNTIMES="shell,ruby"
 
 ### Multi-stage Build
 
-The `Dockerfile.worker` uses a multi-stage build pattern:
+The `Dockerfile.worker.optimized` uses a multi-stage build pattern:
 
 1. **Builder Stage**: Compiles the Rust worker binary
    - Uses BuildKit cache mounts for fast incremental builds
@@ -326,7 +326,7 @@ WHERE status = 'active';
 
 ## Files
 
-- `Dockerfile.worker` - Multi-stage worker Dockerfile with all variants
+- `Dockerfile.worker.optimized` - Multi-stage worker Dockerfile with all variants
 - `README.worker.md` - This file
 - `../docker-compose.yaml` - Service definitions for all workers
 

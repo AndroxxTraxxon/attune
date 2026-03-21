@@ -233,22 +233,22 @@ docker-build-workers: docker-build-worker-base docker-build-worker-python docker
 
 docker-build-worker-base:
 	@echo "Building base worker (shell only)..."
-	DOCKER_BUILDKIT=1 docker build --target worker-base -t attune-worker:base -f docker/Dockerfile.worker .
+	DOCKER_BUILDKIT=1 docker build --target worker-base -t attune-worker:base -f docker/Dockerfile.worker.optimized .
 	@echo "✅ Base worker image built: attune-worker:base"
 
 docker-build-worker-python:
 	@echo "Building Python worker (shell + python)..."
-	DOCKER_BUILDKIT=1 docker build --target worker-python -t attune-worker:python -f docker/Dockerfile.worker .
+	DOCKER_BUILDKIT=1 docker build --target worker-python -t attune-worker:python -f docker/Dockerfile.worker.optimized .
 	@echo "✅ Python worker image built: attune-worker:python"
 
 docker-build-worker-node:
 	@echo "Building Node.js worker (shell + node)..."
-	DOCKER_BUILDKIT=1 docker build --target worker-node -t attune-worker:node -f docker/Dockerfile.worker .
+	DOCKER_BUILDKIT=1 docker build --target worker-node -t attune-worker:node -f docker/Dockerfile.worker.optimized .
 	@echo "✅ Node.js worker image built: attune-worker:node"
 
 docker-build-worker-full:
 	@echo "Building full worker (all runtimes)..."
-	DOCKER_BUILDKIT=1 docker build --target worker-full -t attune-worker:full -f docker/Dockerfile.worker .
+	DOCKER_BUILDKIT=1 docker build --target worker-full -t attune-worker:full -f docker/Dockerfile.worker.optimized .
 	@echo "✅ Full worker image built: attune-worker:full"
 
 docker-up:

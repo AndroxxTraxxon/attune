@@ -219,10 +219,10 @@ docker builder prune --keep-storage 10GB
 
 ### Want faster parallel builds
 
-Remove `sharing=locked` from `docker/Dockerfile` and use cache warming:
+Remove `sharing=locked` from the optimized Dockerfiles and use cache warming:
 
 ```bash
-# Edit docker/Dockerfile - remove ,sharing=locked from RUN --mount lines
+# Edit the optimized Dockerfiles - remove ,sharing=locked from RUN --mount lines
 make docker-cache-warm
 make docker-build
 ```

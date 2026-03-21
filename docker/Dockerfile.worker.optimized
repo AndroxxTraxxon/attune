@@ -101,20 +101,19 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 1000 attune && \
-    mkdir -p /opt/attune/packs /opt/attune/logs /opt/attune/runtime_envs && \
+    mkdir -p /opt/attune/packs /opt/attune/logs /opt/attune/runtime_envs /opt/attune/config && \
     chown -R attune:attune /opt/attune
 
 WORKDIR /opt/attune
 
 COPY --from=builder /build/attune-worker /usr/local/bin/attune-worker
-COPY config.docker.yaml ./config.yaml
 
 USER attune
 
 ENV ATTUNE_WORKER_RUNTIMES="shell"
 ENV ATTUNE_WORKER_TYPE="container"
 ENV RUST_LOG=info
-ENV ATTUNE_CONFIG=/opt/attune/config.yaml
+ENV ATTUNE_CONFIG=/opt/attune/config/config.yaml
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD pgrep -f attune-worker || exit 1
@@ -154,20 +153,19 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     python-dateutil>=2.8.0
 
 RUN useradd -m -u 1000 attune && \
-    mkdir -p /opt/attune/packs /opt/attune/logs /opt/attune/runtime_envs && \
+    mkdir -p /opt/attune/packs /opt/attune/logs /opt/attune/runtime_envs /opt/attune/config && \
     chown -R attune:attune /opt/attune
 
 WORKDIR /opt/attune
 
 COPY --from=builder /build/attune-worker /usr/local/bin/attune-worker
-COPY config.docker.yaml ./config.yaml
 
 USER attune
 
 ENV ATTUNE_WORKER_RUNTIMES="shell,python"
 ENV ATTUNE_WORKER_TYPE="container"
 ENV RUST_LOG=info
-ENV ATTUNE_CONFIG=/opt/attune/config.yaml
+ENV ATTUNE_CONFIG=/opt/attune/config/config.yaml
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD pgrep -f attune-worker || exit 1
@@ -199,20 +197,19 @@ RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - && \
     rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 1000 attune && \
-    mkdir -p /opt/attune/packs /opt/attune/logs /opt/attune/runtime_envs && \
+    mkdir -p /opt/attune/packs /opt/attune/logs /opt/attune/runtime_envs /opt/attune/config && \
     chown -R attune:attune /opt/attune
 
 WORKDIR /opt/attune
 
 COPY --from=builder /build/attune-worker /usr/local/bin/attune-worker
-COPY config.docker.yaml ./config.yaml
 
 USER attune
 
 ENV ATTUNE_WORKER_RUNTIMES="shell,node"
 ENV ATTUNE_WORKER_TYPE="container"
 ENV RUST_LOG=info
-ENV ATTUNE_CONFIG=/opt/attune/config.yaml
+ENV ATTUNE_CONFIG=/opt/attune/config/config.yaml
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD pgrep -f attune-worker || exit 1
@@ -253,20 +250,19 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     python-dateutil>=2.8.0
 
 RUN useradd -m -u 1000 attune && \
-    mkdir -p /opt/attune/packs /opt/attune/logs /opt/attune/runtime_envs && \
+    mkdir -p /opt/attune/packs /opt/attune/logs /opt/attune/runtime_envs /opt/attune/config && \
     chown -R attune:attune /opt/attune
 
 WORKDIR /opt/attune
 
 COPY --from=builder /build/attune-worker /usr/local/bin/attune-worker
-COPY config.docker.yaml ./config.yaml
 
 USER attune
 
 ENV ATTUNE_WORKER_RUNTIMES="shell,python,node,native"
 ENV ATTUNE_WORKER_TYPE="container"
 ENV RUST_LOG=info
-ENV ATTUNE_CONFIG=/opt/attune/config.yaml
+ENV ATTUNE_CONFIG=/opt/attune/config/config.yaml
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD pgrep -f attune-worker || exit 1
