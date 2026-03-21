@@ -113,6 +113,10 @@ async fn main() -> Result<()> {
             let runtime_list: Vec<&str> = detected.iter().map(|r| r.name.as_str()).collect();
             let runtime_csv = runtime_list.join(",");
             info!("Setting ATTUNE_WORKER_RUNTIMES={}", runtime_csv);
+            // SAFETY: std::env::set_var is safe in Rust 2021 edition. If upgrading
+            // to edition 2024+, this call will need to be wrapped in `unsafe {}`.
+            // It's sound here because detection runs single-threaded before tokio
+            // starts any worker tasks.
             std::env::set_var("ATTUNE_WORKER_RUNTIMES", &runtime_csv);
 
             // Stash for Phase 2: pass to WorkerService for rich capability registration
@@ -133,9 +137,10 @@ async fn main() -> Result<()> {
             println!();
             let detected = detect_runtimes();
             print_detection_report(&detected);
+        } else if let Some(ref detected) = agent_detected_runtimes {
+            print_detection_report(detected);
         } else {
-            // We already ran detection above; re-run to get a fresh Vec for the report
-            // (the previous one was consumed by env var setup).
+            // No detection ran (empty results), run it fresh
             let detected = detect_runtimes();
             print_detection_report(&detected);
         }
@@ -144,6 +149,7 @@ async fn main() -> Result<()> {
 
     // --- Phase 2: Load configuration ---
     if let Some(config_path) = args.config {
+        // SAFETY: std::env::set_var is safe in Rust 2021 edition. See note above.
         std::env::set_var("ATTUNE_CONFIG", config_path);
     }
 

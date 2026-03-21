@@ -63,19 +63,11 @@ impl FindById for RuntimeRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let runtime = sqlx::query_as::<_, Runtime>(
-            r#"
-            SELECT id, ref, pack, pack_ref, description, name,
-                   distributions, installation, installers, execution_config,
-                   auto_detected, detection_config,
-                   created, updated
-            FROM runtime
-            WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .fetch_optional(executor)
-        .await?;
+        let query = format!("SELECT {} FROM runtime WHERE id = $1", SELECT_COLUMNS);
+        let runtime = sqlx::query_as::<_, Runtime>(&query)
+            .bind(id)
+            .fetch_optional(executor)
+            .await?;
 
         Ok(runtime)
     }
@@ -87,19 +79,11 @@ impl FindByRef for RuntimeRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let runtime = sqlx::query_as::<_, Runtime>(
-            r#"
-            SELECT id, ref, pack, pack_ref, description, name,
-                   distributions, installation, installers, execution_config,
-                   auto_detected, detection_config,
-                   created, updated
-            FROM runtime
-            WHERE ref = $1
-            "#,
-        )
-        .bind(ref_str)
-        .fetch_optional(executor)
-        .await?;
+        let query = format!("SELECT {} FROM runtime WHERE ref = $1", SELECT_COLUMNS);
+        let runtime = sqlx::query_as::<_, Runtime>(&query)
+            .bind(ref_str)
+            .fetch_optional(executor)
+            .await?;
 
         Ok(runtime)
     }
@@ -111,18 +95,10 @@ impl List for RuntimeRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let runtimes = sqlx::query_as::<_, Runtime>(
-            r#"
-            SELECT id, ref, pack, pack_ref, description, name,
-                   distributions, installation, installers, execution_config,
-                   auto_detected, detection_config,
-                   created, updated
-            FROM runtime
-            ORDER BY ref ASC
-            "#,
-        )
-        .fetch_all(executor)
-        .await?;
+        let query = format!("SELECT {} FROM runtime ORDER BY ref ASC", SELECT_COLUMNS);
+        let runtimes = sqlx::query_as::<_, Runtime>(&query)
+            .fetch_all(executor)
+            .await?;
 
         Ok(runtimes)
     }
@@ -136,31 +112,28 @@ impl Create for RuntimeRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let runtime = sqlx::query_as::<_, Runtime>(
-            r#"
-            INSERT INTO runtime (ref, pack, pack_ref, description, name,
-                                 distributions, installation, installers, execution_config,
-                                 auto_detected, detection_config)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            RETURNING id, ref, pack, pack_ref, description, name,
-                      distributions, installation, installers, execution_config,
-                      auto_detected, detection_config,
-                      created, updated
-            "#,
-        )
-        .bind(&input.r#ref)
-        .bind(input.pack)
-        .bind(&input.pack_ref)
-        .bind(&input.description)
-        .bind(&input.name)
-        .bind(&input.distributions)
-        .bind(&input.installation)
-        .bind(serde_json::json!({}))
-        .bind(&input.execution_config)
-        .bind(input.auto_detected)
-        .bind(&input.detection_config)
-        .fetch_one(executor)
-        .await?;
+        let query = format!(
+            "INSERT INTO runtime (ref, pack, pack_ref, description, name, \
+             distributions, installation, installers, execution_config, \
+             auto_detected, detection_config) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             RETURNING {}",
+            SELECT_COLUMNS
+        );
+        let runtime = sqlx::query_as::<_, Runtime>(&query)
+            .bind(&input.r#ref)
+            .bind(input.pack)
+            .bind(&input.pack_ref)
+            .bind(&input.description)
+            .bind(&input.name)
+            .bind(&input.distributions)
+            .bind(&input.installation)
+            .bind(serde_json::json!({}))
+            .bind(&input.execution_config)
+            .bind(input.auto_detected)
+            .bind(&input.detection_config)
+            .fetch_one(executor)
+            .await?;
 
         Ok(runtime)
     }
@@ -252,12 +225,7 @@ impl Update for RuntimeRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(
-            " RETURNING id, ref, pack, pack_ref, description, name, \
-             distributions, installation, installers, execution_config, \
-             auto_detected, detection_config, \
-             created, updated",
-        );
+        query.push(&format!(" RETURNING {}", SELECT_COLUMNS));
 
         let runtime = query
             .build_query_as::<Runtime>()
@@ -289,20 +257,14 @@ impl RuntimeRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let runtimes = sqlx::query_as::<_, Runtime>(
-            r#"
-            SELECT id, ref, pack, pack_ref, description, name,
-                   distributions, installation, installers, execution_config,
-                   auto_detected, detection_config,
-                   created, updated
-            FROM runtime
-            WHERE pack = $1
-            ORDER BY ref ASC
-            "#,
-        )
-        .bind(pack_id)
-        .fetch_all(executor)
-        .await?;
+        let query = format!(
+            "SELECT {} FROM runtime WHERE pack = $1 ORDER BY ref ASC",
+            SELECT_COLUMNS
+        );
+        let runtimes = sqlx::query_as::<_, Runtime>(&query)
+            .bind(pack_id)
+            .fetch_all(executor)
+            .await?;
 
         Ok(runtimes)
     }
@@ -312,20 +274,14 @@ impl RuntimeRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let runtime = sqlx::query_as::<_, Runtime>(
-            r#"
-            SELECT id, ref, pack, pack_ref, description, name,
-                   distributions, installation, installers, execution_config,
-                   auto_detected, detection_config,
-                   created, updated
-            FROM runtime
-            WHERE LOWER(name) = LOWER($1)
-            LIMIT 1
-            "#,
-        )
-        .bind(name)
-        .fetch_optional(executor)
-        .await?;
+        let query = format!(
+            "SELECT {} FROM runtime WHERE LOWER(name) = LOWER($1) LIMIT 1",
+            SELECT_COLUMNS
+        );
+        let runtime = sqlx::query_as::<_, Runtime>(&query)
+            .bind(name)
+            .fetch_optional(executor)
+            .await?;
 
         Ok(runtime)
     }

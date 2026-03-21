@@ -302,3 +302,163 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/agent/binary", get(download_agent_binary))
         .route("/agent/info", get(agent_info))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use attune_common::config::AgentConfig;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    // ── validate_arch tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_validate_arch_valid_x86_64() {
+        let result = validate_arch("x86_64");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "x86_64");
+    }
+
+    #[test]
+    fn test_validate_arch_valid_aarch64() {
+        let result = validate_arch("aarch64");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "aarch64");
+    }
+
+    #[test]
+    fn test_validate_arch_arm64_alias() {
+        // "arm64" is an alias for "aarch64"
+        let result = validate_arch("arm64");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "aarch64");
+    }
+
+    #[test]
+    fn test_validate_arch_invalid() {
+        let result = validate_arch("mips");
+        assert!(result.is_err());
+        let (status, body) = result.unwrap_err();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body.0["error"], "Invalid architecture");
+    }
+
+    // ── validate_token tests ────────────────────────────────────────
+
+    /// Helper: build a minimal Config with the given agent config.
+    /// Only the `agent` field is relevant for `validate_token`.
+    fn test_config(agent: Option<AgentConfig>) -> attune_common::config::Config {
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let config_path = format!("{}/../../config.test.yaml", manifest_dir);
+        let mut config = attune_common::config::Config::load_from_file(&config_path)
+            .expect("Failed to load test config");
+        config.agent = agent;
+        config
+    }
+
+    #[test]
+    fn test_validate_token_no_config() {
+        // When no agent config is set at all, no token is required.
+        let config = test_config(None);
+        let headers = HeaderMap::new();
+        let query_token = None;
+
+        let result = validate_token(&config, &headers, &query_token);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_token_no_bootstrap_token_configured() {
+        // Agent config exists but bootstrap_token is None → no token required.
+        let config = test_config(Some(AgentConfig {
+            binary_dir: "/tmp/test".to_string(),
+            bootstrap_token: None,
+        }));
+        let headers = HeaderMap::new();
+        let query_token = None;
+
+        let result = validate_token(&config, &headers, &query_token);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_token_valid_from_header() {
+        let config = test_config(Some(AgentConfig {
+            binary_dir: "/tmp/test".to_string(),
+            bootstrap_token: Some("s3cret-bootstrap".to_string()),
+        }));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-agent-token",
+            HeaderValue::from_static("s3cret-bootstrap"),
+        );
+        let query_token = None;
+
+        let result = validate_token(&config, &headers, &query_token);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_token_valid_from_query() {
+        let config = test_config(Some(AgentConfig {
+            binary_dir: "/tmp/test".to_string(),
+            bootstrap_token: Some("s3cret-bootstrap".to_string()),
+        }));
+        let headers = HeaderMap::new();
+        let query_token = Some("s3cret-bootstrap".to_string());
+
+        let result = validate_token(&config, &headers, &query_token);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_token_invalid() {
+        let config = test_config(Some(AgentConfig {
+            binary_dir: "/tmp/test".to_string(),
+            bootstrap_token: Some("correct-token".to_string()),
+        }));
+        let mut headers = HeaderMap::new();
+        headers.insert("x-agent-token", HeaderValue::from_static("wrong-token"));
+        let query_token = None;
+
+        let result = validate_token(&config, &headers, &query_token);
+        assert!(result.is_err());
+        let (status, body) = result.unwrap_err();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body.0["error"], "Invalid token");
+    }
+
+    #[test]
+    fn test_validate_token_missing_when_required() {
+        // bootstrap_token is configured but caller provides nothing.
+        let config = test_config(Some(AgentConfig {
+            binary_dir: "/tmp/test".to_string(),
+            bootstrap_token: Some("required-token".to_string()),
+        }));
+        let headers = HeaderMap::new();
+        let query_token = None;
+
+        let result = validate_token(&config, &headers, &query_token);
+        assert!(result.is_err());
+        let (status, body) = result.unwrap_err();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body.0["error"], "Token required");
+    }
+
+    #[test]
+    fn test_validate_token_header_takes_precedence_over_query() {
+        // When both header and query provide a token, the header value is
+        // checked first (it appears first in the or_else chain). Provide a
+        // valid token in the header and an invalid one in the query — should
+        // succeed because the header matches.
+        let config = test_config(Some(AgentConfig {
+            binary_dir: "/tmp/test".to_string(),
+            bootstrap_token: Some("the-real-token".to_string()),
+        }));
+        let mut headers = HeaderMap::new();
+        headers.insert("x-agent-token", HeaderValue::from_static("the-real-token"));
+        let query_token = Some("wrong-token".to_string());
+
+        let result = validate_token(&config, &headers, &query_token);
+        assert!(result.is_ok());
+    }
+}

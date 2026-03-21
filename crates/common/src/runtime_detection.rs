@@ -12,6 +12,7 @@
 use crate::config::Config;
 use crate::error::Result;
 use crate::models::Runtime;
+use crate::repositories::runtime::SELECT_COLUMNS;
 use serde_json::json;
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -161,18 +162,10 @@ impl RuntimeDetector {
         info!("Querying database for runtime definitions...");
 
         // Query all runtimes from database
-        let runtimes = sqlx::query_as::<_, Runtime>(
-            r#"
-            SELECT id, ref, pack, pack_ref, description, name,
-                   distributions, installation, installers, execution_config,
-                   auto_detected, detection_config,
-                   created, updated
-            FROM runtime
-            ORDER BY ref
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let query = format!("SELECT {} FROM runtime ORDER BY ref", SELECT_COLUMNS);
+        let runtimes = sqlx::query_as::<_, Runtime>(&query)
+            .fetch_all(&self.pool)
+            .await?;
 
         info!("Found {} runtime(s) in database", runtimes.len());
 

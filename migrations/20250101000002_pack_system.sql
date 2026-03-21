@@ -131,6 +131,17 @@ CREATE TABLE runtime (
     --   {manifest_path} - absolute path to the dependency manifest file
     execution_config JSONB NOT NULL DEFAULT '{}'::jsonb,
 
+    -- Whether this runtime was auto-registered by an agent
+    -- (vs. loaded from a pack's YAML file during pack registration)
+    auto_detected BOOLEAN NOT NULL DEFAULT FALSE,
+
+    -- Detection metadata for auto-discovered runtimes.
+    -- Stores how the agent discovered this runtime (binary path, version, etc.)
+    -- enables re-verification on restart.
+    -- Example: { "detected_path": "/usr/bin/ruby", "detected_name": "ruby",
+    --            "detected_version": "3.3.0" }
+    detection_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -145,6 +156,8 @@ CREATE INDEX idx_runtime_created ON runtime(created DESC);
 CREATE INDEX idx_runtime_name ON runtime(name);
 CREATE INDEX idx_runtime_verification ON runtime USING GIN ((distributions->'verification'));
 CREATE INDEX idx_runtime_execution_config ON runtime USING GIN (execution_config);
+CREATE INDEX idx_runtime_auto_detected ON runtime(auto_detected);
+CREATE INDEX idx_runtime_detection_config ON runtime USING GIN (detection_config);
 
 -- Trigger
 CREATE TRIGGER update_runtime_updated
@@ -160,6 +173,8 @@ COMMENT ON COLUMN runtime.distributions IS 'Runtime distribution metadata includ
 COMMENT ON COLUMN runtime.installation IS 'Installation requirements and instructions including package managers and setup steps';
 COMMENT ON COLUMN runtime.installers IS 'Array of installer actions to create pack-specific runtime environments. Each installer defines commands to set up isolated environments (e.g., Python venv, npm install).';
 COMMENT ON COLUMN runtime.execution_config IS 'Execution configuration: interpreter, environment setup, and dependency management. Drives how the worker executes actions and how pack install sets up environments.';
+COMMENT ON COLUMN runtime.auto_detected IS 'Whether this runtime was auto-registered by an agent (true) vs. loaded from a pack YAML (false)';
+COMMENT ON COLUMN runtime.detection_config IS 'Detection metadata for auto-discovered runtimes: binaries probed, version regex, detected path/version';
 
 -- ============================================================================
 -- RUNTIME VERSION TABLE

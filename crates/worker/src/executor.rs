@@ -19,6 +19,7 @@ use attune_common::models::runtime::RuntimeExecutionConfig;
 use attune_common::models::{runtime::Runtime as RuntimeModel, Action, Execution, ExecutionStatus};
 use attune_common::repositories::artifact::{ArtifactRepository, ArtifactVersionRepository};
 use attune_common::repositories::execution::{ExecutionRepository, UpdateExecutionInput};
+use attune_common::repositories::runtime::SELECT_COLUMNS as RUNTIME_SELECT_COLUMNS;
 use attune_common::repositories::runtime_version::RuntimeVersionRepository;
 use attune_common::repositories::{FindById, Update};
 use attune_common::version_matching::select_best_version;
@@ -410,16 +411,14 @@ impl ActionExecutor {
 
         // Load runtime information if specified
         let runtime_record = if let Some(runtime_id) = action.runtime {
-            match sqlx::query_as::<_, RuntimeModel>(
-                r#"SELECT id, ref, pack, pack_ref, description, name,
-                          distributions, installation, installers, execution_config,
-                          auto_detected, detection_config,
-                          created, updated
-                   FROM runtime WHERE id = $1"#,
-            )
-            .bind(runtime_id)
-            .fetch_optional(&self.pool)
-            .await
+            let query = format!(
+                "SELECT {} FROM runtime WHERE id = $1",
+                RUNTIME_SELECT_COLUMNS
+            );
+            match sqlx::query_as::<_, RuntimeModel>(&query)
+                .bind(runtime_id)
+                .fetch_optional(&self.pool)
+                .await
             {
                 Ok(Some(runtime)) => {
                     debug!(

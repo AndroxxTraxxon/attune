@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::models::Runtime;
 use crate::repositories::action::ActionRepository;
-use crate::repositories::runtime::RuntimeRepository;
+use crate::repositories::runtime::{self, RuntimeRepository};
 use crate::repositories::FindById as _;
 use serde_json::Value as JsonValue;
 use sqlx::{PgPool, Row};
@@ -370,20 +370,15 @@ impl PackEnvironmentManager {
     // ========================================================================
 
     async fn get_runtime(&self, runtime_id: i64) -> Result<Runtime> {
-        sqlx::query_as::<_, Runtime>(
-            r#"
-            SELECT id, ref, pack, pack_ref, description, name,
-                   distributions, installation, installers, execution_config,
-                   auto_detected, detection_config,
-                   created, updated
-            FROM runtime
-            WHERE id = $1
-            "#,
-        )
-        .bind(runtime_id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| Error::Internal(format!("Failed to fetch runtime: {}", e)))
+        let query = format!(
+            "SELECT {} FROM runtime WHERE id = $1",
+            runtime::SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, Runtime>(&query)
+            .bind(runtime_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| Error::Internal(format!("Failed to fetch runtime: {}", e)))
     }
 
     fn runtime_requires_environment(&self, runtime: &Runtime) -> Result<bool> {

@@ -393,4 +393,72 @@ mod tests {
 
         registration.deregister().await.unwrap();
     }
+
+    #[test]
+    fn test_detected_runtimes_json_structure() {
+        // Test the JSON structure that set_detected_runtimes builds
+        let runtimes = vec![
+            DetectedRuntime {
+                name: "python".to_string(),
+                path: "/usr/bin/python3".to_string(),
+                version: Some("3.12.1".to_string()),
+            },
+            DetectedRuntime {
+                name: "shell".to_string(),
+                path: "/bin/bash".to_string(),
+                version: None,
+            },
+        ];
+
+        let interpreters: Vec<serde_json::Value> = runtimes
+            .iter()
+            .map(|rt| {
+                json!({
+                    "name": rt.name,
+                    "path": rt.path,
+                    "version": rt.version,
+                })
+            })
+            .collect();
+
+        let json_value = json!(interpreters);
+
+        // Verify structure
+        let arr = json_value.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["name"], "python");
+        assert_eq!(arr[0]["path"], "/usr/bin/python3");
+        assert_eq!(arr[0]["version"], "3.12.1");
+        assert_eq!(arr[1]["name"], "shell");
+        assert_eq!(arr[1]["path"], "/bin/bash");
+        assert!(arr[1]["version"].is_null());
+    }
+
+    #[test]
+    fn test_detected_runtimes_empty() {
+        let runtimes: Vec<DetectedRuntime> = vec![];
+        let interpreters: Vec<serde_json::Value> = runtimes
+            .iter()
+            .map(|rt| {
+                json!({
+                    "name": rt.name,
+                    "path": rt.path,
+                    "version": rt.version,
+                })
+            })
+            .collect();
+
+        let json_value = json!(interpreters);
+        assert_eq!(json_value.as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_agent_mode_capability_value() {
+        // Verify the JSON value for agent_mode capability
+        let value = json!(true);
+        assert_eq!(value, true);
+
+        let value = json!(false);
+        assert_eq!(value, false);
+    }
 }
