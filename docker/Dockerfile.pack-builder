@@ -31,12 +31,11 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /build
 
 # Increase rustc stack size to prevent SIGSEGV during release builds
-ENV RUST_MIN_STACK=16777216
+ENV RUST_MIN_STACK=67108864
 
 # Copy workspace files
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
-COPY .sqlx/ ./.sqlx/
 
 # Build all pack binaries in release mode with BuildKit cache
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \

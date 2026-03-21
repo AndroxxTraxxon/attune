@@ -12,7 +12,7 @@ Docker Compose builds were failing with `rustc interrupted by SIGSEGV` during re
 
 ### Fix
 
-Added `ENV RUST_MIN_STACK=16777216` to the build stage of all 7 Rust Dockerfiles:
+Added `ENV RUST_MIN_STACK=67108864` to the build stage of all 7 Rust Dockerfiles:
 
 - `docker/Dockerfile` (both build stages)
 - `docker/Dockerfile.optimized`

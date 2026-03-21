@@ -9,10 +9,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_MIN_STACK: 16777216
+  RUST_MIN_STACK: 67108864
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
+  # Gitea Actions runner tool cache. Actions like setup-node/setup-python can reuse this.
+  RUNNER_TOOL_CACHE: /toolcache
 
 jobs:
   rust-fmt:
@@ -21,6 +23,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+          key: rustup-rustfmt-${{ runner.os }}-stable-v1
+          restore-keys: |
+            rustup-${{ runner.os }}-stable-v1
+            rustup-
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -36,6 +49,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+          key: rustup-clippy-${{ runner.os }}-stable-v1
+          restore-keys: |
+            rustup-${{ runner.os }}-stable-v1
+            rustup-
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -72,6 +96,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Cache Rust toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+          key: rustup-test-${{ runner.os }}-stable-v1
+          restore-keys: |
+            rustup-${{ runner.os }}-stable-v1
+            rustup-
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -104,6 +139,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+          key: rustup-audit-${{ runner.os }}-stable-v1
+          restore-keys: |
+            rustup-${{ runner.os }}-stable-v1
+            rustup-
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

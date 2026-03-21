@@ -425,10 +425,6 @@ docker builder prune -a
 docker compose build --no-cache
 ```
 
-**SQLx compile-time verification fails:**
-- Ensure `.sqlx/` directory is present
-- Regenerate with `cargo sqlx prepare` if needed
-
 ### Runtime Issues
 
 **Service won't start:**

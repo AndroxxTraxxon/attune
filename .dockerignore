@@ -50,8 +50,8 @@ web/node_modules/
 web/dist/
 web/.vite/
 
-# SQLx offline data (generated at build time)
-#.sqlx/
+# SQLx offline data (generated when using `cargo sqlx prepare`)
+# .sqlx/
 
 # Configuration files (copied selectively)
 config.development.yaml

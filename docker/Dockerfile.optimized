@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /build
 
 # Increase rustc stack size to prevent SIGSEGV during release builds
-ENV RUST_MIN_STACK=33554432
+ENV RUST_MIN_STACK=67108864
 
 # Copy dependency metadata first so `cargo fetch` layer is cached
 # when only source code changes (Cargo.toml/Cargo.lock stay the same)
@@ -60,8 +60,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
     cargo fetch
 
-# Now copy the real source code, SQLx metadata, and migrations
-COPY .sqlx/ ./.sqlx/
+# Now copy the real source code and migrations
 COPY migrations/ ./migrations/
 COPY crates/ ./crates/
 

@@ -69,7 +69,7 @@ help:
 	@echo ""
 
 # Increase rustc stack size to prevent SIGSEGV during compilation
-export RUST_MIN_STACK := 16777216
+export RUST_MIN_STACK:=67108864
 
 # Building
 build:

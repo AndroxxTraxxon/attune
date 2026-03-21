@@ -102,7 +102,7 @@ docker compose logs -f <svc>  # View logs
 - **BuildKit cache mounts**: Persist cargo registry and compilation artifacts between builds
   - **Cache strategy**: `sharing=shared` for registry/git (concurrent-safe), service-specific IDs for target caches
   - **Parallel builds**: 4x faster than old `sharing=locked` strategy - no serialization overhead
-- **Rustc stack size**: All Rust Dockerfiles set `ENV RUST_MIN_STACK=16777216` (16 MiB) in the build stage to prevent `rustc` SIGSEGV crashes during release compilation. The `Makefile` also exports this variable for local builds.
+- **Rustc stack size**: All Rust Dockerfiles set `ENV RUST_MIN_STACK=67108864` (64 MiB) in the build stage to prevent `rustc` SIGSEGV crashes during release compilation. The `Makefile` also exports this variable for local builds.
 - **Documentation**: See `docs/docker-layer-optimization.md`, `docs/QUICKREF-docker-optimization.md`, `docs/QUICKREF-buildkit-cache-strategy.md`
 
 ### Docker Runtime Standardization
