@@ -615,18 +615,46 @@ impl Runtime for ProcessRuntime {
             None
         };
 
-        // Runtime environments are set up proactively — either at worker startup
-        // (scanning all registered packs) or via pack.registered MQ events when a
-        // new pack is installed. We only log a warning here if the expected
-        // environment directory is missing so operators can investigate.
+        // Lazy environment setup: if the environment directory doesn't exist but
+        // should (i.e., there's an environment config and the pack dir exists),
+        // create it on-demand. This is the primary code path for agent mode where
+        // proactive startup setup is skipped, but it also serves as a safety net
+        // for standard workers if the environment was somehow missed.
         if effective_config.environment.is_some() && pack_dir.exists() && !env_dir.exists() {
-            warn!(
+            info!(
                 "Runtime environment for pack '{}' not found at {}. \
-                 The environment should have been created at startup or on pack registration. \
-                 Proceeding with system interpreter as fallback.",
+                 Creating on first use (lazy setup).",
                 context.action_ref,
                 env_dir.display(),
             );
+
+            let setup_runtime = ProcessRuntime::new(
+                self.runtime_name.clone(),
+                effective_config.clone(),
+                self.packs_base_dir.clone(),
+                self.runtime_envs_dir.clone(),
+            );
+            match setup_runtime
+                .setup_pack_environment(&pack_dir, &env_dir)
+                .await
+            {
+                Ok(()) => {
+                    info!(
+                        "Successfully created environment for pack '{}' at {} (lazy setup)",
+                        context.action_ref,
+                        env_dir.display(),
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to create environment for pack '{}' at {}: {}. \
+                         Proceeding with system interpreter as fallback.",
+                        context.action_ref,
+                        env_dir.display(),
+                        e,
+                    );
+                }
+            }
         }
 
         // If the environment directory exists but contains a broken interpreter

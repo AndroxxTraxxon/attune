@@ -60,6 +60,7 @@ impl Server {
             .merge(routes::history_routes())
             .merge(routes::analytics_routes())
             .merge(routes::artifact_routes())
+            .merge(routes::agent_routes())
             .with_state(self.state.clone());
 
         // Auth routes at root level (not versioned for frontend compatibility)

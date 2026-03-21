@@ -76,6 +76,8 @@ async fn create_test_runtime(pool: &PgPool, suffix: &str) -> i64 {
                 "file_extension": ".py"
             }
         }),
+        auto_detected: false,
+        detection_config: json!({}),
     };
 
     let runtime = RuntimeRepository::create(pool, runtime_input)

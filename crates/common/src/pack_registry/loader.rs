@@ -418,6 +418,7 @@ impl<'a> PackComponentLoader<'a> {
                         None => Patch::Clear,
                     }),
                     execution_config: Some(execution_config),
+                    ..Default::default()
                 };
 
                 match RuntimeRepository::update(self.pool, existing.id, update_input).await {
@@ -448,6 +449,8 @@ impl<'a> PackComponentLoader<'a> {
                 distributions,
                 installation,
                 execution_config,
+                auto_detected: false,
+                detection_config: serde_json::json!({}),
             };
 
             match RuntimeRepository::create(self.pool, input).await {

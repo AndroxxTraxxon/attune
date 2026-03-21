@@ -13,6 +13,8 @@ use sqlx::PgPool;
 use std::collections::HashMap;
 use tracing::{info, warn};
 
+use crate::runtime_detect::DetectedRuntime;
+
 /// Worker registration manager
 pub struct WorkerRegistration {
     pool: PgPool,
@@ -98,6 +100,51 @@ impl WorkerRegistration {
             port,
             capabilities,
         }
+    }
+
+    /// Store detected runtime interpreter metadata in capabilities.
+    ///
+    /// This is used by the agent (`attune-agent`) to record the full details of
+    /// auto-detected interpreters — binary paths and versions — alongside the
+    /// simple `runtimes` string list used for backward compatibility.
+    ///
+    /// The data is stored under the `detected_interpreters` capability key as a
+    /// JSON array of objects:
+    /// ```json
+    /// [
+    ///   {"name": "python", "path": "/usr/bin/python3", "version": "3.12.1"},
+    ///   {"name": "shell", "path": "/bin/bash", "version": "5.2.15"}
+    /// ]
+    /// ```
+    pub fn set_detected_runtimes(&mut self, runtimes: Vec<DetectedRuntime>) {
+        let interpreters: Vec<serde_json::Value> = runtimes
+            .iter()
+            .map(|rt| {
+                json!({
+                    "name": rt.name,
+                    "path": rt.path,
+                    "version": rt.version,
+                })
+            })
+            .collect();
+
+        self.capabilities
+            .insert("detected_interpreters".to_string(), json!(interpreters));
+
+        info!(
+            "Stored {} detected interpreter(s) in capabilities",
+            runtimes.len()
+        );
+    }
+
+    /// Mark this worker as running in agent mode.
+    ///
+    /// Agent-mode workers auto-detect their runtimes at startup (as opposed to
+    /// being configured via `ATTUNE_WORKER_RUNTIMES` or config files). Setting
+    /// this flag allows the system to distinguish agents from standard workers.
+    pub fn set_agent_mode(&mut self, is_agent: bool) {
+        self.capabilities
+            .insert("agent_mode".to_string(), json!(is_agent));
     }
 
     /// Detect available runtimes using the unified runtime detector

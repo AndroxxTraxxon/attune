@@ -964,6 +964,8 @@ impl RuntimeFixture {
             distributions: self.distributions,
             installation: self.installation,
             execution_config: self.execution_config,
+            auto_detected: false,
+            detection_config: serde_json::json!({}),
         };
 
         RuntimeRepository::create(pool, input).await

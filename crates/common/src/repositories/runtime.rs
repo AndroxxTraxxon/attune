@@ -23,6 +23,13 @@ impl Repository for RuntimeRepository {
     }
 }
 
+/// Columns selected for all Runtime queries. Centralised here so that
+/// schema changes only need one update.
+pub const SELECT_COLUMNS: &str = "id, ref, pack, pack_ref, description, name, \
+     distributions, installation, installers, execution_config, \
+     auto_detected, detection_config, \
+     created, updated";
+
 /// Input for creating a new runtime
 #[derive(Debug, Clone)]
 pub struct CreateRuntimeInput {
@@ -34,6 +41,8 @@ pub struct CreateRuntimeInput {
     pub distributions: JsonDict,
     pub installation: Option<JsonDict>,
     pub execution_config: JsonDict,
+    pub auto_detected: bool,
+    pub detection_config: JsonDict,
 }
 
 /// Input for updating a runtime
@@ -44,6 +53,8 @@ pub struct UpdateRuntimeInput {
     pub distributions: Option<JsonDict>,
     pub installation: Option<Patch<JsonDict>>,
     pub execution_config: Option<JsonDict>,
+    pub auto_detected: Option<bool>,
+    pub detection_config: Option<JsonDict>,
 }
 
 #[async_trait::async_trait]
@@ -56,6 +67,7 @@ impl FindById for RuntimeRepository {
             r#"
             SELECT id, ref, pack, pack_ref, description, name,
                    distributions, installation, installers, execution_config,
+                   auto_detected, detection_config,
                    created, updated
             FROM runtime
             WHERE id = $1
@@ -79,6 +91,7 @@ impl FindByRef for RuntimeRepository {
             r#"
             SELECT id, ref, pack, pack_ref, description, name,
                    distributions, installation, installers, execution_config,
+                   auto_detected, detection_config,
                    created, updated
             FROM runtime
             WHERE ref = $1
@@ -102,6 +115,7 @@ impl List for RuntimeRepository {
             r#"
             SELECT id, ref, pack, pack_ref, description, name,
                    distributions, installation, installers, execution_config,
+                   auto_detected, detection_config,
                    created, updated
             FROM runtime
             ORDER BY ref ASC
@@ -125,10 +139,12 @@ impl Create for RuntimeRepository {
         let runtime = sqlx::query_as::<_, Runtime>(
             r#"
             INSERT INTO runtime (ref, pack, pack_ref, description, name,
-                                 distributions, installation, installers, execution_config)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                                 distributions, installation, installers, execution_config,
+                                 auto_detected, detection_config)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id, ref, pack, pack_ref, description, name,
                       distributions, installation, installers, execution_config,
+                      auto_detected, detection_config,
                       created, updated
             "#,
         )
@@ -141,6 +157,8 @@ impl Create for RuntimeRepository {
         .bind(&input.installation)
         .bind(serde_json::json!({}))
         .bind(&input.execution_config)
+        .bind(input.auto_detected)
+        .bind(&input.detection_config)
         .fetch_one(executor)
         .await?;
 
@@ -209,6 +227,24 @@ impl Update for RuntimeRepository {
             has_updates = true;
         }
 
+        if let Some(auto_detected) = input.auto_detected {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("auto_detected = ");
+            query.push_bind(auto_detected);
+            has_updates = true;
+        }
+
+        if let Some(detection_config) = &input.detection_config {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("detection_config = ");
+            query.push_bind(detection_config);
+            has_updates = true;
+        }
+
         if !has_updates {
             // No updates requested, fetch and return existing entity
             return Self::get_by_id(executor, id).await;
@@ -218,7 +254,9 @@ impl Update for RuntimeRepository {
         query.push_bind(id);
         query.push(
             " RETURNING id, ref, pack, pack_ref, description, name, \
-             distributions, installation, installers, execution_config, created, updated",
+             distributions, installation, installers, execution_config, \
+             auto_detected, detection_config, \
+             created, updated",
         );
 
         let runtime = query
@@ -255,6 +293,7 @@ impl RuntimeRepository {
             r#"
             SELECT id, ref, pack, pack_ref, description, name,
                    distributions, installation, installers, execution_config,
+                   auto_detected, detection_config,
                    created, updated
             FROM runtime
             WHERE pack = $1
@@ -277,6 +316,7 @@ impl RuntimeRepository {
             r#"
             SELECT id, ref, pack, pack_ref, description, name,
                    distributions, installation, installers, execution_config,
+                   auto_detected, detection_config,
                    created, updated
             FROM runtime
             WHERE LOWER(name) = LOWER($1)

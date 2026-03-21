@@ -45,11 +45,31 @@ use crate::runtime::local::LocalRuntime;
 use crate::runtime::native::NativeRuntime;
 use crate::runtime::process::ProcessRuntime;
 use crate::runtime::RuntimeRegistry;
+use crate::runtime_detect::DetectedRuntime;
 use crate::secrets::SecretManager;
 use crate::version_verify;
 
 use attune_common::repositories::runtime::RuntimeRepository;
 use attune_common::repositories::List;
+
+/// Controls how the worker initializes its runtime environment.
+///
+/// The standard `attune-worker` binary uses `Worker` mode with proactive
+/// setup at startup, while the `attune-agent` binary uses `Agent` mode
+/// with lazy (on-demand) initialization.
+#[derive(Debug, Clone)]
+pub enum StartupMode {
+    /// Full worker mode: proactive environment setup, full version
+    /// verification sweep at startup. Used by `attune-worker`.
+    Worker,
+
+    /// Agent mode: lazy environment setup (on first use), on-demand
+    /// version verification, auto-detected runtimes. Used by `attune-agent`.
+    Agent {
+        /// Runtimes detected by the auto-detection module.
+        detected_runtimes: Vec<DetectedRuntime>,
+    },
+}
 
 /// Message payload for execution.scheduled events
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +113,10 @@ pub struct WorkerService {
     /// Tracks cancellation requests that arrived before the in-memory token
     /// for an execution had been registered.
     pending_cancellations: Arc<Mutex<HashSet<i64>>>,
+    /// Controls whether this worker runs in full `Worker` mode (proactive
+    /// environment setup, full version verification) or `Agent` mode (lazy
+    /// setup, auto-detected runtimes).
+    startup_mode: StartupMode,
 }
 
 impl WorkerService {
@@ -402,7 +426,24 @@ impl WorkerService {
             in_flight_tasks: Arc::new(Mutex::new(JoinSet::new())),
             cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
             pending_cancellations: Arc::new(Mutex::new(HashSet::new())),
+            startup_mode: StartupMode::Worker,
         })
+    }
+
+    /// Set agent-detected runtimes for inclusion in worker registration.
+    ///
+    /// When the worker is started as `attune-agent`, the agent entrypoint
+    /// auto-detects available interpreters and passes them here. During
+    /// [`start()`](Self::start), the detection results are stored in the
+    /// worker's capabilities as `detected_interpreters` (structured JSON
+    /// with binary paths and versions) and the `agent_mode` flag is set.
+    ///
+    /// This method is a no-op for the standard `attune-worker` binary.
+    pub fn with_detected_runtimes(mut self, runtimes: Vec<DetectedRuntime>) -> Self {
+        self.startup_mode = StartupMode::Agent {
+            detected_runtimes: runtimes,
+        };
+        self
     }
 
     /// Start the worker service
@@ -413,6 +454,21 @@ impl WorkerService {
         let worker_id = {
             let mut reg = self.registration.write().await;
             reg.detect_capabilities(&self.config).await?;
+
+            // If running as an agent, store the detected interpreter metadata
+            // and set the agent_mode flag before registering.
+            if let StartupMode::Agent {
+                ref detected_runtimes,
+            } = self.startup_mode
+            {
+                reg.set_detected_runtimes(detected_runtimes.clone());
+                reg.set_agent_mode(true);
+                info!(
+                    "Agent mode: {} detected interpreter(s) will be stored in capabilities",
+                    detected_runtimes.len()
+                );
+            }
+
             reg.register().await?
         };
         self.worker_id = Some(worker_id);
@@ -430,16 +486,26 @@ impl WorkerService {
             })?;
         info!("Worker-specific message queue infrastructure setup completed");
 
-        // Verify which runtime versions are available on this system.
-        // This updates the `available` flag in the database so that
-        // `select_best_version()` only considers genuinely present versions.
-        self.verify_runtime_versions().await;
+        match &self.startup_mode {
+            StartupMode::Worker => {
+                // Verify which runtime versions are available on this system.
+                // This updates the `available` flag in the database so that
+                // `select_best_version()` only considers genuinely present versions.
+                self.verify_runtime_versions().await;
 
-        // Proactively set up runtime environments for all registered packs.
-        // This runs before we start consuming execution messages so that
-        // environments are ready by the time the first execution arrives.
-        // Now version-aware: creates per-version environments where needed.
-        self.scan_and_setup_environments().await;
+                // Proactively set up runtime environments for all registered packs.
+                // This runs before we start consuming execution messages so that
+                // environments are ready by the time the first execution arrives.
+                // Now version-aware: creates per-version environments where needed.
+                self.scan_and_setup_environments().await;
+            }
+            StartupMode::Agent { .. } => {
+                // Skip proactive setup — will happen lazily on first execution
+                info!(
+                    "Agent mode: deferring environment setup and version verification to first use"
+                );
+            }
+        }
 
         // Start heartbeat
         self.heartbeat.start().await?;

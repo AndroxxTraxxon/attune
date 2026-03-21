@@ -10,6 +10,10 @@ repository.workspace = true
 name = "attune-worker"
 path = "src/main.rs"
 
+[[bin]]
+name = "attune-agent"
+path = "src/agent_main.rs"
+
 [dependencies]
 attune-common = { path = "../common" }
 tokio = { workspace = true }

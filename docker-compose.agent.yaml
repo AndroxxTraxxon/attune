@@ -1,0 +1,216 @@
+# Agent-Based Worker Services
+#
+# This override file demonstrates how to add custom runtime workers to Attune
+# by injecting the universal worker agent into any container image.
+#
+# Usage:
+#   docker compose -f docker-compose.yaml -f docker-compose.agent.yaml up -d
+#
+# Prerequisites:
+#   The init-agent service (defined in docker-compose.yaml) must be present.
+#   It builds the statically-linked agent binary and populates the agent_bin volume.
+#
+# How it works:
+#   1. init-agent builds a musl-static attune-agent binary and copies it to the agent_bin volume
+#   2. Each worker service mounts agent_bin read-only and uses the agent as its entrypoint
+#   3. The agent auto-detects available runtimes in the container (python, ruby, node, etc.)
+#   4. No Dockerfile needed — just point at any container image with your desired runtime
+#
+# Adding your own worker:
+#   Copy one of the examples below and change:
+#   - service name (e.g., worker-my-runtime)
+#   - image (any Docker image with your runtime installed)
+#   - ATTUNE_WORKER_NAME (unique name for this worker)
+#   - Optionally set ATTUNE_WORKER_RUNTIMES to override auto-detection
+
+services:
+  # ---------------------------------------------------------------------------
+  # Ruby Worker — Official Ruby image with auto-detected runtime
+  # ---------------------------------------------------------------------------
+  worker-ruby:
+    image: ruby:3.3-slim
+    container_name: attune-worker-ruby
+    depends_on:
+      init-agent:
+        condition: service_completed_successfully
+      init-packs:
+        condition: service_completed_successfully
+      migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    entrypoint: ["/opt/attune/agent/attune-agent"]
+    stop_grace_period: 45s
+    environment:
+      RUST_LOG: info
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
+      ATTUNE_WORKER_NAME: worker-ruby-01
+      ATTUNE_WORKER_TYPE: container
+      ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
+      ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+      ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+      ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE_API_URL: http://attune-api:8080
+      # ATTUNE_WORKER_RUNTIMES omitted — auto-detected as ruby,shell
+    volumes:
+      - agent_bin:/opt/attune/agent:ro
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
+      - packs_data:/opt/attune/packs:ro
+      - runtime_envs:/opt/attune/runtime_envs
+      - artifacts_data:/opt/attune/artifacts
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f attune-agent || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - attune-network
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Python 3.12 Worker — Use a specific Python version via the agent
+  # ---------------------------------------------------------------------------
+  # This demonstrates using the agent with a specific Python version instead of
+  # the built-in worker-python service (which uses debian:bookworm-slim + apt).
+  #
+  # worker-python312:
+  #   image: python:3.12-slim
+  #   container_name: attune-worker-python312
+  #   depends_on:
+  #     init-agent:
+  #       condition: service_completed_successfully
+  #     init-packs:
+  #       condition: service_completed_successfully
+  #     migrations:
+  #       condition: service_completed_successfully
+  #     postgres:
+  #       condition: service_healthy
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   entrypoint: ["/opt/attune/agent/attune-agent"]
+  #   stop_grace_period: 45s
+  #   environment:
+  #     RUST_LOG: info
+  #     ATTUNE_CONFIG: /opt/attune/config/config.yaml
+  #     ATTUNE_WORKER_NAME: worker-python312-01
+  #     ATTUNE_WORKER_TYPE: container
+  #     ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
+  #     ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+  #     ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+  #     ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+  #     ATTUNE_API_URL: http://attune-api:8080
+  #   volumes:
+  #     - agent_bin:/opt/attune/agent:ro
+  #     - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
+  #     - packs_data:/opt/attune/packs:ro
+  #     - runtime_envs:/opt/attune/runtime_envs
+  #     - artifacts_data:/opt/attune/artifacts
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pgrep -f attune-agent || exit 1"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 20s
+  #   networks:
+  #     - attune-network
+  #   restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # GPU Worker — NVIDIA CUDA image for GPU-accelerated workloads
+  # ---------------------------------------------------------------------------
+  # Requires: NVIDIA Container Toolkit installed on the Docker host
+  # See: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/
+  #
+  # worker-gpu:
+  #   image: nvidia/cuda:12.3.1-runtime-ubuntu22.04
+  #   container_name: attune-worker-gpu
+  #   depends_on:
+  #     init-agent:
+  #       condition: service_completed_successfully
+  #     init-packs:
+  #       condition: service_completed_successfully
+  #     migrations:
+  #       condition: service_completed_successfully
+  #     postgres:
+  #       condition: service_healthy
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   entrypoint: ["/opt/attune/agent/attune-agent"]
+  #   runtime: nvidia
+  #   stop_grace_period: 45s
+  #   environment:
+  #     RUST_LOG: info
+  #     ATTUNE_CONFIG: /opt/attune/config/config.yaml
+  #     ATTUNE_WORKER_NAME: worker-gpu-01
+  #     ATTUNE_WORKER_TYPE: container
+  #     ATTUNE_WORKER_RUNTIMES: python,shell  # Manual override — CUDA image has python pre-installed
+  #     ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
+  #     ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+  #     ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+  #     ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+  #     ATTUNE_API_URL: http://attune-api:8080
+  #   volumes:
+  #     - agent_bin:/opt/attune/agent:ro
+  #     - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
+  #     - packs_data:/opt/attune/packs:ro
+  #     - runtime_envs:/opt/attune/runtime_envs
+  #     - artifacts_data:/opt/attune/artifacts
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pgrep -f attune-agent || exit 1"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 20s
+  #   networks:
+  #     - attune-network
+  #   restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Custom Image Worker — Template for any container image
+  # ---------------------------------------------------------------------------
+  # Copy this template and customize for your runtime:
+  #
+  # worker-custom:
+  #   image: my-org/my-custom-image:latest
+  #   container_name: attune-worker-custom
+  #   depends_on:
+  #     init-agent:
+  #       condition: service_completed_successfully
+  #     init-packs:
+  #       condition: service_completed_successfully
+  #     migrations:
+  #       condition: service_completed_successfully
+  #     postgres:
+  #       condition: service_healthy
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   entrypoint: ["/opt/attune/agent/attune-agent"]
+  #   stop_grace_period: 45s
+  #   environment:
+  #     RUST_LOG: info
+  #     ATTUNE_CONFIG: /opt/attune/config/config.yaml
+  #     ATTUNE_WORKER_NAME: worker-custom-01
+  #     ATTUNE_WORKER_TYPE: container
+  #     ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
+  #     ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+  #     ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+  #     ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+  #     ATTUNE_API_URL: http://attune-api:8080
+  #   volumes:
+  #     - agent_bin:/opt/attune/agent:ro
+  #     - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
+  #     - packs_data:/opt/attune/packs:ro
+  #     - runtime_envs:/opt/attune/runtime_envs
+  #     - artifacts_data:/opt/attune/artifacts
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pgrep -f attune-agent || exit 1"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 20s
+  #   networks:
+  #     - attune-network
+  #   restart: unless-stopped

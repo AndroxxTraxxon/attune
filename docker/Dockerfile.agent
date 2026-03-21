@@ -1,0 +1,153 @@
+# Multi-stage Dockerfile for the Attune universal worker agent
+#
+# Builds a statically-linked attune-agent binary using musl, suitable for
+# injection into ANY container as a sidecar or init container. The binary
+# has zero runtime dependencies — no glibc, no libssl, no shared libraries.
+#
+# Stages:
+#   builder      - Cross-compile with musl for a fully static binary
+#   agent-binary - Minimal scratch image containing just the binary
+#   agent-init   - BusyBox-based image for use as a Kubernetes init container
+#                  or Docker Compose volume-populating service (has `cp`)
+#
+# Usage:
+#   # Build the minimal binary-only image:
+#   DOCKER_BUILDKIT=1 docker buildx build --target agent-binary -f docker/Dockerfile.agent -t attune-agent:binary .
+#
+#   # Build the init container image (for volume population via `cp`):
+#   DOCKER_BUILDKIT=1 docker buildx build --target agent-init -f docker/Dockerfile.agent -t attune-agent:latest .
+#
+#   # Use in docker-compose.yaml to populate a shared volume:
+#   # agent-init:
+#   #   image: attune-agent:latest
+#   #   command: ["cp", "/usr/local/bin/attune-agent", "/shared/attune-agent"]
+#   #   volumes:
+#   #     - agent_binary:/shared
+#
+# Note: The agent binary is part of the worker crate (--bin attune-agent).
+# It connects to the Attune API and executes actions inside the target container.
+
+ARG RUST_VERSION=1.92
+ARG DEBIAN_VERSION=bookworm
+
+# ============================================================================
+# Stage 1: Builder - Cross-compile a statically-linked binary with musl
+# ============================================================================
+FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
+
+# Install musl toolchain for static linking
+RUN apt-get update && apt-get install -y \
+    musl-tools \
+    pkg-config \
+    libssl-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add the musl target for fully static binaries
+RUN rustup target add x86_64-unknown-linux-musl
+
+WORKDIR /build
+
+# Increase rustc stack size to prevent SIGSEGV during release builds
+ENV RUST_MIN_STACK=67108864
+
+# Enable SQLx offline mode — compile-time query checking without a live database
+ENV SQLX_OFFLINE=true
+
+# ---------------------------------------------------------------------------
+# Dependency caching layer
+# Copy only Cargo metadata first so `cargo fetch` is cached when only source
+# code changes. This follows the same pattern as Dockerfile.worker.optimized.
+# ---------------------------------------------------------------------------
+COPY Cargo.toml Cargo.lock ./
+COPY crates/common/Cargo.toml ./crates/common/Cargo.toml
+COPY crates/api/Cargo.toml ./crates/api/Cargo.toml
+COPY crates/executor/Cargo.toml ./crates/executor/Cargo.toml
+COPY crates/sensor/Cargo.toml ./crates/sensor/Cargo.toml
+COPY crates/core-timer-sensor/Cargo.toml ./crates/core-timer-sensor/Cargo.toml
+COPY crates/worker/Cargo.toml ./crates/worker/Cargo.toml
+COPY crates/notifier/Cargo.toml ./crates/notifier/Cargo.toml
+COPY crates/cli/Cargo.toml ./crates/cli/Cargo.toml
+
+# Create minimal stub sources so cargo can resolve the workspace and fetch deps.
+# These are ONLY used for `cargo fetch` — never compiled.
+# NOTE: The worker crate has TWO binary targets (attune-worker and attune-agent),
+# so we create stubs for both to satisfy the workspace resolver.
+RUN mkdir -p crates/common/src && echo "" > crates/common/src/lib.rs && \
+    mkdir -p crates/api/src && echo "fn main(){}" > crates/api/src/main.rs && \
+    mkdir -p crates/executor/src && echo "fn main(){}" > crates/executor/src/main.rs && \
+    mkdir -p crates/executor/benches && echo "fn main(){}" > crates/executor/benches/context_clone.rs && \
+    mkdir -p crates/sensor/src && echo "fn main(){}" > crates/sensor/src/main.rs && \
+    mkdir -p crates/core-timer-sensor/src && echo "fn main(){}" > crates/core-timer-sensor/src/main.rs && \
+    mkdir -p crates/worker/src && echo "fn main(){}" > crates/worker/src/main.rs && \
+    echo "fn main(){}" > crates/worker/src/agent_main.rs && \
+    mkdir -p crates/notifier/src && echo "fn main(){}" > crates/notifier/src/main.rs && \
+    mkdir -p crates/cli/src && echo "fn main(){}" > crates/cli/src/main.rs
+
+# Download all dependencies (cached unless Cargo.toml/Cargo.lock change)
+# registry/git use sharing=shared — cargo handles concurrent reads safely
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
+    cargo fetch
+
+# ---------------------------------------------------------------------------
+# Build layer
+# Copy real source code and compile only the agent binary with musl
+# ---------------------------------------------------------------------------
+COPY migrations/ ./migrations/
+COPY crates/ ./crates/
+
+# Build ONLY the attune-agent binary, statically linked with musl.
+# Uses a dedicated cache ID (agent-target) so the musl target directory
+# doesn't collide with the glibc target cache used by other Dockerfiles.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
+    --mount=type=cache,id=agent-target,target=/build/target,sharing=locked \
+    cargo build --release --target x86_64-unknown-linux-musl --bin attune-agent && \
+    cp /build/target/x86_64-unknown-linux-musl/release/attune-agent /build/attune-agent
+
+# Strip the binary to minimize size
+RUN strip /build/attune-agent
+
+# Verify the binary is statically linked and functional
+RUN ls -lh /build/attune-agent && \
+    file /build/attune-agent && \
+    ldd /build/attune-agent 2>&1 || true
+
+# ============================================================================
+# Stage 2: agent-binary - Minimal image with just the static binary
+# ============================================================================
+# This is the smallest possible image — a single static binary on scratch.
+# Useful when you only need to extract the binary (e.g., via COPY --from).
+FROM scratch AS agent-binary
+
+COPY --from=builder /build/attune-agent /usr/local/bin/attune-agent
+
+ENTRYPOINT ["/usr/local/bin/attune-agent"]
+
+# ============================================================================
+# Stage 3: agent-init - Init container for volume population
+# ============================================================================
+# Uses busybox so we have `cp`, `sh`, etc. for use as a Docker Compose or
+# Kubernetes init container that copies the agent binary into a shared volume.
+#
+# Example docker-compose.yaml usage:
+#   agent-init:
+#     image: attune-agent:latest
+#     command: ["cp", "/usr/local/bin/attune-agent", "/shared/attune-agent"]
+#     volumes:
+#       - agent_binary:/shared
+#
+#   my-worker-container:
+#     image: python:3.12
+#     command: ["/agent/attune-agent"]
+#     volumes:
+#       - agent_binary:/agent:ro
+#     depends_on:
+#       agent-init:
+#         condition: service_completed_successfully
+FROM busybox:1.36 AS agent-init
+
+COPY --from=builder /build/attune-agent /usr/local/bin/attune-agent
+
+ENTRYPOINT ["/usr/local/bin/attune-agent"]

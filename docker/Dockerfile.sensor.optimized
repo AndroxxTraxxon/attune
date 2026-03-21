@@ -54,6 +54,7 @@ RUN mkdir -p crates/common/src && echo "" > crates/common/src/lib.rs && \
     mkdir -p crates/sensor/src && echo "fn main(){}" > crates/sensor/src/main.rs && \
     mkdir -p crates/core-timer-sensor/src && echo "fn main(){}" > crates/core-timer-sensor/src/main.rs && \
     mkdir -p crates/worker/src && echo "fn main(){}" > crates/worker/src/main.rs && \
+    echo "fn main(){}" > crates/worker/src/agent_main.rs && \
     mkdir -p crates/notifier/src && echo "fn main(){}" > crates/notifier/src/main.rs && \
     mkdir -p crates/cli/src && echo "fn main(){}" > crates/cli/src/main.rs
 

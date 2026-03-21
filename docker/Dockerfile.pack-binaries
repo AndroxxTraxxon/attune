@@ -51,6 +51,7 @@ RUN mkdir -p crates/executor/src && echo "fn main() {}" > crates/executor/src/ma
 RUN mkdir -p crates/executor/benches && echo "fn main() {}" > crates/executor/benches/context_clone.rs
 RUN mkdir -p crates/sensor/src && echo "fn main() {}" > crates/sensor/src/main.rs
 RUN mkdir -p crates/worker/src && echo "fn main() {}" > crates/worker/src/main.rs
+RUN echo "fn main() {}" > crates/worker/src/agent_main.rs
 RUN mkdir -p crates/notifier/src && echo "fn main() {}" > crates/notifier/src/main.rs
 RUN mkdir -p crates/cli/src && echo "fn main() {}" > crates/cli/src/main.rs
 

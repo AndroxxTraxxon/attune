@@ -42,6 +42,11 @@ pub fn normalize_runtime_name(name: &str) -> &str {
         "python" | "python3" => "python",
         "bash" | "sh" | "shell" => "shell",
         "native" | "builtin" | "standalone" => "native",
+        "ruby" | "rb" => "ruby",
+        "go" | "golang" => "go",
+        "java" | "jdk" | "openjdk" => "java",
+        "perl" | "perl5" => "perl",
+        "r" | "rscript" => "r",
         other => other,
     }
 }
@@ -160,6 +165,7 @@ impl RuntimeDetector {
             r#"
             SELECT id, ref, pack, pack_ref, description, name,
                    distributions, installation, installers, execution_config,
+                   auto_detected, detection_config,
                    created, updated
             FROM runtime
             ORDER BY ref
@@ -364,6 +370,37 @@ mod tests {
     }
 
     #[test]
+    fn test_normalize_runtime_name_ruby_variants() {
+        assert_eq!(normalize_runtime_name("ruby"), "ruby");
+        assert_eq!(normalize_runtime_name("rb"), "ruby");
+    }
+
+    #[test]
+    fn test_normalize_runtime_name_go_variants() {
+        assert_eq!(normalize_runtime_name("go"), "go");
+        assert_eq!(normalize_runtime_name("golang"), "go");
+    }
+
+    #[test]
+    fn test_normalize_runtime_name_java_variants() {
+        assert_eq!(normalize_runtime_name("java"), "java");
+        assert_eq!(normalize_runtime_name("jdk"), "java");
+        assert_eq!(normalize_runtime_name("openjdk"), "java");
+    }
+
+    #[test]
+    fn test_normalize_runtime_name_perl_variants() {
+        assert_eq!(normalize_runtime_name("perl"), "perl");
+        assert_eq!(normalize_runtime_name("perl5"), "perl");
+    }
+
+    #[test]
+    fn test_normalize_runtime_name_r_variants() {
+        assert_eq!(normalize_runtime_name("r"), "r");
+        assert_eq!(normalize_runtime_name("rscript"), "r");
+    }
+
+    #[test]
     fn test_normalize_runtime_name_passthrough() {
         assert_eq!(normalize_runtime_name("custom_runtime"), "custom_runtime");
     }
@@ -390,6 +427,12 @@ mod tests {
         assert!(runtime_matches_filter("python", "Python"));
         assert!(runtime_matches_filter("Shell", "shell"));
         assert!(runtime_matches_filter("NODEJS", "node"));
+        assert!(runtime_matches_filter("Ruby", "ruby"));
+        assert!(runtime_matches_filter("ruby", "rb"));
+        assert!(runtime_matches_filter("Go", "golang"));
+        assert!(runtime_matches_filter("R", "rscript"));
+        assert!(runtime_matches_filter("Java", "jdk"));
+        assert!(runtime_matches_filter("Perl", "perl5"));
         assert!(!runtime_matches_filter("Python", "node"));
     }
 

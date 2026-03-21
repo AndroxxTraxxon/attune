@@ -780,6 +780,8 @@ pub mod runtime {
         pub installation: Option<JsonDict>,
         pub installers: JsonDict,
         pub execution_config: JsonDict,
+        pub auto_detected: bool,
+        pub detection_config: JsonDict,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
     }

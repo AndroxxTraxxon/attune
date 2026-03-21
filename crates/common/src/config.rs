@@ -677,6 +677,15 @@ impl Default for PackRegistryConfig {
     }
 }
 
+/// Agent binary distribution configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    /// Directory containing agent binary files
+    pub binary_dir: String,
+    /// Optional bootstrap token for authenticating agent binary downloads
+    pub bootstrap_token: Option<String>,
+}
+
 /// Executor service configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutorConfig {
@@ -770,6 +779,9 @@ pub struct Config {
 
     /// Executor configuration (optional, for executor service)
     pub executor: Option<ExecutorConfig>,
+
+    /// Agent configuration (optional, for agent binary distribution)
+    pub agent: Option<AgentConfig>,
 }
 
 fn default_service_name() -> String {
@@ -1066,6 +1078,7 @@ mod tests {
             notifier: None,
             pack_registry: PackRegistryConfig::default(),
             executor: None,
+            agent: None,
         };
 
         assert_eq!(config.service_name, "attune");
@@ -1144,6 +1157,7 @@ mod tests {
             notifier: None,
             pack_registry: PackRegistryConfig::default(),
             executor: None,
+            agent: None,
         };
 
         assert!(config.validate().is_ok());

@@ -199,6 +199,10 @@ use crate::dto::{
         crate::routes::webhooks::disable_webhook,
         crate::routes::webhooks::regenerate_webhook_key,
         crate::routes::webhooks::receive_webhook,
+
+        // Agent
+        crate::routes::agent::download_agent_binary,
+        crate::routes::agent::agent_info,
     ),
     components(
         schemas(
@@ -341,6 +345,10 @@ use crate::dto::{
             WebhookReceiverRequest,
             WebhookReceiverResponse,
             ApiResponse<WebhookReceiverResponse>,
+
+            // Agent DTOs
+            crate::routes::agent::AgentBinaryInfo,
+            crate::routes::agent::AgentArchInfo,
         )
     ),
     modifiers(&SecurityAddon),
@@ -359,6 +367,7 @@ use crate::dto::{
         (name = "secrets", description = "Secret management endpoints"),
         (name = "workflows", description = "Workflow management endpoints"),
         (name = "webhooks", description = "Webhook management and receiver endpoints"),
+        (name = "agent", description = "Agent binary distribution endpoints"),
     )
 )]
 pub struct ApiDoc;
@@ -441,14 +450,14 @@ mod tests {
         // We have 57 unique paths with 81 total operations (HTTP methods)
         // This test ensures we don't accidentally remove endpoints
         assert!(
-            path_count >= 57,
-            "Expected at least 57 unique API paths, found {}",
+            path_count >= 59,
+            "Expected at least 59 unique API paths, found {}",
             path_count
         );
 
         assert!(
-            operation_count >= 81,
-            "Expected at least 81 API operations, found {}",
+            operation_count >= 83,
+            "Expected at least 83 API operations, found {}",
             operation_count
         );
 

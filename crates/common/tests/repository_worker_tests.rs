@@ -583,6 +583,8 @@ async fn test_worker_with_runtime() {
                 "file_extension": ".sh"
             }
         }),
+        auto_detected: false,
+        detection_config: json!({}),
     };
 
     let runtime = RuntimeRepository::create(&pool, runtime_input)

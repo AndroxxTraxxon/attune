@@ -131,6 +131,10 @@ images:
     repository: attune-init-packs
     tag: ""
     pullPolicy: IfNotPresent
+  agent:
+    repository: attune-agent
+    tag: ""
+    pullPolicy: IfNotPresent
 
 jobs:
   migrations:
@@ -191,3 +195,57 @@ web:
           - path: /
             pathType: Prefix
     tls: []
+
+# Agent-based workers
+# These deploy the universal worker agent into any container image.
+# The agent auto-detects available runtimes (python, ruby, node, etc.)
+# and registers with the Attune platform.
+#
+# Each entry creates a separate Deployment with an init container that
+# copies the statically-linked agent binary into the worker container.
+#
+# Supported fields per worker:
+#   name             (required) - Unique name for this worker (used in resource names)
+#   image            (required) - Container image with your desired runtime(s)
+#   replicas         (optional) - Number of pod replicas (default: 1)
+#   runtimes         (optional) - List of runtimes to expose; [] = auto-detect
+#   resources        (optional) - Kubernetes resource requests/limits
+#   env              (optional) - Extra environment variables (list of {name, value})
+#   imagePullPolicy  (optional) - Pull policy for the worker image
+#   logLevel         (optional) - RUST_LOG level (default: "info")
+#   runtimeClassName (optional) - Kubernetes RuntimeClass (e.g., "nvidia" for GPU)
+#   nodeSelector     (optional) - Node selector map for pod scheduling
+#   tolerations      (optional) - Tolerations list for pod scheduling
+#   stopGracePeriod  (optional) - Termination grace period in seconds (default: 45)
+#
+# Examples:
+#   agentWorkers:
+#     - name: ruby
+#       image: ruby:3.3
+#       replicas: 2
+#       runtimes: []  # auto-detect
+#       resources: {}
+#
+#     - name: python-gpu
+#       image: nvidia/cuda:12.3.1-runtime-ubuntu22.04
+#       replicas: 1
+#       runtimes: [python, shell]
+#       runtimeClassName: nvidia
+#       nodeSelector:
+#         gpu: "true"
+#       tolerations:
+#         - key: nvidia.com/gpu
+#           operator: Exists
+#           effect: NoSchedule
+#       resources:
+#         limits:
+#           nvidia.com/gpu: 1
+#
+#     - name: custom
+#       image: my-org/my-custom-image:latest
+#       replicas: 1
+#       runtimes: []
+#       env:
+#         - name: MY_CUSTOM_VAR
+#           value: my-value
+agentWorkers: []

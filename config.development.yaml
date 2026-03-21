@@ -125,3 +125,8 @@ executor:
   scheduled_timeout: 120 # 2 minutes (faster feedback in dev)
   timeout_check_interval: 30 # Check every 30 seconds
   enable_timeout_monitor: true
+
+# Agent binary distribution (optional - for local development)
+# Binary is built via: make build-agent
+# agent:
+#   binary_dir: ./target/x86_64-unknown-linux-musl/release

@@ -179,6 +179,8 @@ pub async fn create_runtime(
             distributions: request.distributions,
             installation: request.installation,
             execution_config: request.execution_config,
+            auto_detected: false,
+            detection_config: serde_json::json!({}),
         },
     )
     .await?;
@@ -232,6 +234,7 @@ pub async fn update_runtime(
                 NullableJsonPatch::Clear => Patch::Clear,
             }),
             execution_config: request.execution_config,
+            ..Default::default()
         },
     )
     .await?;

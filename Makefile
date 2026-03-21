@@ -4,7 +4,9 @@
         docker-build-workers docker-build-worker-base docker-build-worker-python \
         docker-build-worker-node docker-build-worker-full deny ci-rust ci-web-blocking ci-web-advisory \
         ci-security-blocking ci-security-advisory ci-blocking ci-advisory \
-        fmt-check pre-commit install-git-hooks
+        fmt-check pre-commit install-git-hooks \
+        build-agent docker-build-agent run-agent run-agent-release \
+        docker-up-agent docker-down-agent
 
 # Default target
 help:
@@ -59,6 +61,14 @@ help:
 	@echo "  make docker-build-worker-full    - Build full worker (all runtimes)"
 	@echo "  make docker-up                   - Start services with docker compose"
 	@echo "  make docker-down                 - Stop services"
+	@echo ""
+	@echo "Agent (Universal Worker):"
+	@echo "  make build-agent         - Build statically-linked agent binary (musl)"
+	@echo "  make docker-build-agent  - Build agent Docker image"
+	@echo "  make run-agent           - Run agent in development mode"
+	@echo "  make run-agent-release   - Run agent in release mode"
+	@echo "  make docker-up-agent     - Start all services + agent workers (ruby, etc.)"
+	@echo "  make docker-down-agent   - Stop agent stack"
 	@echo ""
 	@echo "Development:"
 	@echo "  make watch          - Watch and rebuild on changes"
@@ -251,13 +261,42 @@ docker-build-worker-full:
 	DOCKER_BUILDKIT=1 docker build --target worker-full -t attune-worker:full -f docker/Dockerfile.worker.optimized .
 	@echo "✅ Full worker image built: attune-worker:full"
 
+# Agent binary (statically-linked for injection into any container)
+build-agent:
+	@echo "Installing musl target (if not already installed)..."
+	rustup target add x86_64-unknown-linux-musl 2>/dev/null || true
+	@echo "Building statically-linked agent binary..."
+	SQLX_OFFLINE=true cargo build --release --target x86_64-unknown-linux-musl --bin attune-agent
+	strip target/x86_64-unknown-linux-musl/release/attune-agent
+	@echo "✅ Agent binary built: target/x86_64-unknown-linux-musl/release/attune-agent"
+	@ls -lh target/x86_64-unknown-linux-musl/release/attune-agent
+
+docker-build-agent:
+	@echo "Building agent Docker image (statically-linked binary)..."
+	DOCKER_BUILDKIT=1 docker buildx build --target agent-init -f docker/Dockerfile.agent -t attune-agent:latest .
+	@echo "✅ Agent image built: attune-agent:latest"
+
+run-agent:
+	cargo run --bin attune-agent
+
+run-agent-release:
+	cargo run --bin attune-agent --release
+
 docker-up:
 	@echo "Starting all services with Docker Compose..."
 	docker compose up -d
 
+docker-up-agent:
+	@echo "Starting all services + agent-based workers..."
+	docker compose -f docker-compose.yaml -f docker-compose.agent.yaml up -d
+
 docker-down:
 	@echo "Stopping all services..."
 	docker compose down
+
+docker-down-agent:
+	@echo "Stopping all services (including agent workers)..."
+	docker compose -f docker-compose.yaml -f docker-compose.agent.yaml down
 
 docker-down-volumes:
 	@echo "Stopping all services and removing volumes (WARNING: deletes data)..."

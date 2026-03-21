@@ -163,6 +163,12 @@ jobs:
             context: .
             target: ""
             build_args: ""
+          - name: agent
+            repository: attune-agent
+            dockerfile: docker/Dockerfile.agent
+            context: .
+            target: agent-init
+            build_args: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v4

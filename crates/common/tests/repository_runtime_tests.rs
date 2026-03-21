@@ -79,6 +79,8 @@ impl RuntimeFixture {
                     "file_extension": ".py"
                 }
             }),
+            auto_detected: false,
+            detection_config: json!({}),
         }
     }
 
@@ -102,6 +104,8 @@ impl RuntimeFixture {
                     "file_extension": ".sh"
                 }
             }),
+            auto_detected: false,
+            detection_config: json!({}),
         }
     }
 }
@@ -268,6 +272,7 @@ async fn test_update_runtime() {
             "method": "npm"
         }))),
         execution_config: None,
+        ..Default::default()
     };
 
     let updated = RuntimeRepository::update(&pool, created.id, update_input.clone())
@@ -299,6 +304,7 @@ async fn test_update_runtime_partial() {
         distributions: None,
         installation: None,
         execution_config: None,
+        ..Default::default()
     };
 
     let updated = RuntimeRepository::update(&pool, created.id, update_input.clone())

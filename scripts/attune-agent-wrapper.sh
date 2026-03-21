@@ -1,0 +1,115 @@
+#!/bin/sh
+# attune-agent-wrapper.sh — Bootstrap the Attune agent in any container
+#
+# This script provides a simple way to start the Attune universal worker agent
+# in containers where the agent binary isn't available via a shared volume.
+# It first checks for a volume-mounted binary, then falls back to downloading
+# it from the Attune API.
+#
+# Usage:
+#   As a container entrypoint:
+#     entrypoint: ["/opt/attune/scripts/attune-agent-wrapper.sh"]
+#
+#   With Docker Compose volume mount:
+#     volumes:
+#       - ./scripts/attune-agent-wrapper.sh:/opt/attune/scripts/attune-agent-wrapper.sh:ro
+#
+# Environment Variables:
+#   ATTUNE_AGENT_DIR   - Directory for the agent binary (default: /opt/attune/agent)
+#   ATTUNE_AGENT_URL   - URL to download the agent binary from
+#                        (default: http://attune-api:8080/api/v1/agent/binary)
+#   ATTUNE_AGENT_TOKEN - Optional bootstrap token for authenticated downloads
+#   ATTUNE_AGENT_ARCH  - Target architecture (default: auto-detected via uname -m)
+#
+set -e
+
+AGENT_DIR="${ATTUNE_AGENT_DIR:-/opt/attune/agent}"
+AGENT_BIN="$AGENT_DIR/attune-agent"
+AGENT_URL="${ATTUNE_AGENT_URL:-http://attune-api:8080/api/v1/agent/binary}"
+AGENT_TOKEN="${ATTUNE_AGENT_TOKEN:-}"
+
+# Auto-detect architecture if not specified
+if [ -z "$ATTUNE_AGENT_ARCH" ]; then
+    MACHINE=$(uname -m)
+    case "$MACHINE" in
+        x86_64|amd64)  ATTUNE_AGENT_ARCH="x86_64" ;;
+        aarch64|arm64) ATTUNE_AGENT_ARCH="aarch64" ;;
+        *)
+            echo "[attune] WARNING: Unknown architecture '$MACHINE', defaulting to x86_64" >&2
+            ATTUNE_AGENT_ARCH="x86_64"
+            ;;
+    esac
+fi
+
+# Use volume-mounted binary if available
+if [ -x "$AGENT_BIN" ]; then
+    echo "[attune] Agent binary found at $AGENT_BIN"
+    exec "$AGENT_BIN" "$@"
+fi
+
+# Download the agent binary
+echo "[attune] Agent binary not found at $AGENT_BIN, downloading..."
+echo "[attune]   URL: $AGENT_URL"
+echo "[attune]   Architecture: $ATTUNE_AGENT_ARCH"
+
+DOWNLOAD_URL="${AGENT_URL}?arch=${ATTUNE_AGENT_ARCH}"
+mkdir -p "$AGENT_DIR"
+
+# Build auth header if token is provided
+AUTH_HEADER=""
+if [ -n "$AGENT_TOKEN" ]; then
+    AUTH_HEADER="X-Agent-Token: $AGENT_TOKEN"
+fi
+
+# Download with retries (agent might start before API is ready)
+MAX_RETRIES=10
+RETRY_DELAY=5
+ATTEMPT=0
+
+while [ $ATTEMPT -lt $MAX_RETRIES ]; do
+    ATTEMPT=$((ATTEMPT + 1))
+
+    if command -v curl >/dev/null 2>&1; then
+        CURL_ARGS="-fsSL --retry 3 --retry-delay 2 -o $AGENT_BIN"
+        if [ -n "$AUTH_HEADER" ]; then
+            CURL_ARGS="$CURL_ARGS -H \"$AUTH_HEADER\""
+        fi
+        if eval curl $CURL_ARGS "$DOWNLOAD_URL" 2>/dev/null; then
+            break
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        WGET_ARGS="-q -O $AGENT_BIN"
+        if [ -n "$AUTH_HEADER" ]; then
+            WGET_ARGS="$WGET_ARGS --header=\"$AUTH_HEADER\""
+        fi
+        if eval wget $WGET_ARGS "$DOWNLOAD_URL" 2>/dev/null; then
+            break
+        fi
+    else
+        echo "[attune] ERROR: Neither curl nor wget available. Cannot download agent." >&2
+        echo "[attune] Install curl or wget, or mount the agent binary via volume." >&2
+        exit 1
+    fi
+
+    if [ $ATTEMPT -lt $MAX_RETRIES ]; then
+        echo "[attune] Download attempt $ATTEMPT/$MAX_RETRIES failed, retrying in ${RETRY_DELAY}s..."
+        sleep $RETRY_DELAY
+    else
+        echo "[attune] ERROR: Failed to download agent binary after $MAX_RETRIES attempts." >&2
+        echo "[attune] Check that the API is running and ATTUNE_AGENT_URL is correct." >&2
+        exit 1
+    fi
+done
+
+chmod +x "$AGENT_BIN"
+
+# Verify the binary works
+if ! "$AGENT_BIN" --version >/dev/null 2>&1; then
+    echo "[attune] WARNING: Downloaded binary may not be compatible with this system." >&2
+    echo "[attune]   Architecture: $ATTUNE_AGENT_ARCH ($(uname -m))" >&2
+    echo "[attune]   File type: $(file "$AGENT_BIN" 2>/dev/null || echo 'unknown')" >&2
+fi
+
+echo "[attune] Agent binary downloaded successfully ($(wc -c < "$AGENT_BIN") bytes)."
+echo "[attune] Starting agent..."
+exec "$AGENT_BIN" "$@"

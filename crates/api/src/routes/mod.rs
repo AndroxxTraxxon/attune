@@ -1,6 +1,7 @@
 //! API route modules
 
 pub mod actions;
+pub mod agent;
 pub mod analytics;
 pub mod artifacts;
 pub mod auth;
@@ -19,6 +20,7 @@ pub mod webhooks;
 pub mod workflows;
 
 pub use actions::routes as action_routes;
+pub use agent::routes as agent_routes;
 pub use analytics::routes as analytics_routes;
 pub use artifacts::routes as artifact_routes;
 pub use auth::routes as auth_routes;

@@ -413,6 +413,7 @@ impl ActionExecutor {
             match sqlx::query_as::<_, RuntimeModel>(
                 r#"SELECT id, ref, pack, pack_ref, description, name,
                           distributions, installation, installers, execution_config,
+                          auto_detected, detection_config,
                           created, updated
                    FROM runtime WHERE id = $1"#,
             )

@@ -19,6 +19,7 @@ The workflow publishes these images to the Gitea OCI registry:
 - `attune-migrations`
 - `attune-init-user`
 - `attune-init-packs`
+- `attune-agent`
 
 The Helm chart is pushed as an OCI chart to:
 
