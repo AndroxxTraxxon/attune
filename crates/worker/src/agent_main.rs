@@ -60,8 +60,7 @@ struct Args {
     detect_only: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Install HMAC-only JWT crypto provider (must be before any token operations)
     attune_common::auth::install_crypto_provider();
 
@@ -75,7 +74,11 @@ async fn main() -> Result<()> {
 
     info!("Starting Attune Universal Worker Agent");
 
-    // --- Phase 1: Runtime auto-detection ---
+    // --- Phase 1: Runtime auto-detection (synchronous, before tokio runtime) ---
+    //
+    // All std::env::set_var calls MUST happen here, before we create the tokio
+    // runtime, to avoid undefined behavior from mutating the process environment
+    // while other threads are running.
     //
     // Check if the user has explicitly set ATTUNE_WORKER_RUNTIMES. If so, skip
     // auto-detection and respect their override. Otherwise, probe the system for
@@ -83,15 +86,57 @@ async fn main() -> Result<()> {
     let runtimes_override = std::env::var("ATTUNE_WORKER_RUNTIMES").ok();
 
     // Holds the detected runtimes so we can pass them to WorkerService later.
-    // Populated only when auto-detection actually runs (no env var override).
+    // Populated in both branches: auto-detection and override (filtered to
+    // match the override list).
     let mut agent_detected_runtimes: Option<Vec<attune_worker::runtime_detect::DetectedRuntime>> =
         None;
 
     if let Some(ref override_value) = runtimes_override {
         info!(
-            "ATTUNE_WORKER_RUNTIMES already set (override), skipping auto-detection: {}",
+            "ATTUNE_WORKER_RUNTIMES already set (override): {}",
             override_value
         );
+
+        // Even with an explicit override, run detection so we can register
+        // the overridden runtimes in the database and advertise accurate
+        // capability metadata (binary paths, versions). Without this, the
+        // worker would accept work for runtimes that were never registered
+        // locally — e.g. ruby/go on a fresh deployment.
+        info!("Running auto-detection for override-specified runtimes...");
+        let detected = detect_runtimes();
+
+        // Filter detected runtimes to only those matching the override list,
+        // so we don't register runtimes the user explicitly excluded.
+        let override_names: Vec<&str> = override_value.split(',').map(|s| s.trim()).collect();
+        let filtered: Vec<_> = detected
+            .into_iter()
+            .filter(|rt| {
+                let normalized = attune_common::runtime_detection::normalize_runtime_name(&rt.name);
+                override_names.iter().any(|ov| {
+                    attune_common::runtime_detection::normalize_runtime_name(ov) == normalized
+                })
+            })
+            .collect();
+
+        if filtered.is_empty() {
+            warn!(
+                "None of the override runtimes ({}) were found on this system! \
+                 The agent may not be able to execute any actions.",
+                override_value
+            );
+        } else {
+            info!(
+                "Matched {} override runtime(s) to detected interpreters:",
+                filtered.len()
+            );
+            for rt in &filtered {
+                match &rt.version {
+                    Some(ver) => info!("  ✓ {} — {} ({})", rt.name, rt.path, ver),
+                    None => info!("  ✓ {} — {}", rt.name, rt.path),
+                }
+            }
+            agent_detected_runtimes = Some(filtered);
+        }
     } else {
         info!("No ATTUNE_WORKER_RUNTIMES override — running auto-detection...");
 
@@ -113,10 +158,7 @@ async fn main() -> Result<()> {
             let runtime_list: Vec<&str> = detected.iter().map(|r| r.name.as_str()).collect();
             let runtime_csv = runtime_list.join(",");
             info!("Setting ATTUNE_WORKER_RUNTIMES={}", runtime_csv);
-            // SAFETY: std::env::set_var is safe in Rust 2021 edition. If upgrading
-            // to edition 2024+, this call will need to be wrapped in `unsafe {}`.
-            // It's sound here because detection runs single-threaded before tokio
-            // starts any worker tasks.
+            // Safe: no other threads are running yet (tokio runtime not started).
             std::env::set_var("ATTUNE_WORKER_RUNTIMES", &runtime_csv);
 
             // Stash for Phase 2: pass to WorkerService for rich capability registration
@@ -124,7 +166,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    // --- Handle --detect-only ---
+    // --- Handle --detect-only (synchronous, no async runtime needed) ---
     if args.detect_only {
         if runtimes_override.is_some() {
             // User set an override, but --detect-only should show what's actually
@@ -147,12 +189,24 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // --- Phase 2: Load configuration ---
-    if let Some(config_path) = args.config {
-        // SAFETY: std::env::set_var is safe in Rust 2021 edition. See note above.
+    // --- Set config path env var (synchronous, before tokio runtime) ---
+    if let Some(ref config_path) = args.config {
+        // Safe: no other threads are running yet (tokio runtime not started).
         std::env::set_var("ATTUNE_CONFIG", config_path);
     }
 
+    // --- Build the tokio runtime and run the async portion ---
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async_main(args, agent_detected_runtimes))
+}
+
+/// The async portion of the agent entrypoint. Called from `main()` via
+/// `runtime.block_on()` after all environment variable mutations are complete.
+async fn async_main(
+    args: Args,
+    agent_detected_runtimes: Option<Vec<attune_worker::runtime_detect::DetectedRuntime>>,
+) -> Result<()> {
+    // --- Phase 2: Load configuration ---
     let mut config = Config::load()?;
     config.validate()?;
 

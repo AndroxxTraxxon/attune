@@ -84,10 +84,10 @@ pub async fn auto_register_detected_runtimes(
 
         // Check if a runtime with a matching name already exists in the DB.
         // We normalize both sides for alias-aware comparison.
-        let already_exists = existing_runtimes.iter().any(|r| {
-            let db_name = r.name.to_ascii_lowercase();
-            normalize_runtime_name(&db_name) == canonical_name
-        });
+        // normalize_runtime_name lowercases internally, so no need to pre-lowercase.
+        let already_exists = existing_runtimes
+            .iter()
+            .any(|r| normalize_runtime_name(&r.name) == canonical_name);
 
         if already_exists {
             debug!(
@@ -194,7 +194,7 @@ pub async fn auto_register_detected_runtimes(
                     "Auto-detected {} runtime at {}",
                     detected_rt.name, detected_rt.path
                 )),
-                name: capitalize_runtime_name(canonical_name),
+                name: capitalize_runtime_name(&canonical_name),
                 distributions: build_minimal_distributions(detected_rt),
                 installation: None,
                 execution_config,
@@ -286,7 +286,7 @@ fn build_execution_config_from_template(
 /// interpreter directly, without environment or dependency management.
 fn build_minimal_execution_config(detected: &DetectedRuntime) -> serde_json::Value {
     let canonical = normalize_runtime_name(&detected.name);
-    let file_ext = default_file_extension(canonical);
+    let file_ext = default_file_extension(&canonical);
 
     let mut config = json!({
         "interpreter": {

@@ -24,8 +24,26 @@ use attune_common::models::runtime::{
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use tokio::process::Command;
 use tracing::{debug, error, info, warn};
+
+/// Per-directory locks for lazy environment setup to prevent concurrent
+/// setup of the same environment from corrupting it. When two executions
+/// for the same pack arrive concurrently (e.g. in agent mode), both may
+/// see `!env_dir.exists()` and race to run `setup_pack_environment`.
+/// This map provides a per-directory async mutex so that only one setup
+/// runs at a time for each env_dir path.
+static ENV_SETUP_LOCKS: OnceLock<StdMutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
+
+fn get_env_setup_lock(env_dir: &Path) -> Arc<tokio::sync::Mutex<()>> {
+    let locks = ENV_SETUP_LOCKS.get_or_init(|| StdMutex::new(HashMap::new()));
+    let mut map = locks.lock().unwrap();
+    map.entry(env_dir.to_path_buf())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
 
 fn bash_single_quote_escape(s: &str) -> String {
     s.replace('\'', "'\\''")
@@ -620,111 +638,122 @@ impl Runtime for ProcessRuntime {
         // create it on-demand. This is the primary code path for agent mode where
         // proactive startup setup is skipped, but it also serves as a safety net
         // for standard workers if the environment was somehow missed.
-        if effective_config.environment.is_some() && pack_dir.exists() && !env_dir.exists() {
-            info!(
-                "Runtime environment for pack '{}' not found at {}. \
-                 Creating on first use (lazy setup).",
-                context.action_ref,
-                env_dir.display(),
-            );
+        // Acquire a per-directory async lock to serialize environment setup.
+        // This prevents concurrent executions for the same pack from racing
+        // to create or repair the environment simultaneously.
+        if effective_config.environment.is_some() && pack_dir.exists() {
+            let env_lock = get_env_setup_lock(&env_dir);
+            let _guard = env_lock.lock().await;
 
-            let setup_runtime = ProcessRuntime::new(
-                self.runtime_name.clone(),
-                effective_config.clone(),
-                self.packs_base_dir.clone(),
-                self.runtime_envs_dir.clone(),
-            );
-            match setup_runtime
-                .setup_pack_environment(&pack_dir, &env_dir)
-                .await
-            {
-                Ok(()) => {
-                    info!(
-                        "Successfully created environment for pack '{}' at {} (lazy setup)",
-                        context.action_ref,
-                        env_dir.display(),
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to create environment for pack '{}' at {}: {}. \
-                         Proceeding with system interpreter as fallback.",
-                        context.action_ref,
-                        env_dir.display(),
-                        e,
-                    );
+            // --- Lazy environment creation (double-checked after lock) ---
+            if !env_dir.exists() {
+                info!(
+                    "Runtime environment for pack '{}' not found at {}. \
+                     Creating on first use (lazy setup).",
+                    context.action_ref,
+                    env_dir.display(),
+                );
+
+                let setup_runtime = ProcessRuntime::new(
+                    self.runtime_name.clone(),
+                    effective_config.clone(),
+                    self.packs_base_dir.clone(),
+                    self.runtime_envs_dir.clone(),
+                );
+                match setup_runtime
+                    .setup_pack_environment(&pack_dir, &env_dir)
+                    .await
+                {
+                    Ok(()) => {
+                        info!(
+                            "Successfully created environment for pack '{}' at {} (lazy setup)",
+                            context.action_ref,
+                            env_dir.display(),
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to create environment for pack '{}' at {}: {}. \
+                             Proceeding with system interpreter as fallback.",
+                            context.action_ref,
+                            env_dir.display(),
+                            e,
+                        );
+                    }
                 }
             }
-        }
 
-        // If the environment directory exists but contains a broken interpreter
-        // (e.g. broken symlinks from a venv created in a different container),
-        // attempt to recreate it before resolving the interpreter.
-        if effective_config.environment.is_some() && env_dir.exists() && pack_dir.exists() {
-            if let Some(ref env_cfg) = effective_config.environment {
-                if let Some(ref interp_template) = env_cfg.interpreter_path {
-                    let mut vars = std::collections::HashMap::new();
-                    vars.insert("env_dir", env_dir.to_string_lossy().to_string());
-                    vars.insert("pack_dir", pack_dir.to_string_lossy().to_string());
-                    let resolved = RuntimeExecutionConfig::resolve_template(interp_template, &vars);
-                    let resolved_path = std::path::PathBuf::from(&resolved);
+            // --- Broken-symlink repair (also under the per-directory lock) ---
+            // If the environment directory exists but contains a broken interpreter
+            // (e.g. broken symlinks from a venv created in a different container),
+            // attempt to recreate it before resolving the interpreter.
+            if env_dir.exists() {
+                if let Some(ref env_cfg) = effective_config.environment {
+                    if let Some(ref interp_template) = env_cfg.interpreter_path {
+                        let mut vars = std::collections::HashMap::new();
+                        vars.insert("env_dir", env_dir.to_string_lossy().to_string());
+                        vars.insert("pack_dir", pack_dir.to_string_lossy().to_string());
+                        let resolved =
+                            RuntimeExecutionConfig::resolve_template(interp_template, &vars);
+                        let resolved_path = std::path::PathBuf::from(&resolved);
 
-                    // Check for a broken symlink: symlink_metadata succeeds for
-                    // the link itself even when its target is missing, while
-                    // exists() (which follows symlinks) returns false.
-                    let is_broken_symlink = !resolved_path.exists()
-                        && std::fs::symlink_metadata(&resolved_path)
-                            .map(|m| m.file_type().is_symlink())
-                            .unwrap_or(false);
+                        // Check for a broken symlink: symlink_metadata succeeds for
+                        // the link itself even when its target is missing, while
+                        // exists() (which follows symlinks) returns false.
+                        let is_broken_symlink = !resolved_path.exists()
+                            && std::fs::symlink_metadata(&resolved_path)
+                                .map(|m| m.file_type().is_symlink())
+                                .unwrap_or(false);
 
-                    if is_broken_symlink {
-                        let target = std::fs::read_link(&resolved_path)
-                            .map(|t| t.display().to_string())
-                            .unwrap_or_else(|_| "<unreadable>".to_string());
-                        warn!(
-                            "Detected broken symlink at '{}' -> '{}' in venv for pack '{}'. \
-                             Removing broken environment and recreating...",
-                            resolved_path.display(),
-                            target,
-                            context.action_ref,
-                        );
-
-                        // Remove the broken environment directory
-                        if let Err(e) = std::fs::remove_dir_all(&env_dir) {
+                        if is_broken_symlink {
+                            let target = std::fs::read_link(&resolved_path)
+                                .map(|t| t.display().to_string())
+                                .unwrap_or_else(|_| "<unreadable>".to_string());
                             warn!(
-                                "Failed to remove broken environment at {}: {}. \
-                                 Will proceed with system interpreter.",
-                                env_dir.display(),
-                                e,
+                                "Detected broken symlink at '{}' -> '{}' in venv for pack '{}'. \
+                                 Removing broken environment and recreating...",
+                                resolved_path.display(),
+                                target,
+                                context.action_ref,
                             );
-                        } else {
-                            // Recreate the environment using a temporary ProcessRuntime
-                            // with the effective (possibly version-specific) config.
-                            let setup_runtime = ProcessRuntime::new(
-                                self.runtime_name.clone(),
-                                effective_config.clone(),
-                                self.packs_base_dir.clone(),
-                                self.runtime_envs_dir.clone(),
-                            );
-                            match setup_runtime
-                                .setup_pack_environment(&pack_dir, &env_dir)
-                                .await
-                            {
-                                Ok(()) => {
-                                    info!(
-                                        "Successfully recreated environment for pack '{}' at {}",
-                                        context.action_ref,
-                                        env_dir.display(),
-                                    );
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        "Failed to recreate environment for pack '{}' at {}: {}. \
-                                         Will proceed with system interpreter.",
-                                        context.action_ref,
-                                        env_dir.display(),
-                                        e,
-                                    );
+
+                            // Remove the broken environment directory
+                            if let Err(e) = std::fs::remove_dir_all(&env_dir) {
+                                warn!(
+                                    "Failed to remove broken environment at {}: {}. \
+                                     Will proceed with system interpreter.",
+                                    env_dir.display(),
+                                    e,
+                                );
+                            } else {
+                                // Recreate the environment using a temporary ProcessRuntime
+                                // with the effective (possibly version-specific) config.
+                                let setup_runtime = ProcessRuntime::new(
+                                    self.runtime_name.clone(),
+                                    effective_config.clone(),
+                                    self.packs_base_dir.clone(),
+                                    self.runtime_envs_dir.clone(),
+                                );
+                                match setup_runtime
+                                    .setup_pack_environment(&pack_dir, &env_dir)
+                                    .await
+                                {
+                                    Ok(()) => {
+                                        info!(
+                                            "Successfully recreated environment for pack '{}' at {}",
+                                            context.action_ref,
+                                            env_dir.display(),
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Failed to recreate environment for pack '{}' at {}: {}. \
+                                             Will proceed with system interpreter.",
+                                            context.action_ref,
+                                            env_dir.display(),
+                                            e,
+                                        );
+                                    }
                                 }
                             }
                         }

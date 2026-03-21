@@ -89,7 +89,9 @@ spec:
             - name: ATTUNE_WORKER_TYPE
               value: container
             - name: ATTUNE_WORKER_NAME
-              value: agent-worker-{{ .name }}-01
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: ATTUNE_API_URL
               value: http://{{ include "attune.apiServiceName" $ }}:{{ $.Values.api.service.port }}
             - name: RUST_LOG

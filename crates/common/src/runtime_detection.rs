@@ -34,21 +34,22 @@ use tracing::{debug, info, warn};
 /// use attune_common::runtime_detection::normalize_runtime_name;
 /// assert_eq!(normalize_runtime_name("node.js"), "node");
 /// assert_eq!(normalize_runtime_name("nodejs"), "node");
-/// assert_eq!(normalize_runtime_name("python3"), "python");
-/// assert_eq!(normalize_runtime_name("shell"), "shell");
+/// assert_eq!(normalize_runtime_name("Python3"), "python");
+/// assert_eq!(normalize_runtime_name("Shell"), "shell");
 /// ```
-pub fn normalize_runtime_name(name: &str) -> &str {
-    match name {
-        "node" | "nodejs" | "node.js" => "node",
-        "python" | "python3" => "python",
-        "bash" | "sh" | "shell" => "shell",
-        "native" | "builtin" | "standalone" => "native",
-        "ruby" | "rb" => "ruby",
-        "go" | "golang" => "go",
-        "java" | "jdk" | "openjdk" => "java",
-        "perl" | "perl5" => "perl",
-        "r" | "rscript" => "r",
-        other => other,
+pub fn normalize_runtime_name(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    match lower.as_str() {
+        "node" | "nodejs" | "node.js" => "node".to_string(),
+        "python" | "python3" => "python".to_string(),
+        "bash" | "sh" | "shell" => "shell".to_string(),
+        "native" | "builtin" | "standalone" => "native".to_string(),
+        "ruby" | "rb" => "ruby".to_string(),
+        "go" | "golang" => "go".to_string(),
+        "java" | "jdk" | "openjdk" => "java".to_string(),
+        "perl" | "perl5" => "perl".to_string(),
+        "r" | "rscript" => "r".to_string(),
+        _ => lower,
     }
 }
 
@@ -57,9 +58,7 @@ pub fn normalize_runtime_name(name: &str) -> &str {
 /// Both sides are lowercased and then normalized before comparison so that,
 /// e.g., a filter value of `"node"` matches a database runtime name `"Node.js"`.
 pub fn runtime_matches_filter(rt_name: &str, filter_entry: &str) -> bool {
-    let rt_lower = rt_name.to_ascii_lowercase();
-    let filter_lower = filter_entry.to_ascii_lowercase();
-    normalize_runtime_name(&rt_lower) == normalize_runtime_name(&filter_lower)
+    normalize_runtime_name(rt_name) == normalize_runtime_name(filter_entry)
 }
 
 /// Check if a runtime name matches any entry in a filter list.
@@ -396,6 +395,25 @@ mod tests {
     #[test]
     fn test_normalize_runtime_name_passthrough() {
         assert_eq!(normalize_runtime_name("custom_runtime"), "custom_runtime");
+    }
+
+    #[test]
+    fn test_normalize_runtime_name_case_insensitive() {
+        assert_eq!(normalize_runtime_name("Node"), "node");
+        assert_eq!(normalize_runtime_name("NodeJS"), "node");
+        assert_eq!(normalize_runtime_name("Node.js"), "node");
+        assert_eq!(normalize_runtime_name("Python"), "python");
+        assert_eq!(normalize_runtime_name("Python3"), "python");
+        assert_eq!(normalize_runtime_name("Shell"), "shell");
+        assert_eq!(normalize_runtime_name("BASH"), "shell");
+        assert_eq!(normalize_runtime_name("Ruby"), "ruby");
+        assert_eq!(normalize_runtime_name("Go"), "go");
+        assert_eq!(normalize_runtime_name("GoLang"), "go");
+        assert_eq!(normalize_runtime_name("Java"), "java");
+        assert_eq!(normalize_runtime_name("JDK"), "java");
+        assert_eq!(normalize_runtime_name("Perl"), "perl");
+        assert_eq!(normalize_runtime_name("R"), "r");
+        assert_eq!(normalize_runtime_name("Custom_Runtime"), "custom_runtime");
     }
 
     #[test]

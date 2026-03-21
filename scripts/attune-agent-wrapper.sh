@@ -26,6 +26,9 @@ set -e
 AGENT_DIR="${ATTUNE_AGENT_DIR:-/opt/attune/agent}"
 AGENT_BIN="$AGENT_DIR/attune-agent"
 AGENT_URL="${ATTUNE_AGENT_URL:-http://attune-api:8080/api/v1/agent/binary}"
+# SECURITY: The default URL uses plain HTTP, which is fine for internal Docker
+# networking. For cross-network or production deployments, set ATTUNE_AGENT_URL
+# to an HTTPS endpoint and consider setting ATTUNE_AGENT_TOKEN to authenticate.
 AGENT_TOKEN="${ATTUNE_AGENT_TOKEN:-}"
 
 # Auto-detect architecture if not specified
@@ -70,20 +73,24 @@ while [ $ATTEMPT -lt $MAX_RETRIES ]; do
     ATTEMPT=$((ATTEMPT + 1))
 
     if command -v curl >/dev/null 2>&1; then
-        CURL_ARGS="-fsSL --retry 3 --retry-delay 2 -o $AGENT_BIN"
         if [ -n "$AUTH_HEADER" ]; then
-            CURL_ARGS="$CURL_ARGS -H \"$AUTH_HEADER\""
-        fi
-        if eval curl $CURL_ARGS "$DOWNLOAD_URL" 2>/dev/null; then
-            break
+            if curl -fsSL --retry 3 --retry-delay 2 -o "$AGENT_BIN" -H "$AUTH_HEADER" "$DOWNLOAD_URL" 2>/dev/null; then
+                break
+            fi
+        else
+            if curl -fsSL --retry 3 --retry-delay 2 -o "$AGENT_BIN" "$DOWNLOAD_URL" 2>/dev/null; then
+                break
+            fi
         fi
     elif command -v wget >/dev/null 2>&1; then
-        WGET_ARGS="-q -O $AGENT_BIN"
         if [ -n "$AUTH_HEADER" ]; then
-            WGET_ARGS="$WGET_ARGS --header=\"$AUTH_HEADER\""
-        fi
-        if eval wget $WGET_ARGS "$DOWNLOAD_URL" 2>/dev/null; then
-            break
+            if wget -q -O "$AGENT_BIN" --header="$AUTH_HEADER" "$DOWNLOAD_URL" 2>/dev/null; then
+                break
+            fi
+        else
+            if wget -q -O "$AGENT_BIN" "$DOWNLOAD_URL" 2>/dev/null; then
+                break
+            fi
         fi
     else
         echo "[attune] ERROR: Neither curl nor wget available. Cannot download agent." >&2

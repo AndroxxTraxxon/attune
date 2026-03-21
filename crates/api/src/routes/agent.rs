@@ -14,6 +14,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 use tokio::fs;
 use tokio_util::io::ReaderStream;
 use utoipa::{IntoParams, ToSchema};
@@ -83,7 +84,18 @@ fn validate_token(
 
     let expected_token = match expected_token {
         Some(t) => t,
-        None => return Ok(()), // No token configured, allow access
+        None => {
+            use std::sync::Once;
+            static WARN_ONCE: Once = Once::new();
+            WARN_ONCE.call_once(|| {
+                tracing::warn!(
+                    "Agent binary download endpoint has no bootstrap_token configured. \
+                     Anyone with network access to the API can download the agent binary. \
+                     Set agent.bootstrap_token in config to restrict access."
+                );
+            });
+            return Ok(());
+        }
     };
 
     // Check X-Agent-Token header first, then query param
@@ -94,7 +106,7 @@ fn validate_token(
         .or_else(|| query_token.clone());
 
     match provided_token {
-        Some(ref t) if t == expected_token => Ok(()),
+        Some(ref t) if bool::from(t.as_bytes().ct_eq(expected_token.as_bytes())) => Ok(()),
         Some(_) => Err((
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({
@@ -152,15 +164,19 @@ pub async fn download_agent_binary(
 
     let binary_dir = std::path::Path::new(&agent_config.binary_dir);
 
-    // Try arch-specific binary first, then fall back to generic name
+    // Try arch-specific binary first, then fall back to generic name.
+    // IMPORTANT: The generic `attune-agent` binary is only safe to serve for
+    // x86_64 requests, because the current build pipeline produces an
+    // x86_64-unknown-linux-musl binary. Serving it for aarch64/arm64 would
+    // give the caller an incompatible executable (exec format error).
     let arch_specific = binary_dir.join(format!("attune-agent-{}", arch));
     let generic = binary_dir.join("attune-agent");
 
     let binary_path = if arch_specific.exists() {
         arch_specific
-    } else if generic.exists() {
+    } else if arch == "x86_64" && generic.exists() {
         tracing::debug!(
-            "Arch-specific binary not found at {:?}, falling back to {:?}",
+            "Arch-specific binary not found at {:?}, falling back to generic {:?} (safe for x86_64)",
             arch_specific,
             generic
         );
@@ -269,12 +285,14 @@ pub async fn agent_info(
         let arch_specific = binary_dir.join(format!("attune-agent-{}", arch));
         let generic = binary_dir.join("attune-agent");
 
+        // Only fall back to the generic binary for x86_64, since the build
+        // pipeline currently produces x86_64-only generic binaries.
         let (available, size_bytes) = if arch_specific.exists() {
             match fs::metadata(&arch_specific).await {
                 Ok(m) => (true, m.len()),
                 Err(_) => (false, 0),
             }
-        } else if generic.exists() {
+        } else if *arch == "x86_64" && generic.exists() {
             match fs::metadata(&generic).await {
                 Ok(m) => (true, m.len()),
                 Err(_) => (false, 0),
