@@ -28,18 +28,20 @@
 //! - `--detect-only` — Run runtime detection, print results, and exit
 
 use anyhow::Result;
+use attune_common::agent_bootstrap::{bootstrap_runtime_env, print_detect_only_report};
 use attune_common::config::Config;
 use clap::Parser;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{info, warn};
 
 use attune_worker::dynamic_runtime::auto_register_detected_runtimes;
-use attune_worker::runtime_detect::{detect_runtimes, print_detection_report};
+use attune_worker::runtime_detect::DetectedRuntime;
 use attune_worker::service::WorkerService;
 
 #[derive(Parser, Debug)]
 #[command(name = "attune-agent")]
 #[command(
+    version,
     about = "Attune Universal Worker Agent - Injected into any container to auto-detect and execute actions",
     long_about = "The Attune Agent automatically discovers available runtime interpreters \
                   in the current environment and registers as a worker capable of executing \
@@ -73,119 +75,19 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     info!("Starting Attune Universal Worker Agent");
+    info!("Agent binary: attune-agent {}", env!("CARGO_PKG_VERSION"));
 
-    // --- Phase 1: Runtime auto-detection (synchronous, before tokio runtime) ---
-    //
-    // All std::env::set_var calls MUST happen here, before we create the tokio
-    // runtime, to avoid undefined behavior from mutating the process environment
-    // while other threads are running.
-    //
-    // Check if the user has explicitly set ATTUNE_WORKER_RUNTIMES. If so, skip
-    // auto-detection and respect their override. Otherwise, probe the system for
-    // available interpreters.
-    let runtimes_override = std::env::var("ATTUNE_WORKER_RUNTIMES").ok();
+    // Safe: no async runtime or worker threads are running yet.
+    std::env::set_var("ATTUNE_AGENT_MODE", "true");
+    std::env::set_var("ATTUNE_AGENT_BINARY_NAME", "attune-agent");
+    std::env::set_var("ATTUNE_AGENT_BINARY_VERSION", env!("CARGO_PKG_VERSION"));
 
-    // Holds the detected runtimes so we can pass them to WorkerService later.
-    // Populated in both branches: auto-detection and override (filtered to
-    // match the override list).
-    let mut agent_detected_runtimes: Option<Vec<attune_worker::runtime_detect::DetectedRuntime>> =
-        None;
-
-    if let Some(ref override_value) = runtimes_override {
-        info!(
-            "ATTUNE_WORKER_RUNTIMES already set (override): {}",
-            override_value
-        );
-
-        // Even with an explicit override, run detection so we can register
-        // the overridden runtimes in the database and advertise accurate
-        // capability metadata (binary paths, versions). Without this, the
-        // worker would accept work for runtimes that were never registered
-        // locally — e.g. ruby/go on a fresh deployment.
-        info!("Running auto-detection for override-specified runtimes...");
-        let detected = detect_runtimes();
-
-        // Filter detected runtimes to only those matching the override list,
-        // so we don't register runtimes the user explicitly excluded.
-        let override_names: Vec<&str> = override_value.split(',').map(|s| s.trim()).collect();
-        let filtered: Vec<_> = detected
-            .into_iter()
-            .filter(|rt| {
-                let normalized = attune_common::runtime_detection::normalize_runtime_name(&rt.name);
-                override_names.iter().any(|ov| {
-                    attune_common::runtime_detection::normalize_runtime_name(ov) == normalized
-                })
-            })
-            .collect();
-
-        if filtered.is_empty() {
-            warn!(
-                "None of the override runtimes ({}) were found on this system! \
-                 The agent may not be able to execute any actions.",
-                override_value
-            );
-        } else {
-            info!(
-                "Matched {} override runtime(s) to detected interpreters:",
-                filtered.len()
-            );
-            for rt in &filtered {
-                match &rt.version {
-                    Some(ver) => info!("  ✓ {} — {} ({})", rt.name, rt.path, ver),
-                    None => info!("  ✓ {} — {}", rt.name, rt.path),
-                }
-            }
-            agent_detected_runtimes = Some(filtered);
-        }
-    } else {
-        info!("No ATTUNE_WORKER_RUNTIMES override — running auto-detection...");
-
-        let detected = detect_runtimes();
-
-        if detected.is_empty() {
-            warn!("No runtimes detected! The agent may not be able to execute any actions.");
-        } else {
-            info!("Detected {} runtime(s):", detected.len());
-            for rt in &detected {
-                match &rt.version {
-                    Some(ver) => info!("  ✓ {} — {} ({})", rt.name, rt.path, ver),
-                    None => info!("  ✓ {} — {}", rt.name, rt.path),
-                }
-            }
-
-            // Build comma-separated runtime list and set the env var so that
-            // Config::load() and WorkerService pick it up downstream.
-            let runtime_list: Vec<&str> = detected.iter().map(|r| r.name.as_str()).collect();
-            let runtime_csv = runtime_list.join(",");
-            info!("Setting ATTUNE_WORKER_RUNTIMES={}", runtime_csv);
-            // Safe: no other threads are running yet (tokio runtime not started).
-            std::env::set_var("ATTUNE_WORKER_RUNTIMES", &runtime_csv);
-
-            // Stash for Phase 2: pass to WorkerService for rich capability registration
-            agent_detected_runtimes = Some(detected);
-        }
-    }
+    let bootstrap = bootstrap_runtime_env("ATTUNE_WORKER_RUNTIMES");
+    let agent_detected_runtimes = bootstrap.detected_runtimes.clone();
 
     // --- Handle --detect-only (synchronous, no async runtime needed) ---
     if args.detect_only {
-        if runtimes_override.is_some() {
-            // User set an override, but --detect-only should show what's actually
-            // on this system regardless, so re-run detection.
-            info!(
-                "--detect-only: re-running detection to show what is available on this system..."
-            );
-            println!("NOTE: ATTUNE_WORKER_RUNTIMES is set — auto-detection was skipped during normal startup.");
-            println!("      Showing what auto-detection would find on this system:");
-            println!();
-            let detected = detect_runtimes();
-            print_detection_report(&detected);
-        } else if let Some(ref detected) = agent_detected_runtimes {
-            print_detection_report(detected);
-        } else {
-            // No detection ran (empty results), run it fresh
-            let detected = detect_runtimes();
-            print_detection_report(&detected);
-        }
+        print_detect_only_report("ATTUNE_WORKER_RUNTIMES", &bootstrap);
         return Ok(());
     }
 
@@ -204,7 +106,7 @@ fn main() -> Result<()> {
 /// `runtime.block_on()` after all environment variable mutations are complete.
 async fn async_main(
     args: Args,
-    agent_detected_runtimes: Option<Vec<attune_worker::runtime_detect::DetectedRuntime>>,
+    agent_detected_runtimes: Option<Vec<DetectedRuntime>>,
 ) -> Result<()> {
     // --- Phase 2: Load configuration ---
     let mut config = Config::load()?;

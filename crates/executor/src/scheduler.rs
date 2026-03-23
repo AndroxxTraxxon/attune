@@ -13,8 +13,11 @@
 
 use anyhow::Result;
 use attune_common::{
-    models::{enums::ExecutionStatus, execution::WorkflowTaskMetadata, Action, Execution},
-    mq::{Consumer, ExecutionRequestedPayload, MessageEnvelope, MessageType, Publisher},
+    models::{enums::ExecutionStatus, execution::WorkflowTaskMetadata, Action, Execution, Runtime},
+    mq::{
+        Consumer, ExecutionCompletedPayload, ExecutionRequestedPayload, MessageEnvelope,
+        MessageType, Publisher,
+    },
     repositories::{
         action::ActionRepository,
         execution::{CreateExecutionInput, ExecutionRepository, UpdateExecutionInput},
@@ -24,7 +27,7 @@ use attune_common::{
         },
         Create, FindById, FindByRef, Update,
     },
-    runtime_detection::runtime_matches_filter,
+    runtime_detection::runtime_aliases_contain,
     workflow::WorkflowDefinition,
 };
 use chrono::Utc;
@@ -205,7 +208,23 @@ impl ExecutionScheduler {
         }
 
         // Regular action: select appropriate worker (round-robin among compatible workers)
-        let worker = Self::select_worker(pool, &action, round_robin_counter).await?;
+        let worker = match Self::select_worker(pool, &action, round_robin_counter).await {
+            Ok(worker) => worker,
+            Err(err) if Self::is_unschedulable_error(&err) => {
+                Self::fail_unschedulable_execution(
+                    pool,
+                    publisher,
+                    envelope,
+                    execution_id,
+                    action.id,
+                    &action.r#ref,
+                    &err.to_string(),
+                )
+                .await?;
+                return Ok(());
+            }
+            Err(err) => return Err(err),
+        };
 
         info!(
             "Selected worker {} for execution {}",
@@ -1561,7 +1580,7 @@ impl ExecutionScheduler {
         let compatible_workers: Vec<_> = if let Some(ref runtime) = runtime {
             workers
                 .into_iter()
-                .filter(|w| Self::worker_supports_runtime(w, &runtime.name))
+                .filter(|w| Self::worker_supports_runtime(w, runtime))
                 .collect()
         } else {
             workers
@@ -1619,20 +1638,26 @@ impl ExecutionScheduler {
 
     /// Check if a worker supports a given runtime
     ///
-    /// This checks the worker's capabilities.runtimes array for the runtime name.
-    /// Falls back to checking the deprecated runtime column if capabilities are not set.
-    fn worker_supports_runtime(worker: &attune_common::models::Worker, runtime_name: &str) -> bool {
-        // First, try to parse capabilities and check runtimes array
+    /// This checks the worker's capabilities.runtimes array against the runtime's aliases.
+    /// If aliases are missing, fall back to the runtime's canonical name.
+    fn worker_supports_runtime(worker: &attune_common::models::Worker, runtime: &Runtime) -> bool {
+        let runtime_names = Self::runtime_capability_names(runtime);
+
+        // Try to parse capabilities and check runtimes array
         if let Some(ref capabilities) = worker.capabilities {
             if let Some(runtimes) = capabilities.get("runtimes") {
                 if let Some(runtime_array) = runtimes.as_array() {
-                    // Check if any runtime in the array matches (alias-aware)
+                    // Check if any runtime in the array matches via aliases
                     for runtime_value in runtime_array {
                         if let Some(runtime_str) = runtime_value.as_str() {
-                            if runtime_matches_filter(runtime_name, runtime_str) {
+                            if runtime_names
+                                .iter()
+                                .any(|candidate| candidate.eq_ignore_ascii_case(runtime_str))
+                                || runtime_aliases_contain(&runtime.aliases, runtime_str)
+                            {
                                 debug!(
-                                    "Worker {} supports runtime '{}' via capabilities (matched '{}')",
-                                    worker.name, runtime_name, runtime_str
+                                    "Worker {} supports runtime '{}' via capabilities (matched '{}', candidates: {:?})",
+                                    worker.name, runtime.name, runtime_str, runtime_names
                                 );
                                 return true;
                             }
@@ -1642,23 +1667,88 @@ impl ExecutionScheduler {
             }
         }
 
-        // Fallback: check deprecated runtime column
-        // This is kept for backward compatibility but should be removed in the future
-        if worker.runtime.is_some() {
-            debug!(
-                "Worker {} using deprecated runtime column for matching",
-                worker.name
-            );
-            // Note: This fallback is incomplete because we'd need to look up the runtime name
-            // from the ID, which would require an async call. Since we're moving to capabilities,
-            // we'll just return false here and require workers to set capabilities properly.
-        }
-
         debug!(
-            "Worker {} does not support runtime '{}'",
-            worker.name, runtime_name
+            "Worker {} does not support runtime '{}' (candidates: {:?})",
+            worker.name, runtime.name, runtime_names
         );
         false
+    }
+
+    fn runtime_capability_names(runtime: &Runtime) -> Vec<String> {
+        let mut names: Vec<String> = runtime
+            .aliases
+            .iter()
+            .map(|alias| alias.to_ascii_lowercase())
+            .filter(|alias| !alias.is_empty())
+            .collect();
+
+        let runtime_name = runtime.name.to_ascii_lowercase();
+        if !runtime_name.is_empty() && !names.iter().any(|name| name == &runtime_name) {
+            names.push(runtime_name);
+        }
+
+        names
+    }
+
+    fn is_unschedulable_error(error: &anyhow::Error) -> bool {
+        let message = error.to_string();
+        message.starts_with("No compatible workers found")
+            || message.starts_with("No action workers available")
+            || message.starts_with("No active workers available")
+            || message.starts_with("No workers with fresh heartbeats available")
+    }
+
+    async fn fail_unschedulable_execution(
+        pool: &PgPool,
+        publisher: &Publisher,
+        envelope: &MessageEnvelope<ExecutionRequestedPayload>,
+        execution_id: i64,
+        action_id: i64,
+        action_ref: &str,
+        error_message: &str,
+    ) -> Result<()> {
+        let completed_at = Utc::now();
+        let result = serde_json::json!({
+            "error": "Execution is unschedulable",
+            "message": error_message,
+            "action_ref": action_ref,
+            "failed_by": "execution_scheduler",
+            "failed_at": completed_at.to_rfc3339(),
+        });
+
+        ExecutionRepository::update(
+            pool,
+            execution_id,
+            UpdateExecutionInput {
+                status: Some(ExecutionStatus::Failed),
+                result: Some(result.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+        let completed = MessageEnvelope::new(
+            MessageType::ExecutionCompleted,
+            ExecutionCompletedPayload {
+                execution_id,
+                action_id,
+                action_ref: action_ref.to_string(),
+                status: "failed".to_string(),
+                result: Some(result),
+                completed_at,
+            },
+        )
+        .with_correlation_id(envelope.correlation_id)
+        .with_source("attune-executor");
+
+        publisher.publish_envelope(&completed).await?;
+
+        warn!(
+            "Execution {} marked failed as unschedulable: {}",
+            execution_id, error_message
+        );
+
+        Ok(())
     }
 
     /// Check if a worker's heartbeat is fresh enough to schedule work
@@ -1824,6 +1914,70 @@ mod tests {
     fn test_scheduler_creation() {
         // This is a placeholder test
         // Real tests will require database and message queue setup
+    }
+
+    #[test]
+    fn test_worker_supports_runtime_with_alias_match() {
+        let worker = create_test_worker("test-worker", 5);
+        let runtime = Runtime {
+            id: 1,
+            r#ref: "core.shell".to_string(),
+            pack: None,
+            pack_ref: Some("core".to_string()),
+            description: Some("Shell runtime".to_string()),
+            name: "Shell".to_string(),
+            aliases: vec!["shell".to_string(), "bash".to_string()],
+            distributions: serde_json::json!({}),
+            installation: None,
+            installers: serde_json::json!({}),
+            execution_config: serde_json::json!({}),
+            auto_detected: false,
+            detection_config: serde_json::json!({}),
+            created: Utc::now(),
+            updated: Utc::now(),
+        };
+
+        assert!(ExecutionScheduler::worker_supports_runtime(
+            &worker, &runtime
+        ));
+    }
+
+    #[test]
+    fn test_worker_supports_runtime_falls_back_to_runtime_name_when_aliases_missing() {
+        let worker = create_test_worker("test-worker", 5);
+        let runtime = Runtime {
+            id: 1,
+            r#ref: "core.shell".to_string(),
+            pack: None,
+            pack_ref: Some("core".to_string()),
+            description: Some("Shell runtime".to_string()),
+            name: "Shell".to_string(),
+            aliases: vec![],
+            distributions: serde_json::json!({}),
+            installation: None,
+            installers: serde_json::json!({}),
+            execution_config: serde_json::json!({}),
+            auto_detected: false,
+            detection_config: serde_json::json!({}),
+            created: Utc::now(),
+            updated: Utc::now(),
+        };
+
+        assert!(ExecutionScheduler::worker_supports_runtime(
+            &worker, &runtime
+        ));
+    }
+
+    #[test]
+    fn test_unschedulable_error_classification() {
+        assert!(ExecutionScheduler::is_unschedulable_error(
+            &anyhow::anyhow!(
+                "No compatible workers found for action: core.sleep (requires runtime: Shell)"
+            )
+        ));
+        assert!(!ExecutionScheduler::is_unschedulable_error(
+            &anyhow::anyhow!("database temporarily unavailable")
+        ));
     }
 
     #[test]

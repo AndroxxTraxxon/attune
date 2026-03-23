@@ -15,6 +15,10 @@ use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use tracing::{debug, info};
 
+const ATTUNE_SENSOR_AGENT_MODE_ENV: &str = "ATTUNE_SENSOR_AGENT_MODE";
+const ATTUNE_SENSOR_AGENT_BINARY_NAME_ENV: &str = "ATTUNE_SENSOR_AGENT_BINARY_NAME";
+const ATTUNE_SENSOR_AGENT_BINARY_VERSION_ENV: &str = "ATTUNE_SENSOR_AGENT_BINARY_VERSION";
+
 /// Sensor worker registration manager
 pub struct SensorWorkerRegistration {
     pool: PgPool,
@@ -25,6 +29,33 @@ pub struct SensorWorkerRegistration {
 }
 
 impl SensorWorkerRegistration {
+    fn env_truthy(name: &str) -> bool {
+        std::env::var(name)
+            .ok()
+            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true"))
+            .unwrap_or(false)
+    }
+
+    fn inject_agent_capabilities(capabilities: &mut HashMap<String, serde_json::Value>) {
+        if Self::env_truthy(ATTUNE_SENSOR_AGENT_MODE_ENV) {
+            capabilities.insert("agent_mode".to_string(), json!(true));
+        }
+
+        if let Ok(binary_name) = std::env::var(ATTUNE_SENSOR_AGENT_BINARY_NAME_ENV) {
+            let binary_name = binary_name.trim();
+            if !binary_name.is_empty() {
+                capabilities.insert("agent_binary_name".to_string(), json!(binary_name));
+            }
+        }
+
+        if let Ok(binary_version) = std::env::var(ATTUNE_SENSOR_AGENT_BINARY_VERSION_ENV) {
+            let binary_version = binary_version.trim();
+            if !binary_version.is_empty() {
+                capabilities.insert("agent_binary_version".to_string(), json!(binary_version));
+            }
+        }
+    }
+
     /// Create a new sensor worker registration manager
     pub fn new(pool: PgPool, config: &Config) -> Self {
         let worker_name = config
@@ -66,6 +97,8 @@ impl SensorWorkerRegistration {
             "sensor_version".to_string(),
             json!(env!("CARGO_PKG_VERSION")),
         );
+
+        Self::inject_agent_capabilities(&mut capabilities);
 
         // Placeholder for runtimes (will be detected asynchronously)
         capabilities.insert("runtimes".to_string(), json!(Vec::<String>::new()));
@@ -350,5 +383,29 @@ mod tests {
         registration.update_capabilities().await.unwrap();
 
         registration.deregister().await.unwrap();
+    }
+
+    #[test]
+    fn test_inject_agent_capabilities_from_env() {
+        std::env::set_var(ATTUNE_SENSOR_AGENT_MODE_ENV, "1");
+        std::env::set_var(ATTUNE_SENSOR_AGENT_BINARY_NAME_ENV, "attune-sensor-agent");
+        std::env::set_var(ATTUNE_SENSOR_AGENT_BINARY_VERSION_ENV, "1.2.3");
+
+        let mut capabilities = HashMap::new();
+        SensorWorkerRegistration::inject_agent_capabilities(&mut capabilities);
+
+        assert_eq!(capabilities.get("agent_mode"), Some(&json!(true)));
+        assert_eq!(
+            capabilities.get("agent_binary_name"),
+            Some(&json!("attune-sensor-agent"))
+        );
+        assert_eq!(
+            capabilities.get("agent_binary_version"),
+            Some(&json!("1.2.3"))
+        );
+
+        std::env::remove_var(ATTUNE_SENSOR_AGENT_MODE_ENV);
+        std::env::remove_var(ATTUNE_SENSOR_AGENT_BINARY_NAME_ENV);
+        std::env::remove_var(ATTUNE_SENSOR_AGENT_BINARY_VERSION_ENV);
     }
 }

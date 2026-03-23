@@ -1,6 +1,7 @@
 ref: core.java
 pack_ref: core
 name: Java
+aliases: [java, jdk, openjdk]
 description: Java runtime for executing Java programs and scripts
 
 distributions:

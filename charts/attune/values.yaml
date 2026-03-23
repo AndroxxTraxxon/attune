@@ -108,8 +108,8 @@ images:
     tag: ""
     pullPolicy: IfNotPresent
   sensor:
-    repository: attune-sensor
-    tag: ""
+    repository: nikolaik/python-nodejs
+    tag: python3.12-nodejs22-slim
     pullPolicy: IfNotPresent
   notifier:
     repository: attune-notifier
@@ -166,6 +166,8 @@ worker:
 
 sensor:
   replicaCount: 1
+  runtimes: shell,python,node,native
+  logLevel: debug
   resources: {}
 
 notifier:

@@ -1,6 +1,7 @@
 ref: core.shell
 pack_ref: core
 name: Shell
+aliases: [shell, bash, sh]
 description: Shell (bash/sh) runtime for script execution - always available
 
 distributions:

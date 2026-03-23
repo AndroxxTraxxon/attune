@@ -1,8 +1,7 @@
-# Multi-stage Dockerfile for the Attune universal worker agent
+# Multi-stage Dockerfile for the Attune injected agent binaries
 #
-# Builds a statically-linked attune-agent binary using musl, suitable for
-# injection into ANY container as a sidecar or init container. The binary
-# has zero runtime dependencies — no glibc, no libssl, no shared libraries.
+# Builds statically-linked `attune-agent` and `attune-sensor-agent` binaries
+# using musl, suitable for injection into arbitrary runtime containers.
 #
 # Stages:
 #   builder      - Cross-compile with musl for a fully static binary
@@ -24,8 +23,8 @@
 #   #   volumes:
 #   #     - agent_binary:/shared
 #
-# Note: The agent binary is part of the worker crate (--bin attune-agent).
-# It connects to the Attune API and executes actions inside the target container.
+# Note: `attune-agent` lives in the worker crate and `attune-sensor-agent`
+# lives in the sensor crate.
 
 ARG RUST_VERSION=1.92
 ARG DEBIAN_VERSION=bookworm
@@ -71,13 +70,14 @@ COPY crates/cli/Cargo.toml ./crates/cli/Cargo.toml
 
 # Create minimal stub sources so cargo can resolve the workspace and fetch deps.
 # These are ONLY used for `cargo fetch` — never compiled.
-# NOTE: The worker crate has TWO binary targets (attune-worker and attune-agent),
-# so we create stubs for both to satisfy the workspace resolver.
+# NOTE: The worker crate has TWO binary targets and the sensor crate now has
+# two binary targets as well, so we create stubs for all of them.
 RUN mkdir -p crates/common/src && echo "" > crates/common/src/lib.rs && \
     mkdir -p crates/api/src && echo "fn main(){}" > crates/api/src/main.rs && \
     mkdir -p crates/executor/src && echo "fn main(){}" > crates/executor/src/main.rs && \
     mkdir -p crates/executor/benches && echo "fn main(){}" > crates/executor/benches/context_clone.rs && \
     mkdir -p crates/sensor/src && echo "fn main(){}" > crates/sensor/src/main.rs && \
+    echo "fn main(){}" > crates/sensor/src/agent_main.rs && \
     mkdir -p crates/core-timer-sensor/src && echo "fn main(){}" > crates/core-timer-sensor/src/main.rs && \
     mkdir -p crates/worker/src && echo "fn main(){}" > crates/worker/src/main.rs && \
     echo "fn main(){}" > crates/worker/src/agent_main.rs && \
@@ -97,22 +97,25 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
 COPY migrations/ ./migrations/
 COPY crates/ ./crates/
 
-# Build ONLY the attune-agent binary, statically linked with musl.
+# Build the injected agent binaries, statically linked with musl.
 # Uses a dedicated cache ID (agent-target) so the musl target directory
 # doesn't collide with the glibc target cache used by other Dockerfiles.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
     --mount=type=cache,id=agent-target,target=/build/target,sharing=locked \
-    cargo build --release --target x86_64-unknown-linux-musl --bin attune-agent && \
-    cp /build/target/x86_64-unknown-linux-musl/release/attune-agent /build/attune-agent
+    cargo build --release --target x86_64-unknown-linux-musl --bin attune-agent --bin attune-sensor-agent && \
+    cp /build/target/x86_64-unknown-linux-musl/release/attune-agent /build/attune-agent && \
+    cp /build/target/x86_64-unknown-linux-musl/release/attune-sensor-agent /build/attune-sensor-agent
 
-# Strip the binary to minimize size
-RUN strip /build/attune-agent
+# Strip the binaries to minimize size
+RUN strip /build/attune-agent && strip /build/attune-sensor-agent
 
-# Verify the binary is statically linked and functional
-RUN ls -lh /build/attune-agent && \
+# Verify the binaries are statically linked and functional
+RUN ls -lh /build/attune-agent /build/attune-sensor-agent && \
     file /build/attune-agent && \
-    ldd /build/attune-agent 2>&1 || true
+    file /build/attune-sensor-agent && \
+    ldd /build/attune-agent 2>&1 || true && \
+    ldd /build/attune-sensor-agent 2>&1 || true
 
 # ============================================================================
 # Stage 2: agent-binary - Minimal image with just the static binary
@@ -122,6 +125,7 @@ RUN ls -lh /build/attune-agent && \
 FROM scratch AS agent-binary
 
 COPY --from=builder /build/attune-agent /usr/local/bin/attune-agent
+COPY --from=builder /build/attune-sensor-agent /usr/local/bin/attune-sensor-agent
 
 ENTRYPOINT ["/usr/local/bin/attune-agent"]
 
@@ -149,5 +153,6 @@ ENTRYPOINT ["/usr/local/bin/attune-agent"]
 FROM busybox:1.36 AS agent-init
 
 COPY --from=builder /build/attune-agent /usr/local/bin/attune-agent
+COPY --from=builder /build/attune-sensor-agent /usr/local/bin/attune-sensor-agent
 
 ENTRYPOINT ["/usr/local/bin/attune-agent"]

@@ -304,7 +304,15 @@ spec:
       imagePullSecrets:
         {{- toYaml .Values.global.imagePullSecrets | nindent 8 }}
       {{- end }}
+      terminationGracePeriodSeconds: 45
       initContainers:
+        - name: sensor-agent-loader
+          image: {{ include "attune.image" (dict "root" . "image" .Values.images.agent) }}
+          imagePullPolicy: {{ .Values.images.agent.pullPolicy }}
+          command: ["cp", "/usr/local/bin/attune-sensor-agent", "/opt/attune/agent/attune-sensor-agent"]
+          volumeMounts:
+            - name: agent-bin
+              mountPath: /opt/attune/agent
         - name: wait-for-schema
           image: postgres:16-alpine
           command: ["/bin/sh", "-ec"]
@@ -333,6 +341,7 @@ spec:
         - name: sensor
           image: {{ include "attune.image" (dict "root" . "image" .Values.images.sensor) }}
           imagePullPolicy: {{ .Values.images.sensor.pullPolicy }}
+          command: ["/opt/attune/agent/attune-sensor-agent"]
           envFrom:
             - secretRef:
                 name: {{ include "attune.secretName" . }}
@@ -343,23 +352,33 @@ spec:
               value: {{ .Values.database.schema | quote }}
             - name: ATTUNE__WORKER__WORKER_TYPE
               value: container
+            - name: ATTUNE_SENSOR_RUNTIMES
+              value: {{ .Values.sensor.runtimes | quote }}
             - name: ATTUNE_API_URL
               value: http://{{ include "attune.apiServiceName" . }}:{{ .Values.api.service.port }}
             - name: ATTUNE_MQ_URL
               value: {{ include "attune.rabbitmqUrl" . | quote }}
             - name: ATTUNE_PACKS_BASE_DIR
               value: /opt/attune/packs
+            - name: RUST_LOG
+              value: {{ .Values.sensor.logLevel | quote }}
           resources:
             {{- toYaml .Values.sensor.resources | nindent 12 }}
           volumeMounts:
+            - name: agent-bin
+              mountPath: /opt/attune/agent
+              readOnly: true
             - name: config
               mountPath: /opt/attune/config.yaml
               subPath: config.yaml
             - name: packs
               mountPath: /opt/attune/packs
+              readOnly: true
             - name: runtime-envs
               mountPath: /opt/attune/runtime_envs
       volumes:
+        - name: agent-bin
+          emptyDir: {}
         - name: config
           configMap:
             name: {{ include "attune.fullname" . }}-config

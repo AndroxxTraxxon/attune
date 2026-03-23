@@ -25,7 +25,7 @@ impl Repository for RuntimeRepository {
 
 /// Columns selected for all Runtime queries. Centralised here so that
 /// schema changes only need one update.
-pub const SELECT_COLUMNS: &str = "id, ref, pack, pack_ref, description, name, \
+pub const SELECT_COLUMNS: &str = "id, ref, pack, pack_ref, description, name, aliases, \
      distributions, installation, installers, execution_config, \
      auto_detected, detection_config, \
      created, updated";
@@ -38,6 +38,7 @@ pub struct CreateRuntimeInput {
     pub pack_ref: Option<String>,
     pub description: Option<String>,
     pub name: String,
+    pub aliases: Vec<String>,
     pub distributions: JsonDict,
     pub installation: Option<JsonDict>,
     pub execution_config: JsonDict,
@@ -50,6 +51,7 @@ pub struct CreateRuntimeInput {
 pub struct UpdateRuntimeInput {
     pub description: Option<Patch<String>>,
     pub name: Option<String>,
+    pub aliases: Option<Vec<String>>,
     pub distributions: Option<JsonDict>,
     pub installation: Option<Patch<JsonDict>>,
     pub execution_config: Option<JsonDict>,
@@ -113,10 +115,10 @@ impl Create for RuntimeRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         let query = format!(
-            "INSERT INTO runtime (ref, pack, pack_ref, description, name, \
+            "INSERT INTO runtime (ref, pack, pack_ref, description, name, aliases, \
              distributions, installation, installers, execution_config, \
              auto_detected, detection_config) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
              RETURNING {}",
             SELECT_COLUMNS
         );
@@ -126,6 +128,7 @@ impl Create for RuntimeRepository {
             .bind(&input.pack_ref)
             .bind(&input.description)
             .bind(&input.name)
+            .bind(&input.aliases)
             .bind(&input.distributions)
             .bind(&input.installation)
             .bind(serde_json::json!({}))
@@ -167,6 +170,15 @@ impl Update for RuntimeRepository {
             }
             query.push("name = ");
             query.push_bind(name);
+            has_updates = true;
+        }
+
+        if let Some(aliases) = &input.aliases {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("aliases = ");
+            query.push_bind(aliases.as_slice());
             has_updates = true;
         }
 
@@ -283,6 +295,23 @@ impl RuntimeRepository {
             .fetch_optional(executor)
             .await?;
 
+        Ok(runtime)
+    }
+
+    /// Find a runtime where the given alias appears in its `aliases` array.
+    /// Uses PostgreSQL's `@>` (array contains) operator with a GIN index.
+    pub async fn find_by_alias<'e, E>(executor: E, alias: &str) -> Result<Option<Runtime>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "SELECT {} FROM runtime WHERE aliases @> ARRAY[$1]::text[] LIMIT 1",
+            SELECT_COLUMNS
+        );
+        let runtime = sqlx::query_as::<_, Runtime>(&query)
+            .bind(alias)
+            .fetch_optional(executor)
+            .await?;
         Ok(runtime)
     }
 

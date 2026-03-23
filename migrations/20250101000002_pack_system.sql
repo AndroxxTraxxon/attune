@@ -96,6 +96,7 @@ CREATE TABLE runtime (
     pack_ref TEXT,
     description TEXT,
     name TEXT NOT NULL,
+    aliases TEXT[] NOT NULL DEFAULT '{}'::text[],
 
     distributions JSONB NOT NULL,
     installation JSONB,
@@ -158,6 +159,7 @@ CREATE INDEX idx_runtime_verification ON runtime USING GIN ((distributions->'ver
 CREATE INDEX idx_runtime_execution_config ON runtime USING GIN (execution_config);
 CREATE INDEX idx_runtime_auto_detected ON runtime(auto_detected);
 CREATE INDEX idx_runtime_detection_config ON runtime USING GIN (detection_config);
+CREATE INDEX idx_runtime_aliases ON runtime USING GIN (aliases);
 
 -- Trigger
 CREATE TRIGGER update_runtime_updated
@@ -169,6 +171,7 @@ CREATE TRIGGER update_runtime_updated
 COMMENT ON TABLE runtime IS 'Runtime environments for executing actions and sensors (unified)';
 COMMENT ON COLUMN runtime.ref IS 'Unique runtime reference (format: pack.name, e.g., core.python)';
 COMMENT ON COLUMN runtime.name IS 'Runtime name (e.g., "Python", "Node.js", "Shell")';
+COMMENT ON COLUMN runtime.aliases IS 'Lowercase alias names for this runtime (e.g., ["ruby", "rb"] for the Ruby runtime). Used for alias-aware matching during auto-detection and scheduling.';
 COMMENT ON COLUMN runtime.distributions IS 'Runtime distribution metadata including verification commands, version requirements, and capabilities';
 COMMENT ON COLUMN runtime.installation IS 'Installation requirements and instructions including package managers and setup steps';
 COMMENT ON COLUMN runtime.installers IS 'Array of installer actions to create pack-specific runtime environments. Each installer defines commands to set up isolated environments (e.g., Python venv, npm install).';

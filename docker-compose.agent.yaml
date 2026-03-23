@@ -8,10 +8,10 @@
 #
 # Prerequisites:
 #   The init-agent service (defined in docker-compose.yaml) must be present.
-#   It builds the statically-linked agent binary and populates the agent_bin volume.
+#   It builds the statically-linked worker and sensor agent binaries and populates the agent_bin volume.
 #
 # How it works:
-#   1. init-agent builds a musl-static attune-agent binary and copies it to the agent_bin volume
+#   1. init-agent builds musl-static injected agent binaries and copies them to the agent_bin volume
 #   2. Each worker service mounts agent_bin read-only and uses the agent as its entrypoint
 #   3. The agent auto-detects available runtimes in the container (python, ruby, node, etc.)
 #   4. No Dockerfile needed — just point at any container image with your desired runtime

@@ -35,7 +35,7 @@ use attune_common::repositories::pack::PackRepository;
 use attune_common::repositories::runtime::RuntimeRepository;
 use attune_common::repositories::runtime_version::RuntimeVersionRepository;
 use attune_common::repositories::{FindById, List};
-use attune_common::runtime_detection::runtime_in_filter;
+use attune_common::runtime_detection::runtime_aliases_match_filter;
 
 // Re-export the utility that the API also uses so callers can reach it from
 // either crate without adding a direct common dependency for this one function.
@@ -207,7 +207,7 @@ pub async fn setup_environments_for_registered_pack(
         .iter()
         .filter(|name| {
             if let Some(filter) = runtime_filter {
-                runtime_in_filter(name, filter)
+                runtime_aliases_match_filter(&[name.to_string()], filter)
             } else {
                 true
             }
@@ -463,12 +463,12 @@ async fn process_runtime_for_pack(
     runtime_envs_dir: &Path,
     pack_result: &mut PackEnvSetupResult,
 ) {
-    // Apply worker runtime filter (alias-aware matching)
+    // Apply worker runtime filter (alias-aware matching via declared aliases)
     if let Some(filter) = runtime_filter {
-        if !runtime_in_filter(rt_name, filter) {
+        if !runtime_aliases_match_filter(&rt.aliases, filter) {
             debug!(
-                "Runtime '{}' not in worker filter, skipping for pack '{}'",
-                rt_name, pack_ref,
+                "Runtime '{}' not in worker filter (aliases: {:?}), skipping for pack '{}'",
+                rt_name, rt.aliases, pack_ref,
             );
             return;
         }

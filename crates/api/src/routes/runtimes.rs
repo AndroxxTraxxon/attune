@@ -176,6 +176,7 @@ pub async fn create_runtime(
             pack_ref,
             description: request.description,
             name: request.name,
+            aliases: vec![],
             distributions: request.distributions,
             installation: request.installation,
             execution_config: request.execution_config,

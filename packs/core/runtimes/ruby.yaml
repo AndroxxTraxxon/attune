@@ -1,6 +1,7 @@
 ref: core.ruby
 pack_ref: core
 name: Ruby
+aliases: [ruby, rb]
 description: Ruby runtime for script execution with automatic gem environment management
 
 distributions:

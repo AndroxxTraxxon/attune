@@ -1,6 +1,7 @@
 ref: core.nodejs
 pack_ref: core
 name: Node.js
+aliases: [node, nodejs, "node.js"]
 description: Node.js runtime for JavaScript-based actions and sensors
 
 distributions:

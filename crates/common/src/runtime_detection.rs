@@ -6,8 +6,10 @@
 //! 2. Config file specification (medium priority)
 //! 3. Database-driven detection with verification (lowest priority)
 //!
-//! Also provides [`normalize_runtime_name`] for alias-aware runtime name
-//! comparison across the codebase (worker filters, env setup, etc.).
+//! Also provides alias-based matching functions ([`runtime_aliases_match_filter`]
+//! and [`runtime_aliases_contain`]) for comparing runtime alias lists against
+//! worker filters and capability strings. Aliases are declared per-runtime in
+//! pack manifests, so no hardcoded alias table is needed here.
 
 use crate::config::Config;
 use crate::error::Result;
@@ -19,51 +21,26 @@ use std::collections::HashMap;
 use std::process::Command;
 use tracing::{debug, info, warn};
 
-/// Normalize a runtime name to its canonical short form.
+/// Check if a runtime's aliases overlap with a filter list.
 ///
-/// This ensures that different ways of referring to the same runtime
-/// (e.g., "node", "nodejs", "node.js") all resolve to a single canonical
-/// name. Used by worker runtime filters and environment setup to match
-/// database runtime names against short filter values.
+/// The filter list comes from `ATTUNE_WORKER_RUNTIMES` (e.g., `["python", "shell"]`).
+/// A runtime matches if any of its declared aliases appear in the filter list.
+/// Comparison is case-insensitive.
+pub fn runtime_aliases_match_filter(aliases: &[String], filter: &[String]) -> bool {
+    aliases.iter().any(|alias| {
+        let lower_alias = alias.to_ascii_lowercase();
+        filter.iter().any(|f| f.to_ascii_lowercase() == lower_alias)
+    })
+}
+
+/// Check if a runtime's aliases contain a specific name.
 ///
-/// The canonical names mirror the alias groups in
-/// `PackComponentLoader::resolve_runtime`.
-///
-/// # Examples
-/// ```
-/// use attune_common::runtime_detection::normalize_runtime_name;
-/// assert_eq!(normalize_runtime_name("node.js"), "node");
-/// assert_eq!(normalize_runtime_name("nodejs"), "node");
-/// assert_eq!(normalize_runtime_name("Python3"), "python");
-/// assert_eq!(normalize_runtime_name("Shell"), "shell");
-/// ```
-pub fn normalize_runtime_name(name: &str) -> String {
+/// Used by the scheduler to check if a worker's capability string
+/// (e.g., "python") matches a runtime's aliases (e.g., ["python", "python3"]).
+/// Comparison is case-insensitive.
+pub fn runtime_aliases_contain(aliases: &[String], name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    match lower.as_str() {
-        "node" | "nodejs" | "node.js" => "node".to_string(),
-        "python" | "python3" => "python".to_string(),
-        "bash" | "sh" | "shell" => "shell".to_string(),
-        "native" | "builtin" | "standalone" => "native".to_string(),
-        "ruby" | "rb" => "ruby".to_string(),
-        "go" | "golang" => "go".to_string(),
-        "java" | "jdk" | "openjdk" => "java".to_string(),
-        "perl" | "perl5" => "perl".to_string(),
-        "r" | "rscript" => "r".to_string(),
-        _ => lower,
-    }
-}
-
-/// Check if a runtime name matches a filter entry, supporting common aliases.
-///
-/// Both sides are lowercased and then normalized before comparison so that,
-/// e.g., a filter value of `"node"` matches a database runtime name `"Node.js"`.
-pub fn runtime_matches_filter(rt_name: &str, filter_entry: &str) -> bool {
-    normalize_runtime_name(rt_name) == normalize_runtime_name(filter_entry)
-}
-
-/// Check if a runtime name matches any entry in a filter list.
-pub fn runtime_in_filter(rt_name: &str, filter: &[String]) -> bool {
-    filter.iter().any(|f| runtime_matches_filter(rt_name, f))
+    aliases.iter().any(|a| a.to_ascii_lowercase() == lower)
 }
 
 /// Runtime detection service
@@ -335,125 +312,46 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn test_normalize_runtime_name_node_variants() {
-        assert_eq!(normalize_runtime_name("node"), "node");
-        assert_eq!(normalize_runtime_name("nodejs"), "node");
-        assert_eq!(normalize_runtime_name("node.js"), "node");
+    fn test_runtime_aliases_match_filter() {
+        let aliases = vec!["python".to_string(), "python3".to_string()];
+        let filter = vec!["python".to_string(), "shell".to_string()];
+        assert!(runtime_aliases_match_filter(&aliases, &filter));
+
+        let filter_no_match = vec!["node".to_string(), "ruby".to_string()];
+        assert!(!runtime_aliases_match_filter(&aliases, &filter_no_match));
     }
 
     #[test]
-    fn test_normalize_runtime_name_python_variants() {
-        assert_eq!(normalize_runtime_name("python"), "python");
-        assert_eq!(normalize_runtime_name("python3"), "python");
+    fn test_runtime_aliases_match_filter_case_insensitive() {
+        let aliases = vec!["Python".to_string(), "python3".to_string()];
+        let filter = vec!["python".to_string()];
+        assert!(runtime_aliases_match_filter(&aliases, &filter));
     }
 
     #[test]
-    fn test_normalize_runtime_name_shell_variants() {
-        assert_eq!(normalize_runtime_name("shell"), "shell");
-        assert_eq!(normalize_runtime_name("bash"), "shell");
-        assert_eq!(normalize_runtime_name("sh"), "shell");
+    fn test_runtime_aliases_match_filter_empty() {
+        let aliases: Vec<String> = vec![];
+        let filter = vec!["python".to_string()];
+        assert!(!runtime_aliases_match_filter(&aliases, &filter));
+
+        let aliases = vec!["python".to_string()];
+        let filter: Vec<String> = vec![];
+        assert!(!runtime_aliases_match_filter(&aliases, &filter));
     }
 
     #[test]
-    fn test_normalize_runtime_name_native_variants() {
-        assert_eq!(normalize_runtime_name("native"), "native");
-        assert_eq!(normalize_runtime_name("builtin"), "native");
-        assert_eq!(normalize_runtime_name("standalone"), "native");
+    fn test_runtime_aliases_contain() {
+        let aliases = vec!["ruby".to_string(), "rb".to_string()];
+        assert!(runtime_aliases_contain(&aliases, "ruby"));
+        assert!(runtime_aliases_contain(&aliases, "rb"));
+        assert!(!runtime_aliases_contain(&aliases, "python"));
     }
 
     #[test]
-    fn test_normalize_runtime_name_ruby_variants() {
-        assert_eq!(normalize_runtime_name("ruby"), "ruby");
-        assert_eq!(normalize_runtime_name("rb"), "ruby");
-    }
-
-    #[test]
-    fn test_normalize_runtime_name_go_variants() {
-        assert_eq!(normalize_runtime_name("go"), "go");
-        assert_eq!(normalize_runtime_name("golang"), "go");
-    }
-
-    #[test]
-    fn test_normalize_runtime_name_java_variants() {
-        assert_eq!(normalize_runtime_name("java"), "java");
-        assert_eq!(normalize_runtime_name("jdk"), "java");
-        assert_eq!(normalize_runtime_name("openjdk"), "java");
-    }
-
-    #[test]
-    fn test_normalize_runtime_name_perl_variants() {
-        assert_eq!(normalize_runtime_name("perl"), "perl");
-        assert_eq!(normalize_runtime_name("perl5"), "perl");
-    }
-
-    #[test]
-    fn test_normalize_runtime_name_r_variants() {
-        assert_eq!(normalize_runtime_name("r"), "r");
-        assert_eq!(normalize_runtime_name("rscript"), "r");
-    }
-
-    #[test]
-    fn test_normalize_runtime_name_passthrough() {
-        assert_eq!(normalize_runtime_name("custom_runtime"), "custom_runtime");
-    }
-
-    #[test]
-    fn test_normalize_runtime_name_case_insensitive() {
-        assert_eq!(normalize_runtime_name("Node"), "node");
-        assert_eq!(normalize_runtime_name("NodeJS"), "node");
-        assert_eq!(normalize_runtime_name("Node.js"), "node");
-        assert_eq!(normalize_runtime_name("Python"), "python");
-        assert_eq!(normalize_runtime_name("Python3"), "python");
-        assert_eq!(normalize_runtime_name("Shell"), "shell");
-        assert_eq!(normalize_runtime_name("BASH"), "shell");
-        assert_eq!(normalize_runtime_name("Ruby"), "ruby");
-        assert_eq!(normalize_runtime_name("Go"), "go");
-        assert_eq!(normalize_runtime_name("GoLang"), "go");
-        assert_eq!(normalize_runtime_name("Java"), "java");
-        assert_eq!(normalize_runtime_name("JDK"), "java");
-        assert_eq!(normalize_runtime_name("Perl"), "perl");
-        assert_eq!(normalize_runtime_name("R"), "r");
-        assert_eq!(normalize_runtime_name("Custom_Runtime"), "custom_runtime");
-    }
-
-    #[test]
-    fn test_runtime_matches_filter() {
-        // Node.js DB name lowercased vs worker filter "node"
-        assert!(runtime_matches_filter("node.js", "node"));
-        assert!(runtime_matches_filter("node", "nodejs"));
-        assert!(runtime_matches_filter("nodejs", "node.js"));
-        // Exact match
-        assert!(runtime_matches_filter("shell", "shell"));
-        // No match
-        assert!(!runtime_matches_filter("python", "node"));
-    }
-
-    #[test]
-    fn test_runtime_matches_filter_case_insensitive() {
-        // Database stores capitalized names (e.g., "Node.js", "Python")
-        // Worker capabilities store lowercase (e.g., "node", "python")
-        assert!(runtime_matches_filter("Node.js", "node"));
-        assert!(runtime_matches_filter("node", "Node.js"));
-        assert!(runtime_matches_filter("Python", "python"));
-        assert!(runtime_matches_filter("python", "Python"));
-        assert!(runtime_matches_filter("Shell", "shell"));
-        assert!(runtime_matches_filter("NODEJS", "node"));
-        assert!(runtime_matches_filter("Ruby", "ruby"));
-        assert!(runtime_matches_filter("ruby", "rb"));
-        assert!(runtime_matches_filter("Go", "golang"));
-        assert!(runtime_matches_filter("R", "rscript"));
-        assert!(runtime_matches_filter("Java", "jdk"));
-        assert!(runtime_matches_filter("Perl", "perl5"));
-        assert!(!runtime_matches_filter("Python", "node"));
-    }
-
-    #[test]
-    fn test_runtime_in_filter() {
-        let filter = vec!["shell".to_string(), "node".to_string()];
-        assert!(runtime_in_filter("shell", &filter));
-        assert!(runtime_in_filter("node.js", &filter));
-        assert!(runtime_in_filter("nodejs", &filter));
-        assert!(!runtime_in_filter("python", &filter));
+    fn test_runtime_aliases_contain_case_insensitive() {
+        let aliases = vec!["ruby".to_string(), "rb".to_string()];
+        assert!(runtime_aliases_contain(&aliases, "Ruby"));
+        assert!(runtime_aliases_contain(&aliases, "RB"));
     }
 
     #[test]

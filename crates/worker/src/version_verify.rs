@@ -17,7 +17,7 @@ use tracing::{debug, info, warn};
 
 use attune_common::models::RuntimeVersion;
 use attune_common::repositories::runtime_version::RuntimeVersionRepository;
-use attune_common::runtime_detection::runtime_in_filter;
+use attune_common::runtime_detection::runtime_aliases_match_filter;
 
 /// Result of verifying all runtime versions at startup.
 #[derive(Debug)]
@@ -95,7 +95,7 @@ pub async fn verify_all_runtime_versions(
             .to_lowercase();
 
         if let Some(filter) = runtime_filter {
-            if !runtime_in_filter(&rt_base_name, filter) {
+            if !runtime_aliases_match_filter(&[rt_base_name.to_string()], filter) {
                 debug!(
                     "Skipping version '{}' of runtime '{}' (not in worker runtime filter)",
                     version.version, version.runtime_ref,

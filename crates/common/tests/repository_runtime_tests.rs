@@ -64,6 +64,7 @@ impl RuntimeFixture {
             pack_ref: None,
             description: Some(format!("Test runtime {}", seq)),
             name,
+            aliases: vec![],
             distributions: json!({
                 "linux": { "supported": true, "versions": ["ubuntu20.04", "ubuntu22.04"] },
                 "darwin": { "supported": true, "versions": ["12", "13"] }
@@ -95,6 +96,7 @@ impl RuntimeFixture {
             pack_ref: None,
             description: None,
             name,
+            aliases: vec![],
             distributions: json!({}),
             installation: None,
             execution_config: json!({

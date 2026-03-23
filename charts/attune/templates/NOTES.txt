@@ -13,6 +13,9 @@ Each agent worker uses an init container to copy the statically-linked
 attune-agent binary into the worker pod via an emptyDir volume. The agent
 auto-detects available runtimes in the container and registers with Attune.
 
+The default sensor deployment also uses the same injection pattern, copying
+`attune-sensor-agent` into the pod before starting a stock runtime image.
+
 To add more agent workers, append entries to `agentWorkers` in your values:
 
   agentWorkers:

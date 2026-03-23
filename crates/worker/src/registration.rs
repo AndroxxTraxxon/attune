@@ -15,6 +15,10 @@ use tracing::{info, warn};
 
 use crate::runtime_detect::DetectedRuntime;
 
+const ATTUNE_AGENT_MODE_ENV: &str = "ATTUNE_AGENT_MODE";
+const ATTUNE_AGENT_BINARY_NAME_ENV: &str = "ATTUNE_AGENT_BINARY_NAME";
+const ATTUNE_AGENT_BINARY_VERSION_ENV: &str = "ATTUNE_AGENT_BINARY_VERSION";
+
 /// Worker registration manager
 pub struct WorkerRegistration {
     pool: PgPool,
@@ -29,12 +33,60 @@ pub struct WorkerRegistration {
 }
 
 impl WorkerRegistration {
+    fn env_truthy(name: &str) -> bool {
+        std::env::var(name)
+            .ok()
+            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true"))
+            .unwrap_or(false)
+    }
+
+    fn inject_agent_capabilities(capabilities: &mut HashMap<String, serde_json::Value>) {
+        if Self::env_truthy(ATTUNE_AGENT_MODE_ENV) {
+            capabilities.insert("agent_mode".to_string(), json!(true));
+        }
+
+        if let Ok(binary_name) = std::env::var(ATTUNE_AGENT_BINARY_NAME_ENV) {
+            let binary_name = binary_name.trim();
+            if !binary_name.is_empty() {
+                capabilities.insert("agent_binary_name".to_string(), json!(binary_name));
+            }
+        }
+
+        if let Ok(binary_version) = std::env::var(ATTUNE_AGENT_BINARY_VERSION_ENV) {
+            let binary_version = binary_version.trim();
+            if !binary_version.is_empty() {
+                capabilities.insert("agent_binary_version".to_string(), json!(binary_version));
+            }
+        }
+    }
+
+    fn legacy_worker_name() -> Option<String> {
+        std::env::var("ATTUNE_WORKER_NAME")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn legacy_worker_type() -> Option<WorkerType> {
+        let value = std::env::var("ATTUNE_WORKER_TYPE").ok()?;
+        match value.trim().to_ascii_lowercase().as_str() {
+            "local" => Some(WorkerType::Local),
+            "remote" => Some(WorkerType::Remote),
+            "container" => Some(WorkerType::Container),
+            other => {
+                warn!("Ignoring unrecognized ATTUNE_WORKER_TYPE value: {}", other);
+                None
+            }
+        }
+    }
+
     /// Create a new worker registration manager
     pub fn new(pool: PgPool, config: &Config) -> Self {
         let worker_name = config
             .worker
             .as_ref()
             .and_then(|w| w.name.clone())
+            .or_else(Self::legacy_worker_name)
             .unwrap_or_else(|| {
                 format!(
                     "worker-{}",
@@ -48,6 +100,7 @@ impl WorkerRegistration {
             .worker
             .as_ref()
             .and_then(|w| w.worker_type)
+            .or_else(Self::legacy_worker_type)
             .unwrap_or(WorkerType::Local);
 
         let worker_role = WorkerRole::Action;
@@ -85,6 +138,8 @@ impl WorkerRegistration {
             "worker_version".to_string(),
             json!(env!("CARGO_PKG_VERSION")),
         );
+
+        Self::inject_agent_capabilities(&mut capabilities);
 
         // Placeholder for runtimes (will be detected asynchronously)
         capabilities.insert("runtimes".to_string(), json!(Vec::<String>::new()));
@@ -460,5 +515,29 @@ mod tests {
 
         let value = json!(false);
         assert_eq!(value, false);
+    }
+
+    #[test]
+    fn test_inject_agent_capabilities_from_env() {
+        std::env::set_var(ATTUNE_AGENT_MODE_ENV, "TRUE");
+        std::env::set_var(ATTUNE_AGENT_BINARY_NAME_ENV, "attune-agent");
+        std::env::set_var(ATTUNE_AGENT_BINARY_VERSION_ENV, "1.2.3");
+
+        let mut capabilities = HashMap::new();
+        WorkerRegistration::inject_agent_capabilities(&mut capabilities);
+
+        assert_eq!(capabilities.get("agent_mode"), Some(&json!(true)));
+        assert_eq!(
+            capabilities.get("agent_binary_name"),
+            Some(&json!("attune-agent"))
+        );
+        assert_eq!(
+            capabilities.get("agent_binary_version"),
+            Some(&json!("1.2.3"))
+        );
+
+        std::env::remove_var(ATTUNE_AGENT_MODE_ENV);
+        std::env::remove_var(ATTUNE_AGENT_BINARY_NAME_ENV);
+        std::env::remove_var(ATTUNE_AGENT_BINARY_VERSION_ENV);
     }
 }

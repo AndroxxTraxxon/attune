@@ -11,7 +11,7 @@
 //! - Monitoring sensor health and restarting failed sensors
 
 use anyhow::{anyhow, Result};
-use attune_common::models::{Id, Sensor, Trigger};
+use attune_common::models::{runtime::RuntimeExecutionConfig, Id, Sensor, Trigger};
 use attune_common::repositories::{FindById, List, RuntimeRepository};
 
 use sqlx::{PgPool, Row};
@@ -162,6 +162,127 @@ impl SensorManager {
         Ok(enabled_sensors)
     }
 
+    async fn ensure_runtime_environment(
+        &self,
+        exec_config: &RuntimeExecutionConfig,
+        pack_dir: &std::path::Path,
+        env_dir: &std::path::Path,
+    ) -> Result<()> {
+        let env_cfg = match &exec_config.environment {
+            Some(cfg) if cfg.env_type != "none" => cfg,
+            _ => return Ok(()),
+        };
+
+        let vars = exec_config.build_template_vars_with_env(pack_dir, Some(env_dir));
+
+        if !env_dir.exists() {
+            if env_cfg.create_command.is_empty() {
+                return Err(anyhow!(
+                    "Runtime environment '{}' requires create_command but none is configured",
+                    env_cfg.env_type
+                ));
+            }
+
+            if let Some(parent) = env_dir.parent() {
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                    anyhow!(
+                        "Failed to create runtime environment parent directory {}: {}",
+                        parent.display(),
+                        e
+                    )
+                })?;
+            }
+
+            let resolved_cmd =
+                RuntimeExecutionConfig::resolve_command(&env_cfg.create_command, &vars);
+            let (program, args) = resolved_cmd
+                .split_first()
+                .ok_or_else(|| anyhow!("Empty create_command for runtime environment"))?;
+
+            info!(
+                "Creating sensor runtime environment at {}: {:?}",
+                env_dir.display(),
+                resolved_cmd
+            );
+
+            let output = Command::new(program)
+                .args(args)
+                .current_dir(pack_dir)
+                .output()
+                .await
+                .map_err(|e| anyhow!("Failed to run create command '{}': {}", program, e))?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(anyhow!(
+                    "Runtime environment creation failed (exit {}): {}",
+                    output.status.code().unwrap_or(-1),
+                    stderr.trim()
+                ));
+            }
+        }
+
+        let dep_cfg = match &exec_config.dependencies {
+            Some(cfg) => cfg,
+            None => return Ok(()),
+        };
+
+        let manifest_path = pack_dir.join(&dep_cfg.manifest_file);
+        if !manifest_path.exists() || dep_cfg.install_command.is_empty() {
+            return Ok(());
+        }
+
+        let install_marker = env_dir.join(".attune_sensor_deps_installed");
+        if install_marker.exists() {
+            return Ok(());
+        }
+
+        let resolved_cmd = RuntimeExecutionConfig::resolve_command(&dep_cfg.install_command, &vars);
+        let (program, args) = resolved_cmd
+            .split_first()
+            .ok_or_else(|| anyhow!("Empty install_command for runtime dependencies"))?;
+
+        info!(
+            "Installing sensor runtime dependencies for {} using {:?}",
+            pack_dir.display(),
+            resolved_cmd
+        );
+
+        let output = Command::new(program)
+            .args(args)
+            .current_dir(pack_dir)
+            .output()
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to run dependency install command '{}': {}",
+                    program,
+                    e
+                )
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!(
+                "Runtime dependency installation failed (exit {}): {}",
+                output.status.code().unwrap_or(-1),
+                stderr.trim()
+            ));
+        }
+
+        tokio::fs::write(&install_marker, b"ok")
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to write dependency install marker {}: {}",
+                    install_marker.display(),
+                    e
+                )
+            })?;
+
+        Ok(())
+    }
+
     /// Start a sensor instance
     async fn start_sensor(&self, sensor: Sensor) -> Result<()> {
         info!("Starting sensor {} ({})", sensor.r#ref, sensor.id);
@@ -231,6 +352,12 @@ impl SensorManager {
 
         let exec_config = runtime.parsed_execution_config();
         let rt_name = runtime.name.to_lowercase();
+        let runtime_env_suffix = runtime
+            .r#ref
+            .rsplit('.')
+            .next()
+            .filter(|suffix| !suffix.is_empty())
+            .unwrap_or(&rt_name);
 
         info!(
             "Sensor {} runtime details: id={}, ref='{}', name='{}', execution_config={}",
@@ -242,7 +369,19 @@ impl SensorManager {
         let pack_dir = std::path::PathBuf::from(&self.inner.packs_base_dir).join(pack_ref);
         let env_dir = std::path::PathBuf::from(&self.inner.runtime_envs_dir)
             .join(pack_ref)
-            .join(&rt_name);
+            .join(runtime_env_suffix);
+        if let Err(e) = self
+            .ensure_runtime_environment(&exec_config, &pack_dir, &env_dir)
+            .await
+        {
+            warn!(
+                "Failed to ensure sensor runtime environment for {} at {}: {}",
+                sensor.r#ref,
+                env_dir.display(),
+                e
+            );
+        }
+
         let env_dir_opt = if env_dir.exists() {
             Some(env_dir.as_path())
         } else {
@@ -354,15 +493,31 @@ impl SensorManager {
 
         // Start the standalone sensor with token and configuration
         // Pass sensor ref (e.g., "core.interval_timer_sensor") for proper identification
-        let mut child = cmd
-            .env("ATTUNE_API_URL", &self.inner.api_url)
+        cmd.env("ATTUNE_API_URL", &self.inner.api_url)
             .env("ATTUNE_API_TOKEN", &token_response.token)
             .env("ATTUNE_SENSOR_ID", sensor.id.to_string())
             .env("ATTUNE_SENSOR_REF", &sensor.r#ref)
             .env("ATTUNE_SENSOR_TRIGGERS", &trigger_instances_json)
             .env("ATTUNE_MQ_URL", &self.inner.mq_url)
             .env("ATTUNE_MQ_EXCHANGE", "attune.events")
-            .env("ATTUNE_LOG_LEVEL", "info")
+            .env("ATTUNE_LOG_LEVEL", "info");
+
+        if !exec_config.env_vars.is_empty() {
+            let vars = exec_config.build_template_vars_with_env(&pack_dir, env_dir_opt);
+            for (key, value_template) in &exec_config.env_vars {
+                let resolved = attune_common::models::RuntimeExecutionConfig::resolve_template(
+                    value_template,
+                    &vars,
+                );
+                debug!(
+                    "Setting sensor runtime env var: {}={} (template: {})",
+                    key, resolved, value_template
+                );
+                cmd.env(key, resolved);
+            }
+        }
+
+        let mut child = cmd
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -371,13 +526,14 @@ impl SensorManager {
                 anyhow!(
                     "Failed to start sensor process for '{}': {} \
                      (binary='{}', is_native={}, runtime_ref='{}', \
-                     interpreter_config='{}')",
+                     interpreter_config='{}', env_dir='{}')",
                     sensor.r#ref,
                     e,
                     spawn_binary,
                     is_native,
                     runtime.r#ref,
-                    interpreter_binary
+                    interpreter_binary,
+                    env_dir.display()
                 )
             })?;
 

@@ -574,6 +574,7 @@ async fn test_worker_with_runtime() {
         pack_ref: None,
         description: Some("Test runtime".to_string()),
         name: "test_runtime".to_string(),
+        aliases: vec![],
         distributions: json!({}),
         installation: None,
         execution_config: json!({

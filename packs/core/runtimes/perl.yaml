@@ -1,6 +1,7 @@
 ref: core.perl
 pack_ref: core
 name: Perl
+aliases: [perl, perl5]
 description: Perl runtime for script execution with optional CPAN dependency management
 
 distributions:

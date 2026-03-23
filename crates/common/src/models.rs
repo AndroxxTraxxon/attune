@@ -776,6 +776,7 @@ pub mod runtime {
         pub pack_ref: Option<String>,
         pub description: Option<String>,
         pub name: String,
+        pub aliases: Vec<String>,
         pub distributions: JsonDict,
         pub installation: Option<JsonDict>,
         pub installers: JsonDict,

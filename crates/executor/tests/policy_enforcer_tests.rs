@@ -67,6 +67,7 @@ async fn create_test_runtime(pool: &PgPool, suffix: &str) -> i64 {
         pack_ref: None,
         description: Some(format!("Test runtime {}", suffix)),
         name: format!("Python {}", suffix),
+        aliases: vec![],
         distributions: json!({"ubuntu": "python3"}),
         installation: Some(json!({"method": "apt"})),
         execution_config: json!({

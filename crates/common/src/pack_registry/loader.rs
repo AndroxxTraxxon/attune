@@ -404,6 +404,16 @@ impl<'a> PackComponentLoader<'a> {
                 .and_then(|v| serde_json::to_value(v).ok())
                 .unwrap_or_else(|| serde_json::json!({}));
 
+            let aliases: Vec<String> = data
+                .get("aliases")
+                .and_then(|v| v.as_sequence())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_ascii_lowercase()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
             // Check if runtime already exists — update in place if so
             if let Some(existing) = RuntimeRepository::find_by_ref(self.pool, &runtime_ref).await? {
                 let update_input = UpdateRuntimeInput {
@@ -418,6 +428,7 @@ impl<'a> PackComponentLoader<'a> {
                         None => Patch::Clear,
                     }),
                     execution_config: Some(execution_config),
+                    aliases: Some(aliases),
                     ..Default::default()
                 };
 
@@ -449,6 +460,7 @@ impl<'a> PackComponentLoader<'a> {
                 distributions,
                 installation,
                 execution_config,
+                aliases,
                 auto_detected: false,
                 detection_config: serde_json::json!({}),
             };

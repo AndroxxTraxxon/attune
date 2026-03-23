@@ -1,6 +1,7 @@
 ref: core.python
 pack_ref: core
 name: Python
+aliases: [python, python3]
 description: Python 3 runtime for actions and sensors with automatic environment management
 
 distributions:

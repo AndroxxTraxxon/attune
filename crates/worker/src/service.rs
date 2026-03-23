@@ -23,7 +23,7 @@ use attune_common::mq::{
     MessageEnvelope, MessageType, PackRegisteredPayload, Publisher, PublisherConfig,
 };
 use attune_common::repositories::{execution::ExecutionRepository, FindById};
-use attune_common::runtime_detection::runtime_in_filter;
+use attune_common::runtime_detection::runtime_aliases_match_filter;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -253,10 +253,10 @@ impl WorkerService {
                     // Uses alias-aware matching so that e.g. filter "node"
                     // matches DB runtime name "Node.js" (lowercased to "node.js").
                     if let Some(ref filter) = runtime_filter {
-                        if !runtime_in_filter(&rt_name, filter) {
+                        if !runtime_aliases_match_filter(&rt.aliases, filter) {
                             debug!(
-                                "Skipping runtime '{}' (not in ATTUNE_WORKER_RUNTIMES filter)",
-                                rt_name
+                                "Skipping runtime '{}' (aliases {:?} not in ATTUNE_WORKER_RUNTIMES filter)",
+                                rt_name, rt.aliases
                             );
                             continue;
                         }

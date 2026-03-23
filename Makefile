@@ -265,11 +265,15 @@ docker-build-worker-full:
 build-agent:
 	@echo "Installing musl target (if not already installed)..."
 	rustup target add x86_64-unknown-linux-musl 2>/dev/null || true
-	@echo "Building statically-linked agent binary..."
-	SQLX_OFFLINE=true cargo build --release --target x86_64-unknown-linux-musl --bin attune-agent
+	@echo "Building statically-linked worker and sensor agent binaries..."
+	SQLX_OFFLINE=true cargo build --release --target x86_64-unknown-linux-musl --bin attune-agent --bin attune-sensor-agent
 	strip target/x86_64-unknown-linux-musl/release/attune-agent
-	@echo "✅ Agent binary built: target/x86_64-unknown-linux-musl/release/attune-agent"
+	strip target/x86_64-unknown-linux-musl/release/attune-sensor-agent
+	@echo "✅ Agent binaries built:"
+	@echo "   - target/x86_64-unknown-linux-musl/release/attune-agent"
+	@echo "   - target/x86_64-unknown-linux-musl/release/attune-sensor-agent"
 	@ls -lh target/x86_64-unknown-linux-musl/release/attune-agent
+	@ls -lh target/x86_64-unknown-linux-musl/release/attune-sensor-agent
 
 docker-build-agent:
 	@echo "Building agent Docker image (statically-linked binary)..."
@@ -281,6 +285,12 @@ run-agent:
 
 run-agent-release:
 	cargo run --bin attune-agent --release
+
+run-sensor-agent:
+	cargo run --bin attune-sensor-agent
+
+run-sensor-agent-release:
+	cargo run --bin attune-sensor-agent --release
 
 docker-up:
 	@echo "Starting all services with Docker Compose..."

@@ -961,6 +961,7 @@ impl RuntimeFixture {
             pack_ref: self.pack_ref,
             description: self.description,
             name: self.name,
+            aliases: vec![],
             distributions: self.distributions,
             installation: self.installation,
             execution_config: self.execution_config,

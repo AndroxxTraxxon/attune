@@ -1,6 +1,7 @@
 ref: core.go
 pack_ref: core
 name: Go
+aliases: [go, golang]
 description: Go runtime for compiling and running Go scripts and programs
 
 distributions:

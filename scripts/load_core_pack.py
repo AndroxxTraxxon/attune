@@ -302,6 +302,7 @@ class PackLoader:
 
             name = runtime_data.get("name", ref.split(".")[-1])
             description = runtime_data.get("description", "")
+            aliases = [alias.lower() for alias in runtime_data.get("aliases", [])]
             distributions = json.dumps(runtime_data.get("distributions", {}))
             installation = json.dumps(runtime_data.get("installation", {}))
             execution_config = json.dumps(runtime_data.get("execution_config", {}))
@@ -310,12 +311,13 @@ class PackLoader:
                 """
                 INSERT INTO runtime (
                     ref, pack, pack_ref, name, description,
-                    distributions, installation, execution_config
+                    aliases, distributions, installation, execution_config
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (ref) DO UPDATE SET
                     name = EXCLUDED.name,
                     description = EXCLUDED.description,
+                    aliases = EXCLUDED.aliases,
                     distributions = EXCLUDED.distributions,
                     installation = EXCLUDED.installation,
                     execution_config = EXCLUDED.execution_config,
@@ -328,6 +330,7 @@ class PackLoader:
                     self.pack_ref,
                     name,
                     description,
+                    aliases,
                     distributions,
                     installation,
                     execution_config,
@@ -338,6 +341,8 @@ class PackLoader:
             runtime_ids[ref] = runtime_id
             # Also index by lowercase name for easy lookup by runner_type
             runtime_ids[name.lower()] = runtime_id
+            for alias in aliases:
+                runtime_ids[alias] = runtime_id
             print(f"  ✓ Runtime '{ref}' (ID: {runtime_id})")
 
         cursor.close()

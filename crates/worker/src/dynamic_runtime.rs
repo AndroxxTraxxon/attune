@@ -9,8 +9,7 @@
 //!
 //! For each detected runtime the agent found:
 //!
-//! 1. **Look up by name** in the database using alias-aware matching
-//!    (via [`normalize_runtime_name`]).
+//! 1. **Look up by name** in the database using alias-aware matching.
 //! 2. **If found** → already registered (either from a pack YAML or a previous
 //!    agent run). Nothing to do.
 //! 3. **If not found** → search for a runtime *template* in loaded packs whose
@@ -29,7 +28,7 @@ use attune_common::error::Result;
 use attune_common::models::runtime::Runtime;
 use attune_common::repositories::runtime::{CreateRuntimeInput, RuntimeRepository};
 use attune_common::repositories::{Create, FindByRef, List};
-use attune_common::runtime_detection::normalize_runtime_name;
+
 use serde_json::json;
 use sqlx::PgPool;
 use tracing::{debug, info, warn};
@@ -80,14 +79,17 @@ pub async fn auto_register_detected_runtimes(
     let mut registered_count = 0;
 
     for detected_rt in detected {
-        let canonical_name = normalize_runtime_name(&detected_rt.name);
+        let canonical_name = detected_rt.name.to_ascii_lowercase();
 
         // Check if a runtime with a matching name already exists in the DB.
-        // We normalize both sides for alias-aware comparison.
-        // normalize_runtime_name lowercases internally, so no need to pre-lowercase.
-        let already_exists = existing_runtimes
-            .iter()
-            .any(|r| normalize_runtime_name(&r.name) == canonical_name);
+        // Primary: check if the detected name appears in any existing runtime's aliases.
+        // Secondary: check if the ref ends with the canonical name (e.g., "core.ruby").
+        let already_exists = existing_runtimes.iter().any(|r| {
+            // Primary: check if the detected name is in this runtime's aliases
+            r.aliases.iter().any(|a| a == &canonical_name)
+            // Secondary: check if the ref ends with the canonical name (e.g., "core.ruby")
+            || r.r#ref.ends_with(&format!(".{}", canonical_name))
+        });
 
         if already_exists {
             debug!(
@@ -143,6 +145,7 @@ pub async fn auto_register_detected_runtimes(
                     detected_rt.name, tmpl.r#ref
                 )),
                 name: tmpl.name.clone(),
+                aliases: tmpl.aliases.clone(),
                 distributions: tmpl.distributions.clone(),
                 installation: tmpl.installation.clone(),
                 execution_config: build_execution_config_from_template(&tmpl, detected_rt),
@@ -195,6 +198,7 @@ pub async fn auto_register_detected_runtimes(
                     detected_rt.name, detected_rt.path
                 )),
                 name: capitalize_runtime_name(&canonical_name),
+                aliases: default_aliases(&canonical_name),
                 distributions: build_minimal_distributions(detected_rt),
                 installation: None,
                 execution_config,
@@ -285,7 +289,7 @@ fn build_execution_config_from_template(
 /// This provides enough information for `ProcessRuntime` to invoke the
 /// interpreter directly, without environment or dependency management.
 fn build_minimal_execution_config(detected: &DetectedRuntime) -> serde_json::Value {
-    let canonical = normalize_runtime_name(&detected.name);
+    let canonical = detected.name.to_ascii_lowercase();
     let file_ext = default_file_extension(&canonical);
 
     let mut config = json!({
@@ -317,6 +321,23 @@ fn build_minimal_distributions(detected: &DetectedRuntime) -> serde_json::Value 
             ]
         }
     })
+}
+
+/// Default aliases for auto-detected runtimes that have no template.
+/// These match what the core pack YAMLs declare but serve as fallback
+/// when the template hasn't been loaded.
+fn default_aliases(canonical_name: &str) -> Vec<String> {
+    match canonical_name {
+        "shell" => vec!["shell".into(), "bash".into(), "sh".into()],
+        "python" => vec!["python".into(), "python3".into()],
+        "node" => vec!["node".into(), "nodejs".into(), "node.js".into()],
+        "ruby" => vec!["ruby".into(), "rb".into()],
+        "go" => vec!["go".into(), "golang".into()],
+        "java" => vec!["java".into(), "jdk".into(), "openjdk".into()],
+        "perl" => vec!["perl".into(), "perl5".into()],
+        "r" => vec!["r".into(), "rscript".into()],
+        _ => vec![canonical_name.to_string()],
+    }
 }
 
 /// Capitalize a runtime name for display (e.g., "ruby" → "Ruby", "r" → "R").
@@ -437,6 +458,7 @@ mod tests {
             pack_ref: Some("core".to_string()),
             description: Some("Ruby Runtime".to_string()),
             name: "Ruby".to_string(),
+            aliases: vec!["ruby".to_string(), "rb".to_string()],
             distributions: json!({}),
             installation: None,
             installers: json!({}),
@@ -480,6 +502,7 @@ mod tests {
             pack_ref: Some("core".to_string()),
             description: None,
             name: "Python".to_string(),
+            aliases: vec!["python".to_string(), "python3".to_string()],
             distributions: json!({}),
             installation: None,
             installers: json!({}),
