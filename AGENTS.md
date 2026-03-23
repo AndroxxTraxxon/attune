@@ -99,7 +99,7 @@ docker compose -f docker-compose.yaml -f docker-compose.agent.yaml up -d  # Star
 **Key environment overrides**: `JWT_SECRET`, `ENCRYPTION_KEY` (required for production)
 
 ### Docker Build Optimization
-- **Optimized Dockerfiles**: `docker/Dockerfile.optimized`, `docker/Dockerfile.worker.optimized`, `docker/Dockerfile.sensor.optimized`, and `docker/Dockerfile.agent`
+- **Active Dockerfiles**: `docker/Dockerfile.optimized`, `docker/Dockerfile.agent`, `docker/Dockerfile.web`, and `docker/Dockerfile.pack-binaries`
 - **Agent Dockerfile** (`docker/Dockerfile.agent`): Builds a statically-linked `attune-agent` binary using musl (`x86_64-unknown-linux-musl`). Three stages: `builder` (cross-compile), `agent-binary` (scratch — just the binary), `agent-init` (busybox — for volume population via `cp`). The binary has zero runtime dependencies (no glibc, no libssl). Build with `make docker-build-agent`.
 - **Strategy**: Selective crate copying - only copy crates needed for each service (not entire workspace)
 - **Performance**: 90% faster incremental builds (~30 sec vs ~5 min for code changes)
@@ -681,9 +681,8 @@ When reporting, ask: "Should I fix this first or continue with [original task]?"
 - `Cargo.toml` - Workspace dependencies
 - `Makefile` - Development commands
 - `docker/Dockerfile.optimized` - Optimized service builds (api, executor, notifier)
-- `docker/Dockerfile.worker.optimized` - Optimized worker builds (shell, python, node, full)
-- `docker/Dockerfile.sensor.optimized` - Optimized sensor builds (base, full)
 - `docker/Dockerfile.agent` - Statically-linked agent binary (musl, for injection into any container)
+- `docker/Dockerfile.web` - Web UI build
 - `docker/Dockerfile.pack-binaries` - Separate pack binary builder
 - `scripts/build-pack-binaries.sh` - Build pack binaries script
 

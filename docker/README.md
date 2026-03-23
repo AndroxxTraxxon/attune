@@ -33,13 +33,11 @@ curl -X POST http://localhost:8080/auth/login \
   - Uses build argument `SERVICE` to specify which service to build
   - Example: `docker build --build-arg SERVICE=api -f docker/Dockerfile.optimized -t attune-api .`
 
-- **`Dockerfile.worker.optimized`** - Multi-stage Dockerfile for containerized workers with different runtime capabilities
-  - Supports 4 variants: `worker-base`, `worker-python`, `worker-node`, `worker-full`
-  - See [README.worker.md](./README.worker.md) for details
+- **`Dockerfile.agent`** - Multi-stage Dockerfile for the statically-linked agent image
+  - Builds the `agent-init` image used to populate the shared agent binary volume
 
-- **`Dockerfile.sensor.optimized`** - Multi-stage Dockerfile for the sensor service
-  - Supports `sensor-base` and `sensor-full`
-  
+- **`Dockerfile.pack-binaries`** - Pack binary builder used by `scripts/build-pack-binaries.sh`
+
 - **`Dockerfile.web`** - Multi-stage Dockerfile for React Web UI
   - Builds with Node.js and serves with Nginx
   - Includes runtime environment variable injection
@@ -122,8 +120,8 @@ docker compose build api
 # Web UI
 docker compose build web
 
-# Worker service
-docker compose build worker
+# Notifier service
+docker compose build notifier
 ```
 
 ### Build with Custom Args

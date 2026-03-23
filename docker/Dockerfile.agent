@@ -56,7 +56,8 @@ ENV SQLX_OFFLINE=true
 # ---------------------------------------------------------------------------
 # Dependency caching layer
 # Copy only Cargo metadata first so `cargo fetch` is cached when only source
-# code changes. This follows the same pattern as Dockerfile.worker.optimized.
+# code changes. This follows the same selective-copy optimization pattern as
+# the other active Dockerfiles in this directory.
 # ---------------------------------------------------------------------------
 COPY Cargo.toml Cargo.lock ./
 COPY crates/common/Cargo.toml ./crates/common/Cargo.toml
