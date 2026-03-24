@@ -8,7 +8,7 @@ mod helpers;
 use attune_common::{
     repositories::{
         rule::{CreateRuleInput, RuleRepository, UpdateRuleInput},
-        Create, Delete, FindById, FindByRef, List, Update,
+        Create, Delete, FindById, FindByRef, List, Patch, Update,
     },
     Error,
 };
@@ -48,7 +48,7 @@ async fn test_create_rule() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Test Rule".to_string(),
-        description: "A test rule".to_string(),
+        description: Some("A test rule".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -66,7 +66,7 @@ async fn test_create_rule() {
     assert_eq!(rule.pack, pack.id);
     assert_eq!(rule.pack_ref, pack.r#ref);
     assert_eq!(rule.label, "Test Rule");
-    assert_eq!(rule.description, "A test rule");
+    assert_eq!(rule.description, Some("A test rule".to_string()));
     assert_eq!(rule.action, Some(action.id));
     assert_eq!(rule.action_ref, action.r#ref);
     assert_eq!(rule.trigger, Some(trigger.id));
@@ -105,7 +105,7 @@ async fn test_create_rule_disabled() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Disabled Rule".to_string(),
-        description: "A disabled rule".to_string(),
+        description: Some("A disabled rule".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -155,7 +155,7 @@ async fn test_create_rule_with_complex_conditions() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Complex Rule".to_string(),
-        description: "Rule with complex conditions".to_string(),
+        description: Some("Rule with complex conditions".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -200,7 +200,7 @@ async fn test_create_rule_duplicate_ref() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "First Rule".to_string(),
-        description: "First".to_string(),
+        description: Some("First".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -220,7 +220,7 @@ async fn test_create_rule_duplicate_ref() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Second Rule".to_string(),
-        description: "Second".to_string(),
+        description: Some("Second".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -274,7 +274,7 @@ async fn test_create_rule_invalid_ref_format_uppercase() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Upper Rule".to_string(),
-        description: "Invalid uppercase ref".to_string(),
+        description: Some("Invalid uppercase ref".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -316,7 +316,7 @@ async fn test_create_rule_invalid_ref_format_no_dot() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "No Dot Rule".to_string(),
-        description: "Invalid ref without dot".to_string(),
+        description: Some("Invalid ref without dot".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -362,7 +362,7 @@ async fn test_find_rule_by_id() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Find Rule".to_string(),
-        description: "Rule to find".to_string(),
+        description: Some("Rule to find".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -422,7 +422,7 @@ async fn test_find_rule_by_ref() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Find By Ref Rule".to_string(),
-        description: "Find by ref".to_string(),
+        description: Some("Find by ref".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -484,7 +484,7 @@ async fn test_list_rules() {
             pack: pack.id,
             pack_ref: pack.r#ref.clone(),
             label: format!("List Rule {}", i),
-            description: format!("Rule {}", i),
+            description: Some(format!("Rule {}", i)),
             action: action.id,
             action_ref: action.r#ref.clone(),
             trigger: trigger.id,
@@ -538,7 +538,7 @@ async fn test_list_rules_ordered_by_ref() {
             pack: pack.id,
             pack_ref: pack.r#ref.clone(),
             label: name.to_string(),
-            description: name.to_string(),
+            description: Some(name.to_string()),
             action: action.id,
             action_ref: action.r#ref.clone(),
             trigger: trigger.id,
@@ -594,7 +594,7 @@ async fn test_update_rule_label() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Original Label".to_string(),
-        description: "Original".to_string(),
+        description: Some("Original".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -618,7 +618,7 @@ async fn test_update_rule_label() {
         .unwrap();
 
     assert_eq!(updated.label, "Updated Label");
-    assert_eq!(updated.description, "Original"); // unchanged
+    assert_eq!(updated.description, Some("Original".to_string())); // unchanged
     assert!(updated.updated > created.updated);
 }
 
@@ -647,7 +647,7 @@ async fn test_update_rule_description() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Test".to_string(),
-        description: "Old description".to_string(),
+        description: Some("Old description".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -662,7 +662,7 @@ async fn test_update_rule_description() {
     let created = RuleRepository::create(&pool, input).await.unwrap();
 
     let update = UpdateRuleInput {
-        description: Some("New description".to_string()),
+        description: Some(Patch::Set("New description".to_string())),
         ..Default::default()
     };
 
@@ -670,7 +670,7 @@ async fn test_update_rule_description() {
         .await
         .unwrap();
 
-    assert_eq!(updated.description, "New description");
+    assert_eq!(updated.description, Some("New description".to_string()));
 }
 
 #[tokio::test]
@@ -698,7 +698,7 @@ async fn test_update_rule_conditions() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Test".to_string(),
-        description: "Test".to_string(),
+        description: Some("Test".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -750,7 +750,7 @@ async fn test_update_rule_enabled() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Test".to_string(),
-        description: "Test".to_string(),
+        description: Some("Test".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -803,7 +803,7 @@ async fn test_update_rule_multiple_fields() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Old".to_string(),
-        description: "Old".to_string(),
+        description: Some("Old".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -819,7 +819,7 @@ async fn test_update_rule_multiple_fields() {
 
     let update = UpdateRuleInput {
         label: Some("New Label".to_string()),
-        description: Some("New Description".to_string()),
+        description: Some(Patch::Set("New Description".to_string())),
         conditions: Some(json!({"updated": true})),
         action_params: None,
         trigger_params: None,
@@ -831,7 +831,7 @@ async fn test_update_rule_multiple_fields() {
         .unwrap();
 
     assert_eq!(updated.label, "New Label");
-    assert_eq!(updated.description, "New Description");
+    assert_eq!(updated.description, Some("New Description".to_string()));
     assert_eq!(updated.conditions, json!({"updated": true}));
     assert!(!updated.enabled);
 }
@@ -861,7 +861,7 @@ async fn test_update_rule_no_changes() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Test".to_string(),
-        description: "Test".to_string(),
+        description: Some("Test".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -914,7 +914,7 @@ async fn test_delete_rule() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "To Delete".to_string(),
-        description: "Will be deleted".to_string(),
+        description: Some("Will be deleted".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -995,7 +995,7 @@ async fn test_find_rules_by_pack() {
             pack: pack1.id,
             pack_ref: pack1.r#ref.clone(),
             label: format!("Rule {}", i),
-            description: format!("Rule {}", i),
+            description: Some(format!("Rule {}", i)),
             action: action1.id,
             action_ref: action1.r#ref.clone(),
             trigger: trigger1.id,
@@ -1016,7 +1016,7 @@ async fn test_find_rules_by_pack() {
         pack: pack2.id,
         pack_ref: pack2.r#ref.clone(),
         label: "Pack2 Rule".to_string(),
-        description: "Pack2".to_string(),
+        description: Some("Pack2".to_string()),
         action: action2.id,
         action_ref: action2.r#ref.clone(),
         trigger: trigger2.id,
@@ -1073,7 +1073,7 @@ async fn test_find_rules_by_action() {
             pack: pack.id,
             pack_ref: pack.r#ref.clone(),
             label: format!("Action1 Rule {}", i),
-            description: "Test".to_string(),
+            description: Some("Test".to_string()),
             action: action1.id,
             action_ref: action1.r#ref.clone(),
             trigger: trigger.id,
@@ -1094,7 +1094,7 @@ async fn test_find_rules_by_action() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Action2 Rule".to_string(),
-        description: "Test".to_string(),
+        description: Some("Test".to_string()),
         action: action2.id,
         action_ref: action2.r#ref.clone(),
         trigger: trigger.id,
@@ -1155,7 +1155,7 @@ async fn test_find_rules_by_trigger() {
             pack: pack.id,
             pack_ref: pack.r#ref.clone(),
             label: format!("Trigger1 Rule {}", i),
-            description: "Test".to_string(),
+            description: Some("Test".to_string()),
             action: action.id,
             action_ref: action.r#ref.clone(),
             trigger: trigger1.id,
@@ -1176,7 +1176,7 @@ async fn test_find_rules_by_trigger() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Trigger2 Rule".to_string(),
-        description: "Test".to_string(),
+        description: Some("Test".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger2.id,
@@ -1234,7 +1234,7 @@ async fn test_find_enabled_rules() {
             pack: pack.id,
             pack_ref: pack.r#ref.clone(),
             label: format!("Enabled {}", i),
-            description: "Test".to_string(),
+            description: Some("Test".to_string()),
             action: action.id,
             action_ref: action.r#ref.clone(),
             trigger: trigger.id,
@@ -1256,7 +1256,7 @@ async fn test_find_enabled_rules() {
             pack: pack.id,
             pack_ref: pack.r#ref.clone(),
             label: format!("Disabled {}", i),
-            description: "Test".to_string(),
+            description: Some("Test".to_string()),
             action: action.id,
             action_ref: action.r#ref.clone(),
             trigger: trigger.id,
@@ -1312,7 +1312,7 @@ async fn test_cascade_delete_pack_deletes_rules() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Cascade Rule".to_string(),
-        description: "Will be cascade deleted".to_string(),
+        description: Some("Will be cascade deleted".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,
@@ -1368,7 +1368,7 @@ async fn test_rule_timestamps() {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Timestamp Rule".to_string(),
-        description: "Test timestamps".to_string(),
+        description: Some("Test timestamps".to_string()),
         action: action.id,
         action_ref: action.r#ref.clone(),
         trigger: trigger.id,

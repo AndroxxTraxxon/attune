@@ -148,7 +148,7 @@ CREATE TABLE rule (
     pack BIGINT NOT NULL REFERENCES pack(id) ON DELETE CASCADE,
     pack_ref TEXT NOT NULL,
     label TEXT NOT NULL,
-    description TEXT NOT NULL,
+    description TEXT,
     action BIGINT REFERENCES action(id) ON DELETE SET NULL,
     action_ref TEXT NOT NULL,
     trigger BIGINT REFERENCES trigger(id) ON DELETE SET NULL,

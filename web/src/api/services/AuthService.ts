@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { ChangePasswordRequest } from '../models/ChangePasswordRequest';
+import type { LdapLoginRequest } from '../models/LdapLoginRequest';
 import type { LoginRequest } from '../models/LoginRequest';
 import type { RefreshTokenRequest } from '../models/RefreshTokenRequest';
 import type { RegisterRequest } from '../models/RegisterRequest';
@@ -49,6 +50,55 @@ export class AuthService {
                 400: `Validation error`,
                 401: `Invalid current password or unauthorized`,
                 404: `Identity not found`,
+            },
+        });
+    }
+    /**
+     * Authenticate via LDAP directory.
+     * POST /auth/ldap/login
+     * @returns any Successfully authenticated via LDAP
+     * @throws ApiError
+     */
+    public static ldapLogin({
+        requestBody,
+    }: {
+        requestBody: LdapLoginRequest,
+    }): CancelablePromise<{
+        /**
+         * Token response
+         */
+        data: {
+            /**
+             * Access token (JWT)
+             */
+            access_token: string;
+            /**
+             * Access token expiration in seconds
+             */
+            expires_in: number;
+            /**
+             * Refresh token
+             */
+            refresh_token: string;
+            /**
+             * Token type (always "Bearer")
+             */
+            token_type: string;
+            user?: (null | UserInfo);
+        };
+        /**
+         * Optional message
+         */
+        message?: string | null;
+    }> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/auth/ldap/login',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                401: `Invalid LDAP credentials`,
+                501: `LDAP not configured`,
             },
         });
     }
@@ -235,6 +285,84 @@ export class AuthService {
                 400: `Validation error`,
                 409: `User already exists`,
             },
+        });
+    }
+    /**
+     * Authentication settings endpoint
+     * GET /auth/settings
+     * @returns any Authentication settings
+     * @throws ApiError
+     */
+    public static authSettings(): CancelablePromise<{
+        /**
+         * Public authentication settings for the login page.
+         */
+        data: {
+            /**
+             * Whether authentication is enabled for the server.
+             */
+            authentication_enabled: boolean;
+            /**
+             * Whether LDAP login is configured and enabled.
+             */
+            ldap_enabled: boolean;
+            /**
+             * Optional icon URL shown beside the provider label.
+             */
+            ldap_provider_icon_url?: string | null;
+            /**
+             * User-facing provider label for the login button.
+             */
+            ldap_provider_label?: string | null;
+            /**
+             * Provider name for `?auth=<provider>`.
+             */
+            ldap_provider_name?: string | null;
+            /**
+             * Whether LDAP login should be shown by default.
+             */
+            ldap_visible_by_default: boolean;
+            /**
+             * Whether local username/password login is configured.
+             */
+            local_password_enabled: boolean;
+            /**
+             * Whether local username/password login should be shown by default.
+             */
+            local_password_visible_by_default: boolean;
+            /**
+             * Whether OIDC login is configured and enabled.
+             */
+            oidc_enabled: boolean;
+            /**
+             * Optional icon URL shown beside the provider label.
+             */
+            oidc_provider_icon_url?: string | null;
+            /**
+             * User-facing provider label for the login button.
+             */
+            oidc_provider_label?: string | null;
+            /**
+             * Provider name for `?auth=<provider>`.
+             */
+            oidc_provider_name?: string | null;
+            /**
+             * Whether OIDC login should be shown by default.
+             */
+            oidc_visible_by_default: boolean;
+            /**
+             * Whether unauthenticated self-service registration is allowed.
+             */
+            self_registration_enabled: boolean;
+        };
+        /**
+         * Optional message
+         */
+        message?: string | null;
+    }> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/auth/settings',
         });
     }
 }

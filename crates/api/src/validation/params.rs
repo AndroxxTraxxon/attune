@@ -362,7 +362,7 @@ mod tests {
             pack: 1,
             pack_ref: "test".to_string(),
             label: "Test Action".to_string(),
-            description: "Test action".to_string(),
+            description: Some("Test action".to_string()),
             entrypoint: "test.sh".to_string(),
             runtime: Some(1),
             runtime_version_constraint: None,

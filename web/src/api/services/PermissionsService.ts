@@ -3,7 +3,10 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { CreateIdentityRequest } from '../models/CreateIdentityRequest';
+import type { CreateIdentityRoleAssignmentRequest } from '../models/CreateIdentityRoleAssignmentRequest';
 import type { CreatePermissionAssignmentRequest } from '../models/CreatePermissionAssignmentRequest';
+import type { CreatePermissionSetRoleAssignmentRequest } from '../models/CreatePermissionSetRoleAssignmentRequest';
+import type { IdentityRoleAssignmentResponse } from '../models/IdentityRoleAssignmentResponse';
 import type { PaginatedResponse_IdentitySummary } from '../models/PaginatedResponse_IdentitySummary';
 import type { PermissionAssignmentResponse } from '../models/PermissionAssignmentResponse';
 import type { PermissionSetSummary } from '../models/PermissionSetSummary';
@@ -50,9 +53,12 @@ export class PermissionsService {
     }): CancelablePromise<{
         data: {
             attributes: Value;
+            direct_permissions: Array<PermissionAssignmentResponse>;
             display_name?: string | null;
+            frozen: boolean;
             id: number;
             login: string;
+            roles: Array<IdentityRoleAssignmentResponse>;
         };
         /**
          * Optional message
@@ -70,6 +76,47 @@ export class PermissionsService {
         });
     }
     /**
+     * @returns any Identity role assignment deleted
+     * @throws ApiError
+     */
+    public static deleteIdentityRoleAssignment({
+        id,
+    }: {
+        /**
+         * Identity role assignment ID
+         */
+        id: number,
+    }): CancelablePromise<{
+        /**
+         * Success message response (for operations that don't return data)
+         */
+        data: {
+            /**
+             * Message describing the operation
+             */
+            message: string;
+            /**
+             * Success indicator
+             */
+            success: boolean;
+        };
+        /**
+         * Optional message
+         */
+        message?: string | null;
+    }> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/identities/roles/{id}',
+            path: {
+                'id': id,
+            },
+            errors: {
+                404: `Identity role assignment not found`,
+            },
+        });
+    }
+    /**
      * @returns any Identity details
      * @throws ApiError
      */
@@ -83,9 +130,12 @@ export class PermissionsService {
     }): CancelablePromise<{
         data: {
             attributes: Value;
+            direct_permissions: Array<PermissionAssignmentResponse>;
             display_name?: string | null;
+            frozen: boolean;
             id: number;
             login: string;
+            roles: Array<IdentityRoleAssignmentResponse>;
         };
         /**
          * Optional message
@@ -119,9 +169,12 @@ export class PermissionsService {
     }): CancelablePromise<{
         data: {
             attributes: Value;
+            direct_permissions: Array<PermissionAssignmentResponse>;
             display_name?: string | null;
+            frozen: boolean;
             id: number;
             login: string;
+            roles: Array<IdentityRoleAssignmentResponse>;
         };
         /**
          * Optional message
@@ -183,6 +236,47 @@ export class PermissionsService {
         });
     }
     /**
+     * @returns any Identity frozen
+     * @throws ApiError
+     */
+    public static freezeIdentity({
+        id,
+    }: {
+        /**
+         * Identity ID
+         */
+        id: number,
+    }): CancelablePromise<{
+        /**
+         * Success message response (for operations that don't return data)
+         */
+        data: {
+            /**
+             * Message describing the operation
+             */
+            message: string;
+            /**
+             * Success indicator
+             */
+            success: boolean;
+        };
+        /**
+         * Optional message
+         */
+        message?: string | null;
+    }> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/identities/{id}/freeze',
+            path: {
+                'id': id,
+            },
+            errors: {
+                404: `Identity not found`,
+            },
+        });
+    }
+    /**
      * @returns PermissionAssignmentResponse List permission assignments for an identity
      * @throws ApiError
      */
@@ -197,6 +291,88 @@ export class PermissionsService {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/api/v1/identities/{id}/permissions',
+            path: {
+                'id': id,
+            },
+            errors: {
+                404: `Identity not found`,
+            },
+        });
+    }
+    /**
+     * @returns any Identity role assignment created
+     * @throws ApiError
+     */
+    public static createIdentityRoleAssignment({
+        id,
+        requestBody,
+    }: {
+        /**
+         * Identity ID
+         */
+        id: number,
+        requestBody: CreateIdentityRoleAssignmentRequest,
+    }): CancelablePromise<{
+        data: {
+            created: string;
+            id: number;
+            identity_id: number;
+            managed: boolean;
+            role: string;
+            source: string;
+            updated: string;
+        };
+        /**
+         * Optional message
+         */
+        message?: string | null;
+    }> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/identities/{id}/roles',
+            path: {
+                'id': id,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                404: `Identity not found`,
+            },
+        });
+    }
+    /**
+     * @returns any Identity unfrozen
+     * @throws ApiError
+     */
+    public static unfreezeIdentity({
+        id,
+    }: {
+        /**
+         * Identity ID
+         */
+        id: number,
+    }): CancelablePromise<{
+        /**
+         * Success message response (for operations that don't return data)
+         */
+        data: {
+            /**
+             * Message describing the operation
+             */
+            message: string;
+            /**
+             * Success indicator
+             */
+            success: boolean;
+        };
+        /**
+         * Optional message
+         */
+        message?: string | null;
+    }> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/identities/{id}/unfreeze',
             path: {
                 'id': id,
             },
@@ -292,6 +468,86 @@ export class PermissionsService {
             url: '/api/v1/permissions/sets',
             query: {
                 'pack_ref': packRef,
+            },
+        });
+    }
+    /**
+     * @returns any Permission set role assignment deleted
+     * @throws ApiError
+     */
+    public static deletePermissionSetRoleAssignment({
+        id,
+    }: {
+        /**
+         * Permission set role assignment ID
+         */
+        id: number,
+    }): CancelablePromise<{
+        /**
+         * Success message response (for operations that don't return data)
+         */
+        data: {
+            /**
+             * Message describing the operation
+             */
+            message: string;
+            /**
+             * Success indicator
+             */
+            success: boolean;
+        };
+        /**
+         * Optional message
+         */
+        message?: string | null;
+    }> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/permissions/sets/roles/{id}',
+            path: {
+                'id': id,
+            },
+            errors: {
+                404: `Permission set role assignment not found`,
+            },
+        });
+    }
+    /**
+     * @returns any Permission set role assignment created
+     * @throws ApiError
+     */
+    public static createPermissionSetRoleAssignment({
+        id,
+        requestBody,
+    }: {
+        /**
+         * Permission set ID
+         */
+        id: number,
+        requestBody: CreatePermissionSetRoleAssignmentRequest,
+    }): CancelablePromise<{
+        data: {
+            created: string;
+            id: number;
+            permission_set_id: number;
+            permission_set_ref?: string | null;
+            role: string;
+        };
+        /**
+         * Optional message
+         */
+        message?: string | null;
+    }> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/permissions/sets/{id}/roles',
+            path: {
+                'id': id,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                404: `Permission set not found`,
             },
         });
     }

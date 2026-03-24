@@ -203,9 +203,8 @@ pub struct CreateSensorRequest {
     pub label: String,
 
     /// Sensor description
-    #[validate(length(min = 1))]
     #[schema(example = "Monitors CPU usage and generates events")]
-    pub description: String,
+    pub description: Option<String>,
 
     /// Entry point for sensor execution (e.g., path to script, function name)
     #[validate(length(min = 1, max = 1024))]
@@ -247,7 +246,6 @@ pub struct UpdateSensorRequest {
     pub label: Option<String>,
 
     /// Sensor description
-    #[validate(length(min = 1))]
     #[schema(example = "Enhanced CPU monitoring with alerts")]
     pub description: Option<String>,
 
@@ -297,7 +295,7 @@ pub struct SensorResponse {
 
     /// Sensor description
     #[schema(example = "Monitors CPU usage and generates events")]
-    pub description: String,
+    pub description: Option<String>,
 
     /// Entry point
     #[schema(example = "/sensors/monitoring/cpu_monitor.py")]
@@ -357,7 +355,7 @@ pub struct SensorSummary {
 
     /// Sensor description
     #[schema(example = "Monitors CPU usage and generates events")]
-    pub description: String,
+    pub description: Option<String>,
 
     /// Trigger reference
     #[schema(example = "monitoring.cpu_threshold")]
@@ -499,7 +497,7 @@ mod tests {
             r#ref: "test.sensor".to_string(),
             pack_ref: "test-pack".to_string(),
             label: "Test Sensor".to_string(),
-            description: "Test description".to_string(),
+            description: Some("Test description".to_string()),
             entrypoint: "/sensors/test.py".to_string(),
             runtime_ref: "python3".to_string(),
             trigger_ref: "test.trigger".to_string(),

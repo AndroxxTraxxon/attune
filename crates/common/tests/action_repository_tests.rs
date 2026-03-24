@@ -66,7 +66,10 @@ async fn test_create_action_with_optional_fields() {
         .unwrap();
 
     assert_eq!(action.label, "Full Test Action");
-    assert_eq!(action.description, "Action with all optional fields");
+    assert_eq!(
+        action.description,
+        Some("Action with all optional fields".to_string())
+    );
     assert_eq!(action.entrypoint, "custom.py");
     assert!(action.param_schema.is_some());
     assert!(action.out_schema.is_some());
@@ -204,7 +207,9 @@ async fn test_update_action() {
 
     let update = UpdateActionInput {
         label: Some("Updated Label".to_string()),
-        description: Some("Updated description".to_string()),
+        description: Some(attune_common::repositories::Patch::Set(
+            "Updated description".to_string(),
+        )),
         ..Default::default()
     };
 
@@ -214,7 +219,7 @@ async fn test_update_action() {
 
     assert_eq!(updated.id, action.id);
     assert_eq!(updated.label, "Updated Label");
-    assert_eq!(updated.description, "Updated description");
+    assert_eq!(updated.description, Some("Updated description".to_string()));
     assert_eq!(updated.entrypoint, action.entrypoint); // Unchanged
     assert!(updated.updated > original_updated);
 }
@@ -338,7 +343,7 @@ async fn test_action_foreign_key_constraint() {
         pack: 99999,
         pack_ref: "nonexistent.pack".to_string(),
         label: "Test Action".to_string(),
-        description: "Test".to_string(),
+        description: Some("Test".to_string()),
         entrypoint: "main.py".to_string(),
         runtime: None,
         runtime_version_constraint: None,

@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { PackDescriptionPatch } from './PackDescriptionPatch';
 /**
  * Request DTO for updating a pack
  */
@@ -18,10 +19,7 @@ export type UpdatePackRequest = {
      * Pack dependencies (refs of required packs)
      */
     dependencies?: any[] | null;
-    /**
-     * Pack description
-     */
-    description?: string | null;
+    description?: (null | PackDescriptionPatch);
     /**
      * Whether this is a standard pack
      */

@@ -25,9 +25,8 @@ pub struct CreateActionRequest {
     pub label: String,
 
     /// Action description
-    #[validate(length(min = 1))]
     #[schema(example = "Posts a message to a Slack channel")]
-    pub description: String,
+    pub description: Option<String>,
 
     /// Entry point for action execution (e.g., path to script, function name)
     #[validate(length(min = 1, max = 1024))]
@@ -63,7 +62,6 @@ pub struct UpdateActionRequest {
     pub label: Option<String>,
 
     /// Action description
-    #[validate(length(min = 1))]
     #[schema(example = "Posts a message to a Slack channel with enhanced features")]
     pub description: Option<String>,
 
@@ -121,7 +119,7 @@ pub struct ActionResponse {
 
     /// Action description
     #[schema(example = "Posts a message to a Slack channel")]
-    pub description: String,
+    pub description: Option<String>,
 
     /// Entry point
     #[schema(example = "/actions/slack/post_message.py")]
@@ -183,7 +181,7 @@ pub struct ActionSummary {
 
     /// Action description
     #[schema(example = "Posts a message to a Slack channel")]
-    pub description: String,
+    pub description: Option<String>,
 
     /// Entry point
     #[schema(example = "/actions/slack/post_message.py")]
@@ -321,7 +319,7 @@ mod tests {
             r#ref: "".to_string(), // Invalid: empty
             pack_ref: "test-pack".to_string(),
             label: "Test Action".to_string(),
-            description: "Test description".to_string(),
+            description: Some("Test description".to_string()),
             entrypoint: "/actions/test.py".to_string(),
             runtime: None,
             runtime_version_constraint: None,
@@ -338,7 +336,7 @@ mod tests {
             r#ref: "test.action".to_string(),
             pack_ref: "test-pack".to_string(),
             label: "Test Action".to_string(),
-            description: "Test description".to_string(),
+            description: Some("Test description".to_string()),
             entrypoint: "/actions/test.py".to_string(),
             runtime: None,
             runtime_version_constraint: None,

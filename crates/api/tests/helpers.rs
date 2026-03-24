@@ -241,6 +241,7 @@ impl TestContext {
     }
 
     /// Create and authenticate a test user
+    #[allow(dead_code)]
     pub async fn with_auth(mut self) -> Result<Self> {
         // Generate unique username to avoid conflicts in parallel tests
         let unique_id = uuid::Uuid::new_v4().to_string().replace("-", "")[..8].to_string();
@@ -394,6 +395,7 @@ impl TestContext {
     }
 
     /// Get authenticated token
+    #[allow(dead_code)]
     pub fn token(&self) -> Option<&str> {
         self.token.as_deref()
     }
@@ -495,7 +497,7 @@ pub async fn create_test_action(pool: &PgPool, pack_id: i64, ref_name: &str) -> 
         pack: pack_id,
         pack_ref: format!("pack_{}", pack_id),
         label: format!("Test Action {}", ref_name),
-        description: format!("Test action for {}", ref_name),
+        description: Some(format!("Test action for {}", ref_name)),
         entrypoint: "main.py".to_string(),
         runtime: None,
         runtime_version_constraint: None,

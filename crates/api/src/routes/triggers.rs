@@ -724,7 +724,7 @@ pub async fn update_sensor(
     // Create update input
     let update_input = UpdateSensorInput {
         label: request.label,
-        description: request.description,
+        description: request.description.map(Patch::Set),
         entrypoint: request.entrypoint,
         runtime: None,
         runtime_ref: None,

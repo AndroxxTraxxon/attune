@@ -219,6 +219,7 @@ async fn test_update_identity() {
         display_name: Some("Updated Name".to_string()),
         password_hash: None,
         attributes: Some(json!({"key": "updated", "new_key": "new_value"})),
+        frozen: None,
     };
 
     let updated = IdentityRepository::update(&pool, identity.id, update_input)
@@ -252,6 +253,7 @@ async fn test_update_identity_partial() {
         display_name: Some("Only Display Name Changed".to_string()),
         password_hash: None,
         attributes: None,
+        frozen: None,
     };
 
     let updated = IdentityRepository::update(&pool, identity.id, update_input)
@@ -274,6 +276,7 @@ async fn test_update_identity_not_found() {
         display_name: Some("Updated Name".to_string()),
         password_hash: None,
         attributes: None,
+        frozen: None,
     };
 
     let result = IdentityRepository::update(&pool, 999999, update_input).await;
@@ -380,6 +383,7 @@ async fn test_identity_updated_changes_on_update() {
         display_name: Some("Updated".to_string()),
         password_hash: None,
         attributes: None,
+        frozen: None,
     };
 
     let updated = IdentityRepository::update(&pool, identity.id, update_input)

@@ -10,7 +10,7 @@ use crate::{
 use attune_common::{
     rbac::{Action, AuthorizationContext, Grant, Resource},
     repositories::{
-        identity::{IdentityRepository, PermissionSetRepository},
+        identity::{IdentityRepository, IdentityRoleAssignmentRepository, PermissionSetRepository},
         FindById,
     },
 };
@@ -95,8 +95,16 @@ impl AuthorizationService {
     }
 
     async fn load_effective_grants(&self, identity_id: i64) -> Result<Vec<Grant>, ApiError> {
-        let permission_sets =
+        let mut permission_sets =
             PermissionSetRepository::find_by_identity(&self.db, identity_id).await?;
+        let roles =
+            IdentityRoleAssignmentRepository::find_role_names_by_identity(&self.db, identity_id)
+                .await?;
+        let role_permission_sets = PermissionSetRepository::find_by_roles(&self.db, &roles).await?;
+        permission_sets.extend(role_permission_sets);
+
+        let mut seen_permission_sets = std::collections::HashSet::new();
+        permission_sets.retain(|permission_set| seen_permission_sets.insert(permission_set.id));
 
         let mut grants = Vec::new();
         for permission_set in permission_sets {
@@ -126,10 +134,6 @@ fn resource_name(resource: Resource) -> &'static str {
         Resource::Inquiries => "inquiries",
         Resource::Keys => "keys",
         Resource::Artifacts => "artifacts",
-        Resource::Workflows => "workflows",
-        Resource::Webhooks => "webhooks",
-        Resource::Analytics => "analytics",
-        Resource::History => "history",
         Resource::Identities => "identities",
         Resource::Permissions => "permissions",
     }
@@ -145,5 +149,6 @@ fn action_name(action: Action) -> &'static str {
         Action::Cancel => "cancel",
         Action::Respond => "respond",
         Action::Manage => "manage",
+        Action::Decrypt => "decrypt",
     }
 }

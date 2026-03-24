@@ -1,0 +1,31 @@
+import {
+  CircleArrowRight,
+  CircleDot,
+  CirclePlay,
+  FolderArchive,
+  Home,
+  KeyRound,
+  Package,
+  ShieldCheck,
+  SquareArrowRight,
+  SquareAsterisk,
+  SquareDot,
+  SquarePlay,
+  TerminalSquare,
+} from "lucide-react";
+
+export const navIcons = {
+  dashboard: Home,
+  actions: SquarePlay,
+  runtimes: TerminalSquare,
+  rules: SquareArrowRight,
+  triggers: SquareDot,
+  sensors: SquareAsterisk,
+  executions: CirclePlay,
+  enforcements: CircleArrowRight,
+  events: CircleDot,
+  keys: KeyRound,
+  artifacts: FolderArchive,
+  accessControl: ShieldCheck,
+  packs: Package,
+} as const;

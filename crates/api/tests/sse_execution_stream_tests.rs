@@ -52,7 +52,7 @@ async fn setup_test_pack_and_action(pool: &PgPool) -> Result<(Pack, Action)> {
         pack: pack.id,
         pack_ref: pack.r#ref.clone(),
         label: "Test Action".to_string(),
-        description: "Test action for SSE tests".to_string(),
+        description: Some("Test action for SSE tests".to_string()),
         entrypoint: "test.sh".to_string(),
         runtime: None,
         runtime_version_constraint: None,

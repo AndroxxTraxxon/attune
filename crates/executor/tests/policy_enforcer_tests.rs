@@ -94,7 +94,7 @@ async fn create_test_action(pool: &PgPool, pack_id: i64, suffix: &str) -> i64 {
         pack: pack_id,
         pack_ref: format!("test_pack_{}", suffix),
         label: format!("Test Action {}", suffix),
-        description: format!("Test action {}", suffix),
+        description: Some(format!("Test action {}", suffix)),
         entrypoint: "echo test".to_string(),
         runtime: None,
         runtime_version_constraint: None,

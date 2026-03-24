@@ -21,10 +21,6 @@ pub enum Resource {
     Inquiries,
     Keys,
     Artifacts,
-    Workflows,
-    Webhooks,
-    Analytics,
-    History,
     Identities,
     Permissions,
 }
@@ -40,6 +36,7 @@ pub enum Action {
     Cancel,
     Respond,
     Manage,
+    Decrypt,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -68,6 +65,8 @@ pub struct GrantConstraints {
     pub owner: Option<OwnerConstraint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_types: Option<Vec<OwnerType>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_refs: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visibility: Option<Vec<ArtifactVisibility>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -99,6 +98,7 @@ pub struct AuthorizationContext {
     pub pack_ref: Option<String>,
     pub owner_identity_id: Option<Id>,
     pub owner_type: Option<OwnerType>,
+    pub owner_ref: Option<String>,
     pub visibility: Option<ArtifactVisibility>,
     pub encrypted: Option<bool>,
     pub execution_owner_identity_id: Option<Id>,
@@ -115,6 +115,7 @@ impl AuthorizationContext {
             pack_ref: None,
             owner_identity_id: None,
             owner_type: None,
+            owner_ref: None,
             visibility: None,
             encrypted: None,
             execution_owner_identity_id: None,
@@ -158,6 +159,15 @@ impl Grant {
                 return false;
             };
             if !owner_types.contains(&owner_type) {
+                return false;
+            }
+        }
+
+        if let Some(owner_refs) = &constraints.owner_refs {
+            let Some(owner_ref) = &ctx.owner_ref else {
+                return false;
+            };
+            if !owner_refs.contains(owner_ref) {
                 return false;
             }
         }
@@ -288,5 +298,29 @@ mod tests {
         ctx.identity_attributes
             .insert("team".to_string(), json!("infra"));
         assert!(!grant.allows(Resource::Packs, Action::Read, &ctx));
+    }
+
+    #[test]
+    fn owner_ref_constraint_requires_exact_value_match() {
+        let grant = Grant {
+            resource: Resource::Artifacts,
+            actions: vec![Action::Read],
+            constraints: Some(GrantConstraints {
+                owner_types: Some(vec![OwnerType::Pack]),
+                owner_refs: Some(vec!["python_example".to_string()]),
+                ..Default::default()
+            }),
+        };
+
+        let mut ctx = AuthorizationContext::new(1);
+        ctx.owner_type = Some(OwnerType::Pack);
+        ctx.owner_ref = Some("python_example".to_string());
+        assert!(grant.allows(Resource::Artifacts, Action::Read, &ctx));
+
+        ctx.owner_ref = Some("other_pack".to_string());
+        assert!(!grant.allows(Resource::Artifacts, Action::Read, &ctx));
+
+        ctx.owner_ref = None;
+        assert!(!grant.allows(Resource::Artifacts, Action::Read, &ctx));
     }
 }

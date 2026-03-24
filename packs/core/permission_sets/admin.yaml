@@ -11,25 +11,17 @@ grants:
   - resource: triggers
     actions: [read, create, update, delete]
   - resource: executions
-    actions: [read, create, update, delete, cancel]
+    actions: [read, update, cancel]
   - resource: events
-    actions: [read, create, delete]
+    actions: [read]
   - resource: enforcements
-    actions: [read, create, delete]
+    actions: [read]
   - resource: inquiries
     actions: [read, create, update, delete, respond]
   - resource: keys
-    actions: [read, create, update, delete]
+    actions: [read, create, update, delete, decrypt]
   - resource: artifacts
     actions: [read, create, update, delete]
-  - resource: workflows
-    actions: [read, create, update, delete]
-  - resource: webhooks
-    actions: [read, create, update, delete]
-  - resource: analytics
-    actions: [read]
-  - resource: history
-    actions: [read]
   - resource: identities
     actions: [read, create, update, delete]
   - resource: permissions

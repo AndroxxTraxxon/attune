@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useCreatePack, useUpdatePack } from "@/hooks/usePacks";
-import type { PackResponse } from "@/api";
+import { PackDescriptionPatch, type PackResponse } from "@/api";
 import { labelToRef } from "@/lib/format-utils";
 import SchemaBuilder from "@/components/common/SchemaBuilder";
 import ParamSchemaForm, {
@@ -173,7 +173,9 @@ export default function PackForm({ pack, onSuccess, onCancel }: PackFormProps) {
       if (isEditing) {
         const updateData = {
           label: label.trim(),
-          description: description.trim() || undefined,
+          description: description.trim()
+            ? { op: PackDescriptionPatch.op.SET, value: description.trim() }
+            : { op: PackDescriptionPatch.op.CLEAR },
           version: version.trim(),
           conf_schema: parsedConfSchema,
           config: configValues,

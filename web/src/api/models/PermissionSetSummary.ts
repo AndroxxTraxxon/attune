@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { PermissionSetRoleAssignmentResponse } from './PermissionSetRoleAssignmentResponse';
 import type { Value } from './Value';
 export type PermissionSetSummary = {
     description?: string | null;
@@ -10,5 +11,6 @@ export type PermissionSetSummary = {
     label?: string | null;
     pack_ref?: string | null;
     ref: string;
+    roles: Array<PermissionSetRoleAssignmentResponse>;
 };
 

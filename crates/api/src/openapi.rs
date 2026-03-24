@@ -27,8 +27,11 @@ use crate::dto::{
         UpdatePackRequest, WorkflowSyncResult,
     },
     permission::{
-        CreateIdentityRequest, CreatePermissionAssignmentRequest, IdentityResponse,
-        IdentitySummary, PermissionAssignmentResponse, PermissionSetSummary, UpdateIdentityRequest,
+        CreateIdentityRequest, CreateIdentityRoleAssignmentRequest,
+        CreatePermissionAssignmentRequest, CreatePermissionSetRoleAssignmentRequest,
+        IdentityResponse, IdentityRoleAssignmentResponse, IdentitySummary,
+        PermissionAssignmentResponse, PermissionSetRoleAssignmentResponse, PermissionSetSummary,
+        UpdateIdentityRequest,
     },
     rule::{CreateRuleRequest, RuleResponse, RuleSummary, UpdateRuleRequest},
     runtime::{CreateRuntimeRequest, RuntimeResponse, RuntimeSummary, UpdateRuntimeRequest},
@@ -185,6 +188,12 @@ use crate::dto::{
         crate::routes::permissions::list_identity_permissions,
         crate::routes::permissions::create_permission_assignment,
         crate::routes::permissions::delete_permission_assignment,
+        crate::routes::permissions::create_identity_role_assignment,
+        crate::routes::permissions::delete_identity_role_assignment,
+        crate::routes::permissions::create_permission_set_role_assignment,
+        crate::routes::permissions::delete_permission_set_role_assignment,
+        crate::routes::permissions::freeze_identity,
+        crate::routes::permissions::unfreeze_identity,
 
         // Workflows
         crate::routes::workflows::list_workflows,
@@ -277,6 +286,10 @@ use crate::dto::{
             PermissionSetSummary,
             PermissionAssignmentResponse,
             CreatePermissionAssignmentRequest,
+            CreateIdentityRoleAssignmentRequest,
+            IdentityRoleAssignmentResponse,
+            CreatePermissionSetRoleAssignmentRequest,
+            PermissionSetRoleAssignmentResponse,
 
             // Runtime DTOs
             CreateRuntimeRequest,

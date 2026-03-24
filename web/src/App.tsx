@@ -47,6 +47,15 @@ const TriggerCreatePage = lazy(
 );
 const TriggerEditPage = lazy(() => import("@/pages/triggers/TriggerEditPage"));
 const SensorsPage = lazy(() => import("@/pages/sensors/SensorsPage"));
+const AccessControlPage = lazy(
+  () => import("@/pages/access-control/AccessControlPage"),
+);
+const IdentityDetailPage = lazy(
+  () => import("@/pages/access-control/IdentityDetailPage"),
+);
+const PermissionSetDetailPage = lazy(
+  () => import("@/pages/access-control/PermissionSetDetailPage"),
+);
 
 function PageLoader() {
   return (
@@ -134,6 +143,18 @@ function App() {
                   />
                   <Route path="sensors" element={<SensorsPage />} />
                   <Route path="sensors/:ref" element={<SensorsPage />} />
+                  <Route
+                    path="access-control"
+                    element={<AccessControlPage />}
+                  />
+                  <Route
+                    path="access-control/identities/:id"
+                    element={<IdentityDetailPage />}
+                  />
+                  <Route
+                    path="access-control/permission-sets/:ref"
+                    element={<PermissionSetDetailPage />}
+                  />
                 </Route>
 
                 {/* Catch all - redirect to dashboard */}

@@ -449,7 +449,7 @@ async fn test_delete_event_enforcement_retains_event_id() {
             pack: pack.id,
             pack_ref: pack.r#ref.clone(),
             label: "Test Rule".to_string(),
-            description: "Test".to_string(),
+            description: Some("Test".to_string()),
             action: action.id,
             action_ref: action.r#ref.clone(),
             trigger: trigger.id,

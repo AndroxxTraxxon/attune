@@ -20,8 +20,11 @@ use attune_common::{
     },
 };
 
+use attune_common::rbac::{Action, AuthorizationContext, Resource};
+
 use crate::{
     auth::middleware::RequireAuth,
+    authz::{AuthorizationCheck, AuthorizationService},
     dto::{
         trigger::TriggerResponse,
         webhook::{WebhookReceiverRequest, WebhookReceiverResponse},
@@ -170,7 +173,7 @@ fn get_webhook_config_array(
 )]
 pub async fn enable_webhook(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Path(trigger_ref): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
     // First, find the trigger by ref to get its ID
@@ -178,6 +181,26 @@ pub async fn enable_webhook(
         .await
         .map_err(|e| ApiError::InternalServerError(e.to_string()))?
         .ok_or_else(|| ApiError::NotFound(format!("Trigger '{}' not found", trigger_ref)))?;
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let mut ctx = AuthorizationContext::new(identity_id);
+        ctx.target_ref = Some(trigger.r#ref.clone());
+        ctx.pack_ref = trigger.pack_ref.clone();
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Triggers,
+                    action: Action::Update,
+                    context: ctx,
+                },
+            )
+            .await?;
+    }
 
     // Enable webhooks for this trigger
     let _webhook_info = TriggerRepository::enable_webhook(&state.db, trigger.id)
@@ -213,7 +236,7 @@ pub async fn enable_webhook(
 )]
 pub async fn disable_webhook(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Path(trigger_ref): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
     // First, find the trigger by ref to get its ID
@@ -221,6 +244,26 @@ pub async fn disable_webhook(
         .await
         .map_err(|e| ApiError::InternalServerError(e.to_string()))?
         .ok_or_else(|| ApiError::NotFound(format!("Trigger '{}' not found", trigger_ref)))?;
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let mut ctx = AuthorizationContext::new(identity_id);
+        ctx.target_ref = Some(trigger.r#ref.clone());
+        ctx.pack_ref = trigger.pack_ref.clone();
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Triggers,
+                    action: Action::Update,
+                    context: ctx,
+                },
+            )
+            .await?;
+    }
 
     // Disable webhooks for this trigger
     TriggerRepository::disable_webhook(&state.db, trigger.id)
@@ -257,7 +300,7 @@ pub async fn disable_webhook(
 )]
 pub async fn regenerate_webhook_key(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Path(trigger_ref): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
     // First, find the trigger by ref to get its ID
@@ -265,6 +308,26 @@ pub async fn regenerate_webhook_key(
         .await
         .map_err(|e| ApiError::InternalServerError(e.to_string()))?
         .ok_or_else(|| ApiError::NotFound(format!("Trigger '{}' not found", trigger_ref)))?;
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let mut ctx = AuthorizationContext::new(identity_id);
+        ctx.target_ref = Some(trigger.r#ref.clone());
+        ctx.pack_ref = trigger.pack_ref.clone();
+        authz
+            .authorize(
+                &user,
+                AuthorizationCheck {
+                    resource: Resource::Triggers,
+                    action: Action::Update,
+                    context: ctx,
+                },
+            )
+            .await?;
+    }
 
     // Check if webhooks are enabled
     if !trigger.webhook_enabled {

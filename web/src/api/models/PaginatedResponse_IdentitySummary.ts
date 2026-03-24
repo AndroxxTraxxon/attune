@@ -14,8 +14,10 @@ export type PaginatedResponse_IdentitySummary = {
     data: Array<{
         attributes: Value;
         display_name?: string | null;
+        frozen: boolean;
         id: number;
         login: string;
+        roles: Array<string>;
     }>;
     /**
      * Pagination metadata

@@ -40,7 +40,8 @@ use attune_common::repositories::{
 };
 
 use crate::{
-    auth::middleware::RequireAuth,
+    auth::{jwt::TokenType, middleware::AuthenticatedUser, middleware::RequireAuth},
+    authz::{AuthorizationCheck, AuthorizationService},
     dto::{
         artifact::{
             AllocateFileVersionByRefRequest, AppendProgressRequest, ArtifactExecutionPatch,
@@ -55,6 +56,7 @@ use crate::{
     middleware::{ApiError, ApiResult},
     state::AppState,
 };
+use attune_common::rbac::{Action, AuthorizationContext, Resource};
 
 // ============================================================================
 // Artifact CRUD
@@ -72,7 +74,7 @@ use crate::{
     security(("bearer_auth" = []))
 )]
 pub async fn list_artifacts(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Query(query): Query<ArtifactQueryParams>,
 ) -> ApiResult<impl IntoResponse> {
@@ -88,8 +90,16 @@ pub async fn list_artifacts(
     };
 
     let result = ArtifactRepository::search(&state.db, &filters).await?;
+    let mut rows = result.rows;
 
-    let items: Vec<ArtifactSummary> = result.rows.into_iter().map(ArtifactSummary::from).collect();
+    if let Some((identity_id, grants)) = ensure_can_read_any_artifact(&state, &user).await? {
+        rows.retain(|artifact| {
+            let ctx = artifact_authorization_context(identity_id, artifact);
+            AuthorizationService::is_allowed(&grants, Resource::Artifacts, Action::Read, &ctx)
+        });
+    }
+
+    let items: Vec<ArtifactSummary> = rows.into_iter().map(ArtifactSummary::from).collect();
 
     let pagination = PaginationParams {
         page: query.page,
@@ -113,13 +123,17 @@ pub async fn list_artifacts(
     security(("bearer_auth" = []))
 )]
 pub async fn get_artifact(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> ApiResult<impl IntoResponse> {
     let artifact = ArtifactRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    authorize_artifact_action(&state, &user, Action::Read, &artifact)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
 
     Ok((
         StatusCode::OK,
@@ -140,13 +154,17 @@ pub async fn get_artifact(
     security(("bearer_auth" = []))
 )]
 pub async fn get_artifact_by_ref(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(artifact_ref): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
     let artifact = ArtifactRepository::find_by_ref(&state.db, &artifact_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact '{}' not found", artifact_ref)))?;
+
+    authorize_artifact_action(&state, &user, Action::Read, &artifact)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("Artifact '{}' not found", artifact_ref)))?;
 
     Ok((
         StatusCode::OK,
@@ -168,7 +186,7 @@ pub async fn get_artifact_by_ref(
     security(("bearer_auth" = []))
 )]
 pub async fn create_artifact(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Json(request): Json<CreateArtifactRequest>,
 ) -> ApiResult<impl IntoResponse> {
@@ -199,6 +217,16 @@ pub async fn create_artifact(
             ArtifactVisibility::Private
         }
     });
+
+    authorize_artifact_create(
+        &state,
+        &user,
+        &request.r#ref,
+        request.scope,
+        &request.owner,
+        visibility,
+    )
+    .await?;
 
     let input = CreateArtifactInput {
         r#ref: request.r#ref,
@@ -240,15 +268,17 @@ pub async fn create_artifact(
     security(("bearer_auth" = []))
 )]
 pub async fn update_artifact(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
     Json(request): Json<UpdateArtifactRequest>,
 ) -> ApiResult<impl IntoResponse> {
     // Verify artifact exists
-    ArtifactRepository::find_by_id(&state.db, id)
+    let artifact = ArtifactRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    authorize_artifact_action(&state, &user, Action::Update, &artifact).await?;
 
     let input = UpdateArtifactInput {
         r#ref: None, // Ref is immutable after creation
@@ -305,13 +335,15 @@ pub async fn update_artifact(
     security(("bearer_auth" = []))
 )]
 pub async fn delete_artifact(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> ApiResult<impl IntoResponse> {
     let artifact = ArtifactRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    authorize_artifact_action(&state, &user, Action::Delete, &artifact).await?;
 
     // Before deleting DB rows, clean up any file-backed versions on disk
     let file_versions =
@@ -355,11 +387,17 @@ pub async fn delete_artifact(
     security(("bearer_auth" = []))
 )]
 pub async fn list_artifacts_by_execution(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(execution_id): Path<i64>,
 ) -> ApiResult<impl IntoResponse> {
-    let artifacts = ArtifactRepository::find_by_execution(&state.db, execution_id).await?;
+    let mut artifacts = ArtifactRepository::find_by_execution(&state.db, execution_id).await?;
+    if let Some((identity_id, grants)) = ensure_can_read_any_artifact(&state, &user).await? {
+        artifacts.retain(|artifact| {
+            let ctx = artifact_authorization_context(identity_id, artifact);
+            AuthorizationService::is_allowed(&grants, Resource::Artifacts, Action::Read, &ctx)
+        });
+    }
     let items: Vec<ArtifactSummary> = artifacts.into_iter().map(ArtifactSummary::from).collect();
 
     Ok((StatusCode::OK, Json(ApiResponse::new(items))))
@@ -387,7 +425,7 @@ pub async fn list_artifacts_by_execution(
     security(("bearer_auth" = []))
 )]
 pub async fn append_progress(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
     Json(request): Json<AppendProgressRequest>,
@@ -395,6 +433,8 @@ pub async fn append_progress(
     let artifact = ArtifactRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    authorize_artifact_action(&state, &user, Action::Update, &artifact).await?;
 
     if artifact.r#type != ArtifactType::Progress {
         return Err(ApiError::BadRequest(format!(
@@ -430,15 +470,17 @@ pub async fn append_progress(
     security(("bearer_auth" = []))
 )]
 pub async fn set_artifact_data(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
     Json(request): Json<SetDataRequest>,
 ) -> ApiResult<impl IntoResponse> {
     // Verify exists
-    ArtifactRepository::find_by_id(&state.db, id)
+    let artifact = ArtifactRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    authorize_artifact_action(&state, &user, Action::Update, &artifact).await?;
 
     let updated = ArtifactRepository::set_data(&state.db, id, &request.data).await?;
 
@@ -468,14 +510,18 @@ pub async fn set_artifact_data(
     security(("bearer_auth" = []))
 )]
 pub async fn list_versions(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> ApiResult<impl IntoResponse> {
     // Verify artifact exists
-    ArtifactRepository::find_by_id(&state.db, id)
+    let artifact = ArtifactRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    authorize_artifact_action(&state, &user, Action::Read, &artifact)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
 
     let versions = ArtifactVersionRepository::list_by_artifact(&state.db, id).await?;
     let items: Vec<ArtifactVersionSummary> = versions
@@ -502,14 +548,18 @@ pub async fn list_versions(
     security(("bearer_auth" = []))
 )]
 pub async fn get_version(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path((id, version)): Path<(i64, i32)>,
 ) -> ApiResult<impl IntoResponse> {
     // Verify artifact exists
-    ArtifactRepository::find_by_id(&state.db, id)
+    let artifact = ArtifactRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    authorize_artifact_action(&state, &user, Action::Read, &artifact)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
 
     let ver = ArtifactVersionRepository::find_by_version(&state.db, id, version)
         .await?
@@ -536,13 +586,17 @@ pub async fn get_version(
     security(("bearer_auth" = []))
 )]
 pub async fn get_latest_version(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> ApiResult<impl IntoResponse> {
-    ArtifactRepository::find_by_id(&state.db, id)
+    let artifact = ArtifactRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    authorize_artifact_action(&state, &user, Action::Read, &artifact)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
 
     let ver = ArtifactVersionRepository::find_latest(&state.db, id)
         .await?
@@ -568,14 +622,16 @@ pub async fn get_latest_version(
     security(("bearer_auth" = []))
 )]
 pub async fn create_version_json(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
     Json(request): Json<CreateVersionJsonRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    ArtifactRepository::find_by_id(&state.db, id)
+    let artifact = ArtifactRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    authorize_artifact_action(&state, &user, Action::Update, &artifact).await?;
 
     let input = CreateArtifactVersionInput {
         artifact: id,
@@ -624,7 +680,7 @@ pub async fn create_version_json(
     security(("bearer_auth" = []))
 )]
 pub async fn create_version_file(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
     Json(request): Json<CreateFileVersionRequest>,
@@ -632,6 +688,8 @@ pub async fn create_version_file(
     let artifact = ArtifactRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    authorize_artifact_action(&state, &user, Action::Update, &artifact).await?;
 
     // Validate this is a file-type artifact
     if !is_file_backed_type(artifact.r#type) {
@@ -726,14 +784,16 @@ pub async fn create_version_file(
     security(("bearer_auth" = []))
 )]
 pub async fn upload_version(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
     mut multipart: Multipart,
 ) -> ApiResult<impl IntoResponse> {
-    ArtifactRepository::find_by_id(&state.db, id)
+    let artifact = ArtifactRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    authorize_artifact_action(&state, &user, Action::Update, &artifact).await?;
 
     let mut file_data: Option<Vec<u8>> = None;
     let mut content_type: Option<String> = None;
@@ -854,13 +914,17 @@ pub async fn upload_version(
     security(("bearer_auth" = []))
 )]
 pub async fn download_version(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path((id, version)): Path<(i64, i32)>,
 ) -> ApiResult<impl IntoResponse> {
     let artifact = ArtifactRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    authorize_artifact_action(&state, &user, Action::Read, &artifact)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
 
     // First try without content (cheaper query) to check for file_path
     let ver = ArtifactVersionRepository::find_by_version(&state.db, id, version)
@@ -904,13 +968,17 @@ pub async fn download_version(
     security(("bearer_auth" = []))
 )]
 pub async fn download_latest(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> ApiResult<impl IntoResponse> {
     let artifact = ArtifactRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    authorize_artifact_action(&state, &user, Action::Read, &artifact)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
 
     // First try without content (cheaper query) to check for file_path
     let ver = ArtifactVersionRepository::find_latest(&state.db, id)
@@ -955,7 +1023,7 @@ pub async fn download_latest(
     security(("bearer_auth" = []))
 )]
 pub async fn delete_version(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path((id, version)): Path<(i64, i32)>,
 ) -> ApiResult<impl IntoResponse> {
@@ -963,6 +1031,8 @@ pub async fn delete_version(
     let artifact = ArtifactRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    authorize_artifact_action(&state, &user, Action::Delete, &artifact).await?;
 
     // Find the version by artifact + version number
     let ver = ArtifactVersionRepository::find_by_version(&state.db, id, version)
@@ -1042,7 +1112,7 @@ pub async fn delete_version(
     security(("bearer_auth" = []))
 )]
 pub async fn upload_version_by_ref(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(artifact_ref): Path<String>,
     mut multipart: Multipart,
@@ -1157,6 +1227,8 @@ pub async fn upload_version_by_ref(
     // Upsert: find existing artifact or create a new one
     let artifact = match ArtifactRepository::find_by_ref(&state.db, &artifact_ref).await? {
         Some(existing) => {
+            authorize_artifact_action(&state, &user, Action::Update, &existing).await?;
+
             // Update execution link if a new execution ID was provided
             if execution_id.is_some() && execution_id != existing.execution {
                 let update_input = UpdateArtifactInput {
@@ -1210,6 +1282,16 @@ pub async fn upload_version_by_ref(
                     }
                 }
             };
+
+            authorize_artifact_create(
+                &state,
+                &user,
+                &artifact_ref,
+                a_scope,
+                owner.as_deref().unwrap_or_default(),
+                a_visibility,
+            )
+            .await?;
 
             // Parse retention
             let a_retention_policy: RetentionPolicyType = match &retention_policy {
@@ -1297,7 +1379,7 @@ pub async fn upload_version_by_ref(
     security(("bearer_auth" = []))
 )]
 pub async fn allocate_file_version_by_ref(
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(artifact_ref): Path<String>,
     Json(request): Json<AllocateFileVersionByRefRequest>,
@@ -1305,6 +1387,8 @@ pub async fn allocate_file_version_by_ref(
     // Upsert: find existing artifact or create a new one
     let artifact = match ArtifactRepository::find_by_ref(&state.db, &artifact_ref).await? {
         Some(existing) => {
+            authorize_artifact_action(&state, &user, Action::Update, &existing).await?;
+
             // Update execution link if a new execution ID was provided
             if request.execution.is_some() && request.execution != existing.execution {
                 let update_input = UpdateArtifactInput {
@@ -1346,6 +1430,16 @@ pub async fn allocate_file_version_by_ref(
                 .retention_policy
                 .unwrap_or(RetentionPolicyType::Versions);
             let a_retention_limit = request.retention_limit.unwrap_or(10);
+
+            authorize_artifact_create(
+                &state,
+                &user,
+                &artifact_ref,
+                a_scope,
+                request.owner.as_deref().unwrap_or_default(),
+                a_visibility,
+            )
+            .await?;
 
             let create_input = CreateArtifactInput {
                 r#ref: artifact_ref.clone(),
@@ -1436,6 +1530,105 @@ pub async fn allocate_file_version_by_ref(
 // ============================================================================
 // Helpers
 // ============================================================================
+
+async fn authorize_artifact_action(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    action: Action,
+    artifact: &attune_common::models::artifact::Artifact,
+) -> Result<(), ApiError> {
+    if user.claims.token_type != TokenType::Access {
+        return Ok(());
+    }
+
+    let identity_id = user
+        .identity_id()
+        .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+    let authz = AuthorizationService::new(state.db.clone());
+    authz
+        .authorize(
+            user,
+            AuthorizationCheck {
+                resource: Resource::Artifacts,
+                action,
+                context: artifact_authorization_context(identity_id, artifact),
+            },
+        )
+        .await
+}
+
+async fn authorize_artifact_create(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    artifact_ref: &str,
+    scope: OwnerType,
+    owner: &str,
+    visibility: ArtifactVisibility,
+) -> Result<(), ApiError> {
+    if user.claims.token_type != TokenType::Access {
+        return Ok(());
+    }
+
+    let identity_id = user
+        .identity_id()
+        .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+    let authz = AuthorizationService::new(state.db.clone());
+    let mut ctx = AuthorizationContext::new(identity_id);
+    ctx.target_ref = Some(artifact_ref.to_string());
+    ctx.owner_type = Some(scope);
+    ctx.owner_ref = Some(owner.to_string());
+    ctx.visibility = Some(visibility);
+
+    authz
+        .authorize(
+            user,
+            AuthorizationCheck {
+                resource: Resource::Artifacts,
+                action: Action::Create,
+                context: ctx,
+            },
+        )
+        .await
+}
+
+async fn ensure_can_read_any_artifact(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+) -> Result<Option<(i64, Vec<attune_common::rbac::Grant>)>, ApiError> {
+    if user.claims.token_type != TokenType::Access {
+        return Ok(None);
+    }
+
+    let identity_id = user
+        .identity_id()
+        .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+    let authz = AuthorizationService::new(state.db.clone());
+    let grants = authz.effective_grants(user).await?;
+
+    let can_read_any_artifact = grants
+        .iter()
+        .any(|g| g.resource == Resource::Artifacts && g.actions.contains(&Action::Read));
+    if !can_read_any_artifact {
+        return Err(ApiError::Forbidden(
+            "Insufficient permissions: artifacts:read".to_string(),
+        ));
+    }
+
+    Ok(Some((identity_id, grants)))
+}
+
+fn artifact_authorization_context(
+    identity_id: i64,
+    artifact: &attune_common::models::artifact::Artifact,
+) -> AuthorizationContext {
+    let mut ctx = AuthorizationContext::new(identity_id);
+    ctx.target_id = Some(artifact.id);
+    ctx.target_ref = Some(artifact.r#ref.clone());
+    ctx.owner_type = Some(artifact.scope);
+    ctx.owner_ref = Some(artifact.owner.clone());
+    ctx.visibility = Some(artifact.visibility);
+    ctx
+}
 
 /// Returns true for artifact types that should use file-backed storage on disk.
 fn is_file_backed_type(artifact_type: ArtifactType) -> bool {
@@ -1775,13 +1968,18 @@ pub async fn stream_artifact(
     let token = params.token.as_ref().ok_or(ApiError::Unauthorized(
         "Missing authentication token".to_string(),
     ))?;
-    validate_token(token, &state.jwt_config)
+    let claims = validate_token(token, &state.jwt_config)
         .map_err(|_| ApiError::Unauthorized("Invalid authentication token".to_string()))?;
+    let user = AuthenticatedUser { claims };
 
     // --- resolve artifact + latest version ---------------------------------
     let artifact = ArtifactRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
+
+    authorize_artifact_action(&state, &user, Action::Read, &artifact)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
 
     if !is_file_backed_type(artifact.r#type) {
         return Err(ApiError::BadRequest(format!(

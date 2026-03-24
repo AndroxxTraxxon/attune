@@ -14,10 +14,32 @@ pub struct IdentitySummary {
     pub id: i64,
     pub login: String,
     pub display_name: Option<String>,
+    pub frozen: bool,
     pub attributes: JsonValue,
+    pub roles: Vec<String>,
 }
 
-pub type IdentityResponse = IdentitySummary;
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct IdentityRoleAssignmentResponse {
+    pub id: i64,
+    pub identity_id: i64,
+    pub role: String,
+    pub source: String,
+    pub managed: bool,
+    pub created: chrono::DateTime<chrono::Utc>,
+    pub updated: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct IdentityResponse {
+    pub id: i64,
+    pub login: String,
+    pub display_name: Option<String>,
+    pub frozen: bool,
+    pub attributes: JsonValue,
+    pub roles: Vec<IdentityRoleAssignmentResponse>,
+    pub direct_permissions: Vec<PermissionAssignmentResponse>,
+}
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PermissionSetSummary {
@@ -27,6 +49,7 @@ pub struct PermissionSetSummary {
     pub label: Option<String>,
     pub description: Option<String>,
     pub grants: JsonValue,
+    pub roles: Vec<PermissionSetRoleAssignmentResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -38,11 +61,32 @@ pub struct PermissionAssignmentResponse {
     pub created: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PermissionSetRoleAssignmentResponse {
+    pub id: i64,
+    pub permission_set_id: i64,
+    pub permission_set_ref: Option<String>,
+    pub role: String,
+    pub created: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreatePermissionAssignmentRequest {
     pub identity_id: Option<i64>,
     pub identity_login: Option<String>,
     pub permission_set_ref: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
+pub struct CreateIdentityRoleAssignmentRequest {
+    #[validate(length(min = 1, max = 255))]
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
+pub struct CreatePermissionSetRoleAssignmentRequest {
+    #[validate(length(min = 1, max = 255))]
+    pub role: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
@@ -62,4 +106,5 @@ pub struct UpdateIdentityRequest {
     pub display_name: Option<String>,
     pub password: Option<String>,
     pub attributes: Option<JsonValue>,
+    pub frozen: Option<bool>,
 }

@@ -277,7 +277,7 @@ pub async fn update_action(
     // Create update input
     let update_input = UpdateActionInput {
         label: request.label,
-        description: request.description,
+        description: request.description.map(Patch::Set),
         entrypoint: request.entrypoint,
         runtime: request.runtime,
         runtime_version_constraint: request.runtime_version_constraint.map(|patch| match patch {

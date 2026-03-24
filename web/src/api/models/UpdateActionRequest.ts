@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { RuntimeVersionConstraintPatch } from './RuntimeVersionConstraintPatch';
 /**
  * Request DTO for updating an action
  */
@@ -30,9 +31,6 @@ export type UpdateActionRequest = {
      * Runtime ID
      */
     runtime?: number | null;
-    /**
-     * Optional semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0")
-     */
-    runtime_version_constraint?: string | null;
+    runtime_version_constraint?: (null | RuntimeVersionConstraintPatch);
 };
 

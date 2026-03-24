@@ -887,7 +887,7 @@ pub mod trigger {
         pub pack: Option<Id>,
         pub pack_ref: Option<String>,
         pub label: String,
-        pub description: String,
+        pub description: Option<String>,
         pub entrypoint: String,
         pub runtime: Id,
         pub runtime_ref: String,
@@ -915,7 +915,7 @@ pub mod action {
         pub pack: Id,
         pub pack_ref: String,
         pub label: String,
-        pub description: String,
+        pub description: Option<String>,
         pub entrypoint: String,
         pub runtime: Option<Id>,
         /// Optional semver version constraint for the runtime
@@ -965,7 +965,7 @@ pub mod rule {
         pub pack: Id,
         pub pack_ref: String,
         pub label: String,
-        pub description: String,
+        pub description: Option<String>,
         pub action: Option<Id>,
         pub action_ref: String,
         pub trigger: Option<Id>,
@@ -1221,6 +1221,7 @@ pub mod identity {
         pub display_name: Option<String>,
         pub password_hash: Option<String>,
         pub attributes: JsonDict,
+        pub frozen: bool,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
     }
@@ -1243,6 +1244,25 @@ pub mod identity {
         pub id: Id,
         pub identity: Id,
         pub permset: Id,
+        pub created: DateTime<Utc>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+    pub struct IdentityRoleAssignment {
+        pub id: Id,
+        pub identity: Id,
+        pub role: String,
+        pub source: String,
+        pub managed: bool,
+        pub created: DateTime<Utc>,
+        pub updated: DateTime<Utc>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+    pub struct PermissionSetRoleAssignment {
+        pub id: Id,
+        pub permset: Id,
+        pub role: String,
         pub created: DateTime<Utc>,
     }
 }

@@ -93,19 +93,6 @@ pub async fn create_execution(
                 },
             )
             .await?;
-
-        let mut execution_ctx = AuthorizationContext::new(identity_id);
-        execution_ctx.pack_ref = Some(action.pack_ref.clone());
-        authz
-            .authorize(
-                &user,
-                AuthorizationCheck {
-                    resource: Resource::Executions,
-                    action: Action::Create,
-                    context: execution_ctx,
-                },
-            )
-            .await?;
     }
 
     // Create execution input

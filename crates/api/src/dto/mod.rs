@@ -51,9 +51,10 @@ pub use inquiry::{
 pub use key::{CreateKeyRequest, KeyQueryParams, KeyResponse, KeySummary, UpdateKeyRequest};
 pub use pack::{CreatePackRequest, PackResponse, PackSummary, UpdatePackRequest};
 pub use permission::{
-    CreateIdentityRequest, CreatePermissionAssignmentRequest, IdentityResponse, IdentitySummary,
-    PermissionAssignmentResponse, PermissionSetQueryParams, PermissionSetSummary,
-    UpdateIdentityRequest,
+    CreateIdentityRequest, CreateIdentityRoleAssignmentRequest, CreatePermissionAssignmentRequest,
+    CreatePermissionSetRoleAssignmentRequest, IdentityResponse, IdentityRoleAssignmentResponse,
+    IdentitySummary, PermissionAssignmentResponse, PermissionSetQueryParams,
+    PermissionSetRoleAssignmentResponse, PermissionSetSummary, UpdateIdentityRequest,
 };
 pub use rule::{CreateRuleRequest, RuleResponse, RuleSummary, UpdateRuleRequest};
 pub use runtime::{CreateRuntimeRequest, RuntimeResponse, RuntimeSummary, UpdateRuntimeRequest};

@@ -78,4 +78,5 @@ docker-compose.override.yml
 *.pid
 
 packs.examples/
+packs.external/
 codex/

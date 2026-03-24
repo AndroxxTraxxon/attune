@@ -665,7 +665,7 @@ pub struct CreateSensorInput {
     pub pack: Option<Id>,
     pub pack_ref: Option<String>,
     pub label: String,
-    pub description: String,
+    pub description: Option<String>,
     pub entrypoint: String,
     pub runtime: Id,
     pub runtime_ref: String,
@@ -681,7 +681,7 @@ pub struct CreateSensorInput {
 #[derive(Debug, Clone, Default)]
 pub struct UpdateSensorInput {
     pub label: Option<String>,
-    pub description: Option<String>,
+    pub description: Option<Patch<String>>,
     pub entrypoint: Option<String>,
     pub runtime: Option<Id>,
     pub runtime_ref: Option<String>,
@@ -830,7 +830,10 @@ impl Update for SensorRepository {
                 query.push(", ");
             }
             query.push("description = ");
-            query.push_bind(description);
+            match description {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<String>::None),
+            };
             has_updates = true;
         }
 

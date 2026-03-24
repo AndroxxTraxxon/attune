@@ -82,6 +82,17 @@ pub async fn create_event(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateEventRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    // Only sensor and execution tokens may create events directly.
+    // User sessions must go through the webhook receiver instead.
+    use crate::auth::jwt::TokenType;
+    if user.0.claims.token_type == TokenType::Access {
+        return Err(ApiError::Forbidden(
+            "Events may only be created by sensor services. To fire an event as a user, \
+             enable webhooks on the trigger and POST to its webhook URL."
+                .to_string(),
+        ));
+    }
+
     // Validate request
     payload
         .validate()
@@ -128,7 +139,6 @@ pub async fn create_event(
     };
 
     // Determine source (sensor) from authenticated user if it's a sensor token
-    use crate::auth::jwt::TokenType;
     let (source_id, source_ref) = match user.0.claims.token_type {
         TokenType::Sensor => {
             // Extract sensor reference from login

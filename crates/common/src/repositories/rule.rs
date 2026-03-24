@@ -6,7 +6,7 @@ use crate::models::{rule::*, Id};
 use crate::{Error, Result};
 use sqlx::{Executor, Postgres, QueryBuilder};
 
-use super::{Create, Delete, FindById, FindByRef, List, Repository, Update};
+use super::{Create, Delete, FindById, FindByRef, List, Patch, Repository, Update};
 
 /// Filters for [`RuleRepository::list_search`].
 ///
@@ -41,7 +41,7 @@ pub struct RestoreRuleInput {
     pub pack: Id,
     pub pack_ref: String,
     pub label: String,
-    pub description: String,
+    pub description: Option<String>,
     pub action: Option<Id>,
     pub action_ref: String,
     pub trigger: Option<Id>,
@@ -70,7 +70,7 @@ pub struct CreateRuleInput {
     pub pack: Id,
     pub pack_ref: String,
     pub label: String,
-    pub description: String,
+    pub description: Option<String>,
     pub action: Id,
     pub action_ref: String,
     pub trigger: Id,
@@ -86,7 +86,7 @@ pub struct CreateRuleInput {
 #[derive(Debug, Clone, Default)]
 pub struct UpdateRuleInput {
     pub label: Option<String>,
-    pub description: Option<String>,
+    pub description: Option<Patch<String>>,
     pub conditions: Option<serde_json::Value>,
     pub action_params: Option<serde_json::Value>,
     pub trigger_params: Option<serde_json::Value>,
@@ -228,7 +228,10 @@ impl Update for RuleRepository {
                 query.push(", ");
             }
             query.push("description = ");
-            query.push_bind(description);
+            match description {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<String>::None),
+            };
             has_updates = true;
         }
 

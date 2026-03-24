@@ -725,8 +725,7 @@ impl<'a> PackComponentLoader<'a> {
             let description = data
                 .get("description")
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+                .map(|s| s.to_string());
 
             let enabled = data
                 .get("enabled")
@@ -745,7 +744,10 @@ impl<'a> PackComponentLoader<'a> {
             if let Some(existing) = TriggerRepository::find_by_ref(self.pool, &trigger_ref).await? {
                 let update_input = UpdateTriggerInput {
                     label: Some(label),
-                    description: Some(Patch::Set(description)),
+                    description: Some(match description {
+                        Some(description) => Patch::Set(description),
+                        None => Patch::Clear,
+                    }),
                     enabled: Some(enabled),
                     param_schema: Some(match param_schema {
                         Some(value) => Patch::Set(value),
@@ -778,7 +780,7 @@ impl<'a> PackComponentLoader<'a> {
                 pack: Some(self.pack_id),
                 pack_ref: Some(self.pack_ref.clone()),
                 label,
-                description: Some(description),
+                description,
                 enabled,
                 param_schema,
                 out_schema,
@@ -858,8 +860,7 @@ impl<'a> PackComponentLoader<'a> {
             let description = data
                 .get("description")
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+                .map(|s| s.to_string());
 
             // ── Workflow file handling ──────────────────────────────────
             // If the action declares `workflow_file`, load the referenced
@@ -876,7 +877,7 @@ impl<'a> PackComponentLoader<'a> {
                         wf_path,
                         &action_ref,
                         &label,
-                        &description,
+                        description.as_deref().unwrap_or(""),
                         &data,
                     )
                     .await
@@ -956,7 +957,10 @@ impl<'a> PackComponentLoader<'a> {
             if let Some(existing) = ActionRepository::find_by_ref(self.pool, &action_ref).await? {
                 let update_input = UpdateActionInput {
                     label: Some(label),
-                    description: Some(description),
+                    description: Some(match description {
+                        Some(description) => Patch::Set(description),
+                        None => Patch::Clear,
+                    }),
                     entrypoint: Some(entrypoint),
                     runtime: runtime_id,
                     runtime_version_constraint: Some(match runtime_version_constraint {
@@ -1310,8 +1314,7 @@ impl<'a> PackComponentLoader<'a> {
             let description = data
                 .get("description")
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+                .map(|s| s.to_string());
 
             let enabled = data
                 .get("enabled")
@@ -1347,7 +1350,10 @@ impl<'a> PackComponentLoader<'a> {
             if let Some(existing) = SensorRepository::find_by_ref(self.pool, &sensor_ref).await? {
                 let update_input = UpdateSensorInput {
                     label: Some(label),
-                    description: Some(description),
+                    description: Some(match description {
+                        Some(description) => Patch::Set(description),
+                        None => Patch::Clear,
+                    }),
                     entrypoint: Some(entrypoint),
                     runtime: Some(sensor_runtime_id),
                     runtime_ref: Some(sensor_runtime_ref.clone()),

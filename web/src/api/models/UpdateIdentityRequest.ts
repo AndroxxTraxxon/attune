@@ -6,6 +6,7 @@ import type { Value } from './Value';
 export type UpdateIdentityRequest = {
     attributes?: (null | Value);
     display_name?: string | null;
+    frozen?: boolean | null;
     password?: string | null;
 };
 

@@ -25,9 +25,8 @@ pub struct CreateRuleRequest {
     pub label: String,
 
     /// Rule description
-    #[validate(length(min = 1))]
     #[schema(example = "Send Slack notification when an error occurs")]
-    pub description: String,
+    pub description: Option<String>,
 
     /// Action reference to execute when rule matches
     #[validate(length(min = 1, max = 255))]
@@ -69,7 +68,6 @@ pub struct UpdateRuleRequest {
     pub label: Option<String>,
 
     /// Rule description
-    #[validate(length(min = 1))]
     #[schema(example = "Enhanced error notification with filtering")]
     pub description: Option<String>,
 
@@ -115,7 +113,7 @@ pub struct RuleResponse {
 
     /// Rule description
     #[schema(example = "Send Slack notification when an error occurs")]
-    pub description: String,
+    pub description: Option<String>,
 
     /// Action ID (null if the referenced action has been deleted)
     #[schema(example = 1)]
@@ -183,7 +181,7 @@ pub struct RuleSummary {
 
     /// Rule description
     #[schema(example = "Send Slack notification when an error occurs")]
-    pub description: String,
+    pub description: Option<String>,
 
     /// Action reference
     #[schema(example = "slack.post_message")]
@@ -297,7 +295,7 @@ mod tests {
             r#ref: "".to_string(), // Invalid: empty
             pack_ref: "test-pack".to_string(),
             label: "Test Rule".to_string(),
-            description: "Test description".to_string(),
+            description: Some("Test description".to_string()),
             action_ref: "test.action".to_string(),
             trigger_ref: "test.trigger".to_string(),
             conditions: default_empty_object(),
@@ -315,7 +313,7 @@ mod tests {
             r#ref: "test.rule".to_string(),
             pack_ref: "test-pack".to_string(),
             label: "Test Rule".to_string(),
-            description: "Test description".to_string(),
+            description: Some("Test description".to_string()),
             action_ref: "test.action".to_string(),
             trigger_ref: "test.trigger".to_string(),
             conditions: serde_json::json!({

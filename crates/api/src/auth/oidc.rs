@@ -3,7 +3,10 @@
 use attune_common::{
     config::OidcConfig,
     repositories::{
-        identity::{CreateIdentityInput, IdentityRepository, UpdateIdentityInput},
+        identity::{
+            CreateIdentityInput, IdentityRepository, IdentityRoleAssignmentRepository,
+            UpdateIdentityInput,
+        },
         Create, Update,
     },
 };
@@ -282,6 +285,11 @@ pub async fn handle_callback(
     }
 
     let identity = upsert_identity(state, &oidc_claims).await?;
+    if identity.frozen {
+        return Err(ApiError::Forbidden(
+            "Identity is frozen and cannot authenticate".to_string(),
+        ));
+    }
     let access_token = generate_access_token(identity.id, &identity.login, &state.jwt_config)?;
     let refresh_token = generate_refresh_token(identity.id, &identity.login, &state.jwt_config)?;
 
@@ -511,10 +519,13 @@ async fn upsert_identity(
                 display_name,
                 password_hash: None,
                 attributes: Some(attributes.clone()),
+                frozen: None,
             };
-            IdentityRepository::update(&state.db, identity.id, updated)
+            let identity = IdentityRepository::update(&state.db, identity.id, updated)
                 .await
-                .map_err(Into::into)
+                .map_err(ApiError::from)?;
+            sync_roles(&state.db, identity.id, "oidc", &oidc_claims.groups).await?;
+            Ok(identity)
         }
         None => {
             let login = match IdentityRepository::find_by_login(&state.db, &desired_login).await? {
@@ -522,7 +533,7 @@ async fn upsert_identity(
                 None => desired_login,
             };
 
-            IdentityRepository::create(
+            let identity = IdentityRepository::create(
                 &state.db,
                 CreateIdentityInput {
                     login,
@@ -532,9 +543,22 @@ async fn upsert_identity(
                 },
             )
             .await
-            .map_err(Into::into)
+            .map_err(ApiError::from)?;
+            sync_roles(&state.db, identity.id, "oidc", &oidc_claims.groups).await?;
+            Ok(identity)
         }
     }
+}
+
+async fn sync_roles(
+    db: &sqlx::PgPool,
+    identity_id: i64,
+    source: &str,
+    roles: &[String],
+) -> Result<(), ApiError> {
+    IdentityRoleAssignmentRepository::replace_managed_roles(db, identity_id, source, roles)
+        .await
+        .map_err(Into::into)
 }
 
 fn derive_login(oidc_claims: &OidcIdentityClaims) -> String {

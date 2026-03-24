@@ -179,7 +179,7 @@ async fn test_create_sensor_duplicate_ref_fails() {
         pack: Some(pack.id),
         pack_ref: Some(pack.r#ref.clone()),
         label: "Duplicate Sensor".to_string(),
-        description: "Test sensor".to_string(),
+        description: Some("Test sensor".to_string()),
         entrypoint: "sensors/dup.py".to_string(),
         runtime: runtime.id,
         runtime_ref: runtime.r#ref.clone(),
@@ -235,7 +235,7 @@ async fn test_create_sensor_invalid_ref_format_fails() {
             pack: Some(pack.id),
             pack_ref: Some(pack.r#ref.clone()),
             label: "Invalid Sensor".to_string(),
-            description: "Test sensor".to_string(),
+            description: Some("Test sensor".to_string()),
             entrypoint: "sensors/invalid.py".to_string(),
             runtime: runtime.id,
             runtime_ref: runtime.r#ref.clone(),
@@ -276,7 +276,7 @@ async fn test_create_sensor_invalid_pack_fails() {
         pack: Some(99999), // Non-existent pack
         pack_ref: Some("invalid".to_string()),
         label: "Invalid Pack Sensor".to_string(),
-        description: "Test sensor".to_string(),
+        description: Some("Test sensor".to_string()),
         entrypoint: "sensors/invalid.py".to_string(),
         runtime: runtime.id,
         runtime_ref: runtime.r#ref.clone(),
@@ -308,7 +308,7 @@ async fn test_create_sensor_invalid_trigger_fails() {
         pack: None,
         pack_ref: None,
         label: "Invalid Trigger Sensor".to_string(),
-        description: "Test sensor".to_string(),
+        description: Some("Test sensor".to_string()),
         entrypoint: "sensors/invalid.py".to_string(),
         runtime: runtime.id,
         runtime_ref: runtime.r#ref.clone(),
@@ -340,7 +340,7 @@ async fn test_create_sensor_invalid_runtime_fails() {
         pack: None,
         pack_ref: None,
         label: "Invalid Runtime Sensor".to_string(),
-        description: "Test sensor".to_string(),
+        description: Some("Test sensor".to_string()),
         entrypoint: "sensors/invalid.py".to_string(),
         runtime: 99999, // Non-existent runtime
         runtime_ref: "invalid.runtime".to_string(),
@@ -728,7 +728,7 @@ async fn test_update_description() {
     .unwrap();
 
     let input = UpdateSensorInput {
-        description: Some("New description for the sensor".to_string()),
+        description: Some(Patch::Set("New description for the sensor".to_string())),
         ..Default::default()
     };
 
@@ -736,7 +736,10 @@ async fn test_update_description() {
         .await
         .unwrap();
 
-    assert_eq!(updated.description, "New description for the sensor");
+    assert_eq!(
+        updated.description,
+        Some("New description for the sensor".to_string())
+    );
 }
 
 #[tokio::test]
@@ -934,7 +937,7 @@ async fn test_update_multiple_fields() {
 
     let input = UpdateSensorInput {
         label: Some("Multi Update".to_string()),
-        description: Some("Updated multiple fields".to_string()),
+        description: Some(Patch::Set("Updated multiple fields".to_string())),
         entrypoint: Some("sensors/multi.py".to_string()),
         enabled: Some(false),
         param_schema: Some(Patch::Set(json!({"type": "object"}))),
@@ -946,7 +949,10 @@ async fn test_update_multiple_fields() {
         .unwrap();
 
     assert_eq!(updated.label, "Multi Update");
-    assert_eq!(updated.description, "Updated multiple fields");
+    assert_eq!(
+        updated.description,
+        Some("Updated multiple fields".to_string())
+    );
     assert_eq!(updated.entrypoint, "sensors/multi.py");
     assert!(!updated.enabled);
     assert_eq!(updated.param_schema, Some(json!({"type": "object"})));

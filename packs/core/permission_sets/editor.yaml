@@ -11,14 +11,8 @@ grants:
   - resource: triggers
     actions: [read]
   - resource: executions
-    actions: [read, create, cancel]
+    actions: [read, cancel]
   - resource: keys
-    actions: [read, update]
+    actions: [read, update, decrypt]
   - resource: artifacts
-    actions: [read]
-  - resource: workflows
-    actions: [read, create, update]
-  - resource: analytics
-    actions: [read]
-  - resource: history
     actions: [read]

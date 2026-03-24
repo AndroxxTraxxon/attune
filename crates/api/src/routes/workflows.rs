@@ -18,7 +18,7 @@ use attune_common::repositories::{
         CreateWorkflowDefinitionInput, UpdateWorkflowDefinitionInput, WorkflowDefinitionRepository,
         WorkflowSearchFilters,
     },
-    Create, Delete, FindByRef, Update,
+    Create, Delete, FindByRef, Patch, Update,
 };
 
 use crate::{
@@ -217,7 +217,7 @@ pub async fn create_workflow(
         pack.id,
         &pack.r#ref,
         &request.label,
-        &request.description.clone().unwrap_or_default(),
+        request.description.as_deref(),
         "workflow",
         request.param_schema.as_ref(),
         request.out_schema.as_ref(),
@@ -416,7 +416,7 @@ pub async fn save_workflow_file(
         pack.id,
         &pack.r#ref,
         &request.label,
-        &request.description.clone().unwrap_or_default(),
+        request.description.as_deref(),
         &entrypoint,
         request.param_schema.as_ref(),
         request.out_schema.as_ref(),
@@ -499,7 +499,7 @@ pub async fn update_workflow_file(
         pack.id,
         &pack.r#ref,
         &request.label,
-        &request.description.unwrap_or_default(),
+        request.description.as_deref(),
         &entrypoint,
         request.param_schema.as_ref(),
         request.out_schema.as_ref(),
@@ -702,7 +702,7 @@ async fn create_companion_action(
     pack_id: i64,
     pack_ref: &str,
     label: &str,
-    description: &str,
+    description: Option<&str>,
     entrypoint: &str,
     param_schema: Option<&serde_json::Value>,
     out_schema: Option<&serde_json::Value>,
@@ -713,7 +713,7 @@ async fn create_companion_action(
         pack: pack_id,
         pack_ref: pack_ref.to_string(),
         label: label.to_string(),
-        description: description.to_string(),
+        description: description.map(|s| s.to_string()),
         entrypoint: entrypoint.to_string(),
         runtime: None,
         runtime_version_constraint: None,
@@ -787,7 +787,7 @@ async fn update_companion_action(
     if let Some(action) = existing_action {
         let update_input = UpdateActionInput {
             label: label.map(|s| s.to_string()),
-            description: description.map(|s| s.to_string()),
+            description: description.map(|s| Patch::Set(s.to_string())),
             entrypoint: None,
             runtime: None,
             runtime_version_constraint: None,
@@ -838,7 +838,7 @@ async fn ensure_companion_action(
     pack_id: i64,
     pack_ref: &str,
     label: &str,
-    description: &str,
+    description: Option<&str>,
     entrypoint: &str,
     param_schema: Option<&serde_json::Value>,
     out_schema: Option<&serde_json::Value>,
@@ -853,7 +853,10 @@ async fn ensure_companion_action(
         // Update existing companion action
         let update_input = UpdateActionInput {
             label: Some(label.to_string()),
-            description: Some(description.to_string()),
+            description: Some(match description {
+                Some(description) => Patch::Set(description.to_string()),
+                None => Patch::Clear,
+            }),
             entrypoint: Some(entrypoint.to_string()),
             runtime: None,
             runtime_version_constraint: None,

@@ -368,7 +368,7 @@ mod tests {
             pack: 1,
             pack_ref: "test".to_string(),
             label: "Test Rule".to_string(),
-            description: "Test rule description".to_string(),
+            description: Some("Test rule description".to_string()),
             trigger_ref: "test.trigger".to_string(),
             trigger: Some(1),
             action_ref: "test.action".to_string(),

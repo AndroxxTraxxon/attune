@@ -169,6 +169,12 @@ pub async fn login(
         .await?
         .ok_or_else(|| ApiError::Unauthorized("Invalid login or password".to_string()))?;
 
+    if identity.frozen {
+        return Err(ApiError::Forbidden(
+            "Identity is frozen and cannot authenticate".to_string(),
+        ));
+    }
+
     // Check if identity has a password set
     let password_hash = identity
         .password_hash
@@ -324,6 +330,12 @@ pub async fn refresh_token(
         .await?
         .ok_or_else(|| ApiError::Unauthorized("Identity not found".to_string()))?;
 
+    if identity.frozen {
+        return Err(ApiError::Forbidden(
+            "Identity is frozen and cannot authenticate".to_string(),
+        ));
+    }
+
     // Generate new tokens
     let access_token = generate_access_token(identity.id, &identity.login, &state.jwt_config)?;
     let refresh_token = generate_refresh_token(identity.id, &identity.login, &state.jwt_config)?;
@@ -379,6 +391,12 @@ pub async fn get_current_user(
     let identity = IdentityRepository::find_by_id(&state.db, identity_id)
         .await?
         .ok_or_else(|| ApiError::NotFound("Identity not found".to_string()))?;
+
+    if identity.frozen {
+        return Err(ApiError::Forbidden(
+            "Identity is frozen and cannot authenticate".to_string(),
+        ));
+    }
 
     let response = CurrentUserResponse {
         id: identity.id,
@@ -551,6 +569,7 @@ pub async fn change_password(
         display_name: None,
         password_hash: Some(new_password_hash),
         attributes: None,
+        frozen: None,
     };
 
     IdentityRepository::update(&state.db, identity_id, update_input).await?;

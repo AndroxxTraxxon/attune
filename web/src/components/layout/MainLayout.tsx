@@ -1,24 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import {
-  Package,
-  ChevronLeft,
-  ChevronRight,
-  User,
-  LogOut,
-  CirclePlay,
-  CircleArrowRight,
-  SquareArrowRight,
-  SquarePlay,
-  SquareDot,
-  CircleDot,
-  SquareAsterisk,
-  KeyRound,
-  Home,
-  FolderArchive,
-  TerminalSquare,
-} from "lucide-react";
+import { ChevronLeft, ChevronRight, User, LogOut } from "lucide-react";
+import { navIcons } from "./navIcons";
 
 // Color mappings for navigation items — defined outside component for stable reference
 const colorClasses = {
@@ -68,29 +52,36 @@ const colorClasses = {
 // Navigation sections with dividers and colors
 const navSections = [
   {
-    items: [{ to: "/", label: "Dashboard", icon: Home, color: "gray" }],
+    items: [
+      { to: "/", label: "Dashboard", icon: navIcons.dashboard, color: "gray" },
+    ],
   },
   {
     // Component Management - Cool colors (cyan -> blue -> violet)
     items: [
-      { to: "/actions", label: "Actions", icon: SquarePlay, color: "cyan" },
+      {
+        to: "/actions",
+        label: "Actions",
+        icon: navIcons.actions,
+        color: "cyan",
+      },
       {
         to: "/runtimes",
         label: "Runtimes",
-        icon: TerminalSquare,
+        icon: navIcons.runtimes,
         color: "blue",
       },
-      { to: "/rules", label: "Rules", icon: SquareArrowRight, color: "blue" },
+      { to: "/rules", label: "Rules", icon: navIcons.rules, color: "blue" },
       {
         to: "/triggers",
         label: "Triggers",
-        icon: SquareDot,
+        icon: navIcons.triggers,
         color: "violet",
       },
       {
         to: "/sensors",
         label: "Sensors",
-        icon: SquareAsterisk,
+        icon: navIcons.sensors,
         color: "purple",
       },
     ],
@@ -101,36 +92,47 @@ const navSections = [
       {
         to: "/executions",
         label: "Execution History",
-        icon: CirclePlay,
+        icon: navIcons.executions,
         color: "fuchsia",
       },
       {
         to: "/enforcements",
         label: "Enforcement History",
-        icon: CircleArrowRight,
+        icon: navIcons.enforcements,
         color: "rose",
       },
       {
         to: "/events",
         label: "Event History",
-        icon: CircleDot,
+        icon: navIcons.events,
         color: "orange",
       },
     ],
   },
   {
     items: [
-      { to: "/keys", label: "Keys & Secrets", icon: KeyRound, color: "gray" },
+      {
+        to: "/keys",
+        label: "Keys & Secrets",
+        icon: navIcons.keys,
+        color: "gray",
+      },
       {
         to: "/artifacts",
         label: "Artifacts",
-        icon: FolderArchive,
+        icon: navIcons.artifacts,
+        color: "gray",
+      },
+      {
+        to: "/access-control",
+        label: "Access Control",
+        icon: navIcons.accessControl,
         color: "gray",
       },
       {
         to: "/packs",
         label: "Pack Management",
-        icon: Package,
+        icon: navIcons.packs,
         color: "gray",
       },
     ],

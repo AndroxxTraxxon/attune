@@ -28,6 +28,7 @@ pub struct UpdateIdentityInput {
     pub display_name: Option<String>,
     pub password_hash: Option<String>,
     pub attributes: Option<JsonDict>,
+    pub frozen: Option<bool>,
 }
 
 #[async_trait::async_trait]
@@ -37,7 +38,7 @@ impl FindById for IdentityRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, Identity>(
-            "SELECT id, login, display_name, password_hash, attributes, created, updated FROM identity WHERE id = $1"
+            "SELECT id, login, display_name, password_hash, attributes, frozen, created, updated FROM identity WHERE id = $1"
         ).bind(id).fetch_optional(executor).await.map_err(Into::into)
     }
 }
@@ -49,7 +50,7 @@ impl List for IdentityRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, Identity>(
-            "SELECT id, login, display_name, password_hash, attributes, created, updated FROM identity ORDER BY login ASC"
+            "SELECT id, login, display_name, password_hash, attributes, frozen, created, updated FROM identity ORDER BY login ASC"
         ).fetch_all(executor).await.map_err(Into::into)
     }
 }
@@ -62,7 +63,7 @@ impl Create for IdentityRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, Identity>(
-            "INSERT INTO identity (login, display_name, password_hash, attributes) VALUES ($1, $2, $3, $4) RETURNING id, login, display_name, password_hash, attributes, created, updated"
+            "INSERT INTO identity (login, display_name, password_hash, attributes) VALUES ($1, $2, $3, $4) RETURNING id, login, display_name, password_hash, attributes, frozen, created, updated"
         )
         .bind(&input.login)
         .bind(&input.display_name)
@@ -111,6 +112,13 @@ impl Update for IdentityRepository {
             query.push("attributes = ").push_bind(attributes);
             has_updates = true;
         }
+        if let Some(frozen) = input.frozen {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("frozen = ").push_bind(frozen);
+            has_updates = true;
+        }
 
         if !has_updates {
             // No updates requested, fetch and return existing entity
@@ -119,7 +127,7 @@ impl Update for IdentityRepository {
 
         query.push(", updated = NOW() WHERE id = ").push_bind(id);
         query.push(
-            " RETURNING id, login, display_name, password_hash, attributes, created, updated",
+            " RETURNING id, login, display_name, password_hash, attributes, frozen, created, updated",
         );
 
         query
@@ -156,7 +164,7 @@ impl IdentityRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, Identity>(
-            "SELECT id, login, display_name, password_hash, attributes, created, updated FROM identity WHERE login = $1"
+            "SELECT id, login, display_name, password_hash, attributes, frozen, created, updated FROM identity WHERE login = $1"
         ).bind(login).fetch_optional(executor).await.map_err(Into::into)
     }
 
@@ -169,7 +177,7 @@ impl IdentityRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, Identity>(
-            "SELECT id, login, display_name, password_hash, attributes, created, updated
+            "SELECT id, login, display_name, password_hash, attributes, frozen, created, updated
              FROM identity
              WHERE attributes->'oidc'->>'issuer' = $1
                AND attributes->'oidc'->>'sub' = $2",
@@ -190,7 +198,7 @@ impl IdentityRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         sqlx::query_as::<_, Identity>(
-            "SELECT id, login, display_name, password_hash, attributes, created, updated
+            "SELECT id, login, display_name, password_hash, attributes, frozen, created, updated
              FROM identity
              WHERE attributes->'ldap'->>'server_url' = $1
                AND attributes->'ldap'->>'dn' = $2",
@@ -363,6 +371,27 @@ impl PermissionSetRepository {
         .map_err(Into::into)
     }
 
+    pub async fn find_by_roles<'e, E>(executor: E, roles: &[String]) -> Result<Vec<PermissionSet>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        if roles.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        sqlx::query_as::<_, PermissionSet>(
+            "SELECT DISTINCT ps.id, ps.ref, ps.pack, ps.pack_ref, ps.label, ps.description, ps.grants, ps.created, ps.updated
+             FROM permission_set ps
+             INNER JOIN permission_set_role_assignment psra ON psra.permset = ps.id
+             WHERE psra.role = ANY($1)
+             ORDER BY ps.ref ASC",
+        )
+        .bind(roles)
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+
     /// Delete permission sets belonging to a pack whose refs are NOT in the given set.
     ///
     /// Used during pack reinstallation to clean up permission sets that were
@@ -476,6 +505,234 @@ impl PermissionAssignmentRepository {
             "SELECT id, identity, permset, created FROM permission_assignment WHERE identity = $1",
         )
         .bind(identity_id)
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+}
+
+pub struct IdentityRoleAssignmentRepository;
+
+impl Repository for IdentityRoleAssignmentRepository {
+    type Entity = IdentityRoleAssignment;
+    fn table_name() -> &'static str {
+        "identity_role_assignment"
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateIdentityRoleAssignmentInput {
+    pub identity: Id,
+    pub role: String,
+    pub source: String,
+    pub managed: bool,
+}
+
+#[async_trait::async_trait]
+impl FindById for IdentityRoleAssignmentRepository {
+    async fn find_by_id<'e, E>(executor: E, id: i64) -> Result<Option<Self::Entity>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, IdentityRoleAssignment>(
+            "SELECT id, identity, role, source, managed, created, updated FROM identity_role_assignment WHERE id = $1"
+        )
+        .bind(id)
+        .fetch_optional(executor)
+        .await
+        .map_err(Into::into)
+    }
+}
+
+#[async_trait::async_trait]
+impl Create for IdentityRoleAssignmentRepository {
+    type CreateInput = CreateIdentityRoleAssignmentInput;
+    async fn create<'e, E>(executor: E, input: Self::CreateInput) -> Result<Self::Entity>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, IdentityRoleAssignment>(
+            "INSERT INTO identity_role_assignment (identity, role, source, managed)
+             VALUES ($1, $2, $3, $4)
+             RETURNING id, identity, role, source, managed, created, updated",
+        )
+        .bind(input.identity)
+        .bind(&input.role)
+        .bind(&input.source)
+        .bind(input.managed)
+        .fetch_one(executor)
+        .await
+        .map_err(Into::into)
+    }
+}
+
+#[async_trait::async_trait]
+impl Delete for IdentityRoleAssignmentRepository {
+    async fn delete<'e, E>(executor: E, id: i64) -> Result<bool>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = sqlx::query("DELETE FROM identity_role_assignment WHERE id = $1")
+            .bind(id)
+            .execute(executor)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+impl IdentityRoleAssignmentRepository {
+    pub async fn find_by_identity<'e, E>(
+        executor: E,
+        identity_id: Id,
+    ) -> Result<Vec<IdentityRoleAssignment>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, IdentityRoleAssignment>(
+            "SELECT id, identity, role, source, managed, created, updated
+             FROM identity_role_assignment
+             WHERE identity = $1
+             ORDER BY role ASC",
+        )
+        .bind(identity_id)
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+
+    pub async fn find_role_names_by_identity<'e, E>(
+        executor: E,
+        identity_id: Id,
+    ) -> Result<Vec<String>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_scalar::<_, String>(
+            "SELECT role FROM identity_role_assignment WHERE identity = $1 ORDER BY role ASC",
+        )
+        .bind(identity_id)
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+
+    pub async fn replace_managed_roles<'e, E>(
+        executor: E,
+        identity_id: Id,
+        source: &str,
+        roles: &[String],
+    ) -> Result<()>
+    where
+        E: Executor<'e, Database = Postgres> + Copy + 'e,
+    {
+        sqlx::query(
+            "DELETE FROM identity_role_assignment WHERE identity = $1 AND source = $2 AND managed = true",
+        )
+        .bind(identity_id)
+        .bind(source)
+        .execute(executor)
+        .await?;
+
+        for role in roles {
+            sqlx::query(
+                "INSERT INTO identity_role_assignment (identity, role, source, managed)
+                 VALUES ($1, $2, $3, true)
+                 ON CONFLICT (identity, role) DO UPDATE
+                 SET source = EXCLUDED.source,
+                     managed = EXCLUDED.managed,
+                     updated = NOW()",
+            )
+            .bind(identity_id)
+            .bind(role)
+            .bind(source)
+            .execute(executor)
+            .await?;
+        }
+
+        Ok(())
+    }
+}
+
+pub struct PermissionSetRoleAssignmentRepository;
+
+impl Repository for PermissionSetRoleAssignmentRepository {
+    type Entity = PermissionSetRoleAssignment;
+    fn table_name() -> &'static str {
+        "permission_set_role_assignment"
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CreatePermissionSetRoleAssignmentInput {
+    pub permset: Id,
+    pub role: String,
+}
+
+#[async_trait::async_trait]
+impl FindById for PermissionSetRoleAssignmentRepository {
+    async fn find_by_id<'e, E>(executor: E, id: i64) -> Result<Option<Self::Entity>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, PermissionSetRoleAssignment>(
+            "SELECT id, permset, role, created FROM permission_set_role_assignment WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(executor)
+        .await
+        .map_err(Into::into)
+    }
+}
+
+#[async_trait::async_trait]
+impl Create for PermissionSetRoleAssignmentRepository {
+    type CreateInput = CreatePermissionSetRoleAssignmentInput;
+    async fn create<'e, E>(executor: E, input: Self::CreateInput) -> Result<Self::Entity>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, PermissionSetRoleAssignment>(
+            "INSERT INTO permission_set_role_assignment (permset, role)
+             VALUES ($1, $2)
+             RETURNING id, permset, role, created",
+        )
+        .bind(input.permset)
+        .bind(&input.role)
+        .fetch_one(executor)
+        .await
+        .map_err(Into::into)
+    }
+}
+
+#[async_trait::async_trait]
+impl Delete for PermissionSetRoleAssignmentRepository {
+    async fn delete<'e, E>(executor: E, id: i64) -> Result<bool>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = sqlx::query("DELETE FROM permission_set_role_assignment WHERE id = $1")
+            .bind(id)
+            .execute(executor)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+impl PermissionSetRoleAssignmentRepository {
+    pub async fn find_by_permission_set<'e, E>(
+        executor: E,
+        permset_id: Id,
+    ) -> Result<Vec<PermissionSetRoleAssignment>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, PermissionSetRoleAssignment>(
+            "SELECT id, permset, role, created
+             FROM permission_set_role_assignment
+             WHERE permset = $1
+             ORDER BY role ASC",
+        )
+        .bind(permset_id)
         .fetch_all(executor)
         .await
         .map_err(Into::into)

@@ -9,6 +9,7 @@ import ParamSchemaForm, {
   type ParamSchema,
 } from "@/components/common/ParamSchemaForm";
 import SearchableSelect from "@/components/common/SearchableSelect";
+import RuleMatchConditionsEditor from "@/components/forms/RuleMatchConditionsEditor";
 import type {
   RuleResponse,
   ActionSummary,
@@ -40,9 +41,21 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
   const [description, setDescription] = useState(rule?.description || "");
   const [triggerId, setTriggerId] = useState<number>(rule?.trigger || 0);
   const [actionId, setActionId] = useState<number>(rule?.action || 0);
-  const [conditions, setConditions] = useState(
-    rule?.conditions ? JSON.stringify(rule.conditions, null, 2) : "",
-  );
+  const [conditions, setConditions] = useState<JsonValue | undefined>(() => {
+    if (!rule?.conditions) {
+      return undefined;
+    }
+
+    if (
+      typeof rule.conditions === "object" &&
+      !Array.isArray(rule.conditions) &&
+      Object.keys(rule.conditions).length === 0
+    ) {
+      return undefined;
+    }
+
+    return rule.conditions;
+  });
   const [triggerParameters, setTriggerParameters] = useState<
     Record<string, JsonValue>
   >(rule?.trigger_params || {});
@@ -57,6 +70,7 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
   const [actionParamErrors, setActionParamErrors] = useState<
     Record<string, string>
   >({});
+  const [conditionsError, setConditionsError] = useState<string | undefined>();
 
   // Data fetching
   const { data: packsData } = usePacks({ pageSize: 1000 });
@@ -143,10 +157,6 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
       newErrors.label = "Label is required";
     }
 
-    if (!description.trim()) {
-      newErrors.description = "Description is required";
-    }
-
     if (!packId) {
       newErrors.pack = "Pack is required";
     }
@@ -159,13 +169,8 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
       newErrors.action = "Action is required";
     }
 
-    // Validate conditions JSON if provided
-    if (conditions.trim()) {
-      try {
-        JSON.parse(conditions);
-      } catch {
-        newErrors.conditions = "Invalid JSON format";
-      }
+    if (conditionsError) {
+      newErrors.conditions = conditionsError;
     }
 
     // Validate trigger parameters (allow templates in rule context)
@@ -210,15 +215,18 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
       pack_ref: selectedPackData?.ref || "",
       ref: fullRef,
       label: label.trim(),
-      description: description.trim(),
       trigger_ref: selectedTrigger?.ref || "",
       action_ref: selectedAction?.ref || "",
       enabled,
     };
 
+    if (description.trim()) {
+      formData.description = description.trim();
+    }
+
     // Only add optional fields if they have values
-    if (conditions.trim()) {
-      formData.conditions = JSON.parse(conditions);
+    if (conditions !== undefined) {
+      formData.conditions = conditions;
     }
 
     // Add trigger parameters if any
@@ -274,280 +282,252 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
       )}
 
       {/* Basic Information */}
-      <div className="bg-white rounded-lg shadow p-6 space-y-4">
+      <div className="bg-white rounded-lg shadow p-5 lg:p-6">
         <h3 className="text-lg font-semibold text-gray-900">
           Basic Information
         </h3>
 
-        {/* Pack Selection */}
-        <div>
-          <label
-            htmlFor="pack"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Pack <span className="text-red-500">*</span>
-          </label>
-          <SearchableSelect
-            id="pack"
-            value={packId}
-            onChange={(v) => setPackId(Number(v))}
-            options={packs.map((pack) => ({
-              value: pack.id,
-              label: `${pack.label} (${pack.version})`,
-            }))}
-            placeholder="Select a pack..."
-            disabled={isEditing}
-            error={!!errors.pack}
-          />
-          {errors.pack && (
-            <p className="mt-1 text-sm text-red-600">{errors.pack}</p>
-          )}
-        </div>
+        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-12">
+          {/* Pack Selection */}
+          <div className="lg:col-span-4">
+            <label
+              htmlFor="pack"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Pack <span className="text-red-500">*</span>
+            </label>
+            <SearchableSelect
+              id="pack"
+              value={packId}
+              onChange={(v) => setPackId(Number(v))}
+              options={packs.map((pack) => ({
+                value: pack.id,
+                label: `${pack.label} (${pack.version})`,
+              }))}
+              placeholder="Select a pack..."
+              disabled={isEditing}
+              error={!!errors.pack}
+            />
+            {errors.pack && (
+              <p className="mt-1 text-sm text-red-600">{errors.pack}</p>
+            )}
+          </div>
 
-        {/* Label - MOVED FIRST */}
-        <div>
-          <label
-            htmlFor="label"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Label <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="text"
-            id="label"
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            onBlur={() => {
-              // Auto-populate localRef from label if localRef is empty and not editing
-              if (!isEditing && !localRef.trim() && label.trim()) {
-                setLocalRef(labelToRef(label));
-              }
-            }}
-            placeholder="e.g., Notify on Error"
-            className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-              errors.label ? "border-red-500" : "border-gray-300"
-            }`}
-          />
-          {errors.label && (
-            <p className="mt-1 text-sm text-red-600">{errors.label}</p>
-          )}
-          <p className="mt-1 text-xs text-gray-500">
-            Human-readable name for display
-          </p>
-        </div>
-
-        {/* Reference - MOVED AFTER LABEL with Pack Prefix */}
-        <div>
-          <label
-            htmlFor="ref"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Reference <span className="text-red-500">*</span>
-          </label>
-          <div className="input-with-prefix">
-            <span className={`prefix ${errors.ref ? "error" : ""}`}>
-              {selectedPack?.ref || "pack"}.
-            </span>
+          {/* Label */}
+          <div className="lg:col-span-8">
+            <label
+              htmlFor="label"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Label <span className="text-red-500">*</span>
+            </label>
             <input
               type="text"
-              id="ref"
-              value={localRef}
-              onChange={(e) => setLocalRef(e.target.value)}
-              placeholder="e.g., notify_on_error"
-              disabled={isEditing}
-              className={errors.ref ? "error" : ""}
+              id="label"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              onBlur={() => {
+                // Auto-populate localRef from label if localRef is empty and not editing
+                if (!isEditing && !localRef.trim() && label.trim()) {
+                  setLocalRef(labelToRef(label));
+                }
+              }}
+              placeholder="e.g., Notify on Error"
+              className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                errors.label ? "border-red-500" : "border-gray-300"
+              }`}
             />
+            {errors.label && (
+              <p className="mt-1 text-sm text-red-600">{errors.label}</p>
+            )}
           </div>
-          {errors.ref && (
-            <p className="mt-1 text-sm text-red-600">{errors.ref}</p>
-          )}
-          <p className="mt-1 text-xs text-gray-500">
-            Local identifier within the pack. Auto-populated from label.
-          </p>
-        </div>
 
-        {/* Description */}
-        <div>
-          <label
-            htmlFor="description"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Description <span className="text-red-500">*</span>
-          </label>
-          <textarea
-            id="description"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Describe what this rule does..."
-            rows={3}
-            className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-              errors.description ? "border-red-500" : "border-gray-300"
-            }`}
-          />
-          {errors.description && (
-            <p className="mt-1 text-sm text-red-600">{errors.description}</p>
-          )}
-        </div>
+          {/* Reference */}
+          <div className="lg:col-span-7">
+            <label
+              htmlFor="ref"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Reference <span className="text-red-500">*</span>
+            </label>
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
+              <div className="input-with-prefix flex-1">
+                <span className={`prefix ${errors.ref ? "error" : ""}`}>
+                  {selectedPack?.ref || "pack"}.
+                </span>
+                <input
+                  type="text"
+                  id="ref"
+                  value={localRef}
+                  onChange={(e) => setLocalRef(e.target.value)}
+                  placeholder="e.g., notify_on_error"
+                  disabled={isEditing}
+                  className={errors.ref ? "error" : ""}
+                />
+              </div>
+              <label
+                htmlFor="enabled"
+                className="flex items-center gap-2 whitespace-nowrap rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-700"
+              >
+                <input
+                  type="checkbox"
+                  id="enabled"
+                  checked={enabled}
+                  onChange={(e) => setEnabled(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                Enable immediately
+              </label>
+            </div>
+            {errors.ref && (
+              <p className="mt-1 text-sm text-red-600">{errors.ref}</p>
+            )}
+          </div>
 
-        {/* Enabled Toggle */}
-        <div className="flex items-center">
-          <input
-            type="checkbox"
-            id="enabled"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-            className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-          />
-          <label htmlFor="enabled" className="ml-2 text-sm text-gray-700">
-            Enable rule immediately
-          </label>
+          {/* Description */}
+          <div className="lg:col-span-12">
+            <label
+              htmlFor="description"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Description
+            </label>
+            <textarea
+              id="description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Describe what this rule does..."
+              rows={2}
+              className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                errors.description ? "border-red-500" : "border-gray-300"
+              }`}
+            />
+            {errors.description && (
+              <p className="mt-1 text-sm text-red-600">{errors.description}</p>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Trigger Configuration */}
-      <div className="bg-white rounded-lg shadow p-6 space-y-4">
-        <h3 className="text-lg font-semibold text-gray-900">
-          Trigger Configuration
-        </h3>
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        {/* Trigger Configuration */}
+        <div className="bg-white rounded-lg shadow p-5 lg:p-6 space-y-4">
+          <h3 className="text-lg font-semibold text-gray-900">
+            Trigger Configuration
+          </h3>
 
-        {!packId ? (
-          <p className="text-sm text-gray-500">
-            Select a pack first to choose a trigger
-          </p>
-        ) : !triggers || triggers.length === 0 ? (
-          <p className="text-sm text-gray-500">
-            No triggers available in the system
-          </p>
-        ) : (
-          <>
-            {/* Trigger Selection */}
-            <div>
-              <label
-                htmlFor="trigger"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Trigger <span className="text-red-500">*</span>
-              </label>
-              <SearchableSelect
-                id="trigger"
-                value={triggerId}
-                onChange={(v) => setTriggerId(Number(v))}
-                options={triggers.map((trigger) => ({
-                  value: trigger.id,
-                  label: `${trigger.ref} - ${trigger.label}`,
-                }))}
-                placeholder="Select a trigger..."
-                disabled={isEditing}
-                error={!!errors.trigger}
-              />
-              {errors.trigger && (
-                <p className="mt-1 text-sm text-red-600">{errors.trigger}</p>
-              )}
-            </div>
-
-            {/* Trigger Parameters - Dynamic Form */}
-            {selectedTrigger && (
+          {!triggers || triggers.length === 0 ? (
+            <p className="text-sm text-gray-500">
+              No triggers available in the system
+            </p>
+          ) : (
+            <>
+              {/* Trigger Selection */}
               <div>
-                <h4 className="text-sm font-medium text-gray-700 mb-3">
-                  Trigger Parameters
-                </h4>
-                <ParamSchemaForm
-                  schema={triggerParamSchema}
-                  values={triggerParameters}
-                  onChange={setTriggerParameters}
-                  errors={triggerParamErrors}
-                  allowTemplates
+                <label
+                  htmlFor="trigger"
+                  className="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  Trigger <span className="text-red-500">*</span>
+                </label>
+                <SearchableSelect
+                  id="trigger"
+                  value={triggerId}
+                  onChange={(v) => setTriggerId(Number(v))}
+                  options={triggers.map((trigger) => ({
+                    value: trigger.id,
+                    label: `${trigger.ref} - ${trigger.label}`,
+                  }))}
+                  placeholder="Select a trigger..."
+                  disabled={isEditing}
+                  error={!!errors.trigger}
                 />
+                {errors.trigger && (
+                  <p className="mt-1 text-sm text-red-600">{errors.trigger}</p>
+                )}
               </div>
-            )}
 
-            {/* Conditions (JSON) */}
-            <div>
-              <label
-                htmlFor="conditions"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Match Conditions (JSON)
-              </label>
-              <textarea
-                id="conditions"
+              {/* Trigger Parameters - Dynamic Form */}
+              {selectedTrigger && (
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 mb-3">
+                    Trigger Parameters
+                  </h4>
+                  <ParamSchemaForm
+                    schema={triggerParamSchema}
+                    values={triggerParameters}
+                    onChange={setTriggerParameters}
+                    errors={triggerParamErrors}
+                    allowTemplates
+                  />
+                </div>
+              )}
+
+              <RuleMatchConditionsEditor
                 value={conditions}
-                onChange={(e) => setConditions(e.target.value)}
-                placeholder={`{\n  "and": [\n    {"var": "payload.severity", ">=": 3},\n    {"var": "payload.status", "==": "error"}\n  ]\n}`}
-                rows={8}
-                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm ${
-                  errors.conditions ? "border-red-500" : "border-gray-300"
-                }`}
+                onChange={setConditions}
+                error={errors.conditions}
+                onErrorChange={setConditionsError}
               />
-              {errors.conditions && (
-                <p className="mt-1 text-sm text-red-600">{errors.conditions}</p>
-              )}
-              <p className="mt-1 text-xs text-gray-500">
-                Optional. Leave empty to match all events from this trigger.
-              </p>
-            </div>
-          </>
-        )}
-      </div>
+            </>
+          )}
+        </div>
 
-      {/* Action Configuration */}
-      <div className="bg-white rounded-lg shadow p-6 space-y-4">
-        <h3 className="text-lg font-semibold text-gray-900">
-          Action Configuration
-        </h3>
+        {/* Action Configuration */}
+        <div className="bg-white rounded-lg shadow p-5 lg:p-6 space-y-4">
+          <h3 className="text-lg font-semibold text-gray-900">
+            Action Configuration
+          </h3>
 
-        {!packId ? (
-          <p className="text-sm text-gray-500">
-            Select a pack first to choose an action
-          </p>
-        ) : !actions || actions.length === 0 ? (
-          <p className="text-sm text-gray-500">
-            No actions available in the system
-          </p>
-        ) : (
-          <>
-            {/* Action Selection */}
-            <div>
-              <label
-                htmlFor="action"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Action <span className="text-red-500">*</span>
-              </label>
-              <SearchableSelect
-                id="action"
-                value={actionId}
-                onChange={(v) => setActionId(Number(v))}
-                options={actions.map((action) => ({
-                  value: action.id,
-                  label: `${action.ref} - ${action.label}`,
-                }))}
-                placeholder="Select an action..."
-                disabled={isEditing}
-                error={!!errors.action}
-              />
-              {errors.action && (
-                <p className="mt-1 text-sm text-red-600">{errors.action}</p>
-              )}
-            </div>
-
-            {/* Action Parameters - Dynamic Form */}
-            {selectedAction && (
+          {!actions || actions.length === 0 ? (
+            <p className="text-sm text-gray-500">
+              No actions available in the system
+            </p>
+          ) : (
+            <>
+              {/* Action Selection */}
               <div>
-                <h4 className="text-sm font-medium text-gray-700 mb-3">
-                  Action Parameters
-                </h4>
-                <ParamSchemaForm
-                  schema={actionParamSchema}
-                  values={actionParameters}
-                  onChange={setActionParameters}
-                  errors={actionParamErrors}
-                  allowTemplates
+                <label
+                  htmlFor="action"
+                  className="block text-sm font-medium text-gray-700 mb-1"
+                >
+                  Action <span className="text-red-500">*</span>
+                </label>
+                <SearchableSelect
+                  id="action"
+                  value={actionId}
+                  onChange={(v) => setActionId(Number(v))}
+                  options={actions.map((action) => ({
+                    value: action.id,
+                    label: `${action.ref} - ${action.label}`,
+                  }))}
+                  placeholder="Select an action..."
+                  disabled={isEditing}
+                  error={!!errors.action}
                 />
+                {errors.action && (
+                  <p className="mt-1 text-sm text-red-600">{errors.action}</p>
+                )}
               </div>
-            )}
-          </>
-        )}
+
+              {/* Action Parameters - Dynamic Form */}
+              {selectedAction && (
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 mb-3">
+                    Action Parameters
+                  </h4>
+                  <ParamSchemaForm
+                    schema={actionParamSchema}
+                    values={actionParameters}
+                    onChange={setActionParameters}
+                    errors={actionParamErrors}
+                    allowTemplates
+                  />
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* Form Actions */}

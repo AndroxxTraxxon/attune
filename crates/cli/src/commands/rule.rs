@@ -112,7 +112,7 @@ struct Rule {
     pack: Option<i64>,
     pack_ref: String,
     label: String,
-    description: String,
+    description: Option<String>,
     #[serde(default)]
     trigger: Option<i64>,
     trigger_ref: String,
@@ -133,7 +133,7 @@ struct RuleDetail {
     pack: Option<i64>,
     pack_ref: String,
     label: String,
-    description: String,
+    description: Option<String>,
     #[serde(default)]
     trigger: Option<i64>,
     trigger_ref: String,
@@ -321,7 +321,10 @@ async fn handle_show(
                 ("Ref", rule.rule_ref.clone()),
                 ("Pack", rule.pack_ref.clone()),
                 ("Label", rule.label.clone()),
-                ("Description", rule.description.clone()),
+                (
+                    "Description",
+                    rule.description.unwrap_or_else(|| "None".to_string()),
+                ),
                 ("Trigger", rule.trigger_ref.clone()),
                 ("Action", rule.action_ref.clone()),
                 ("Enabled", output::format_bool(rule.enabled)),
@@ -440,7 +443,10 @@ async fn handle_update(
                 ("Ref", rule.rule_ref.clone()),
                 ("Pack", rule.pack_ref.clone()),
                 ("Label", rule.label.clone()),
-                ("Description", rule.description.clone()),
+                (
+                    "Description",
+                    rule.description.unwrap_or_else(|| "None".to_string()),
+                ),
                 ("Trigger", rule.trigger_ref.clone()),
                 ("Action", rule.action_ref.clone()),
                 ("Enabled", output::format_bool(rule.enabled)),

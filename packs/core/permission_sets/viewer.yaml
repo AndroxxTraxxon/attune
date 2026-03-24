@@ -12,9 +12,7 @@ grants:
     actions: [read]
   - resource: executions
     actions: [read]
+  - resource: keys
+    actions: [read]
   - resource: artifacts
-    actions: [read]
-  - resource: analytics
-    actions: [read]
-  - resource: history
     actions: [read]

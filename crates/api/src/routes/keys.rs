@@ -120,12 +120,16 @@ pub async fn get_key(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Key '{}' not found", key_ref)))?;
 
-    if user.0.claims.token_type == TokenType::Access {
+    // For encrypted keys, track whether this caller is permitted to see the value.
+    // Non-Access tokens (sensor, execution) always get full access.
+    let can_decrypt = if user.0.claims.token_type == TokenType::Access {
         let identity_id = user
             .0
             .identity_id()
             .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
         let authz = AuthorizationService::new(state.db.clone());
+
+        // Basic read check — hide behind 404 to prevent enumeration.
         authz
             .authorize(
                 &user.0,
@@ -136,28 +140,55 @@ pub async fn get_key(
                 },
             )
             .await
-            // Hide unauthorized records behind 404 to reduce enumeration leakage.
             .map_err(|_| ApiError::NotFound(format!("Key '{}' not found", key_ref)))?;
-    }
 
-    // Decrypt value if encrypted
+        // For encrypted keys, separately check Keys::Decrypt.
+        // Failing this is not an error — we just return the value as null.
+        if key.encrypted {
+            authz
+                .authorize(
+                    &user.0,
+                    AuthorizationCheck {
+                        resource: Resource::Keys,
+                        action: Action::Decrypt,
+                        context: key_authorization_context(identity_id, &key),
+                    },
+                )
+                .await
+                .is_ok()
+        } else {
+            true
+        }
+    } else {
+        true
+    };
+
+    // Decrypt value if encrypted and caller has permission.
+    // If they lack Keys::Decrypt, return null rather than the ciphertext.
     if key.encrypted {
-        let encryption_key = state
-            .config
-            .security
-            .encryption_key
-            .as_ref()
-            .ok_or_else(|| {
-                ApiError::InternalServerError("Encryption key not configured on server".to_string())
-            })?;
+        if can_decrypt {
+            let encryption_key =
+                state
+                    .config
+                    .security
+                    .encryption_key
+                    .as_ref()
+                    .ok_or_else(|| {
+                        ApiError::InternalServerError(
+                            "Encryption key not configured on server".to_string(),
+                        )
+                    })?;
 
-        let decrypted_value = attune_common::crypto::decrypt_json(&key.value, encryption_key)
-            .map_err(|e| {
+            let decrypted_value = attune_common::crypto::decrypt_json(&key.value, encryption_key)
+                .map_err(|e| {
                 tracing::error!("Failed to decrypt key '{}': {}", key_ref, e);
                 ApiError::InternalServerError(format!("Failed to decrypt key: {}", e))
             })?;
 
-        key.value = decrypted_value;
+            key.value = decrypted_value;
+        } else {
+            key.value = serde_json::Value::Null;
+        }
     }
 
     let response = ApiResponse::new(KeyResponse::from(key));
@@ -195,6 +226,7 @@ pub async fn create_key(
         let mut ctx = AuthorizationContext::new(identity_id);
         ctx.owner_identity_id = request.owner_identity;
         ctx.owner_type = Some(request.owner_type);
+        ctx.owner_ref = requested_key_owner_ref(&request);
         ctx.encrypted = Some(request.encrypted);
         ctx.target_ref = Some(request.r#ref.clone());
 
@@ -541,6 +573,38 @@ fn key_authorization_context(identity_id: i64, key: &Key) -> AuthorizationContex
     ctx.target_ref = Some(key.r#ref.clone());
     ctx.owner_identity_id = key.owner_identity;
     ctx.owner_type = Some(key.owner_type);
+    ctx.owner_ref = key_owner_ref(
+        key.owner_type,
+        key.owner.as_deref(),
+        key.owner_pack_ref.as_deref(),
+        key.owner_action_ref.as_deref(),
+        key.owner_sensor_ref.as_deref(),
+    );
     ctx.encrypted = Some(key.encrypted);
     ctx
+}
+
+fn requested_key_owner_ref(request: &CreateKeyRequest) -> Option<String> {
+    key_owner_ref(
+        request.owner_type,
+        request.owner.as_deref(),
+        request.owner_pack_ref.as_deref(),
+        request.owner_action_ref.as_deref(),
+        request.owner_sensor_ref.as_deref(),
+    )
+}
+
+fn key_owner_ref(
+    owner_type: OwnerType,
+    owner: Option<&str>,
+    owner_pack_ref: Option<&str>,
+    owner_action_ref: Option<&str>,
+    owner_sensor_ref: Option<&str>,
+) -> Option<String> {
+    match owner_type {
+        OwnerType::Pack => owner_pack_ref.map(str::to_string),
+        OwnerType::Action => owner_action_ref.map(str::to_string),
+        OwnerType::Sensor => owner_sensor_ref.map(str::to_string),
+        _ => owner.map(str::to_string),
+    }
 }

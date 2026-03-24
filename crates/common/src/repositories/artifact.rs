@@ -577,6 +577,14 @@ pub struct CreateArtifactVersionInput {
 }
 
 impl ArtifactVersionRepository {
+    fn select_columns_with_alias(alias: &str) -> String {
+        format!(
+            "{alias}.id, {alias}.artifact, {alias}.version, {alias}.content_type, \
+             {alias}.size_bytes, NULL::bytea AS content, {alias}.content_json, \
+             {alias}.file_path, {alias}.meta, {alias}.created_by, {alias}.created"
+        )
+    }
+
     /// Find a version by ID (without binary content for performance)
     pub async fn find_by_id<'e, E>(executor: E, id: i64) -> Result<Option<ArtifactVersion>>
     where
@@ -812,14 +820,11 @@ impl ArtifactVersionRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         let query = format!(
-            "SELECT av.{} \
+            "SELECT {} \
              FROM artifact_version av \
              JOIN artifact a ON av.artifact = a.id \
              WHERE a.execution = $1 AND av.file_path IS NOT NULL",
-            artifact_version::SELECT_COLUMNS
-                .split(", ")
-                .collect::<Vec<_>>()
-                .join(", av.")
+            Self::select_columns_with_alias("av")
         );
         sqlx::query_as::<_, ArtifactVersion>(&query)
             .bind(execution_id)
@@ -845,5 +850,20 @@ impl ArtifactVersionRepository {
             .fetch_all(executor)
             .await
             .map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ArtifactVersionRepository;
+
+    #[test]
+    fn aliased_select_columns_keep_null_content_expression_unqualified() {
+        let columns = ArtifactVersionRepository::select_columns_with_alias("av");
+
+        assert!(columns.contains("av.id"));
+        assert!(columns.contains("av.file_path"));
+        assert!(columns.contains("NULL::bytea AS content"));
+        assert!(!columns.contains("av.NULL::bytea AS content"));
     }
 }

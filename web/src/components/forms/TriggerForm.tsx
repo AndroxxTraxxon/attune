@@ -10,7 +10,7 @@ import {
 } from "@/lib/format-utils";
 import SchemaBuilder from "@/components/common/SchemaBuilder";
 import SearchableSelect from "@/components/common/SearchableSelect";
-import { WebhooksService } from "@/api";
+import { TriggerStringPatch, WebhooksService } from "@/api";
 import type { TriggerResponse, PackSummary } from "@/api";
 
 /** Flat schema format: each key is a parameter name mapped to its definition */
@@ -116,7 +116,6 @@ export default function TriggerForm({
         pack_ref: selectedPackData.ref,
         ref: fullRef,
         label: label.trim(),
-        description: description.trim() || undefined,
         enabled,
         param_schema:
           Object.keys(paramSchema).length > 0 ? paramSchema : undefined,
@@ -124,9 +123,16 @@ export default function TriggerForm({
       };
 
       if (isEditing && initialData?.ref) {
+        const updateData = {
+          ...formData,
+          description: description.trim()
+            ? { op: TriggerStringPatch.op.SET, value: description.trim() }
+            : { op: TriggerStringPatch.op.CLEAR },
+        };
+
         await updateTrigger.mutateAsync({
           ref: initialData.ref,
-          data: formData,
+          data: updateData,
         });
 
         // Handle webhook enable/disable separately for updates
@@ -152,7 +158,12 @@ export default function TriggerForm({
         navigate(`/triggers/${encodeURIComponent(initialData.ref)}`);
         return;
       } else {
-        const response = await createTrigger.mutateAsync(formData);
+        const createData = {
+          ...formData,
+          description: description.trim() || undefined,
+        };
+
+        const response = await createTrigger.mutateAsync(createData);
         const newTrigger = response?.data;
         if (newTrigger?.ref) {
           // If webhook is enabled, enable it after trigger creation

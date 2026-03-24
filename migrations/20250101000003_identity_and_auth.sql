@@ -115,6 +115,61 @@ COMMENT ON COLUMN permission_assignment.permset IS 'Permission set being assigne
 
 -- ============================================================================
 
+ALTER TABLE identity
+    ADD COLUMN frozen BOOLEAN NOT NULL DEFAULT false;
+
+CREATE INDEX idx_identity_frozen ON identity(frozen);
+
+COMMENT ON COLUMN identity.frozen IS 'If true, authentication is blocked for this identity';
+
+CREATE TABLE identity_role_assignment (
+    id BIGSERIAL PRIMARY KEY,
+    identity BIGINT NOT NULL REFERENCES identity(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    managed BOOLEAN NOT NULL DEFAULT false,
+    created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT unique_identity_role_assignment UNIQUE (identity, role)
+);
+
+CREATE INDEX idx_identity_role_assignment_identity
+    ON identity_role_assignment(identity);
+CREATE INDEX idx_identity_role_assignment_role
+    ON identity_role_assignment(role);
+CREATE INDEX idx_identity_role_assignment_source
+    ON identity_role_assignment(source);
+
+CREATE TRIGGER update_identity_role_assignment_updated
+    BEFORE UPDATE ON identity_role_assignment
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_column();
+
+COMMENT ON TABLE identity_role_assignment IS 'Links identities to role labels from manual assignment or external identity providers';
+COMMENT ON COLUMN identity_role_assignment.role IS 'Opaque role/group label (e.g. IDP group name)';
+COMMENT ON COLUMN identity_role_assignment.source IS 'Where the role assignment originated (manual, oidc, ldap, sync, etc.)';
+COMMENT ON COLUMN identity_role_assignment.managed IS 'True when the assignment is managed by external sync and should not be edited manually';
+
+CREATE TABLE permission_set_role_assignment (
+    id BIGSERIAL PRIMARY KEY,
+    permset BIGINT NOT NULL REFERENCES permission_set(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT unique_permission_set_role_assignment UNIQUE (permset, role)
+);
+
+CREATE INDEX idx_permission_set_role_assignment_permset
+    ON permission_set_role_assignment(permset);
+CREATE INDEX idx_permission_set_role_assignment_role
+    ON permission_set_role_assignment(role);
+
+COMMENT ON TABLE permission_set_role_assignment IS 'Links permission sets to role labels for role-based grant expansion';
+COMMENT ON COLUMN permission_set_role_assignment.role IS 'Opaque role/group label associated with the permission set';
+
+-- ============================================================================
+
 -- ============================================================================
 -- POLICY TABLE
 -- ============================================================================

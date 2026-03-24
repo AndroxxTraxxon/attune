@@ -20,7 +20,7 @@ use attune_common::repositories::{
     pack::PackRepository,
     rule::{CreateRuleInput, RuleRepository, RuleSearchFilters, UpdateRuleInput},
     trigger::TriggerRepository,
-    Create, Delete, FindByRef, Update,
+    Create, Delete, FindByRef, Patch, Update,
 };
 
 use crate::{
@@ -474,7 +474,7 @@ pub async fn update_rule(
     // Create update input
     let update_input = UpdateRuleInput {
         label: request.label,
-        description: request.description,
+        description: request.description.map(Patch::Set),
         conditions: request.conditions,
         action_params: request.action_params,
         trigger_params: request.trigger_params,

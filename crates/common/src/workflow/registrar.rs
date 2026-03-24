@@ -13,6 +13,7 @@
 use crate::error::{Error, Result};
 use crate::repositories::action::{ActionRepository, CreateActionInput, UpdateActionInput};
 use crate::repositories::workflow::{CreateWorkflowDefinitionInput, UpdateWorkflowDefinitionInput};
+use crate::repositories::Patch;
 use crate::repositories::{
     Create, Delete, FindByRef, PackRepository, Update, WorkflowDefinitionRepository,
 };
@@ -270,7 +271,7 @@ impl WorkflowRegistrar {
             pack: pack_id,
             pack_ref: pack_ref.to_string(),
             label: effective_label.to_string(),
-            description: workflow.description.clone().unwrap_or_default(),
+            description: workflow.description.clone(),
             entrypoint,
             runtime: None,
             runtime_version_constraint: None,
@@ -317,7 +318,10 @@ impl WorkflowRegistrar {
             // Update the existing companion action to stay in sync
             let update_input = UpdateActionInput {
                 label: Some(effective_label.to_string()),
-                description: workflow.description.clone(),
+                description: Some(match workflow.description.clone() {
+                    Some(description) => Patch::Set(description),
+                    None => Patch::Clear,
+                }),
                 entrypoint: Some(format!("workflows/{}.workflow.yaml", workflow_name)),
                 runtime: None,
                 runtime_version_constraint: None,

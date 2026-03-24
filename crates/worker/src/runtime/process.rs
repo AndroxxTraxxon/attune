@@ -49,6 +49,52 @@ fn bash_single_quote_escape(s: &str) -> String {
     s.replace('\'', "'\\''")
 }
 
+fn format_command_for_log(cmd: &Command) -> String {
+    let program = cmd.as_std().get_program().to_string_lossy().into_owned();
+    let args = cmd
+        .as_std()
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let cwd = cmd
+        .as_std()
+        .get_current_dir()
+        .map(|dir| dir.display().to_string())
+        .unwrap_or_else(|| "<inherit>".to_string());
+    let env = cmd
+        .as_std()
+        .get_envs()
+        .map(|(key, value)| {
+            let key = key.to_string_lossy().into_owned();
+            let value = value
+                .map(|v| {
+                    if is_sensitive_env_var(&key) {
+                        "<redacted>".to_string()
+                    } else {
+                        v.to_string_lossy().into_owned()
+                    }
+                })
+                .unwrap_or_else(|| "<unset>".to_string());
+            format!("{key}={value}")
+        })
+        .collect::<Vec<_>>();
+
+    format!(
+        "program={program}, args={args:?}, cwd={cwd}, env={env:?}",
+        args = args,
+        env = env,
+    )
+}
+
+fn is_sensitive_env_var(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    upper.contains("TOKEN")
+        || upper.contains("SECRET")
+        || upper.contains("PASSWORD")
+        || upper.ends_with("_KEY")
+        || upper == "KEY"
+}
+
 /// A generic runtime driven by `RuntimeExecutionConfig` from the database.
 ///
 /// Each `ProcessRuntime` instance corresponds to a row in the `runtime` table.
@@ -897,10 +943,10 @@ impl Runtime for ProcessRuntime {
             }
         };
 
-        // Log the full command about to be executed
+        // Log the spawned process accurately instead of using Command's shell-like Debug output.
         info!(
-            "Running command: {:?} (action: '{}', execution_id: {}, working_dir: {:?})",
-            cmd,
+            "Running command: {} (action: '{}', execution_id: {}, working_dir: {:?})",
+            format_command_for_log(&cmd),
             context.action_ref,
             context.execution_id,
             working_dir

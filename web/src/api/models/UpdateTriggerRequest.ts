@@ -2,14 +2,12 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { TriggerStringPatch } from './TriggerStringPatch';
 /**
  * Request DTO for updating a trigger
  */
 export type UpdateTriggerRequest = {
-    /**
-     * Trigger description
-     */
-    description?: string | null;
+    description?: (null | TriggerStringPatch);
     /**
      * Whether the trigger is enabled
      */

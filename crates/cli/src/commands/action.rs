@@ -90,7 +90,7 @@ struct Action {
     action_ref: String,
     pack_ref: String,
     label: String,
-    description: String,
+    description: Option<String>,
     entrypoint: String,
     runtime: Option<i64>,
     created: String,
@@ -105,7 +105,7 @@ struct ActionDetail {
     pack: i64,
     pack_ref: String,
     label: String,
-    description: String,
+    description: Option<String>,
     entrypoint: String,
     runtime: Option<i64>,
     param_schema: Option<serde_json::Value>,
@@ -253,7 +253,7 @@ async fn handle_list(
                             .runtime
                             .map(|r| r.to_string())
                             .unwrap_or_else(|| "none".to_string()),
-                        output::truncate(&action.description, 40),
+                        output::truncate(&action.description.unwrap_or_default(), 40),
                     ]);
                 }
 
@@ -288,7 +288,10 @@ async fn handle_show(
                 ("Reference", action.action_ref.clone()),
                 ("Pack", action.pack_ref.clone()),
                 ("Label", action.label.clone()),
-                ("Description", action.description.clone()),
+                (
+                    "Description",
+                    action.description.unwrap_or_else(|| "None".to_string()),
+                ),
                 ("Entry Point", action.entrypoint.clone()),
                 (
                     "Runtime",
@@ -356,7 +359,10 @@ async fn handle_update(
                 ("Ref", action.action_ref.clone()),
                 ("Pack", action.pack_ref.clone()),
                 ("Label", action.label.clone()),
-                ("Description", action.description.clone()),
+                (
+                    "Description",
+                    action.description.unwrap_or_else(|| "None".to_string()),
+                ),
                 ("Entrypoint", action.entrypoint.clone()),
                 (
                     "Runtime",
