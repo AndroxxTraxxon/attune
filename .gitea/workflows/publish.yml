@@ -546,6 +546,29 @@ jobs:
         run: |
           set -euo pipefail
 
+          run_with_retries() {
+            local max_attempts="$1"
+            local delay_seconds="$2"
+            shift 2
+
+            local attempt=1
+            while true; do
+              if "$@"; then
+                return 0
+              fi
+
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                echo "Command failed after ${attempt} attempts: $*"
+                return 1
+              fi
+
+              echo "Command failed on attempt ${attempt}/${max_attempts}: $*"
+              echo "Retrying in ${delay_seconds}s..."
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+            done
+          }
+
           image_ref="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/${{ matrix.image.repository }}:${{ needs.metadata.outputs.image_tag }}-${{ matrix.arch }}"
 
           build_cmd=(
@@ -561,7 +584,7 @@ jobs:
             build_cmd+=(--tag "$image_ref" --push)
           fi
 
-          "${build_cmd[@]}"
+          run_with_retries 3 5 "${build_cmd[@]}"
 
       - name: Link container package to repository
         shell: bash
@@ -663,6 +686,29 @@ jobs:
         run: |
           set -euo pipefail
 
+          run_with_retries() {
+            local max_attempts="$1"
+            local delay_seconds="$2"
+            shift 2
+
+            local attempt=1
+            while true; do
+              if "$@"; then
+                return 0
+              fi
+
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                echo "Command failed after ${attempt} attempts: $*"
+                return 1
+              fi
+
+              echo "Command failed on attempt ${attempt}/${max_attempts}: $*"
+              echo "Retrying in ${delay_seconds}s..."
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+            done
+          }
+
           image_ref="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/attune/web:${{ needs.metadata.outputs.image_tag }}-${{ matrix.arch }}"
 
           build_cmd=(
@@ -678,7 +724,7 @@ jobs:
             build_cmd+=(--tag "$image_ref" --push)
           fi
 
-          "${build_cmd[@]}"
+          run_with_retries 3 5 "${build_cmd[@]}"
 
       - name: Link web container package to repository
         shell: bash
@@ -775,6 +821,29 @@ jobs:
         run: |
           set -euo pipefail
 
+          run_with_retries() {
+            local max_attempts="$1"
+            local delay_seconds="$2"
+            shift 2
+
+            local attempt=1
+            while true; do
+              if "$@"; then
+                return 0
+              fi
+
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                echo "Command failed after ${attempt} attempts: $*"
+                return 1
+              fi
+
+              echo "Command failed on attempt ${attempt}/${max_attempts}: $*"
+              echo "Retrying in ${delay_seconds}s..."
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+            done
+          }
+
           image_base="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/${{ matrix.repository }}"
 
           IFS=',' read -ra tags <<< "${{ needs.metadata.outputs.image_tags }}"
@@ -783,7 +852,8 @@ jobs:
             amd64_ref="${image_base}:${{ needs.metadata.outputs.image_tag }}-amd64"
             arm64_ref="${image_base}:${{ needs.metadata.outputs.image_tag }}-arm64"
 
-            docker buildx imagetools create \
+            run_with_retries 3 5 \
+              docker buildx imagetools create \
               --tag "$manifest_ref" \
               "$amd64_ref" \
               "$arm64_ref"
