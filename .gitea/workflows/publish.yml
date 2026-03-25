@@ -351,6 +351,10 @@ jobs:
           case "${status_code}" in
             200|201|204|409)
               ;;
+            400|404)
+              echo "Package link unsupported for package '${package_name}' on this Gitea endpoint; continuing"
+              cat /tmp/package-link-response.txt
+              ;;
             *)
               cat /tmp/package-link-response.txt
               exit 1
@@ -577,6 +581,10 @@ jobs:
           case "${status_code}" in
             200|201|204|409)
               ;;
+            400|404)
+              echo "Package link unsupported for package '${package_name}' on this Gitea endpoint; continuing"
+              cat /tmp/package-link-response.txt
+              ;;
             *)
               cat /tmp/package-link-response.txt
               exit 1
@@ -689,6 +697,10 @@ jobs:
 
           case "${status_code}" in
             200|201|204|409)
+              ;;
+            400|404)
+              echo "Package link unsupported for package '${package_name}' on this Gitea endpoint; continuing"
+              cat /tmp/package-link-response.txt
               ;;
             *)
               cat /tmp/package-link-response.txt
