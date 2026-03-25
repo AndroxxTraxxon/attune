@@ -728,6 +728,19 @@ jobs:
           - attune/agent
           - attune/web
     steps:
+      - name: Setup Docker Buildx
+        if: needs.metadata.outputs.registry_plain_http != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Setup Docker Buildx For Plain HTTP Registry
+        if: needs.metadata.outputs.registry_plain_http == 'true'
+        uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [registry."${{ needs.metadata.outputs.registry }}"]
+              http = true
+              insecure = true
+
       - name: Configure OCI registry auth
         shell: bash
         env:
@@ -763,13 +776,6 @@ jobs:
           set -euo pipefail
 
           image_base="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/${{ matrix.repository }}"
-          create_args=()
-          push_args=()
-
-          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
-            create_args+=(--insecure)
-            push_args+=(--insecure)
-          fi
 
           IFS=',' read -ra tags <<< "${{ needs.metadata.outputs.image_tags }}"
           for tag in "${tags[@]}"; do
@@ -777,9 +783,8 @@ jobs:
             amd64_ref="${image_base}:${{ needs.metadata.outputs.image_tag }}-amd64"
             arm64_ref="${image_base}:${{ needs.metadata.outputs.image_tag }}-arm64"
 
-            docker manifest rm "$manifest_ref" >/dev/null 2>&1 || true
-            docker manifest create "${create_args[@]}" "$manifest_ref" "$amd64_ref" "$arm64_ref"
-            docker manifest annotate "$manifest_ref" "$amd64_ref" --os linux --arch amd64
-            docker manifest annotate "$manifest_ref" "$arm64_ref" --os linux --arch arm64
-            docker manifest push "${push_args[@]}" "$manifest_ref"
+            docker buildx imagetools create \
+              --tag "$manifest_ref" \
+              "$amd64_ref" \
+              "$arm64_ref"
           done
