@@ -34,6 +34,7 @@ env:
   REGISTRY_NAMESPACE: ${{ vars.CONTAINER_REGISTRY_NAMESPACE }}
   REGISTRY_PLAIN_HTTP: ${{ vars.CONTAINER_REGISTRY_INSECURE }}
   ARTIFACT_REPOSITORY: attune-build-artifacts
+  GNU_GLIBC_VERSION: "2.28"
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
@@ -133,9 +134,13 @@ jobs:
         include:
           - arch: amd64
             runner_label: build-amd64
+            service_rust_target: x86_64-unknown-linux-gnu
+            service_target: x86_64-unknown-linux-gnu.2.28
             musl_target: x86_64-unknown-linux-musl
           - arch: arm64
-            runner_label: build-arm64
+            runner_label: build-amd64
+            service_rust_target: aarch64-unknown-linux-gnu
+            service_target: aarch64-unknown-linux-gnu.2.28
             musl_target: aarch64-unknown-linux-musl
     steps:
       - name: Checkout
@@ -156,7 +161,9 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.musl_target }}
+          targets: |
+            ${{ matrix.service_rust_target }}
+            ${{ matrix.musl_target }}
 
       - name: Cache Cargo registry + index
         uses: actions/cache@v4
@@ -184,22 +191,69 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update
-          apt-get install -y pkg-config libssl-dev musl-tools file
+          apt-get install -y pkg-config libssl-dev file binutils python3 python3-pip
+
+      - name: Install Zig
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip3 install --break-system-packages --no-cache-dir ziglang
+
+      - name: Install cargo-zigbuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v cargo-zigbuild >/dev/null 2>&1; then
+            cargo install --locked cargo-zigbuild
+          fi
 
       - name: Build release binaries
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release \
+          cargo zigbuild --release \
+            --target "${{ matrix.service_target }}" \
             --bin attune-api \
             --bin attune-executor \
             --bin attune-notifier
+
+      - name: Verify minimum glibc requirement
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_dir="target/${{ matrix.service_rust_target }}/release"
+
+          get_min_glibc() {
+            local file_path="$1"
+            readelf -W --version-info --dyn-syms "$file_path" \
+              | grep 'Name: GLIBC_' \
+              | sed -E 's/.*GLIBC_(.+) Flags.*/\1/' \
+              | sort -t . -k1,1n -k2,2n \
+              | tail -n 1
+          }
+
+          version_gt() {
+            [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ] && [ "$1" != "$2" ]
+          }
+
+          for binary in attune-api attune-executor attune-notifier; do
+            min_glibc="$(get_min_glibc "${output_dir}/${binary}")"
+            if [ -z "${min_glibc}" ]; then
+              echo "Failed to determine glibc requirement for ${binary}"
+              exit 1
+            fi
+            echo "${binary} requires glibc ${min_glibc}"
+            if version_gt "${min_glibc}" "${GNU_GLIBC_VERSION}"; then
+              echo "Expected ${binary} to require glibc <= ${GNU_GLIBC_VERSION}, got ${min_glibc}"
+              exit 1
+            fi
+          done
 
       - name: Build static agent binaries
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release \
+          cargo zigbuild --release \
             --target "${{ matrix.musl_target }}" \
             --bin attune-agent \
             --bin attune-sensor-agent
@@ -210,11 +264,12 @@ jobs:
           set -euo pipefail
 
           bundle_root="dist/bundle/${{ matrix.arch }}"
+          service_output_dir="target/${{ matrix.service_rust_target }}/release"
           mkdir -p "$bundle_root/bin" "$bundle_root/agent"
 
-          cp target/release/attune-api "$bundle_root/bin/"
-          cp target/release/attune-executor "$bundle_root/bin/"
-          cp target/release/attune-notifier "$bundle_root/bin/"
+          cp "${service_output_dir}/attune-api" "$bundle_root/bin/"
+          cp "${service_output_dir}/attune-executor" "$bundle_root/bin/"
+          cp "${service_output_dir}/attune-notifier" "$bundle_root/bin/"
           cp target/${{ matrix.musl_target }}/release/attune-agent "$bundle_root/agent/"
           cp target/${{ matrix.musl_target }}/release/attune-sensor-agent "$bundle_root/agent/"
 
