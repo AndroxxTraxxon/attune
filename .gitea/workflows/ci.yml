@@ -19,7 +19,7 @@ env:
 jobs:
   rust-fmt:
     name: Rustfmt
-    runs-on: ubuntu-latest
+    runs-on: build-amd64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -45,7 +45,7 @@ jobs:
 
   rust-clippy:
     name: Clippy
-    runs-on: ubuntu-latest
+    runs-on: build-amd64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -91,7 +91,7 @@ jobs:
 
   rust-test:
     name: Tests
-    runs-on: ubuntu-latest
+    runs-on: build-amd64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -135,7 +135,7 @@ jobs:
 
   rust-audit:
     name: Cargo Audit & Deny
-    runs-on: ubuntu-latest
+    runs-on: build-amd64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -188,7 +188,7 @@ jobs:
 
   web-blocking:
     name: Web Blocking Checks
-    runs-on: ubuntu-latest
+    runs-on: build-amd64
     defaults:
       run:
         working-directory: web
@@ -217,7 +217,7 @@ jobs:
 
   security-blocking:
     name: Security Blocking Checks
-    runs-on: ubuntu-latest
+    runs-on: build-amd64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -250,7 +250,7 @@ jobs:
 
   web-advisory:
     name: Web Advisory Checks
-    runs-on: ubuntu-latest
+    runs-on: build-amd64
     continue-on-error: true
     defaults:
       run:
@@ -279,7 +279,7 @@ jobs:
 
   security-advisory:
     name: Security Advisory Checks
-    runs-on: ubuntu-latest
+    runs-on: build-amd64
     continue-on-error: true
     steps:
       - name: Checkout
