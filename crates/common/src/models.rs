@@ -444,13 +444,55 @@ pub mod runtime {
 
         /// Optional environment variables to set during action execution.
         ///
-        /// Values support the same template variables as other fields:
+        /// Entries support the same template variables as other fields:
         /// `{pack_dir}`, `{env_dir}`, `{interpreter}`, `{manifest_path}`.
         ///
-        /// Example: `{"NODE_PATH": "{env_dir}/node_modules"}` ensures Node.js
-        /// can find packages installed in the isolated runtime environment.
+        /// The shorthand string form replaces the variable entirely:
+        /// `{"NODE_PATH": "{env_dir}/node_modules"}`
+        ///
+        /// The object form supports declarative merge semantics:
+        /// `{"PYTHONPATH": {"value": "{pack_dir}/lib", "operation": "prepend"}}`
         #[serde(default)]
-        pub env_vars: HashMap<String, String>,
+        pub env_vars: HashMap<String, RuntimeEnvVarConfig>,
+    }
+
+    /// Declarative configuration for a single runtime environment variable.
+    ///
+    /// The string form is shorthand for `{ "value": "...", "operation": "set" }`.
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(untagged)]
+    pub enum RuntimeEnvVarConfig {
+        Value(String),
+        Spec(RuntimeEnvVarSpec),
+    }
+
+    /// Full configuration for a runtime environment variable.
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct RuntimeEnvVarSpec {
+        /// Template value to resolve for this variable.
+        pub value: String,
+
+        /// How the resolved value should be merged with any existing value.
+        #[serde(default)]
+        pub operation: RuntimeEnvVarOperation,
+
+        /// Separator used for prepend/append operations.
+        #[serde(default = "default_env_var_separator")]
+        pub separator: String,
+    }
+
+    /// Merge behavior for runtime-provided environment variables.
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+    #[serde(rename_all = "snake_case")]
+    pub enum RuntimeEnvVarOperation {
+        #[default]
+        Set,
+        Prepend,
+        Append,
+    }
+
+    fn default_env_var_separator() -> String {
+        ":".to_string()
     }
 
     /// Controls how inline code is materialized before execution.
@@ -765,6 +807,43 @@ pub mod runtime {
             } else {
                 false
             }
+        }
+    }
+
+    impl RuntimeEnvVarConfig {
+        /// Resolve this environment variable against the current template
+        /// variables and any existing value already present in the process env.
+        pub fn resolve(
+            &self,
+            vars: &HashMap<&str, String>,
+            existing_value: Option<&str>,
+        ) -> String {
+            match self {
+                Self::Value(value) => RuntimeExecutionConfig::resolve_template(value, vars),
+                Self::Spec(spec) => {
+                    let resolved = RuntimeExecutionConfig::resolve_template(&spec.value, vars);
+                    match spec.operation {
+                        RuntimeEnvVarOperation::Set => resolved,
+                        RuntimeEnvVarOperation::Prepend => {
+                            join_env_var_values(&resolved, existing_value, &spec.separator)
+                        }
+                        RuntimeEnvVarOperation::Append => join_env_var_values(
+                            existing_value.unwrap_or_default(),
+                            Some(&resolved),
+                            &spec.separator,
+                        ),
+                    }
+                }
+            }
+        }
+    }
+
+    fn join_env_var_values(left: &str, right: Option<&str>, separator: &str) -> String {
+        match (left.is_empty(), right.unwrap_or_default().is_empty()) {
+            (true, true) => String::new(),
+            (false, true) => left.to_string(),
+            (true, false) => right.unwrap_or_default().to_string(),
+            (false, false) => format!("{}{}{}", left, separator, right.unwrap_or_default()),
         }
     }
 
@@ -1638,5 +1717,70 @@ pub mod entity_history {
                 )),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::runtime::{
+        RuntimeEnvVarConfig, RuntimeEnvVarOperation, RuntimeEnvVarSpec, RuntimeExecutionConfig,
+    };
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[test]
+    fn runtime_execution_config_env_vars_accept_string_and_object_forms() {
+        let config: RuntimeExecutionConfig = serde_json::from_value(json!({
+            "env_vars": {
+                "NODE_PATH": "{env_dir}/node_modules",
+                "PYTHONPATH": {
+                    "value": "{pack_dir}/lib",
+                    "operation": "prepend",
+                    "separator": ":"
+                }
+            }
+        }))
+        .expect("runtime execution config should deserialize");
+
+        assert!(matches!(
+            config.env_vars.get("NODE_PATH"),
+            Some(RuntimeEnvVarConfig::Value(value)) if value == "{env_dir}/node_modules"
+        ));
+
+        assert!(matches!(
+            config.env_vars.get("PYTHONPATH"),
+            Some(RuntimeEnvVarConfig::Spec(RuntimeEnvVarSpec {
+                value,
+                operation: RuntimeEnvVarOperation::Prepend,
+                separator,
+            })) if value == "{pack_dir}/lib" && separator == ":"
+        ));
+    }
+
+    #[test]
+    fn runtime_env_var_config_resolves_prepend_and_append_against_existing_values() {
+        let mut vars = HashMap::new();
+        vars.insert("pack_dir", "/packs/example".to_string());
+        vars.insert("env_dir", "/runtime_envs/example/python".to_string());
+
+        let prepend = RuntimeEnvVarConfig::Spec(RuntimeEnvVarSpec {
+            value: "{pack_dir}/lib".to_string(),
+            operation: RuntimeEnvVarOperation::Prepend,
+            separator: ":".to_string(),
+        });
+        assert_eq!(
+            prepend.resolve(&vars, Some("/already/set")),
+            "/packs/example/lib:/already/set"
+        );
+
+        let append = RuntimeEnvVarConfig::Spec(RuntimeEnvVarSpec {
+            value: "{env_dir}/node_modules".to_string(),
+            operation: RuntimeEnvVarOperation::Append,
+            separator: ":".to_string(),
+        });
+        assert_eq!(
+            append.resolve(&vars, Some("/base/modules")),
+            "/base/modules:/runtime_envs/example/python/node_modules"
+        );
     }
 }

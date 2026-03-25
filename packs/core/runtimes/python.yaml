@@ -54,6 +54,11 @@ execution_config:
       - install
       - "-r"
       - "{manifest_path}"
+  env_vars:
+    PYTHONPATH:
+      operation: prepend
+      value: "{pack_dir}/lib"
+      separator: ":"
 
 # Version-specific execution configurations.
 # Each entry describes how to invoke a particular Python version.
@@ -96,6 +101,11 @@ versions:
           - install
           - "-r"
           - "{manifest_path}"
+      env_vars:
+        PYTHONPATH:
+          operation: prepend
+          value: "{pack_dir}/lib"
+          separator: ":"
 
   - version: "3.12"
     is_default: true
@@ -133,6 +143,11 @@ versions:
           - install
           - "-r"
           - "{manifest_path}"
+      env_vars:
+        PYTHONPATH:
+          operation: prepend
+          value: "{pack_dir}/lib"
+          separator: ":"
 
   - version: "3.13"
     distributions:
@@ -169,3 +184,8 @@ versions:
           - install
           - "-r"
           - "{manifest_path}"
+      env_vars:
+        PYTHONPATH:
+          operation: prepend
+          value: "{pack_dir}/lib"
+          separator: ":"

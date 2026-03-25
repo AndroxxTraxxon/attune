@@ -1,7 +1,27 @@
-name: Publish Images And Chart
+name: Publish Images
 
 on:
   workflow_dispatch:
+    inputs:
+      target_arch:
+        description: Architecture to publish
+        type: choice
+        options:
+          - all
+          - amd64
+          - arm64
+        default: all
+      target_image:
+        description: Image to publish
+        type: choice
+        options:
+          - all
+          - api
+          - executor
+          - notifier
+          - agent
+          - web
+        default: all
   push:
     branches:
       - main
@@ -13,21 +33,26 @@ env:
   REGISTRY_HOST: ${{ vars.CLUSTER_GITEA_HOST }}
   REGISTRY_NAMESPACE: ${{ vars.CONTAINER_REGISTRY_NAMESPACE }}
   REGISTRY_PLAIN_HTTP: ${{ vars.CONTAINER_REGISTRY_INSECURE }}
-  CHART_NAME: attune
+  ARTIFACT_REPOSITORY: attune-build-artifacts
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+  RUST_MIN_STACK: 67108864
+  SQLX_OFFLINE: true
+  RUNNER_TOOL_CACHE: /toolcache
 
 jobs:
   metadata:
     name: Resolve Publish Metadata
-    runs-on: ubuntu-latest
+    runs-on: build-amd64
     outputs:
       registry: ${{ steps.meta.outputs.registry }}
       namespace: ${{ steps.meta.outputs.namespace }}
       registry_plain_http: ${{ steps.meta.outputs.registry_plain_http }}
       image_tag: ${{ steps.meta.outputs.image_tag }}
       image_tags: ${{ steps.meta.outputs.image_tags }}
-      chart_version: ${{ steps.meta.outputs.chart_version }}
-      app_version: ${{ steps.meta.outputs.app_version }}
-      release_channel: ${{ steps.meta.outputs.release_channel }}
+      artifact_ref_base: ${{ steps.meta.outputs.artifact_ref_base }}
     steps:
       - name: Resolve tags and registry paths
         id: meta
@@ -78,14 +103,12 @@ jobs:
           if [ "$ref_type" = "tag" ] && printf '%s' "$ref_name" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.].*)?$'; then
             version="${ref_name#v}"
             image_tags="${version},latest,sha-${short_sha}"
-            chart_version="$version"
-            release_channel="release"
           else
             version="sha-${short_sha}"
             image_tags="edge,sha-${short_sha}"
-            chart_version="0.0.0-dev.${{ github.run_number }}"
-            release_channel="edge"
           fi
+
+          artifact_ref_base="${registry}/${namespace}/${ARTIFACT_REPOSITORY}"
 
           {
             echo "registry=$registry"
@@ -93,82 +116,387 @@ jobs:
             echo "registry_plain_http=$registry_plain_http"
             echo "image_tag=$version"
             echo "image_tags=$image_tags"
-            echo "chart_version=$chart_version"
-            echo "app_version=$version"
-            echo "release_channel=$release_channel"
+            echo "artifact_ref_base=$artifact_ref_base"
           } >> "$GITHUB_OUTPUT"
 
-  publish-images:
-    name: Publish ${{ matrix.image.name }}
-    runs-on: ubuntu-latest
+  build-rust-bundles:
+    name: Build Rust Bundles (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner_label }}
     needs: metadata
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.target_arch == 'all' ||
+      inputs.target_arch == matrix.arch
     strategy:
       fail-fast: false
       matrix:
-        image:
-          - name: api
-            repository: attune-api
-            dockerfile: docker/Dockerfile.optimized
-            context: .
-            target: ""
-            build_args: |
-              SERVICE=api
-          - name: executor
-            repository: attune-executor
-            dockerfile: docker/Dockerfile.optimized
-            context: .
-            target: ""
-            build_args: |
-              SERVICE=executor
-          - name: notifier
-            repository: attune-notifier
-            dockerfile: docker/Dockerfile.optimized
-            context: .
-            target: ""
-            build_args: |
-              SERVICE=notifier
-          - name: sensor
-            repository: attune-sensor
-            dockerfile: docker/Dockerfile.sensor.optimized
-            context: .
-            target: sensor-full
-            build_args: ""
-          - name: worker
-            repository: attune-worker
-            dockerfile: docker/Dockerfile.worker.optimized
-            context: .
-            target: worker-full
-            build_args: ""
-          - name: web
-            repository: attune-web
-            dockerfile: docker/Dockerfile.web
-            context: .
-            target: ""
-            build_args: ""
-          - name: migrations
-            repository: attune-migrations
-            dockerfile: docker/Dockerfile.migrations
-            context: .
-            target: ""
-            build_args: ""
-          - name: init-user
-            repository: attune-init-user
-            dockerfile: docker/Dockerfile.init-user
-            context: .
-            target: ""
-            build_args: ""
-          - name: init-packs
-            repository: attune-init-packs
-            dockerfile: docker/Dockerfile.init-packs
-            context: .
-            target: ""
-            build_args: ""
-          - name: agent
-            repository: attune-agent
-            dockerfile: docker/Dockerfile.agent
-            context: .
-            target: agent-init
-            build_args: ""
+        include:
+          - arch: amd64
+            runner_label: build-amd64
+            musl_target: x86_64-unknown-linux-musl
+          - arch: arm64
+            runner_label: build-arm64
+            musl_target: aarch64-unknown-linux-musl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+          key: rustup-publish-${{ runner.os }}-${{ matrix.arch }}-stable-v1
+          restore-keys: |
+            rustup-${{ runner.os }}-${{ matrix.arch }}-stable-v1
+            rustup-${{ runner.os }}-stable-v1
+            rustup-
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.musl_target }}
+
+      - name: Cache Cargo registry + index
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-publish-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-publish-${{ matrix.arch }}-
+            cargo-registry-
+
+      - name: Cache Cargo build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: cargo-publish-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}
+          restore-keys: |
+            cargo-publish-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}-
+            cargo-publish-${{ matrix.arch }}-
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y pkg-config libssl-dev musl-tools file
+
+      - name: Build release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release \
+            --bin attune-api \
+            --bin attune-executor \
+            --bin attune-notifier
+
+      - name: Build static agent binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release \
+            --target "${{ matrix.musl_target }}" \
+            --bin attune-agent \
+            --bin attune-sensor-agent
+
+      - name: Assemble binary bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bundle_root="dist/bundle/${{ matrix.arch }}"
+          mkdir -p "$bundle_root/bin" "$bundle_root/agent"
+
+          cp target/release/attune-api "$bundle_root/bin/"
+          cp target/release/attune-executor "$bundle_root/bin/"
+          cp target/release/attune-notifier "$bundle_root/bin/"
+          cp target/${{ matrix.musl_target }}/release/attune-agent "$bundle_root/agent/"
+          cp target/${{ matrix.musl_target }}/release/attune-sensor-agent "$bundle_root/agent/"
+
+          cat > "$bundle_root/metadata.json" <<EOF
+          {
+            "git_sha": "${{ github.sha }}",
+            "ref": "${{ github.ref }}",
+            "arch": "${{ matrix.arch }}",
+            "image_tag": "${{ needs.metadata.outputs.image_tag }}"
+          }
+          EOF
+
+          tar -C dist/bundle/${{ matrix.arch }} -czf "dist/attune-binaries-${{ matrix.arch }}.tar.gz" .
+
+      - name: Setup ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Log in to registry for artifacts
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          registry_username="${REGISTRY_USERNAME:-${{ github.actor }}}"
+          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
+          login_args=()
+
+          if [ -z "$registry_password" ]; then
+            echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
+            exit 1
+          fi
+
+          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
+            login_args+=(--plain-http)
+          fi
+
+          oras login "${{ needs.metadata.outputs.registry }}" \
+            "${login_args[@]}" \
+            --username "$registry_username" \
+            --password "$registry_password"
+
+      - name: Push binary bundle artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          push_args=()
+
+          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
+            push_args+=(--plain-http)
+          fi
+
+          oras push \
+            "${push_args[@]}" \
+            "${{ needs.metadata.outputs.artifact_ref_base }}:rust-binaries-${{ needs.metadata.outputs.image_tag }}-${{ matrix.arch }}" \
+            --artifact-type application/vnd.attune.rust-binaries.v1 \
+            "dist/attune-binaries-${{ matrix.arch }}.tar.gz:application/vnd.attune.rust-binaries.layer.v1.tar+gzip"
+
+  publish-rust-images:
+    name: Publish ${{ matrix.image.name }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner_label }}
+    needs:
+      - metadata
+      - build-rust-bundles
+    if: |
+      (github.event_name != 'workflow_dispatch' ||
+      inputs.target_arch == 'all' ||
+      inputs.target_arch == matrix.arch) &&
+      (github.event_name != 'workflow_dispatch' ||
+      inputs.target_image == 'all' ||
+      inputs.target_image == matrix.image.name)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner_label: build-amd64
+            platform: linux/amd64
+            image:
+              name: api
+              repository: attune-api
+              source_path: bin/attune-api
+              dockerfile: docker/Dockerfile.runtime
+          - arch: amd64
+            runner_label: build-amd64
+            platform: linux/amd64
+            image:
+              name: executor
+              repository: attune-executor
+              source_path: bin/attune-executor
+              dockerfile: docker/Dockerfile.runtime
+          - arch: amd64
+            runner_label: build-amd64
+            platform: linux/amd64
+            image:
+              name: notifier
+              repository: attune-notifier
+              source_path: bin/attune-notifier
+              dockerfile: docker/Dockerfile.runtime
+          - arch: amd64
+            runner_label: build-amd64
+            platform: linux/amd64
+            image:
+              name: agent
+              repository: attune-agent
+              source_path: agent/attune-agent
+              dockerfile: docker/Dockerfile.agent-package
+          - arch: arm64
+            runner_label: build-arm64
+            platform: linux/arm64
+            image:
+              name: api
+              repository: attune-api
+              source_path: bin/attune-api
+              dockerfile: docker/Dockerfile.runtime
+          - arch: arm64
+            runner_label: build-arm64
+            platform: linux/arm64
+            image:
+              name: executor
+              repository: attune-executor
+              source_path: bin/attune-executor
+              dockerfile: docker/Dockerfile.runtime
+          - arch: arm64
+            runner_label: build-arm64
+            platform: linux/arm64
+            image:
+              name: notifier
+              repository: attune-notifier
+              source_path: bin/attune-notifier
+              dockerfile: docker/Dockerfile.runtime
+          - arch: arm64
+            runner_label: build-arm64
+            platform: linux/arm64
+            image:
+              name: agent
+              repository: attune-agent
+              source_path: agent/attune-agent
+              dockerfile: docker/Dockerfile.agent-package
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Setup Docker Buildx
+        if: needs.metadata.outputs.registry_plain_http != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Setup Docker Buildx For Plain HTTP Registry
+        if: needs.metadata.outputs.registry_plain_http == 'true'
+        uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [registry."${{ needs.metadata.outputs.registry }}"]
+              http = true
+              insecure = true
+
+      - name: Log in to registry
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          registry_username="${REGISTRY_USERNAME:-${{ github.actor }}}"
+          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
+
+          if [ -z "$registry_password" ]; then
+            echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
+            exit 1
+          fi
+
+          mkdir -p "$HOME/.docker"
+          auth="$(printf '%s:%s' "$registry_username" "$registry_password" | base64 | tr -d '\n')"
+
+          cat > "$HOME/.docker/config.json" <<EOF
+          {
+            "auths": {
+              "${{ needs.metadata.outputs.registry }}": {
+                "auth": "${auth}"
+              }
+            }
+          }
+          EOF
+
+          oras_login_args=()
+          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
+            oras_login_args+=(--plain-http)
+          fi
+
+          oras login "${{ needs.metadata.outputs.registry }}" \
+            "${oras_login_args[@]}" \
+            --username "$registry_username" \
+            --password "$registry_password"
+
+      - name: Pull binary bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          pull_args=()
+
+          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
+            pull_args+=(--plain-http)
+          fi
+
+          mkdir -p dist/artifact
+          cd dist/artifact
+
+          oras pull \
+            "${pull_args[@]}" \
+            "${{ needs.metadata.outputs.artifact_ref_base }}:rust-binaries-${{ needs.metadata.outputs.image_tag }}-${{ matrix.arch }}"
+
+          tar -xzf "attune-binaries-${{ matrix.arch }}.tar.gz"
+
+      - name: Prepare packaging context
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist/image
+          mkdir -p dist/image
+
+          case "${{ matrix.image.name }}" in
+            api|executor|notifier)
+              cp "dist/artifact/${{ matrix.image.source_path }}" dist/attune-service-binary
+              ;;
+            agent)
+              cp dist/artifact/agent/attune-agent dist/attune-agent
+              cp dist/artifact/agent/attune-sensor-agent dist/attune-sensor-agent
+              ;;
+            *)
+              echo "Unsupported image: ${{ matrix.image.name }}"
+              exit 1
+              ;;
+          esac
+
+      - name: Push architecture image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          image_ref="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/${{ matrix.image.repository }}:${{ needs.metadata.outputs.image_tag }}-${{ matrix.arch }}"
+
+          build_cmd=(
+            docker buildx build
+            .
+            --platform "${{ matrix.platform }}"
+            --file "${{ matrix.image.dockerfile }}"
+          )
+
+          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
+            build_cmd+=(--output "type=image,\"name=${image_ref}\",push=true,registry.insecure=true")
+          else
+            build_cmd+=(--tag "$image_ref" --push)
+          fi
+
+          "${build_cmd[@]}"
+
+  publish-web-images:
+    name: Publish web (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner_label }}
+    needs: metadata
+    if: |
+      (github.event_name != 'workflow_dispatch' ||
+      inputs.target_arch == 'all' ||
+      inputs.target_arch == matrix.arch) &&
+      (github.event_name != 'workflow_dispatch' ||
+      inputs.target_image == 'all' ||
+      inputs.target_image == 'web')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner_label: build-amd64
+            platform: linux/amd64
+          - arch: arm64
+            runner_label: build-arm64
+            platform: linux/arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -196,7 +524,6 @@ jobs:
           set -euo pipefail
           username="${REGISTRY_USERNAME:-${{ github.actor }}}"
           password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
-          registry="${{ needs.metadata.outputs.registry }}"
 
           if [ -z "$password" ]; then
             echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
@@ -209,81 +536,56 @@ jobs:
           cat > "$HOME/.docker/config.json" <<EOF
           {
             "auths": {
-              "${registry}": {
+              "${{ needs.metadata.outputs.registry }}": {
                 "auth": "${auth}"
               }
             }
           }
           EOF
 
-      - name: Prepare image tags
-        id: tags
+      - name: Push architecture image
         shell: bash
         run: |
           set -euo pipefail
-          image_ref_base="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/${{ matrix.image.repository }}"
-          tag_lines=""
-          IFS=',' read -ra tags <<< "${{ needs.metadata.outputs.image_tags }}"
-          for tag in "${tags[@]}"; do
-            tag_lines="${tag_lines}${image_ref_base}:${tag}"$'\n'
-          done
-          printf 'tags<<EOF\n%sEOF\n' "$tag_lines" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push image
-        shell: bash
-        run: |
-          set -euo pipefail
-          image_names_csv=""
+          image_ref="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/attune-web:${{ needs.metadata.outputs.image_tag }}-${{ matrix.arch }}"
+
           build_cmd=(
             docker buildx build
-            "${{ matrix.image.context }}"
-            --file "${{ matrix.image.dockerfile }}"
+            .
+            --platform "${{ matrix.platform }}"
+            --file docker/Dockerfile.web
           )
 
-          if [ -n "${{ matrix.image.target }}" ]; then
-            build_cmd+=(--target "${{ matrix.image.target }}")
-          fi
-
-          while IFS= read -r tag; do
-            if [ -n "$tag" ]; then
-              if [ -n "$image_names_csv" ]; then
-                image_names_csv="${image_names_csv},${tag}"
-              else
-                image_names_csv="${tag}"
-              fi
-
-              if [ "${{ needs.metadata.outputs.registry_plain_http }}" != "true" ]; then
-                build_cmd+=(--tag "$tag")
-              fi
-            fi
-          done <<< "${{ steps.tags.outputs.tags }}"
-
-          while IFS= read -r build_arg; do
-            [ -n "$build_arg" ] && build_cmd+=(--build-arg "$build_arg")
-          done <<< "${{ matrix.image.build_args }}"
-
           if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
-            build_cmd+=(--output "type=image,\"name=${image_names_csv}\",push=true,registry.insecure=true")
+            build_cmd+=(--output "type=image,\"name=${image_ref}\",push=true,registry.insecure=true")
           else
-            build_cmd+=(--push)
+            build_cmd+=(--tag "$image_ref" --push)
           fi
 
           "${build_cmd[@]}"
 
-  publish-chart:
-    name: Publish Helm Chart
-    runs-on: ubuntu-latest
+  publish-manifests:
+    name: Publish manifest ${{ matrix.repository }}
+    runs-on: build-amd64
     needs:
       - metadata
-      - publish-images
+      - publish-rust-images
+      - publish-web-images
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      (inputs.target_arch == 'all' && inputs.target_image == 'all')
+    strategy:
+      fail-fast: false
+      matrix:
+        repository:
+          - attune-api
+          - attune-executor
+          - attune-notifier
+          - attune-agent
+          - attune-web
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Helm
-        uses: azure/setup-helm@v4
-
-      - name: Log in to Gitea OCI registry
+      - name: Configure OCI registry auth
         shell: bash
         env:
           REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
@@ -291,43 +593,48 @@ jobs:
           GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          registry_username="${REGISTRY_USERNAME:-${{ github.actor }}}"
-          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
-          login_args=()
+          username="${REGISTRY_USERNAME:-${{ github.actor }}}"
+          password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
 
-          if [ -z "$registry_password" ]; then
+          if [ -z "$password" ]; then
             echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
             exit 1
           fi
 
-          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
-            login_args+=(--plain-http)
-          fi
+          mkdir -p "$HOME/.docker"
+          auth="$(printf '%s:%s' "$username" "$password" | base64 | tr -d '\n')"
 
-          printf '%s' "$registry_password" | helm registry login "${{ needs.metadata.outputs.registry }}" \
-            --username "$registry_username" \
-            "${login_args[@]}" \
-            --password-stdin
+          cat > "$HOME/.docker/config.json" <<EOF
+          {
+            "auths": {
+              "${{ needs.metadata.outputs.registry }}": {
+                "auth": "${auth}"
+              }
+            }
+          }
+          EOF
 
-      - name: Lint chart
+      - name: Publish manifest tags
+        shell: bash
         run: |
-          helm lint charts/attune
+          set -euo pipefail
 
-      - name: Package chart
-        run: |
-          mkdir -p dist
-          helm package charts/attune \
-            --destination dist \
-            --version "${{ needs.metadata.outputs.chart_version }}" \
-            --app-version "${{ needs.metadata.outputs.app_version }}"
-
-      - name: Push chart to OCI registry
-        run: |
+          image_base="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/${{ matrix.repository }}"
           push_args=()
+
           if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
-            push_args+=(--plain-http)
+            push_args+=(--insecure)
           fi
 
-          helm push "dist/${CHART_NAME}-${{ needs.metadata.outputs.chart_version }}.tgz" \
-            "oci://${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/helm" \
-            "${push_args[@]}"
+          IFS=',' read -ra tags <<< "${{ needs.metadata.outputs.image_tags }}"
+          for tag in "${tags[@]}"; do
+            manifest_ref="${image_base}:${tag}"
+            amd64_ref="${image_base}:${{ needs.metadata.outputs.image_tag }}-amd64"
+            arm64_ref="${image_base}:${{ needs.metadata.outputs.image_tag }}-arm64"
+
+            docker manifest rm "$manifest_ref" >/dev/null 2>&1 || true
+            docker manifest create "$manifest_ref" "$amd64_ref" "$arm64_ref"
+            docker manifest annotate "$manifest_ref" "$amd64_ref" --os linux --arch amd64
+            docker manifest annotate "$manifest_ref" "$arm64_ref" --os linux --arch arm64
+            docker manifest push "${push_args[@]}" "$manifest_ref"
+          done

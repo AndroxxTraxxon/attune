@@ -12,6 +12,41 @@ Each runtime YAML file contains only the fields that are stored in the database:
 - `description` - Brief description of the runtime
 - `distributions` - Runtime verification and capability metadata (JSONB)
 - `installation` - Installation requirements and metadata (JSONB)
+- `execution_config` - Interpreter, environment, dependency, and execution-time env var metadata
+
+## `execution_config.env_vars`
+
+Runtime authors can declare execution-time environment variables in a purely declarative way.
+
+String values replace the variable entirely:
+
+```yaml
+env_vars:
+  NODE_PATH: "{env_dir}/node_modules"
+```
+
+Object values support merge semantics against an existing value already present in the execution environment:
+
+```yaml
+env_vars:
+  PYTHONPATH:
+    operation: prepend
+    value: "{pack_dir}/lib"
+    separator: ":"
+```
+
+Supported operations:
+
+- `set` - Replace the variable with the resolved value
+- `prepend` - Add the resolved value before the existing value
+- `append` - Add the resolved value after the existing value
+
+Supported template variables:
+
+- `{pack_dir}`
+- `{env_dir}`
+- `{interpreter}`
+- `{manifest_path}`
 
 ## Available Runtimes
 

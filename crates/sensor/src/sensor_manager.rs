@@ -27,6 +27,37 @@ use tracing::{debug, error, info, warn};
 
 use crate::api_client::ApiClient;
 
+fn existing_command_env(cmd: &Command, key: &str) -> Option<String> {
+    cmd.as_std()
+        .get_envs()
+        .find_map(|(env_key, value)| {
+            if env_key == key {
+                value.map(|value| value.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        })
+        .or_else(|| std::env::var(key).ok())
+}
+
+fn apply_runtime_env_vars(
+    cmd: &mut Command,
+    exec_config: &RuntimeExecutionConfig,
+    pack_dir: &std::path::Path,
+    env_dir: Option<&std::path::Path>,
+) {
+    if exec_config.env_vars.is_empty() {
+        return;
+    }
+
+    let vars = exec_config.build_template_vars_with_env(pack_dir, env_dir);
+    for (key, env_var_config) in &exec_config.env_vars {
+        let resolved = env_var_config.resolve(&vars, existing_command_env(cmd, key).as_deref());
+        debug!("Setting sensor runtime env var: {}={}", key, resolved);
+        cmd.env(key, resolved);
+    }
+}
+
 /// Sensor manager that coordinates all sensor instances
 #[derive(Clone)]
 pub struct SensorManager {
@@ -502,20 +533,7 @@ impl SensorManager {
             .env("ATTUNE_MQ_EXCHANGE", "attune.events")
             .env("ATTUNE_LOG_LEVEL", "info");
 
-        if !exec_config.env_vars.is_empty() {
-            let vars = exec_config.build_template_vars_with_env(&pack_dir, env_dir_opt);
-            for (key, value_template) in &exec_config.env_vars {
-                let resolved = attune_common::models::RuntimeExecutionConfig::resolve_template(
-                    value_template,
-                    &vars,
-                );
-                debug!(
-                    "Setting sensor runtime env var: {}={} (template: {})",
-                    key, resolved, value_template
-                );
-                cmd.env(key, resolved);
-            }
-        }
+        apply_runtime_env_vars(&mut cmd, &exec_config, &pack_dir, env_dir_opt);
 
         let mut child = cmd
             .stdin(Stdio::null())
@@ -904,6 +922,10 @@ pub struct SensorStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use attune_common::models::runtime::{
+        RuntimeEnvVarConfig, RuntimeEnvVarOperation, RuntimeEnvVarSpec,
+    };
+    use std::collections::HashMap;
 
     #[test]
     fn test_sensor_status_default() {
@@ -912,5 +934,47 @@ mod tests {
         assert!(!status.failed);
         assert_eq!(status.failure_count, 0);
         assert!(status.last_poll.is_none());
+    }
+
+    #[test]
+    fn test_apply_runtime_env_vars_prepends_to_existing_command_env() {
+        let mut env_vars = HashMap::new();
+        env_vars.insert(
+            "PYTHONPATH".to_string(),
+            RuntimeEnvVarConfig::Spec(RuntimeEnvVarSpec {
+                value: "{pack_dir}/lib".to_string(),
+                operation: RuntimeEnvVarOperation::Prepend,
+                separator: ":".to_string(),
+            }),
+        );
+
+        let exec_config = RuntimeExecutionConfig {
+            env_vars,
+            ..RuntimeExecutionConfig::default()
+        };
+
+        let mut cmd = Command::new("python3");
+        cmd.env("PYTHONPATH", "/existing/pythonpath");
+
+        apply_runtime_env_vars(
+            &mut cmd,
+            &exec_config,
+            std::path::Path::new("/packs/testpack"),
+            None,
+        );
+
+        let resolved = cmd
+            .as_std()
+            .get_envs()
+            .find_map(|(key, value)| {
+                if key == "PYTHONPATH" {
+                    value.map(|value| value.to_string_lossy().into_owned())
+                } else {
+                    None
+                }
+            })
+            .expect("PYTHONPATH should be set");
+
+        assert_eq!(resolved, "/packs/testpack/lib:/existing/pythonpath");
     }
 }

@@ -1,0 +1,33 @@
+ARG DEBIAN_VERSION=bookworm
+
+FROM debian:${DEBIAN_VERSION}-slim AS runtime
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 attune && \
+    mkdir -p /opt/attune/packs /opt/attune/logs /opt/attune/runtime_envs /opt/attune/config /opt/attune/artifacts /opt/attune/agent && \
+    chown -R attune:attune /opt/attune
+
+WORKDIR /opt/attune
+
+COPY dist/attune-service-binary /usr/local/bin/attune-service
+COPY migrations/ ./migrations/
+
+RUN chown -R attune:attune /opt/attune
+
+USER attune
+
+ENV RUST_LOG=info
+ENV ATTUNE_CONFIG=/opt/attune/config/config.yaml
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+EXPOSE 8080
+
+CMD ["/usr/local/bin/attune-service"]

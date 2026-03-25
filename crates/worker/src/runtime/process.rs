@@ -830,12 +830,9 @@ impl Runtime for ProcessRuntime {
         // resolved against the current pack/env directories.
         if !effective_config.env_vars.is_empty() {
             let vars = effective_config.build_template_vars_with_env(&pack_dir, env_dir_opt);
-            for (key, value_template) in &effective_config.env_vars {
-                let resolved = RuntimeExecutionConfig::resolve_template(value_template, &vars);
-                debug!(
-                    "Setting runtime env var: {}={} (template: {})",
-                    key, resolved, value_template
-                );
+            for (key, env_var_config) in &effective_config.env_vars {
+                let resolved = env_var_config.resolve(&vars, env.get(key).map(String::as_str));
+                debug!("Setting runtime env var: {}={}", key, resolved);
                 env.insert(key.clone(), resolved);
             }
         }
@@ -1062,7 +1059,8 @@ mod tests {
     use super::*;
     use attune_common::models::runtime::{
         DependencyConfig, EnvironmentConfig, InlineExecutionConfig, InlineExecutionStrategy,
-        InterpreterConfig, RuntimeExecutionConfig,
+        InterpreterConfig, RuntimeEnvVarConfig, RuntimeEnvVarOperation, RuntimeEnvVarSpec,
+        RuntimeExecutionConfig,
     };
     use attune_common::models::{OutputFormat, ParameterDelivery, ParameterFormat};
     use std::collections::HashMap;
@@ -1375,6 +1373,88 @@ mod tests {
         let result = runtime.execute(context).await.unwrap();
         assert_eq!(result.exit_code, 0);
         assert!(result.stdout.contains("hello from python process runtime"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_python_file_with_pack_lib_on_pythonpath() {
+        let temp_dir = TempDir::new().unwrap();
+        let packs_dir = temp_dir.path().join("packs");
+        let pack_dir = packs_dir.join("testpack");
+        let actions_dir = pack_dir.join("actions");
+        let lib_dir = pack_dir.join("lib");
+        std::fs::create_dir_all(&actions_dir).unwrap();
+        std::fs::create_dir_all(&lib_dir).unwrap();
+
+        std::fs::write(
+            lib_dir.join("helper.py"),
+            "def message():\n    return 'hello from pack lib'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            actions_dir.join("hello.py"),
+            "import helper\nimport os\nprint(helper.message())\nprint(os.environ['PYTHONPATH'])\n",
+        )
+        .unwrap();
+
+        let mut env_vars = HashMap::new();
+        env_vars.insert(
+            "PYTHONPATH".to_string(),
+            RuntimeEnvVarConfig::Spec(RuntimeEnvVarSpec {
+                value: "{pack_dir}/lib".to_string(),
+                operation: RuntimeEnvVarOperation::Prepend,
+                separator: ":".to_string(),
+            }),
+        );
+
+        let runtime = ProcessRuntime::new(
+            "python".to_string(),
+            RuntimeExecutionConfig {
+                interpreter: InterpreterConfig {
+                    binary: "python3".to_string(),
+                    args: vec![],
+                    file_extension: Some(".py".to_string()),
+                },
+                inline_execution: InlineExecutionConfig::default(),
+                environment: None,
+                dependencies: None,
+                env_vars,
+            },
+            packs_dir,
+            temp_dir.path().join("runtime_envs"),
+        );
+
+        let mut env = HashMap::new();
+        env.insert("PYTHONPATH".to_string(), "/existing/pythonpath".to_string());
+
+        let context = ExecutionContext {
+            execution_id: 3,
+            action_ref: "testpack.hello".to_string(),
+            parameters: HashMap::new(),
+            env,
+            secrets: HashMap::new(),
+            timeout: Some(10),
+            working_dir: None,
+            entry_point: "hello.py".to_string(),
+            code: None,
+            code_path: Some(actions_dir.join("hello.py")),
+            runtime_name: Some("python".to_string()),
+            runtime_config_override: None,
+            runtime_env_dir_suffix: None,
+            selected_runtime_version: None,
+            max_stdout_bytes: 1024 * 1024,
+            max_stderr_bytes: 1024 * 1024,
+            parameter_delivery: ParameterDelivery::default(),
+            parameter_format: ParameterFormat::default(),
+            output_format: OutputFormat::default(),
+            cancel_token: None,
+        };
+
+        let result = runtime.execute(context).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("hello from pack lib"));
+        assert!(result
+            .stdout
+            .contains(&format!("{}/lib:/existing/pythonpath", pack_dir.display())));
     }
 
     #[tokio::test]
