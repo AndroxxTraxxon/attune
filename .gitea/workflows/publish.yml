@@ -342,10 +342,11 @@ jobs:
           set -euo pipefail
           api_base="${{ github.server_url }}/api/v1"
           package_name="${ARTIFACT_REPOSITORY}"
+          encoded_package_name="$(PACKAGE_NAME="${package_name}" python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["PACKAGE_NAME"], safe=""))')"
 
           status_code="$(curl -sS -o /tmp/package-link-response.txt -w '%{http_code}' -X POST \
             -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
-            "${api_base}/packages/${{ needs.metadata.outputs.namespace }}/container/${package_name}/-/link/${REPOSITORY_NAME}")"
+            "${api_base}/packages/${{ needs.metadata.outputs.namespace }}/container/${encoded_package_name}/-/link/${REPOSITORY_NAME}")"
 
           case "${status_code}" in
             200|201|204|409)
@@ -567,10 +568,11 @@ jobs:
           set -euo pipefail
           api_base="${{ github.server_url }}/api/v1"
           package_name="${{ matrix.image.repository }}"
+          encoded_package_name="$(PACKAGE_NAME="${package_name}" python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["PACKAGE_NAME"], safe=""))')"
 
           status_code="$(curl -sS -o /tmp/package-link-response.txt -w '%{http_code}' -X POST \
             -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
-            "${api_base}/packages/${{ needs.metadata.outputs.namespace }}/container/${package_name}/-/link/${REPOSITORY_NAME}")"
+            "${api_base}/packages/${{ needs.metadata.outputs.namespace }}/container/${encoded_package_name}/-/link/${REPOSITORY_NAME}")"
 
           case "${status_code}" in
             200|201|204|409)
@@ -678,10 +680,12 @@ jobs:
         run: |
           set -euo pipefail
           api_base="${{ github.server_url }}/api/v1"
+          package_name="attune/web"
+          encoded_package_name="$(PACKAGE_NAME="${package_name}" python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["PACKAGE_NAME"], safe=""))')"
 
           status_code="$(curl -sS -o /tmp/package-link-response.txt -w '%{http_code}' -X POST \
             -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
-            "${api_base}/packages/${{ needs.metadata.outputs.namespace }}/container/attune/web/-/link/${REPOSITORY_NAME}")"
+            "${api_base}/packages/${{ needs.metadata.outputs.namespace }}/container/${encoded_package_name}/-/link/${REPOSITORY_NAME}")"
 
           case "${status_code}" in
             200|201|204|409)
