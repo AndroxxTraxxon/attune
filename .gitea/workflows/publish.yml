@@ -227,7 +227,7 @@ jobs:
             local file_path="$1"
             readelf -W --version-info --dyn-syms "$file_path" \
               | grep 'Name: GLIBC_' \
-              | sed -E 's/.*GLIBC_(.+) Flags.*/\1/' \
+              | sed -E 's/.*GLIBC_([0-9.]+).*/\1/' \
               | sort -t . -k1,1n -k2,2n \
               | tail -n 1
           }
