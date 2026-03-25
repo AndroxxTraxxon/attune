@@ -237,7 +237,7 @@ impl Update for RuntimeRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(&format!(" RETURNING {}", SELECT_COLUMNS));
+        query.push(format!(" RETURNING {}", SELECT_COLUMNS));
 
         let runtime = query
             .build_query_as::<Runtime>()

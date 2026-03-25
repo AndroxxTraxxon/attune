@@ -238,22 +238,24 @@ docker-build-web:
 	docker compose build web
 
 # Agent binary (statically-linked for injection into any container)
+AGENT_RUST_TARGET ?= x86_64-unknown-linux-musl
+
 build-agent:
 	@echo "Installing musl target (if not already installed)..."
-	rustup target add x86_64-unknown-linux-musl 2>/dev/null || true
+	rustup target add $(AGENT_RUST_TARGET) 2>/dev/null || true
 	@echo "Building statically-linked worker and sensor agent binaries..."
-	SQLX_OFFLINE=true cargo build --release --target x86_64-unknown-linux-musl --bin attune-agent --bin attune-sensor-agent
-	strip target/x86_64-unknown-linux-musl/release/attune-agent
-	strip target/x86_64-unknown-linux-musl/release/attune-sensor-agent
+	SQLX_OFFLINE=true cargo build --release --target $(AGENT_RUST_TARGET) --bin attune-agent --bin attune-sensor-agent
+	strip target/$(AGENT_RUST_TARGET)/release/attune-agent
+	strip target/$(AGENT_RUST_TARGET)/release/attune-sensor-agent
 	@echo "✅ Agent binaries built:"
-	@echo "   - target/x86_64-unknown-linux-musl/release/attune-agent"
-	@echo "   - target/x86_64-unknown-linux-musl/release/attune-sensor-agent"
-	@ls -lh target/x86_64-unknown-linux-musl/release/attune-agent
-	@ls -lh target/x86_64-unknown-linux-musl/release/attune-sensor-agent
+	@echo "   - target/$(AGENT_RUST_TARGET)/release/attune-agent"
+	@echo "   - target/$(AGENT_RUST_TARGET)/release/attune-sensor-agent"
+	@ls -lh target/$(AGENT_RUST_TARGET)/release/attune-agent
+	@ls -lh target/$(AGENT_RUST_TARGET)/release/attune-sensor-agent
 
 docker-build-agent:
 	@echo "Building agent Docker image (statically-linked binary)..."
-	DOCKER_BUILDKIT=1 docker buildx build --target agent-init -f docker/Dockerfile.agent -t attune-agent:latest .
+	DOCKER_BUILDKIT=1 docker buildx build --build-arg RUST_TARGET=$(AGENT_RUST_TARGET) --target agent-init -f docker/Dockerfile.agent -t attune-agent:latest .
 	@echo "✅ Agent image built: attune-agent:latest"
 
 run-agent:

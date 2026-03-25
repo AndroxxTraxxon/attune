@@ -263,16 +263,19 @@ jobs:
         run: |
           set -euo pipefail
           push_args=()
+          artifact_file="attune-binaries-${{ matrix.arch }}.tar.gz"
 
           if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
             push_args+=(--plain-http)
           fi
 
+          cp "dist/${artifact_file}" "${artifact_file}"
+
           oras push \
             "${push_args[@]}" \
             "${{ needs.metadata.outputs.artifact_ref_base }}:rust-binaries-${{ needs.metadata.outputs.image_tag }}-${{ matrix.arch }}" \
             --artifact-type application/vnd.attune.rust-binaries.v1 \
-            "dist/attune-binaries-${{ matrix.arch }}.tar.gz:application/vnd.attune.rust-binaries.layer.v1.tar+gzip"
+            "${artifact_file}:application/vnd.attune.rust-binaries.layer.v1.tar+gzip"
 
   publish-rust-images:
     name: Publish ${{ matrix.image.name }} (${{ matrix.arch }})

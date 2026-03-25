@@ -28,11 +28,14 @@
 
 ARG RUST_VERSION=1.92
 ARG DEBIAN_VERSION=bookworm
+ARG RUST_TARGET=x86_64-unknown-linux-musl
 
 # ============================================================================
 # Stage 1: Builder - Cross-compile a statically-linked binary with musl
 # ============================================================================
 FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
+
+ARG RUST_TARGET
 
 # Install musl toolchain for static linking
 RUN apt-get update && apt-get install -y \
@@ -42,8 +45,8 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Add the musl target for fully static binaries
-RUN rustup target add x86_64-unknown-linux-musl
+# Add the requested musl target for fully static binaries
+RUN rustup target add ${RUST_TARGET}
 
 WORKDIR /build
 
@@ -104,9 +107,9 @@ COPY crates/ ./crates/
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
     --mount=type=cache,id=agent-target,target=/build/target,sharing=locked \
-    cargo build --release --target x86_64-unknown-linux-musl --bin attune-agent --bin attune-sensor-agent && \
-    cp /build/target/x86_64-unknown-linux-musl/release/attune-agent /build/attune-agent && \
-    cp /build/target/x86_64-unknown-linux-musl/release/attune-sensor-agent /build/attune-sensor-agent
+    cargo build --release --target ${RUST_TARGET} --bin attune-agent --bin attune-sensor-agent && \
+    cp /build/target/${RUST_TARGET}/release/attune-agent /build/attune-agent && \
+    cp /build/target/${RUST_TARGET}/release/attune-sensor-agent /build/attune-sensor-agent
 
 # Strip the binaries to minimize size
 RUN strip /build/attune-agent && strip /build/attune-sensor-agent
