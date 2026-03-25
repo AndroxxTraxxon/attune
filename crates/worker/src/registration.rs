@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn test_detected_runtimes_json_structure() {
         // Test the JSON structure that set_detected_runtimes builds
-        let runtimes = vec![
+        let runtimes = [
             DetectedRuntime {
                 name: "python".to_string(),
                 path: "/usr/bin/python3".to_string(),

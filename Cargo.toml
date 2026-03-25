@@ -101,7 +101,7 @@ tar = "0.4"
 flate2 = "1.1"
 
 # WebSocket client
-tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
 
 # URL parsing
 url = "2.5"

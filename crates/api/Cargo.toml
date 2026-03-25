@@ -70,7 +70,7 @@ jsonschema = { workspace = true }
 # HTTP client
 reqwest = { workspace = true }
 openidconnect = "4.0"
-ldap3 = "0.12"
+ldap3 = { version = "0.12", default-features = false, features = ["sync", "tls-rustls-ring"] }
 url = { workspace = true }
 
 # Archive/compression
