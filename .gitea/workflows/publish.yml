@@ -33,7 +33,8 @@ env:
   REGISTRY_HOST: ${{ vars.CLUSTER_GITEA_HOST }}
   REGISTRY_NAMESPACE: ${{ vars.CONTAINER_REGISTRY_NAMESPACE }}
   REGISTRY_PLAIN_HTTP: ${{ vars.CONTAINER_REGISTRY_INSECURE }}
-  ARTIFACT_REPOSITORY: attune-build-artifacts
+  REPOSITORY_NAME: attune
+  ARTIFACT_REPOSITORY: attune/build-artifacts
   GNU_GLIBC_VERSION: "2.28"
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
@@ -332,6 +333,29 @@ jobs:
             --artifact-type application/vnd.attune.rust-binaries.v1 \
             "${artifact_file}:application/vnd.attune.rust-binaries.layer.v1.tar+gzip"
 
+      - name: Link binary bundle package to repository
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          api_base="${{ github.server_url }}/api/v1"
+          package_name="${ARTIFACT_REPOSITORY}"
+
+          status_code="$(curl -sS -o /tmp/package-link-response.txt -w '%{http_code}' -X POST \
+            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
+            "${api_base}/packages/${{ needs.metadata.outputs.namespace }}/container/${package_name}/-/link/${REPOSITORY_NAME}")"
+
+          case "${status_code}" in
+            200|201|204|409)
+              ;;
+            *)
+              cat /tmp/package-link-response.txt
+              exit 1
+              ;;
+          esac
+
   publish-rust-images:
     name: Publish ${{ matrix.image.name }} (${{ matrix.arch }})
     runs-on: ${{ matrix.runner_label }}
@@ -354,7 +378,7 @@ jobs:
             platform: linux/amd64
             image:
               name: api
-              repository: attune-api
+              repository: attune/api
               source_path: bin/attune-api
               dockerfile: docker/Dockerfile.runtime
           - arch: amd64
@@ -362,7 +386,7 @@ jobs:
             platform: linux/amd64
             image:
               name: executor
-              repository: attune-executor
+              repository: attune/executor
               source_path: bin/attune-executor
               dockerfile: docker/Dockerfile.runtime
           - arch: amd64
@@ -370,7 +394,7 @@ jobs:
             platform: linux/amd64
             image:
               name: notifier
-              repository: attune-notifier
+              repository: attune/notifier
               source_path: bin/attune-notifier
               dockerfile: docker/Dockerfile.runtime
           - arch: amd64
@@ -378,7 +402,7 @@ jobs:
             platform: linux/amd64
             image:
               name: agent
-              repository: attune-agent
+              repository: attune/agent
               source_path: agent/attune-agent
               dockerfile: docker/Dockerfile.agent-package
           - arch: arm64
@@ -386,7 +410,7 @@ jobs:
             platform: linux/arm64
             image:
               name: api
-              repository: attune-api
+              repository: attune/api
               source_path: bin/attune-api
               dockerfile: docker/Dockerfile.runtime
           - arch: arm64
@@ -394,7 +418,7 @@ jobs:
             platform: linux/arm64
             image:
               name: executor
-              repository: attune-executor
+              repository: attune/executor
               source_path: bin/attune-executor
               dockerfile: docker/Dockerfile.runtime
           - arch: arm64
@@ -402,7 +426,7 @@ jobs:
             platform: linux/arm64
             image:
               name: notifier
-              repository: attune-notifier
+              repository: attune/notifier
               source_path: bin/attune-notifier
               dockerfile: docker/Dockerfile.runtime
           - arch: arm64
@@ -410,7 +434,7 @@ jobs:
             platform: linux/arm64
             image:
               name: agent
-              repository: attune-agent
+              repository: attune/agent
               source_path: agent/attune-agent
               dockerfile: docker/Dockerfile.agent-package
     steps:
@@ -534,6 +558,29 @@ jobs:
 
           "${build_cmd[@]}"
 
+      - name: Link container package to repository
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          api_base="${{ github.server_url }}/api/v1"
+          package_name="${{ matrix.image.repository }}"
+
+          status_code="$(curl -sS -o /tmp/package-link-response.txt -w '%{http_code}' -X POST \
+            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
+            "${api_base}/packages/${{ needs.metadata.outputs.namespace }}/container/${package_name}/-/link/${REPOSITORY_NAME}")"
+
+          case "${status_code}" in
+            200|201|204|409)
+              ;;
+            *)
+              cat /tmp/package-link-response.txt
+              exit 1
+              ;;
+          esac
+
   publish-web-images:
     name: Publish web (${{ matrix.arch }})
     runs-on: ${{ matrix.runner_label }}
@@ -606,7 +653,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          image_ref="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/attune-web:${{ needs.metadata.outputs.image_tag }}-${{ matrix.arch }}"
+          image_ref="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/attune/web:${{ needs.metadata.outputs.image_tag }}-${{ matrix.arch }}"
 
           build_cmd=(
             docker buildx build
@@ -623,6 +670,28 @@ jobs:
 
           "${build_cmd[@]}"
 
+      - name: Link web container package to repository
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          api_base="${{ github.server_url }}/api/v1"
+
+          status_code="$(curl -sS -o /tmp/package-link-response.txt -w '%{http_code}' -X POST \
+            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
+            "${api_base}/packages/${{ needs.metadata.outputs.namespace }}/container/attune/web/-/link/${REPOSITORY_NAME}")"
+
+          case "${status_code}" in
+            200|201|204|409)
+              ;;
+            *)
+              cat /tmp/package-link-response.txt
+              exit 1
+              ;;
+          esac
+
   publish-manifests:
     name: Publish manifest ${{ matrix.repository }}
     runs-on: build-amd64
@@ -637,11 +706,11 @@ jobs:
       fail-fast: false
       matrix:
         repository:
-          - attune-api
-          - attune-executor
-          - attune-notifier
-          - attune-agent
-          - attune-web
+          - attune/api
+          - attune/executor
+          - attune/notifier
+          - attune/agent
+          - attune/web
     steps:
       - name: Configure OCI registry auth
         shell: bash
@@ -678,9 +747,11 @@ jobs:
           set -euo pipefail
 
           image_base="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/${{ matrix.repository }}"
+          create_args=()
           push_args=()
 
           if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
+            create_args+=(--insecure)
             push_args+=(--insecure)
           fi
 
@@ -691,7 +762,7 @@ jobs:
             arm64_ref="${image_base}:${{ needs.metadata.outputs.image_tag }}-arm64"
 
             docker manifest rm "$manifest_ref" >/dev/null 2>&1 || true
-            docker manifest create "$manifest_ref" "$amd64_ref" "$arm64_ref"
+            docker manifest create "${create_args[@]}" "$manifest_ref" "$amd64_ref" "$arm64_ref"
             docker manifest annotate "$manifest_ref" "$amd64_ref" --os linux --arch amd64
             docker manifest annotate "$manifest_ref" "$arm64_ref" --os linux --arch arm64
             docker manifest push "${push_args[@]}" "$manifest_ref"
