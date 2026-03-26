@@ -21,13 +21,13 @@ copy_file() {
     cp "${src}" "${dst}"
 }
 
-# Keep the distributable compose file and README as the maintained templates.
+# Keep the distributable compose file, README, and config as the maintained templates.
 if [ "${bundle_dir}" != "${template_dir}" ]; then
     copy_file "${template_dir}/docker-compose.yaml" "${bundle_dir}/docker-compose.yaml"
     copy_file "${template_dir}/README.md" "${bundle_dir}/README.md"
+    copy_file "${template_dir}/config.docker.yaml" "${bundle_dir}/config.docker.yaml"
 fi
 
-copy_file "${repo_root}/config.docker.yaml" "${bundle_dir}/config.docker.yaml"
 copy_file "${repo_root}/docker/run-migrations.sh" "${bundle_dir}/docker/run-migrations.sh"
 copy_file "${repo_root}/docker/init-user.sh" "${bundle_dir}/docker/init-user.sh"
 copy_file "${repo_root}/docker/init-packs.sh" "${bundle_dir}/docker/init-packs.sh"

@@ -11,6 +11,7 @@ target/
 # Configuration files (keep *.example.yaml)
 config.yaml
 config.*.yaml
+!docker/distributable/config.docker.yaml
 !config.example.yaml
 !config.development.yaml
 !config.test.yaml

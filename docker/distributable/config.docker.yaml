@@ -1,0 +1,159 @@
+# Attune Docker Environment Configuration
+# This file overrides base config.yaml settings for Docker deployments
+
+environment: docker
+
+# Docker database (PostgreSQL container)
+database:
+  url: postgresql://attune:attune@postgres:5432/attune
+  max_connections: 20
+  min_connections: 5
+  acquire_timeout: 30
+  idle_timeout: 600
+  max_lifetime: 1800
+  log_statements: false
+  schema: "attune"
+
+# Docker message queue (RabbitMQ container)
+message_queue:
+  url: amqp://attune:attune@rabbitmq:5672
+  connection_timeout: 30
+  heartbeat: 60
+  prefetch_count: 10
+  rabbitmq:
+    worker_queue_ttl_ms: 300000 # 5 minutes - expire unprocessed executions
+    dead_letter:
+      enabled: true
+      exchange: attune.dlx
+      ttl_ms: 86400000 # 24 hours - retain DLQ messages for debugging
+
+# Docker cache (Redis container - optional)
+cache:
+  enabled: true
+  url: redis://redis:6379
+  connection_timeout: 5
+  default_ttl: 3600
+
+# API server configuration
+server:
+  host: 0.0.0.0
+  port: 8080
+  cors_origins:
+    - http://localhost
+    - http://localhost:3000
+    - http://localhost:3001
+    - http://localhost:3002
+    - http://localhost:5173
+    - http://127.0.0.1:3000
+    - http://127.0.0.1:3001
+    - http://127.0.0.1:3002
+    - http://127.0.0.1:5173
+    - http://web
+  request_timeout: 60
+  max_request_size: 10485760 # 10MB
+
+# Logging configuration
+log:
+  level: info
+  format: json # Structured logs for container environments
+  console: true
+
+# Security settings (MUST override via environment variables in production)
+security:
+  jwt_secret: ${JWT_SECRET}
+  jwt_access_expiration: 3600 # 1 hour
+  jwt_refresh_expiration: 604800 # 7 days
+  encryption_key: ${ENCRYPTION_KEY}
+  enable_auth: true
+  allow_self_registration: false
+  login_page:
+    show_local_login: true
+    show_oidc_login: true
+  oidc:
+    # example local dev
+    enabled: false
+    discovery_url: https://my.sso.provider.com/.well-known/openid-configuration
+    client_id: 31d194737840d32bd3afe6474826976bae346d77247a158c4dc43887278eb605
+    client_secret: xL2C9WOC8shZ2QrZs9VFa10JK1Ob95xcMtZU3N86H1Pz0my5
+    provider_name: my-sso-provider
+    provider_label: My SSO Provider
+    provider_icon_url: https://my.sso.provider.com/favicon.ico
+    redirect_uri: http://localhost:3000/auth/callback
+    post_logout_redirect_uri: http://localhost:3000/login
+    scopes:
+      - groups
+
+# Packs directory (mounted volume in containers)
+packs_base_dir: /opt/attune/packs
+
+# Runtime environments directory (isolated envs like virtualenvs, node_modules).
+# Kept separate from packs so pack directories remain clean and read-only.
+# Pattern: {runtime_envs_dir}/{pack_ref}/{runtime_name}
+runtime_envs_dir: /opt/attune/runtime_envs
+
+# Artifacts directory (shared volume for file-based artifact storage).
+# File-type artifacts are written here by execution processes and served by the API.
+# Pattern: {artifacts_dir}/{ref_slug}/v{version}.{ext}
+artifacts_dir: /opt/attune/artifacts
+
+# Executor service configuration
+executor:
+  service_name: attune-executor
+  max_concurrent_executions: 50
+  heartbeat_interval: 30
+  task_timeout: 300
+  cleanup_interval: 120
+  scheduling_interval: 5
+  retry_max_attempts: 3
+  retry_backoff_multiplier: 2.0
+  retry_backoff_max: 300
+  scheduled_timeout: 300 # 5 minutes - fail executions stuck in SCHEDULED
+  timeout_check_interval: 60 # Check every minute for stale executions
+  enable_timeout_monitor: true
+
+# Worker service configuration
+worker:
+  service_name: attune-worker
+  worker_type: container
+  max_concurrent_tasks: 20
+  heartbeat_interval: 10 # Reduced from 30s for faster stale detection (staleness = 30s)
+  task_timeout: 300
+  cleanup_interval: 120
+  work_dir: /tmp/attune-worker
+  python:
+    executable: python3
+    venv_dir: /tmp/attune-worker/venvs
+    requirements_timeout: 300
+  nodejs:
+    executable: node
+    npm_executable: npm
+    modules_dir: /tmp/attune-worker/node_modules
+    install_timeout: 300
+  shell:
+    executable: /bin/bash
+    allowed_shells:
+      - /bin/bash
+      - /bin/sh
+
+# Sensor service configuration
+sensor:
+  service_name: attune-sensor
+  heartbeat_interval: 10 # Reduced from 30s for faster stale detection
+  max_concurrent_sensors: 50
+  sensor_timeout: 300
+  polling_interval: 10
+  cleanup_interval: 120
+
+# Notifier service configuration
+notifier:
+  service_name: attune-notifier
+  websocket_host: 0.0.0.0
+  websocket_port: 8081
+  heartbeat_interval: 30
+  connection_timeout: 60
+  max_connections: 1000
+  message_buffer_size: 10000
+
+# Agent binary distribution (serves the agent binary via API for remote downloads)
+agent:
+  binary_dir: /opt/attune/agent
