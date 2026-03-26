@@ -378,13 +378,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/package-docker-dist.sh docker/dist dist/attune-docker-dist.tar.gz
+          bash scripts/package-docker-dist.sh docker/distributable artifacts/attune-docker-dist.tar.gz
 
       - name: Upload docker dist archive
         uses: actions/upload-artifact@v4
         with:
           name: attune-docker-dist-${{ needs.metadata.outputs.image_tag }}
-          path: dist/attune-docker-dist.tar.gz
+          path: artifacts/attune-docker-dist.tar.gz
           if-no-files-found: error
 
       - name: Attach docker dist archive to release
@@ -404,7 +404,7 @@ jobs:
           api_base="${{ github.server_url }}/api/v1"
           owner_repo="${{ github.repository }}"
           tag_name="${{ github.ref_name }}"
-          archive_path="dist/attune-docker-dist.tar.gz"
+          archive_path="artifacts/attune-docker-dist.tar.gz"
           asset_name="attune-docker-dist-${tag_name}.tar.gz"
 
           release_response_file="$(mktemp)"

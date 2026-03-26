@@ -3,10 +3,10 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-bundle_dir="${1:-${repo_root}/docker/dist}"
-archive_path="${2:-${repo_root}/dist/attune-docker-dist.tar.gz}"
+bundle_dir="${1:-${repo_root}/docker/distributable}"
+archive_path="${2:-${repo_root}/artifacts/attune-docker-dist.tar.gz}"
 
-template_dir="${repo_root}/docker/dist"
+template_dir="${repo_root}/docker/distributable"
 
 mkdir -p "${bundle_dir}/docker" "${bundle_dir}/migrations" "${bundle_dir}/packs" "${bundle_dir}/scripts"
 mkdir -p "$(dirname "${archive_path}")"

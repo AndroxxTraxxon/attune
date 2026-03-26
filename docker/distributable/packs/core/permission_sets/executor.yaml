@@ -1,0 +1,18 @@
+ref: core.executor
+label: Executor
+description: Read operational metadata and trigger executions without changing system definitions.
+grants:
+  - resource: packs
+    actions: [read]
+  - resource: actions
+    actions: [read, execute]
+  - resource: rules
+    actions: [read]
+  - resource: triggers
+    actions: [read]
+  - resource: executions
+    actions: [read]
+  - resource: keys
+    actions: [read]
+  - resource: artifacts
+    actions: [read]

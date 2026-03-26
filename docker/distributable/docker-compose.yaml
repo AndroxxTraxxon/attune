@@ -1,0 +1,581 @@
+name: attune
+
+services:
+  postgres:
+    image: timescale/timescaledb:2.17.2-pg16
+    container_name: attune-postgres
+    environment:
+      POSTGRES_USER: attune
+      POSTGRES_PASSWORD: attune
+      POSTGRES_DB: attune
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U attune"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - attune-network
+    restart: unless-stopped
+
+  migrations:
+    image: postgres:16-alpine
+    container_name: attune-migrations
+    volumes:
+      - ./migrations:/migrations:ro
+      - ./docker/run-migrations.sh:/run-migrations.sh:ro
+      - ./docker/init-roles.sql:/docker/init-roles.sql:ro
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: attune
+      DB_PASSWORD: attune
+      DB_NAME: attune
+      MIGRATIONS_DIR: /migrations
+    command: ["/bin/sh", "/run-migrations.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - attune-network
+    restart: on-failure
+
+  init-user:
+    image: postgres:16-alpine
+    container_name: attune-init-user
+    volumes:
+      - ./docker/init-user.sh:/init-user.sh:ro
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: attune
+      DB_PASSWORD: attune
+      DB_NAME: attune
+      DB_SCHEMA: public
+      TEST_LOGIN: ${ATTUNE_TEST_LOGIN:-test@attune.local}
+      TEST_PASSWORD: ${ATTUNE_TEST_PASSWORD:-TestPass123!}
+      TEST_DISPLAY_NAME: ${ATTUNE_TEST_DISPLAY_NAME:-Test User}
+    command: ["/bin/sh", "/init-user.sh"]
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    networks:
+      - attune-network
+    restart: on-failure
+
+  init-packs:
+    image: python:3.11-slim
+    container_name: attune-init-packs
+    volumes:
+      - ./packs:/source/packs:ro
+      - ./scripts/load_core_pack.py:/scripts/load_core_pack.py:ro
+      - ./docker/init-packs.sh:/init-packs.sh:ro
+      - packs_data:/opt/attune/packs
+      - runtime_envs:/opt/attune/runtime_envs
+      - artifacts_data:/opt/attune/artifacts
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: attune
+      DB_PASSWORD: attune
+      DB_NAME: attune
+      DB_SCHEMA: public
+      SOURCE_PACKS_DIR: /source/packs
+      TARGET_PACKS_DIR: /opt/attune/packs
+      LOADER_SCRIPT: /scripts/load_core_pack.py
+      DEFAULT_ADMIN_LOGIN: ${ATTUNE_TEST_LOGIN:-test@attune.local}
+      DEFAULT_ADMIN_PERMISSION_SET_REF: core.admin
+    command: ["/bin/sh", "/init-packs.sh"]
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    networks:
+      - attune-network
+    restart: on-failure
+    entrypoint: ""
+
+  init-agent:
+    image: ${ATTUNE_IMAGE_REGISTRY:-git.rdrx.app/attune-system}/attune/agent:${ATTUNE_IMAGE_TAG:-latest}
+    container_name: attune-init-agent
+    volumes:
+      - agent_bin:/opt/attune/agent
+    entrypoint:
+      [
+        "/bin/sh",
+        "-c",
+        "cp /usr/local/bin/attune-agent /opt/attune/agent/attune-agent && cp /usr/local/bin/attune-sensor-agent /opt/attune/agent/attune-sensor-agent && chmod +x /opt/attune/agent/attune-agent /opt/attune/agent/attune-sensor-agent && /usr/local/bin/attune-agent --version > /opt/attune/agent/attune-agent.version && /usr/local/bin/attune-sensor-agent --version > /opt/attune/agent/attune-sensor-agent.version && echo 'Agent binaries copied successfully'",
+      ]
+    restart: "no"
+    networks:
+      - attune-network
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: attune-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: attune
+      RABBITMQ_DEFAULT_PASS: attune
+      RABBITMQ_DEFAULT_VHOST: /
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - attune-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: attune-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - attune-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  api:
+    image: ${ATTUNE_IMAGE_REGISTRY:-git.rdrx.app/attune-system}/attune/api:${ATTUNE_IMAGE_TAG:-latest}
+    container_name: attune-api
+    environment:
+      RUST_LOG: info
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
+      ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
+      ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+      ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE__CACHE__URL: redis://redis:6379
+      ATTUNE__WORKER__WORKER_TYPE: container
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
+      - packs_data:/opt/attune/packs:rw
+      - runtime_envs:/opt/attune/runtime_envs
+      - artifacts_data:/opt/attune/artifacts
+      - api_logs:/opt/attune/logs
+      - agent_bin:/opt/attune/agent:ro
+    depends_on:
+      init-agent:
+        condition: service_completed_successfully
+      init-packs:
+        condition: service_completed_successfully
+      init-user:
+        condition: service_completed_successfully
+      migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - attune-network
+    restart: unless-stopped
+
+  executor:
+    image: ${ATTUNE_IMAGE_REGISTRY:-git.rdrx.app/attune-system}/attune/executor:${ATTUNE_IMAGE_TAG:-latest}
+    container_name: attune-executor
+    environment:
+      RUST_LOG: info
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
+      ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
+      ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+      ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE__CACHE__URL: redis://redis:6379
+      ATTUNE__WORKER__WORKER_TYPE: container
+    volumes:
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
+      - packs_data:/opt/attune/packs:ro
+      - artifacts_data:/opt/attune/artifacts:ro
+      - executor_logs:/opt/attune/logs
+    depends_on:
+      init-packs:
+        condition: service_completed_successfully
+      init-user:
+        condition: service_completed_successfully
+      migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - attune-network
+    restart: unless-stopped
+
+  worker-shell:
+    image: debian:bookworm-slim
+    container_name: attune-worker-shell
+    entrypoint: ["/opt/attune/agent/attune-agent"]
+    stop_grace_period: 45s
+    environment:
+      RUST_LOG: info
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
+      ATTUNE_WORKER_TYPE: container
+      ATTUNE_WORKER_NAME: worker-shell-01
+      ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
+      ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+      ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE_API_URL: http://attune-api:8080
+    volumes:
+      - agent_bin:/opt/attune/agent:ro
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
+      - packs_data:/opt/attune/packs:ro
+      - runtime_envs:/opt/attune/runtime_envs
+      - artifacts_data:/opt/attune/artifacts
+      - worker_shell_logs:/opt/attune/logs
+    depends_on:
+      init-agent:
+        condition: service_completed_successfully
+      init-packs:
+        condition: service_completed_successfully
+      init-user:
+        condition: service_completed_successfully
+      migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f attune-agent || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - attune-network
+    restart: unless-stopped
+
+  worker-python:
+    image: python:3.12-slim
+    container_name: attune-worker-python
+    entrypoint: ["/opt/attune/agent/attune-agent"]
+    stop_grace_period: 45s
+    environment:
+      RUST_LOG: info
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
+      ATTUNE_WORKER_TYPE: container
+      ATTUNE_WORKER_NAME: worker-python-01
+      ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
+      ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+      ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE_API_URL: http://attune-api:8080
+    volumes:
+      - agent_bin:/opt/attune/agent:ro
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
+      - packs_data:/opt/attune/packs:ro
+      - runtime_envs:/opt/attune/runtime_envs
+      - artifacts_data:/opt/attune/artifacts
+      - worker_python_logs:/opt/attune/logs
+    depends_on:
+      init-agent:
+        condition: service_completed_successfully
+      init-packs:
+        condition: service_completed_successfully
+      init-user:
+        condition: service_completed_successfully
+      migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f attune-agent || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - attune-network
+    restart: unless-stopped
+
+  worker-node:
+    image: node:22-slim
+    container_name: attune-worker-node
+    entrypoint: ["/opt/attune/agent/attune-agent"]
+    stop_grace_period: 45s
+    environment:
+      RUST_LOG: info
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
+      ATTUNE_WORKER_TYPE: container
+      ATTUNE_WORKER_NAME: worker-node-01
+      ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
+      ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+      ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE_API_URL: http://attune-api:8080
+    volumes:
+      - agent_bin:/opt/attune/agent:ro
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
+      - packs_data:/opt/attune/packs:ro
+      - runtime_envs:/opt/attune/runtime_envs
+      - artifacts_data:/opt/attune/artifacts
+      - worker_node_logs:/opt/attune/logs
+    depends_on:
+      init-agent:
+        condition: service_completed_successfully
+      init-packs:
+        condition: service_completed_successfully
+      init-user:
+        condition: service_completed_successfully
+      migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f attune-agent || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - attune-network
+    restart: unless-stopped
+
+  worker-full:
+    image: nikolaik/python-nodejs:python3.12-nodejs22-slim
+    container_name: attune-worker-full
+    entrypoint: ["/opt/attune/agent/attune-agent"]
+    stop_grace_period: 45s
+    environment:
+      RUST_LOG: info
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
+      ATTUNE_WORKER_RUNTIMES: shell,python,node,native
+      ATTUNE_WORKER_TYPE: container
+      ATTUNE_WORKER_NAME: worker-full-01
+      ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
+      ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+      ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE_API_URL: http://attune-api:8080
+    volumes:
+      - agent_bin:/opt/attune/agent:ro
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
+      - packs_data:/opt/attune/packs:ro
+      - runtime_envs:/opt/attune/runtime_envs
+      - artifacts_data:/opt/attune/artifacts
+      - worker_full_logs:/opt/attune/logs
+    depends_on:
+      init-agent:
+        condition: service_completed_successfully
+      init-packs:
+        condition: service_completed_successfully
+      init-user:
+        condition: service_completed_successfully
+      migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f attune-agent || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - attune-network
+    restart: unless-stopped
+
+  sensor:
+    image: nikolaik/python-nodejs:python3.12-nodejs22-slim
+    container_name: attune-sensor
+    entrypoint: ["/opt/attune/agent/attune-sensor-agent"]
+    stop_grace_period: 45s
+    environment:
+      RUST_LOG: debug
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
+      ATTUNE_SENSOR_RUNTIMES: shell,python,node,native
+      ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
+      ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+      ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE__WORKER__WORKER_TYPE: container
+      ATTUNE_API_URL: http://attune-api:8080
+      ATTUNE_MQ_URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE_PACKS_BASE_DIR: /opt/attune/packs
+    volumes:
+      - agent_bin:/opt/attune/agent:ro
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
+      - packs_data:/opt/attune/packs:rw
+      - runtime_envs:/opt/attune/runtime_envs
+      - sensor_logs:/opt/attune/logs
+    depends_on:
+      init-agent:
+        condition: service_completed_successfully
+      init-packs:
+        condition: service_completed_successfully
+      init-user:
+        condition: service_completed_successfully
+      migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - attune-network
+    restart: unless-stopped
+
+  notifier:
+    image: ${ATTUNE_IMAGE_REGISTRY:-git.rdrx.app/attune-system}/attune/notifier:${ATTUNE_IMAGE_TAG:-latest}
+    container_name: attune-notifier
+    environment:
+      RUST_LOG: info
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
+      ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
+      ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+      ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE__WORKER__WORKER_TYPE: container
+    ports:
+      - "8081:8081"
+    volumes:
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
+      - notifier_logs:/opt/attune/logs
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - attune-network
+    restart: unless-stopped
+
+  web:
+    image: ${ATTUNE_IMAGE_REGISTRY:-git.rdrx.app/attune-system}/attune/web:${ATTUNE_IMAGE_TAG:-latest}
+    container_name: attune-web
+    environment:
+      API_URL: ${API_URL:-http://localhost:8080}
+      WS_URL: ${WS_URL:-ws://localhost:8081}
+      ENVIRONMENT: docker
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+      notifier:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - attune-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  redis_data:
+    driver: local
+  api_logs:
+    driver: local
+  executor_logs:
+    driver: local
+  worker_shell_logs:
+    driver: local
+  worker_python_logs:
+    driver: local
+  worker_node_logs:
+    driver: local
+  worker_full_logs:
+    driver: local
+  sensor_logs:
+    driver: local
+  notifier_logs:
+    driver: local
+  packs_data:
+    driver: local
+  runtime_envs:
+    driver: local
+  artifacts_data:
+    driver: local
+  agent_bin:
+    driver: local
+
+networks:
+  attune-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

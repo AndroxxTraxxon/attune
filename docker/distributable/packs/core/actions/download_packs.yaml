@@ -1,0 +1,115 @@
+# Download Packs Action
+# Downloads packs from various sources (git repositories, HTTP archives, or pack registry)
+
+ref: core.download_packs
+label: "Download Packs"
+description: "Download packs from git repositories, HTTP archives, or pack registry to a temporary directory"
+enabled: true
+runner_type: shell
+entry_point: download_packs.sh
+
+# Parameter delivery: stdin for secure parameter passing (no env vars)
+parameter_delivery: stdin
+parameter_format: dotenv
+
+# Output format: json (structured data parsing enabled)
+output_format: json
+
+# Action parameters schema (StackStorm-style with inline required/secret)
+parameters:
+  packs:
+    type: array
+    description: "List of packs to download (git URLs, HTTP URLs, or pack refs)"
+    items:
+      type: string
+    minItems: 1
+    required: true
+  destination_dir:
+    type: string
+    description: "Destination directory for downloaded packs"
+    required: true
+  registry_url:
+    type: string
+    description: "Pack registry URL for resolving pack refs (optional)"
+    default: "https://registry.attune.io/index.json"
+  ref_spec:
+    type: string
+    description: "Git reference to checkout (branch, tag, or commit) - applies to all git URLs"
+  timeout:
+    type: integer
+    description: "Download timeout in seconds per pack"
+    default: 300
+    minimum: 10
+    maximum: 3600
+  verify_ssl:
+    type: boolean
+    description: "Verify SSL certificates for HTTPS downloads"
+    default: true
+  api_url:
+    type: string
+    description: "Attune API URL for making registry lookups"
+    default: "http://localhost:8080"
+
+# Output schema: describes the JSON structure written to stdout
+# Note: stdout/stderr/exit_code are captured automatically by the execution system
+output_schema:
+  downloaded_packs:
+    type: array
+    description: "List of successfully downloaded packs"
+    items:
+      type: object
+      properties:
+        source:
+          type: string
+          description: "Original pack source (URL or ref)"
+        source_type:
+          type: string
+          description: "Type of source"
+          enum:
+            - git
+            - http
+            - registry
+        pack_path:
+          type: string
+          description: "Local filesystem path to downloaded pack"
+        pack_ref:
+          type: string
+          description: "Pack reference (from pack.yaml)"
+        pack_version:
+          type: string
+          description: "Pack version (from pack.yaml)"
+        git_commit:
+          type: string
+          description: "Git commit hash (for git sources)"
+        checksum:
+          type: string
+          description: "Directory checksum"
+  failed_packs:
+    type: array
+    description: "List of packs that failed to download"
+    items:
+      type: object
+      properties:
+        source:
+          type: string
+          description: "Pack source that failed"
+        error:
+          type: string
+          description: "Error message"
+  total_count:
+    type: integer
+    description: "Total number of packs requested"
+  success_count:
+    type: integer
+    description: "Number of packs successfully downloaded"
+  failure_count:
+    type: integer
+    description: "Number of packs that failed"
+
+# Tags for categorization
+tags:
+  - pack
+  - download
+  - git
+  - installation
+  - registry

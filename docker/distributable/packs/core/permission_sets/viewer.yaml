@@ -1,0 +1,18 @@
+ref: core.viewer
+label: Viewer
+description: Read-only access to operational metadata and execution visibility.
+grants:
+  - resource: packs
+    actions: [read]
+  - resource: actions
+    actions: [read]
+  - resource: rules
+    actions: [read]
+  - resource: triggers
+    actions: [read]
+  - resource: executions
+    actions: [read]
+  - resource: keys
+    actions: [read]
+  - resource: artifacts
+    actions: [read]
