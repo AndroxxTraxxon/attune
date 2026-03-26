@@ -20,6 +20,7 @@ on:
           - executor
           - notifier
           - agent
+          - docker-dist
           - web
         default: all
   push:
@@ -357,6 +358,146 @@ jobs:
               ;;
             *)
               cat /tmp/package-link-response.txt
+              exit 1
+              ;;
+          esac
+
+  publish-docker-dist:
+    name: Publish Docker Dist Bundle
+    runs-on: build-amd64
+    needs: metadata
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.target_image == 'all' ||
+      inputs.target_image == 'docker-dist'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build docker dist bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/package-docker-dist.sh docker/dist dist/attune-docker-dist.tar.gz
+
+      - name: Upload docker dist archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: attune-docker-dist-${{ needs.metadata.outputs.image_tag }}
+          path: dist/attune-docker-dist.tar.gz
+          if-no-files-found: error
+
+      - name: Attach docker dist archive to release
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${REGISTRY_USERNAME:-}" ] || [ -z "${REGISTRY_PASSWORD:-}" ]; then
+            echo "CONTAINER_REGISTRY_USERNAME and CONTAINER_REGISTRY_PASSWORD are required to attach the docker dist archive to a release"
+            exit 1
+          fi
+
+          api_base="${{ github.server_url }}/api/v1"
+          owner_repo="${{ github.repository }}"
+          tag_name="${{ github.ref_name }}"
+          archive_path="dist/attune-docker-dist.tar.gz"
+          asset_name="attune-docker-dist-${tag_name}.tar.gz"
+
+          release_response_file="$(mktemp)"
+          status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
+            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
+            "${api_base}/repos/${owner_repo}/releases/tags/${tag_name}")"
+
+          if [ "${status_code}" = "404" ]; then
+            create_payload="$(TAG_NAME="${tag_name}" python3 - <<'PY'
+            import json
+            import os
+
+            tag = os.environ["TAG_NAME"]
+            print(json.dumps({
+                "tag_name": tag,
+                "name": tag,
+                "draft": False,
+                "prerelease": "-" in tag,
+            }))
+            PY
+            )"
+
+            status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
+              -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
+              -H "Content-Type: application/json" \
+              -X POST \
+              -d "${create_payload}" \
+              "${api_base}/repos/${owner_repo}/releases")"
+          fi
+
+          case "${status_code}" in
+            200|201)
+              ;;
+            *)
+              echo "Failed to fetch or create release for tag ${tag_name}"
+              cat "${release_response_file}"
+              exit 1
+              ;;
+          esac
+
+          release_id="$(python3 - "${release_response_file}" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], "r", encoding="utf-8") as fh:
+              data = json.load(fh)
+          print(data["id"])
+          PY
+          )"
+
+          existing_asset_id="$(python3 - "${release_response_file}" "${asset_name}" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], "r", encoding="utf-8") as fh:
+              data = json.load(fh)
+          name = sys.argv[2]
+          for asset in data.get("assets", []):
+              if asset.get("name") == name:
+                  print(asset["id"])
+                  break
+          PY
+          )"
+
+          if [ -n "${existing_asset_id}" ]; then
+            curl -sS \
+              -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
+              -X DELETE \
+              "${api_base}/repos/${owner_repo}/releases/${release_id}/assets/${existing_asset_id}" \
+              >/dev/null
+          fi
+
+          encoded_asset_name="$(ASSET_NAME="${asset_name}" python3 - <<'PY'
+          import os
+          import urllib.parse
+
+          print(urllib.parse.quote(os.environ["ASSET_NAME"], safe=""))
+          PY
+          )"
+
+          upload_response_file="$(mktemp)"
+          status_code="$(curl -sS -o "${upload_response_file}" -w '%{http_code}' \
+            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary "@${archive_path}" \
+            "${api_base}/repos/${owner_repo}/releases/${release_id}/assets?name=${encoded_asset_name}")"
+
+          case "${status_code}" in
+            201)
+              ;;
+            *)
+              echo "Failed to upload release asset ${asset_name}"
+              cat "${upload_response_file}"
               exit 1
               ;;
           esac
