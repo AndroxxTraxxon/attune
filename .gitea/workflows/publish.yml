@@ -506,17 +506,23 @@ jobs:
         run: |
           set -euo pipefail
           pull_args=()
+          artifact_ref="${{ needs.metadata.outputs.artifact_ref_base }}:rust-binaries-${{ needs.metadata.outputs.image_tag }}-${{ matrix.arch }}"
 
           if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
             pull_args+=(--plain-http)
           fi
+
+          echo "Pulling binary bundle artifact"
+          echo "  ref: ${artifact_ref}"
+          echo "  arch: ${{ matrix.arch }}"
+          echo "  plain_http: ${{ needs.metadata.outputs.registry_plain_http }}"
 
           mkdir -p dist/artifact
           cd dist/artifact
 
           oras pull \
             "${pull_args[@]}" \
-            "${{ needs.metadata.outputs.artifact_ref_base }}:rust-binaries-${{ needs.metadata.outputs.image_tag }}-${{ matrix.arch }}"
+            "${artifact_ref}"
 
           tar -xzf "attune-binaries-${{ matrix.arch }}.tar.gz"
 
@@ -526,6 +532,12 @@ jobs:
           set -euo pipefail
           rm -rf dist/image
           mkdir -p dist/image
+
+          echo "Preparing packaging context"
+          echo "  image: ${{ matrix.image.name }}"
+          echo "  repository: ${{ matrix.image.repository }}"
+          echo "  source_path: ${{ matrix.image.source_path }}"
+          echo "  dockerfile: ${{ matrix.image.dockerfile }}"
 
           case "${{ matrix.image.name }}" in
             api|executor|notifier)
@@ -583,6 +595,14 @@ jobs:
           else
             build_cmd+=(--tag "$image_ref" --push)
           fi
+
+          echo "Publishing architecture image"
+          echo "  image: ${{ matrix.image.name }}"
+          echo "  repository: ${{ matrix.image.repository }}"
+          echo "  platform: ${{ matrix.platform }}"
+          echo "  dockerfile: ${{ matrix.image.dockerfile }}"
+          echo "  destination: ${image_ref}"
+          echo "  plain_http: ${{ needs.metadata.outputs.registry_plain_http }}"
 
           run_with_retries 3 5 "${build_cmd[@]}"
 
@@ -716,6 +736,8 @@ jobs:
             .
             --platform "${{ matrix.platform }}"
             --file docker/Dockerfile.web
+            --provenance=false
+            --sbom=false
           )
 
           if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
@@ -723,6 +745,14 @@ jobs:
           else
             build_cmd+=(--tag "$image_ref" --push)
           fi
+
+          echo "Publishing architecture image"
+          echo "  image: web"
+          echo "  repository: attune/web"
+          echo "  platform: ${{ matrix.platform }}"
+          echo "  dockerfile: docker/Dockerfile.web"
+          echo "  destination: ${image_ref}"
+          echo "  plain_http: ${{ needs.metadata.outputs.registry_plain_http }}"
 
           run_with_retries 3 5 "${build_cmd[@]}"
 
@@ -845,6 +875,13 @@ jobs:
           }
 
           image_base="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/${{ matrix.repository }}"
+          create_args=()
+          push_args=()
+
+          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
+            create_args+=(--insecure)
+            push_args+=(--insecure)
+          fi
 
           IFS=',' read -ra tags <<< "${{ needs.metadata.outputs.image_tags }}"
           for tag in "${tags[@]}"; do
@@ -852,9 +889,33 @@ jobs:
             amd64_ref="${image_base}:${{ needs.metadata.outputs.image_tag }}-amd64"
             arm64_ref="${image_base}:${{ needs.metadata.outputs.image_tag }}-arm64"
 
-            run_with_retries 3 5 \
-              docker buildx imagetools create \
-              --tag "$manifest_ref" \
-              "$amd64_ref" \
-              "$arm64_ref"
+            if [ "${{ matrix.repository }}" = "attune/web" ]; then
+              echo "Publishing multi-arch manifest with docker manifest"
+              echo "  repository: ${{ matrix.repository }}"
+              echo "  manifest_tag: ${tag}"
+              echo "  manifest_ref: ${manifest_ref}"
+              echo "  source_amd64: ${amd64_ref}"
+              echo "  source_arm64: ${arm64_ref}"
+              echo "  plain_http: ${{ needs.metadata.outputs.registry_plain_http }}"
+              docker manifest rm "$manifest_ref" >/dev/null 2>&1 || true
+              run_with_retries 3 5 \
+                docker manifest create "${create_args[@]}" "$manifest_ref" "$amd64_ref" "$arm64_ref"
+              docker manifest annotate "$manifest_ref" "$amd64_ref" --os linux --arch amd64
+              docker manifest annotate "$manifest_ref" "$arm64_ref" --os linux --arch arm64
+              run_with_retries 3 5 \
+                docker manifest push "${push_args[@]}" "$manifest_ref"
+            else
+              echo "Publishing multi-arch manifest with buildx imagetools"
+              echo "  repository: ${{ matrix.repository }}"
+              echo "  manifest_tag: ${tag}"
+              echo "  manifest_ref: ${manifest_ref}"
+              echo "  source_amd64: ${amd64_ref}"
+              echo "  source_arm64: ${arm64_ref}"
+              echo "  plain_http: ${{ needs.metadata.outputs.registry_plain_http }}"
+              run_with_retries 3 5 \
+                docker buildx imagetools create \
+                --tag "$manifest_ref" \
+                "$amd64_ref" \
+                "$arm64_ref"
+            fi
           done
