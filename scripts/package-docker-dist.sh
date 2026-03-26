@@ -7,6 +7,9 @@ bundle_dir="${1:-${repo_root}/docker/distributable}"
 archive_path="${2:-${repo_root}/artifacts/attune-docker-dist.tar.gz}"
 
 template_dir="${repo_root}/docker/distributable"
+bundle_dir="$(realpath -m "${bundle_dir}")"
+archive_path="$(realpath -m "${archive_path}")"
+template_dir="$(realpath -m "${template_dir}")"
 
 mkdir -p "${bundle_dir}/docker" "${bundle_dir}/migrations" "${bundle_dir}/packs" "${bundle_dir}/scripts"
 mkdir -p "$(dirname "${archive_path}")"
