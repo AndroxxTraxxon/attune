@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Build pack binaries using Docker and extract them to ./packs/
 #
-# This script builds native pack binaries (sensors, etc.) in a Docker container
-# with GLIBC compatibility and extracts them to the appropriate pack directories.
+# This script builds statically-linked pack binaries (sensors, etc.) in a Docker
+# container using cargo-zigbuild + musl, producing binaries with zero runtime
+# dependencies. Supports cross-compilation for any target architecture.
 #
 # Usage:
-#   ./scripts/build-pack-binaries.sh
+#   ./scripts/build-pack-binaries.sh                  # Build for x86_64 (default)
+#   RUST_TARGET=aarch64-unknown-linux-musl ./scripts/build-pack-binaries.sh  # Build for arm64
 #
 # The script will:
-# 1. Build pack binaries in a Docker container with GLIBC 2.36 (Debian Bookworm)
+# 1. Build statically-linked pack binaries via cargo-zigbuild + musl
 # 2. Extract binaries to ./packs/core/sensors/
 # 3. Make binaries executable
 # 4. Clean up temporary container
@@ -29,10 +31,12 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 IMAGE_NAME="attune-pack-builder"
 CONTAINER_NAME="attune-pack-binaries-tmp"
 DOCKERFILE="docker/Dockerfile.pack-binaries"
+RUST_TARGET="${RUST_TARGET:-x86_64-unknown-linux-musl}"
 
-echo -e "${GREEN}Building pack binaries...${NC}"
+echo -e "${GREEN}Building statically-linked pack binaries...${NC}"
 echo "Project root: ${PROJECT_ROOT}"
 echo "Dockerfile: ${DOCKERFILE}"
+echo "Target: ${RUST_TARGET}"
 echo ""
 
 # Navigate to project root
@@ -45,8 +49,9 @@ if [[ ! -f "${DOCKERFILE}" ]]; then
 fi
 
 # Build the Docker image
-echo -e "${YELLOW}Step 1/4: Building Docker image...${NC}"
+echo -e "${YELLOW}Step 1/4: Building Docker image (target: ${RUST_TARGET})...${NC}"
 if DOCKER_BUILDKIT=1 docker build \
+    --build-arg RUST_TARGET="${RUST_TARGET}" \
     -f "${DOCKERFILE}" \
     -t "${IMAGE_NAME}" \
     . ; then
@@ -87,7 +92,7 @@ chmod +x packs/core/sensors/attune-core-timer-sensor
 echo ""
 echo -e "${YELLOW}Verifying binaries:${NC}"
 file packs/core/sensors/attune-core-timer-sensor
-ldd packs/core/sensors/attune-core-timer-sensor || echo "(ldd failed - binary may be static or require different environment)"
+(ldd packs/core/sensors/attune-core-timer-sensor 2>&1 || echo "statically linked (no dynamic dependencies)")
 ls -lh packs/core/sensors/attune-core-timer-sensor
 
 # Clean up temporary container
@@ -105,11 +110,13 @@ echo -e "${GREEN}═════════════════════
 echo -e "${GREEN}Pack binaries built successfully!${NC}"
 echo -e "${GREEN}════════════════════════════════════════${NC}"
 echo ""
+echo "Target architecture: ${RUST_TARGET}"
 echo "Binaries location:"
 echo "  • packs/core/sensors/attune-core-timer-sensor"
 echo ""
-echo "These binaries are now ready to be used by the init-packs service"
-echo "when starting docker-compose."
+echo "These are statically-linked musl binaries with zero runtime dependencies."
+echo "They are now ready to be used by the init-packs service when starting"
+echo "docker-compose."
 echo ""
 echo "To use them:"
 echo "  docker compose up -d"

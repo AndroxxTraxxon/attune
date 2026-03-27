@@ -355,10 +355,14 @@ pub struct OidcConfig {
     pub enabled: bool,
 
     /// OpenID Provider discovery document URL.
-    pub discovery_url: String,
+    /// Required when `enabled` is true; ignored otherwise.
+    #[serde(default)]
+    pub discovery_url: Option<String>,
 
     /// Confidential client ID.
-    pub client_id: String,
+    /// Required when `enabled` is true; ignored otherwise.
+    #[serde(default)]
+    pub client_id: Option<String>,
 
     /// Provider name used in login-page overrides such as `?auth=<provider_name>`.
     #[serde(default = "default_oidc_provider_name")]
@@ -374,7 +378,9 @@ pub struct OidcConfig {
     pub client_secret: Option<String>,
 
     /// Redirect URI registered with the provider.
-    pub redirect_uri: String,
+    /// Required when `enabled` is true; ignored otherwise.
+    #[serde(default)]
+    pub redirect_uri: Option<String>,
 
     /// Optional post-logout redirect URI.
     pub post_logout_redirect_uri: Option<String>,
@@ -396,7 +402,9 @@ pub struct LdapConfig {
     pub enabled: bool,
 
     /// LDAP server URL (e.g., "ldap://ldap.example.com:389" or "ldaps://ldap.example.com:636").
-    pub url: String,
+    /// Required when `enabled` is true; ignored otherwise.
+    #[serde(default)]
+    pub url: Option<String>,
 
     /// Bind DN template. Use `{login}` as placeholder for the user-supplied login.
     /// Example: "uid={login},ou=users,dc=example,dc=com"
@@ -985,14 +993,20 @@ impl Config {
 
         if let Some(oidc) = &self.security.oidc {
             if oidc.enabled {
-                if oidc.discovery_url.trim().is_empty() {
+                if oidc
+                    .discovery_url
+                    .as_deref()
+                    .unwrap_or("")
+                    .trim()
+                    .is_empty()
+                {
                     return Err(crate::Error::validation(
-                        "OIDC discovery URL cannot be empty when OIDC is enabled",
+                        "OIDC discovery URL is required when OIDC is enabled",
                     ));
                 }
-                if oidc.client_id.trim().is_empty() {
+                if oidc.client_id.as_deref().unwrap_or("").trim().is_empty() {
                     return Err(crate::Error::validation(
-                        "OIDC client ID cannot be empty when OIDC is enabled",
+                        "OIDC client ID is required when OIDC is enabled",
                     ));
                 }
                 if oidc
@@ -1006,9 +1020,19 @@ impl Config {
                         "OIDC client secret is required when OIDC is enabled",
                     ));
                 }
-                if oidc.redirect_uri.trim().is_empty() {
+                if oidc.redirect_uri.as_deref().unwrap_or("").trim().is_empty() {
                     return Err(crate::Error::validation(
-                        "OIDC redirect URI cannot be empty when OIDC is enabled",
+                        "OIDC redirect URI is required when OIDC is enabled",
+                    ));
+                }
+            }
+        }
+
+        if let Some(ldap) = &self.security.ldap {
+            if ldap.enabled {
+                if ldap.url.as_deref().unwrap_or("").trim().is_empty() {
+                    return Err(crate::Error::validation(
+                        "LDAP server URL is required when LDAP is enabled",
                     ));
                 }
             }
@@ -1173,6 +1197,31 @@ mod tests {
     }
 
     #[test]
+    fn test_oidc_config_disabled_no_urls_required() {
+        let yaml = r#"
+enabled: false
+"#;
+        let cfg: OidcConfig = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(!cfg.enabled);
+        assert!(cfg.discovery_url.is_none());
+        assert!(cfg.client_id.is_none());
+        assert!(cfg.redirect_uri.is_none());
+        assert!(cfg.client_secret.is_none());
+        assert_eq!(cfg.provider_name, "oidc");
+    }
+
+    #[test]
+    fn test_ldap_config_disabled_no_url_required() {
+        let yaml = r#"
+enabled: false
+"#;
+        let cfg: LdapConfig = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(!cfg.enabled);
+        assert!(cfg.url.is_none());
+        assert_eq!(cfg.provider_name, "ldap");
+    }
+
+    #[test]
     fn test_ldap_config_defaults() {
         let yaml = r#"
 enabled: true
@@ -1182,7 +1231,7 @@ client_id: "test"
         let cfg: LdapConfig = serde_yaml_ng::from_str(yaml).unwrap();
 
         assert!(cfg.enabled);
-        assert_eq!(cfg.url, "ldap://localhost:389");
+        assert_eq!(cfg.url.as_deref(), Some("ldap://localhost:389"));
         assert_eq!(cfg.user_filter, "(uid={login})");
         assert_eq!(cfg.login_attr, "uid");
         assert_eq!(cfg.email_attr, "mail");
@@ -1222,7 +1271,7 @@ provider_icon_url: "https://corp.com/icon.svg"
         let cfg: LdapConfig = serde_yaml_ng::from_str(yaml).unwrap();
 
         assert!(cfg.enabled);
-        assert_eq!(cfg.url, "ldaps://ldap.corp.com:636");
+        assert_eq!(cfg.url.as_deref(), Some("ldaps://ldap.corp.com:636"));
         assert_eq!(
             cfg.bind_dn_template.as_deref(),
             Some("uid={login},ou=people,dc=corp,dc=com")

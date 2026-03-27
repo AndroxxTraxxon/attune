@@ -126,15 +126,17 @@ pub async fn build_login_redirect(
         .map_err(|err| {
             ApiError::InternalServerError(format!("Failed to build OIDC HTTP client: {err}"))
         })?;
-    let redirect_uri = RedirectUrl::new(oidc.redirect_uri.clone()).map_err(|err| {
+    let redirect_uri_str = oidc.redirect_uri.clone().unwrap_or_default();
+    let redirect_uri = RedirectUrl::new(redirect_uri_str).map_err(|err| {
         ApiError::InternalServerError(format!("Invalid OIDC redirect URI: {err}"))
     })?;
     let client_secret = oidc.client_secret.clone().ok_or_else(|| {
         ApiError::InternalServerError("OIDC client secret is missing".to_string())
     })?;
+    let client_id = oidc.client_id.clone().unwrap_or_default();
     let client = CoreClient::from_provider_metadata(
         discovery.metadata.clone(),
-        ClientId::new(oidc.client_id.clone()),
+        ClientId::new(client_id),
         Some(ClientSecret::new(client_secret)),
     )
     .set_redirect_uri(redirect_uri);
@@ -238,15 +240,17 @@ pub async fn handle_callback(
         .map_err(|err| {
             ApiError::InternalServerError(format!("Failed to build OIDC HTTP client: {err}"))
         })?;
-    let redirect_uri = RedirectUrl::new(oidc.redirect_uri.clone()).map_err(|err| {
+    let redirect_uri_str = oidc.redirect_uri.clone().unwrap_or_default();
+    let redirect_uri = RedirectUrl::new(redirect_uri_str).map_err(|err| {
         ApiError::InternalServerError(format!("Invalid OIDC redirect URI: {err}"))
     })?;
     let client_secret = oidc.client_secret.clone().ok_or_else(|| {
         ApiError::InternalServerError("OIDC client secret is missing".to_string())
     })?;
+    let client_id = oidc.client_id.clone().unwrap_or_default();
     let client = CoreClient::from_provider_metadata(
         discovery.metadata.clone(),
-        ClientId::new(oidc.client_id.clone()),
+        ClientId::new(client_id),
         Some(ClientSecret::new(client_secret)),
     )
     .set_redirect_uri(redirect_uri);
@@ -336,7 +340,7 @@ pub async fn build_logout_redirect(
                 pairs.append_pair("id_token_hint", &id_token_hint);
             }
             pairs.append_pair("post_logout_redirect_uri", &post_logout_redirect_uri);
-            pairs.append_pair("client_id", &oidc.client_id);
+            pairs.append_pair("client_id", oidc.client_id.as_deref().unwrap_or_default());
         }
         String::from(url)
     } else {
@@ -481,7 +485,8 @@ fn oidc_config(state: &SharedState) -> Result<OidcConfig, ApiError> {
 }
 
 async fn fetch_discovery_document(oidc: &OidcConfig) -> Result<OidcDiscoveryDocument, ApiError> {
-    let discovery = reqwest::get(&oidc.discovery_url).await.map_err(|err| {
+    let discovery_url = oidc.discovery_url.as_deref().unwrap_or_default();
+    let discovery = reqwest::get(discovery_url).await.map_err(|err| {
         ApiError::InternalServerError(format!("Failed to fetch OIDC discovery document: {err}"))
     })?;
 
@@ -621,7 +626,7 @@ async fn verify_id_token(
     let issuer = discovery.metadata.issuer().to_string();
     let mut validation = Validation::new(algorithm);
     validation.set_issuer(&[issuer.as_str()]);
-    validation.set_audience(&[oidc.client_id.as_str()]);
+    validation.set_audience(&[oidc.client_id.as_deref().unwrap_or_default()]);
     validation.set_required_spec_claims(&["exp", "iat", "iss", "sub", "aud"]);
     validation.validate_nbf = false;
 
@@ -740,7 +745,8 @@ fn should_use_secure_cookies(state: &SharedState) -> bool {
             .security
             .oidc
             .as_ref()
-            .map(|oidc| oidc.redirect_uri.starts_with("https://"))
+            .and_then(|oidc| oidc.redirect_uri.as_deref())
+            .map(|uri| uri.starts_with("https://"))
             .unwrap_or(false)
 }
 

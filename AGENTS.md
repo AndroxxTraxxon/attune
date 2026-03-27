@@ -77,7 +77,7 @@ attune/
 
 **Services**:
 - **Infrastructure**: postgres (TimescaleDB), rabbitmq, redis
-- **Init** (run-once): migrations, init-user, init-packs, init-agent
+- **Init** (run-once): migrations, init-user, init-pack-binaries, init-packs, init-agent
 - **Application**: api (8080), executor, worker-{shell,python,node,full}, sensor, notifier (8081), web (3000)
 
 **Volumes** (named):
@@ -100,7 +100,8 @@ docker compose -f docker-compose.yaml -f docker-compose.agent.yaml up -d  # Star
 
 ### Docker Build Optimization
 - **Active Dockerfiles**: `docker/Dockerfile.optimized`, `docker/Dockerfile.agent`, `docker/Dockerfile.web`, and `docker/Dockerfile.pack-binaries`
-- **Agent Dockerfile** (`docker/Dockerfile.agent`): Builds a statically-linked `attune-agent` binary using musl (`x86_64-unknown-linux-musl`). Three stages: `builder` (cross-compile), `agent-binary` (scratch — just the binary), `agent-init` (busybox — for volume population via `cp`). The binary has zero runtime dependencies (no glibc, no libssl). Build with `make docker-build-agent`.
+- **Agent Dockerfile** (`docker/Dockerfile.agent`): Builds statically-linked `attune-agent` and `attune-sensor-agent` binaries using musl. Uses `cargo-zigbuild` (zig as the cross-compilation backend) so that any target architecture can be built from any host — e.g., building `aarch64-unknown-linux-musl` on an x86_64 host or vice versa. The `RUST_TARGET` build arg controls the output architecture (`x86_64-unknown-linux-musl` default, or `aarch64-unknown-linux-musl` for arm64). Three stages: `builder` (cross-compile with cargo-zigbuild), `agent-binary` (scratch — just the binaries), `agent-init` (busybox — for volume population via `cp`). The binaries have zero runtime dependencies (no glibc, no libssl). Build with `make docker-build-agent` (amd64), `make docker-build-agent-arm64` (arm64), or `make docker-build-agent-all` (both). In `docker-compose.yaml`, set `AGENT_RUST_TARGET=aarch64-unknown-linux-musl` env var to build arm64 agent binaries (defaults to x86_64).
+- **Pack Binaries Dockerfile** (`docker/Dockerfile.pack-binaries`): Builds statically-linked pack binaries (sensors, etc.) using musl + cargo-zigbuild for cross-compilation. The `RUST_TARGET` build arg controls the output architecture (`x86_64-unknown-linux-musl` default, or `aarch64-unknown-linux-musl` for arm64). Three stages: `builder` (cross-compile with cargo-zigbuild), `output` (scratch — just the binaries for `docker cp` extraction), `pack-binaries-init` (busybox — for Docker Compose volume population via `cp`). Build with `make docker-build-pack-binaries` (amd64), `make docker-build-pack-binaries-arm64` (arm64), or `make docker-build-pack-binaries-all` (both). In `docker-compose.yaml`, set `PACK_BINARIES_RUST_TARGET=aarch64-unknown-linux-musl` env var to build arm64 pack binaries (defaults to x86_64). The `init-pack-binaries` Docker Compose service automatically builds and copies pack binaries into the `packs_data` volume before `init-packs` runs.
 - **Strategy**: Selective crate copying - only copy crates needed for each service (not entire workspace)
 - **Performance**: 90% faster incremental builds (~30 sec vs ~5 min for code changes)
 - **BuildKit cache mounts**: Persist cargo registry and compilation artifacts between builds
@@ -123,7 +124,7 @@ docker compose -f docker-compose.yaml -f docker-compose.agent.yaml up -d  # Star
 - **Key Principle**: Packs are NOT copied into Docker images - they are mounted as volumes
 - **Volume Flow**: Host `./packs/` → `init-packs` service → `packs_data` volume → mounted in all services
 - **Benefits**: Update packs with restart (~5 sec) instead of rebuild (~5 min)
-- **Pack Binaries**: Built separately with `./scripts/build-pack-binaries.sh` (GLIBC compatibility)
+- **Pack Binaries**: Automatically built and deployed via the `init-pack-binaries` Docker Compose service (statically-linked musl binaries via cargo-zigbuild, supports cross-compilation via `PACK_BINARIES_RUST_TARGET` env var). Can also be built manually with `./scripts/build-pack-binaries.sh` or `make docker-build-pack-binaries`. The `init-packs` service depends on `init-pack-binaries` and preserves any ELF binaries already present in the target `sensors/` directory (detected via ELF magic bytes with `od`) — it backs them up before copying host pack files and restores them afterward, preventing the host's stale dynamically-linked binary from overwriting the freshly-built static one.
 - **Development**: Use `./packs.dev/` for instant testing (direct bind mount, no restart needed)
 - **Documentation**: See `docs/QUICKREF-packs-volumes.md`
 
@@ -273,7 +274,7 @@ Completion listener advances workflow → Schedules successor tasks → Complete
 - **Pack Volume Strategy**: Packs are mounted as volumes (NOT copied into Docker images)
   - Host `./packs/` → `packs_data` volume via `init-packs` service → mounted at `/opt/attune/packs` in all services
   - Development packs in `./packs.dev/` are bind-mounted directly for instant updates
-- **Pack Binaries**: Native binaries (sensors) built separately with `./scripts/build-pack-binaries.sh`
+- **Pack Binaries**: Native binaries (sensors) automatically built by the `init-pack-binaries` Docker Compose service (statically-linked musl, cross-arch via `PACK_BINARIES_RUST_TARGET`). Can also be built manually with `./scripts/build-pack-binaries.sh` or `make docker-build-pack-binaries`.
 - **Action Script Resolution**: Worker constructs file paths as `{packs_base_dir}/{pack_ref}/actions/{entrypoint}`
 - **Workflow Action YAML (`workflow_file` field)**: An action YAML may include a `workflow_file` field (e.g., `workflow_file: workflows/timeline_demo.yaml`) pointing to a workflow definition file relative to the `actions/` directory. When present, the `PackComponentLoader` reads and parses the referenced workflow YAML, creates/updates a `workflow_definition` record, and links the action to it via `action.workflow_def`. This separates action-level metadata (ref, label, parameters, policies) from the workflow graph (tasks, transitions, variables), and allows **multiple actions to reference the same workflow file** with different parameter schemas or policy configurations. Workflow actions have no `runner_type` (runtime is `None`) — the executor orchestrates child task executions rather than sending to a worker.
   - **Action-linked workflow files omit action-level metadata**: Workflow files referenced via `workflow_file` should contain **only the execution graph**: `version`, `vars`, `tasks`, `output_map`. The `ref`, `label`, `description`, `parameters`, `output`, and `tags` fields are omitted — the action YAML is the single authoritative source for those values. The `WorkflowDefinition` parser accepts empty `ref`/`label` (defaults to `""`), and the loader / registrar fall back to the action YAML (or filename-derived values) when they are missing. Standalone workflow files (in `workflows/`) still carry their own `ref`/`label` since they have no companion action YAML.
@@ -683,7 +684,7 @@ When reporting, ask: "Should I fix this first or continue with [original task]?"
 - `docker/Dockerfile.optimized` - Optimized service builds (api, executor, notifier)
 - `docker/Dockerfile.agent` - Statically-linked agent binary (musl, for injection into any container)
 - `docker/Dockerfile.web` - Web UI build
-- `docker/Dockerfile.pack-binaries` - Separate pack binary builder
+- `docker/Dockerfile.pack-binaries` - Separate pack binary builder (cargo-zigbuild + musl static linking, 3 stages: builder, output, pack-binaries-init)
 - `scripts/build-pack-binaries.sh` - Build pack binaries script
 
 ## Common Pitfalls to Avoid
@@ -703,7 +704,7 @@ When reporting, ask: "Should I fix this first or continue with [original task]?"
 14. **REMEMBER** schema is determined by `search_path`, not hardcoded in queries (production uses `attune`, development uses `public`)
 15. **REMEMBER** to regenerate SQLx metadata after schema-related changes: `cargo sqlx prepare`
 16. **REMEMBER** packs are volumes - update with restart, not rebuild
-17. **REMEMBER** to build pack binaries separately: `./scripts/build-pack-binaries.sh`
+17. **REMEMBER** pack binaries are automatically built by `init-pack-binaries` in Docker Compose. For manual builds use `make docker-build-pack-binaries` or `./scripts/build-pack-binaries.sh`.
 18. **REMEMBER** when adding mutable columns to `execution` or `worker`, add a corresponding `IS DISTINCT FROM` check to the entity's history trigger function in the TimescaleDB migration. Events and enforcements are hypertables without history tables — do NOT add frequently-mutated columns to them. Execution is both a hypertable AND has an `execution_history` table (because it is mutable with ~4 updates per row).
 19. **REMEMBER** for large JSONB columns in history triggers (like `execution.result`), use `_jsonb_digest_summary()` instead of storing the raw value — see migration `000009_timescaledb_history`
 20. **NEVER** use `SELECT *` on tables that have DB-only columns not in the Rust `FromRow` struct (e.g., `execution.is_workflow`, `execution.workflow_def` exist in SQL but not in the `Execution` model). Define a `SELECT_COLUMNS` constant in the repository (see `execution.rs`, `pack.rs`, `runtime_version.rs` for examples) and reference it from all queries — including queries outside the repository (e.g., `timeout_monitor.rs` imports `execution::SELECT_COLUMNS`).ause runtime deserialization failures.

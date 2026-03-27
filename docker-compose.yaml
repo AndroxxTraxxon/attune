@@ -91,6 +91,30 @@ services:
       - attune-network
     restart: on-failure
 
+  # Build and extract statically-linked pack binaries (sensors, etc.)
+  # These binaries are built with musl for cross-architecture compatibility
+  # and placed directly into the packs volume for sensor containers to use.
+  init-pack-binaries:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.pack-binaries
+      target: pack-binaries-init
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+        RUST_TARGET: ${PACK_BINARIES_RUST_TARGET:-x86_64-unknown-linux-musl}
+    container_name: attune-init-pack-binaries
+    volumes:
+      - packs_data:/opt/attune/packs
+    entrypoint:
+      [
+        "/bin/sh",
+        "-c",
+        "mkdir -p /opt/attune/packs/core/sensors && cp /pack-binaries/attune-core-timer-sensor /opt/attune/packs/core/sensors/attune-core-timer-sensor && chmod +x /opt/attune/packs/core/sensors/attune-core-timer-sensor && echo 'Pack binaries copied successfully'",
+      ]
+    restart: "no"
+    networks:
+      - attune-network
+
   # Initialize builtin packs
   # Copies pack files to shared volume and loads them into database
   init-packs:
@@ -117,6 +141,8 @@ services:
       DEFAULT_ADMIN_PERMISSION_SET_REF: core.admin
     command: ["/bin/sh", "/init-packs.sh"]
     depends_on:
+      init-pack-binaries:
+        condition: service_completed_successfully
       migrations:
         condition: service_completed_successfully
       postgres:
@@ -136,6 +162,7 @@ services:
       target: agent-init
       args:
         BUILDKIT_INLINE_CACHE: 1
+        RUST_TARGET: ${AGENT_RUST_TARGET:-x86_64-unknown-linux-musl}
     container_name: attune-init-agent
     volumes:
       - agent_bin:/opt/attune/agent
@@ -209,8 +236,8 @@ services:
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
       # Message Queue
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
-      # Cache
-      ATTUNE__CACHE__URL: redis://redis:6379
+      # Redis
+      ATTUNE__REDIS__URL: redis://redis:6379
       # Worker config override
       ATTUNE__WORKER__WORKER_TYPE: container
     ports:
@@ -263,7 +290,7 @@ services:
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
-      ATTUNE__CACHE__URL: redis://redis:6379
+      ATTUNE__REDIS__URL: redis://redis:6379
       ATTUNE__WORKER__WORKER_TYPE: container
     volumes:
       - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro

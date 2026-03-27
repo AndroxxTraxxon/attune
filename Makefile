@@ -5,8 +5,10 @@
         docker-build-worker-node docker-build-worker-full deny ci-rust ci-web-blocking ci-web-advisory \
         ci-security-blocking ci-security-advisory ci-blocking ci-advisory \
         fmt-check pre-commit install-git-hooks \
-        build-agent docker-build-agent run-agent run-agent-release \
-        docker-up-agent docker-down-agent
+        build-agent docker-build-agent docker-build-agent-arm64 docker-build-agent-all \
+        run-agent run-agent-release \
+        docker-up-agent docker-down-agent \
+        docker-build-pack-binaries docker-build-pack-binaries-arm64 docker-build-pack-binaries-all
 
 # Default target
 help:
@@ -63,12 +65,19 @@ help:
 	@echo "  make docker-down                 - Stop services"
 	@echo ""
 	@echo "Agent (Universal Worker):"
-	@echo "  make build-agent         - Build statically-linked agent binary (musl)"
-	@echo "  make docker-build-agent  - Build agent Docker image"
-	@echo "  make run-agent           - Run agent in development mode"
-	@echo "  make run-agent-release   - Run agent in release mode"
+	@echo "  make build-agent              - Build statically-linked agent binary (musl)"
+	@echo "  make docker-build-agent       - Build agent Docker image (amd64, default)"
+	@echo "  make docker-build-agent-arm64 - Build agent Docker image (arm64)"
+	@echo "  make docker-build-agent-all   - Build agent Docker images (amd64 + arm64)"
+	@echo "  make run-agent                - Run agent in development mode"
+	@echo "  make run-agent-release        - Run agent in release mode"
 	@echo "  make docker-up-agent     - Start all services + agent workers (ruby, etc.)"
 	@echo "  make docker-down-agent   - Stop agent stack"
+	@echo ""
+	@echo "Pack Binaries:"
+	@echo "  make docker-build-pack-binaries       - Build pack binaries Docker image (amd64, default)"
+	@echo "  make docker-build-pack-binaries-arm64  - Build pack binaries Docker image (arm64)"
+	@echo "  make docker-build-pack-binaries-all    - Build pack binaries Docker images (amd64 + arm64)"
 	@echo ""
 	@echo "Development:"
 	@echo "  make watch          - Watch and rebuild on changes"
@@ -240,6 +249,9 @@ docker-build-web:
 # Agent binary (statically-linked for injection into any container)
 AGENT_RUST_TARGET ?= x86_64-unknown-linux-musl
 
+# Pack binaries (statically-linked for packs volume)
+PACK_BINARIES_RUST_TARGET ?= x86_64-unknown-linux-musl
+
 build-agent:
 	@echo "Installing musl target (if not already installed)..."
 	rustup target add $(AGENT_RUST_TARGET) 2>/dev/null || true
@@ -254,15 +266,43 @@ build-agent:
 	@ls -lh target/$(AGENT_RUST_TARGET)/release/attune-sensor-agent
 
 docker-build-agent:
-	@echo "Building agent Docker image (statically-linked binary)..."
+	@echo "Building agent Docker image ($(AGENT_RUST_TARGET))..."
 	DOCKER_BUILDKIT=1 docker buildx build --build-arg RUST_TARGET=$(AGENT_RUST_TARGET) --target agent-init -f docker/Dockerfile.agent -t attune-agent:latest .
-	@echo "✅ Agent image built: attune-agent:latest"
+	@echo "✅ Agent image built: attune-agent:latest ($(AGENT_RUST_TARGET))"
+
+docker-build-agent-arm64:
+	@echo "Building arm64 agent Docker image..."
+	DOCKER_BUILDKIT=1 docker buildx build --build-arg RUST_TARGET=aarch64-unknown-linux-musl --target agent-init -f docker/Dockerfile.agent -t attune-agent:arm64 .
+	@echo "✅ Agent image built: attune-agent:arm64"
+
+docker-build-agent-all:
+	@echo "Building agent Docker images for all architectures..."
+	$(MAKE) docker-build-agent
+	$(MAKE) docker-build-agent-arm64
+	@echo "✅ All agent images built: attune-agent:latest (amd64), attune-agent:arm64"
 
 run-agent:
 	cargo run --bin attune-agent
 
 run-agent-release:
 	cargo run --bin attune-agent --release
+
+# Pack binaries (statically-linked for packs volume)
+docker-build-pack-binaries:
+	@echo "Building pack binaries Docker image ($(PACK_BINARIES_RUST_TARGET))..."
+	DOCKER_BUILDKIT=1 docker buildx build --build-arg RUST_TARGET=$(PACK_BINARIES_RUST_TARGET) --target pack-binaries-init -f docker/Dockerfile.pack-binaries -t attune-pack-builder:latest .
+	@echo "✅ Pack binaries image built: attune-pack-builder:latest ($(PACK_BINARIES_RUST_TARGET))"
+
+docker-build-pack-binaries-arm64:
+	@echo "Building arm64 pack binaries Docker image..."
+	DOCKER_BUILDKIT=1 docker buildx build --build-arg RUST_TARGET=aarch64-unknown-linux-musl --target pack-binaries-init -f docker/Dockerfile.pack-binaries -t attune-pack-builder:arm64 .
+	@echo "✅ Pack binaries image built: attune-pack-builder:arm64"
+
+docker-build-pack-binaries-all:
+	@echo "Building pack binaries Docker images for all architectures..."
+	$(MAKE) docker-build-pack-binaries
+	$(MAKE) docker-build-pack-binaries-arm64
+	@echo "✅ All pack binary images built: attune-pack-builder:latest (amd64), attune-pack-builder:arm64"
 
 run-sensor-agent:
 	cargo run --bin attune-sensor-agent

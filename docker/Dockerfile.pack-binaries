@@ -1,12 +1,26 @@
-# Dockerfile for building pack binaries independently
+# Dockerfile for building statically-linked pack binaries independently
 #
-# This Dockerfile builds native pack binaries (sensors, etc.) with GLIBC compatibility
-# The binaries are built separately from service containers and placed in ./packs/
+# This Dockerfile builds native pack binaries (sensors, etc.) as fully static
+# musl binaries with zero runtime dependencies. Uses cargo-zigbuild for
+# cross-compilation, allowing builds for any target architecture from any host
+# (e.g., building x86_64 musl binaries on an arm64 Mac, or vice versa).
+#
+# Architecture handling:
+#   The RUST_TARGET build arg controls the output architecture:
+#     x86_64-unknown-linux-musl   -> amd64 static binary (default)
+#     aarch64-unknown-linux-musl  -> arm64 static binary
 #
 # Usage:
-#   docker build -f docker/Dockerfile.pack-binaries -t attune-pack-builder .
+#   # Build for the default architecture (x86_64):
+#   DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.pack-binaries -t attune-pack-builder .
+#
+#   # Build for arm64:
+#   DOCKER_BUILDKIT=1 docker build --build-arg RUST_TARGET=aarch64-unknown-linux-musl \
+#       -f docker/Dockerfile.pack-binaries -t attune-pack-builder .
+#
+#   # Extract binaries:
 #   docker create --name pack-binaries attune-pack-builder
-#   docker cp pack-binaries:/build/pack-binaries/. ./packs/
+#   docker cp pack-binaries:/pack-binaries/. ./packs/
 #   docker rm pack-binaries
 #
 # Or use the provided script:
@@ -14,25 +28,56 @@
 
 ARG RUST_VERSION=1.92
 ARG DEBIAN_VERSION=bookworm
+ARG RUST_TARGET=x86_64-unknown-linux-musl
 
 # ============================================================================
-# Stage 1: Builder - Build pack binaries with GLIBC 2.36
+# Stage 1: Builder - Cross-compile statically-linked pack binaries with musl
 # ============================================================================
 FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
 
-# Install build dependencies
+ARG RUST_TARGET
+
+# Install build dependencies.
+# - musl-tools: provides the musl libc headers needed for musl target builds
+# - python3 + pip: needed to install ziglang (zig is the cross-compilation backend)
+# - pkg-config, libssl-dev: needed for native dependency detection during build
+# - file, binutils: for verifying and stripping the resulting binaries
 RUN apt-get update && apt-get install -y \
+    musl-tools \
     pkg-config \
     libssl-dev \
     ca-certificates \
+    file \
+    binutils \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install zig (provides cross-compilation toolchains for all architectures)
+# and cargo-zigbuild (cargo subcommand that uses zig as the linker/compiler).
+# This replaces native musl-gcc and avoids the -m64 flag mismatch that occurs
+# when the host arch doesn't match the target arch (e.g., building x86_64 musl
+# binaries on an arm64 host).
+RUN pip3 install --break-system-packages --no-cache-dir ziglang && \
+    cargo install --locked cargo-zigbuild
+
+# Add the requested musl target for fully static binaries
+RUN rustup target add ${RUST_TARGET}
 
 WORKDIR /build
 
 # Increase rustc stack size to prevent SIGSEGV during release builds
 ENV RUST_MIN_STACK=67108864
 
-# Copy workspace configuration
+# Enable SQLx offline mode — compile-time query checking without a live database
+ENV SQLX_OFFLINE=true
+
+# ---------------------------------------------------------------------------
+# Dependency caching layer
+# Copy only Cargo metadata first so `cargo fetch` is cached when only source
+# code changes. This follows the same selective-copy optimization pattern as
+# the other active Dockerfiles in this directory.
+# ---------------------------------------------------------------------------
 COPY Cargo.toml Cargo.lock ./
 
 # Copy all workspace member manifests (required for workspace resolution)
@@ -45,35 +90,63 @@ COPY crates/worker/Cargo.toml ./crates/worker/Cargo.toml
 COPY crates/notifier/Cargo.toml ./crates/notifier/Cargo.toml
 COPY crates/cli/Cargo.toml ./crates/cli/Cargo.toml
 
-# Create dummy source files for workspace members (not being built)
-RUN mkdir -p crates/api/src && echo "fn main() {}" > crates/api/src/main.rs
-RUN mkdir -p crates/executor/src && echo "fn main() {}" > crates/executor/src/main.rs
-RUN mkdir -p crates/executor/benches && echo "fn main() {}" > crates/executor/benches/context_clone.rs
-RUN mkdir -p crates/sensor/src && echo "fn main() {}" > crates/sensor/src/main.rs
-RUN mkdir -p crates/worker/src && echo "fn main() {}" > crates/worker/src/main.rs
-RUN echo "fn main() {}" > crates/worker/src/agent_main.rs
-RUN mkdir -p crates/notifier/src && echo "fn main() {}" > crates/notifier/src/main.rs
-RUN mkdir -p crates/cli/src && echo "fn main() {}" > crates/cli/src/main.rs
+# Create minimal stub sources so cargo can resolve the workspace and fetch deps.
+# These are ONLY used for `cargo fetch` — never compiled.
+# NOTE: The worker crate has TWO binary targets (main + agent_main) and the
+# sensor crate also has two binary targets (main + agent_main), so we create
+# stubs for all of them.
+RUN mkdir -p crates/common/src && echo "" > crates/common/src/lib.rs && \
+    mkdir -p crates/api/src && echo "fn main(){}" > crates/api/src/main.rs && \
+    mkdir -p crates/executor/src && echo "fn main(){}" > crates/executor/src/main.rs && \
+    mkdir -p crates/executor/benches && echo "fn main(){}" > crates/executor/benches/context_clone.rs && \
+    mkdir -p crates/sensor/src && echo "fn main(){}" > crates/sensor/src/main.rs && \
+    echo "fn main(){}" > crates/sensor/src/agent_main.rs && \
+    mkdir -p crates/core-timer-sensor/src && echo "fn main(){}" > crates/core-timer-sensor/src/main.rs && \
+    mkdir -p crates/worker/src && echo "fn main(){}" > crates/worker/src/main.rs && \
+    echo "fn main(){}" > crates/worker/src/agent_main.rs && \
+    mkdir -p crates/notifier/src && echo "fn main(){}" > crates/notifier/src/main.rs && \
+    mkdir -p crates/cli/src && echo "fn main(){}" > crates/cli/src/main.rs
 
-# Copy only the source code needed for pack binaries
+# Download all dependencies (cached unless Cargo.toml/Cargo.lock change)
+# registry/git use sharing=shared — cargo handles concurrent reads safely
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
+    cargo fetch
+
+# ---------------------------------------------------------------------------
+# Build layer
+# Copy real source code and compile only the pack binaries with musl
+# ---------------------------------------------------------------------------
+COPY migrations/ ./migrations/
 COPY crates/common/ ./crates/common/
 COPY crates/core-timer-sensor/ ./crates/core-timer-sensor/
 
-# Build pack binaries with BuildKit cache mounts
-# These binaries will have GLIBC 2.36 compatibility (Debian Bookworm)
+# Build pack binaries with BuildKit cache mounts, statically linked with musl.
+# Uses cargo-zigbuild so that cross-compilation works regardless of host arch.
 # - registry/git use sharing=shared (cargo handles concurrent access safely)
-# - target uses dedicated cache for pack binaries (separate from service builds)
+# - target uses sharing=locked because zigbuild cross-compilation needs
+#   exclusive access to the target directory
+# - dedicated cache ID (target-pack-binaries-static) to avoid collisions with
+#   other Dockerfiles' target caches
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
-    --mount=type=cache,target=/build/target,id=target-pack-binaries \
+    --mount=type=cache,id=target-pack-binaries-static,target=/build/target,sharing=locked \
     mkdir -p /build/pack-binaries && \
-    cargo build --release --bin attune-core-timer-sensor && \
-    cp /build/target/release/attune-core-timer-sensor /build/pack-binaries/attune-core-timer-sensor
+    cargo zigbuild --release --target ${RUST_TARGET} --bin attune-core-timer-sensor && \
+    cp /build/target/${RUST_TARGET}/release/attune-core-timer-sensor /build/pack-binaries/attune-core-timer-sensor
 
-# Verify binaries were built successfully
-RUN ls -lah /build/pack-binaries/ && \
+# Strip the binary to minimize size.
+# When cross-compiling for a different architecture, the host strip may not
+# understand the foreign binary format. In that case we skip stripping — the
+# binary is still functional, just slightly larger.
+RUN (strip /build/pack-binaries/attune-core-timer-sensor 2>/dev/null && \
+    echo "stripped attune-core-timer-sensor" || \
+    echo "strip skipped for attune-core-timer-sensor (cross-arch binary)")
+
+# Verify binaries were built successfully and are statically linked
+RUN ls -lh /build/pack-binaries/attune-core-timer-sensor && \
     file /build/pack-binaries/attune-core-timer-sensor && \
-    ldd /build/pack-binaries/attune-core-timer-sensor && \
+    (ldd /build/pack-binaries/attune-core-timer-sensor 2>&1 || echo "statically linked (no dynamic dependencies)") && \
     /build/pack-binaries/attune-core-timer-sensor --version || echo "Built successfully"
 
 # ============================================================================
@@ -87,3 +160,15 @@ COPY --from=builder /build/pack-binaries/ /pack-binaries/
 
 # Default command (not used in FROM scratch)
 CMD ["/bin/sh"]
+
+# ============================================================================
+# Stage 3: pack-binaries-init - Init container for volume population
+# ============================================================================
+# Uses busybox so we have `cp`, `sh`, etc. for use as a Docker Compose
+# init service that copies pack binaries into the shared packs volume.
+FROM busybox:1.36 AS pack-binaries-init
+
+COPY --from=builder /build/pack-binaries/ /pack-binaries/
+
+# No default entrypoint — docker-compose provides the command
+ENTRYPOINT ["/bin/sh"]

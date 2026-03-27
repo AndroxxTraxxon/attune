@@ -139,7 +139,8 @@ fn conn_settings(config: &LdapConfig) -> LdapConnSettings {
 /// Open a new LDAP connection.
 async fn connect(config: &LdapConfig) -> Result<Ldap, ApiError> {
     let settings = conn_settings(config);
-    let (conn, ldap) = LdapConnAsync::with_settings(settings, &config.url)
+    let url = config.url.as_deref().unwrap_or_default();
+    let (conn, ldap) = LdapConnAsync::with_settings(settings, url)
         .await
         .map_err(|err| {
             ApiError::InternalServerError(format!("Failed to connect to LDAP server: {err}"))
@@ -333,7 +334,7 @@ fn extract_claims(config: &LdapConfig, entry: &SearchEntry) -> LdapUserClaims {
         .unwrap_or_default();
 
     LdapUserClaims {
-        server_url: config.url.clone(),
+        server_url: config.url.clone().unwrap_or_default(),
         dn: entry.dn.clone(),
         login: first_attr(&config.login_attr),
         email: first_attr(&config.email_attr),

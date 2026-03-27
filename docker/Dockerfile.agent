@@ -4,17 +4,30 @@
 # using musl, suitable for injection into arbitrary runtime containers.
 #
 # Stages:
-#   builder      - Cross-compile with musl for a fully static binary
+#   builder      - Cross-compile with cargo-zigbuild + musl for a fully static binary
 #   agent-binary - Minimal scratch image containing just the binary
 #   agent-init   - BusyBox-based image for use as a Kubernetes init container
 #                  or Docker Compose volume-populating service (has `cp`)
 #
+# Architecture handling:
+#   Uses cargo-zigbuild for cross-compilation, which bundles all necessary
+#   cross-compilation toolchains internally. This allows building for any
+#   target architecture from any host — e.g., building aarch64 musl binaries
+#   on an x86_64 host, or vice versa. This matches the CI/CD pipeline approach.
+#
+#   The RUST_TARGET build arg controls the output architecture:
+#     x86_64-unknown-linux-musl   -> amd64 static binary (default)
+#     aarch64-unknown-linux-musl  -> arm64 static binary
+#
 # Usage:
+#   # Build for the default architecture (x86_64):
+#   DOCKER_BUILDKIT=1 docker buildx build --target agent-init -f docker/Dockerfile.agent -t attune-agent:latest .
+#
+#   # Build for arm64:
+#   DOCKER_BUILDKIT=1 docker buildx build --build-arg RUST_TARGET=aarch64-unknown-linux-musl --target agent-init -f docker/Dockerfile.agent -t attune-agent:latest .
+#
 #   # Build the minimal binary-only image:
 #   DOCKER_BUILDKIT=1 docker buildx build --target agent-binary -f docker/Dockerfile.agent -t attune-agent:binary .
-#
-#   # Build the init container image (for volume population via `cp`):
-#   DOCKER_BUILDKIT=1 docker buildx build --target agent-init -f docker/Dockerfile.agent -t attune-agent:latest .
 #
 #   # Use in docker-compose.yaml to populate a shared volume:
 #   # agent-init:
@@ -37,13 +50,29 @@ FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
 
 ARG RUST_TARGET
 
-# Install musl toolchain for static linking
+# Install build dependencies.
+# - musl-tools: provides the musl libc headers needed for musl target builds
+# - python3 + pip: needed to install ziglang (zig is the cross-compilation backend)
+# - pkg-config, libssl-dev: needed for native dependency detection during build
+# - file, binutils: for verifying the resulting binaries (file, strip)
 RUN apt-get update && apt-get install -y \
     musl-tools \
     pkg-config \
     libssl-dev \
     ca-certificates \
+    file \
+    binutils \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install zig (provides cross-compilation toolchains for all architectures)
+# and cargo-zigbuild (cargo subcommand that uses zig as the linker/compiler).
+# This replaces native musl-gcc and avoids the -m64 flag mismatch that occurs
+# when the host arch doesn't match the target arch (e.g., building x86_64 musl
+# binaries on an arm64 host).
+RUN pip3 install --break-system-packages --no-cache-dir ziglang && \
+    cargo install --locked cargo-zigbuild
 
 # Add the requested musl target for fully static binaries
 RUN rustup target add ${RUST_TARGET}
@@ -96,25 +125,30 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
 
 # ---------------------------------------------------------------------------
 # Build layer
-# Copy real source code and compile only the agent binary with musl
+# Copy real source code and compile only the agent binaries with musl
 # ---------------------------------------------------------------------------
 COPY migrations/ ./migrations/
 COPY crates/ ./crates/
 
 # Build the injected agent binaries, statically linked with musl.
+# Uses cargo-zigbuild so that cross-compilation works regardless of host arch.
 # Uses a dedicated cache ID (agent-target) so the musl target directory
 # doesn't collide with the glibc target cache used by other Dockerfiles.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
     --mount=type=cache,id=agent-target,target=/build/target,sharing=locked \
-    cargo build --release --target ${RUST_TARGET} --bin attune-agent --bin attune-sensor-agent && \
+    cargo zigbuild --release --target ${RUST_TARGET} --bin attune-agent --bin attune-sensor-agent && \
     cp /build/target/${RUST_TARGET}/release/attune-agent /build/attune-agent && \
     cp /build/target/${RUST_TARGET}/release/attune-sensor-agent /build/attune-sensor-agent
 
-# Strip the binaries to minimize size
-RUN strip /build/attune-agent && strip /build/attune-sensor-agent
+# Strip the binaries to minimize size.
+# When cross-compiling for a different architecture, the host strip may not
+# understand the foreign binary format. In that case we skip stripping — the
+# binary is still functional, just slightly larger.
+RUN (strip /build/attune-agent 2>/dev/null && echo "stripped attune-agent" || echo "strip skipped for attune-agent (cross-arch binary)") && \
+    (strip /build/attune-sensor-agent 2>/dev/null && echo "stripped attune-sensor-agent" || echo "strip skipped for attune-sensor-agent (cross-arch binary)")
 
-# Verify the binaries are statically linked and functional
+# Verify the binaries exist and show their details
 RUN ls -lh /build/attune-agent /build/attune-sensor-agent && \
     file /build/attune-agent && \
     file /build/attune-sensor-agent && \

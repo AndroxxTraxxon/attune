@@ -119,13 +119,53 @@ for pack_dir in "$SOURCE_PACKS_DIR"/*; do
             target_pack_dir="$TARGET_PACKS_DIR/$pack_name"
 
             if [ -d "$target_pack_dir" ]; then
-                # Pack exists, update files to ensure we have latest (especially binaries)
+                # Pack exists, update non-binary files to ensure we have latest.
+                # Compiled sensor binaries in sensors/ are provided by init-pack-binaries
+                # (statically-linked musl builds) and must NOT be overwritten by
+                # the host's copy, which may be dynamically linked or the wrong arch.
                 echo -e "${YELLOW}  ⟳${NC} Pack exists at: $target_pack_dir, updating files..."
+
+                # Detect ELF binaries already in the target sensors/ dir by
+                # checking for the 4-byte ELF magic number (\x7fELF) at the
+                # start of the file.  The `file` command is unavailable on
+                # python:3.11-slim, so we read the magic bytes with `od`.
+                _skip_bins=""
+                if [ -d "$target_pack_dir/sensors" ]; then
+                    for _bin in "$target_pack_dir/sensors"/*; do
+                        [ -f "$_bin" ] || continue
+                        _magic=$(od -A n -t x1 -N 4 "$_bin" 2>/dev/null | tr -d ' ')
+                        if [ "$_magic" = "7f454c46" ]; then
+                            _skip_bins="$_skip_bins $(basename "$_bin")"
+                        fi
+                    done
+                fi
+
+                # Copy everything from source, then restore any skipped binaries
+                # that were overwritten. We do it this way (copy-then-restore)
+                # rather than exclude-during-copy because busybox cp and POSIX cp
+                # have no --exclude flag.
+                if [ -n "$_skip_bins" ]; then
+                    # Back up existing static binaries
+                    _tmpdir=$(mktemp -d)
+                    for _b in $_skip_bins; do
+                        cp "$target_pack_dir/sensors/$_b" "$_tmpdir/$_b"
+                    done
+                fi
+
                 if cp -rf "$pack_dir"/* "$target_pack_dir"/; then
                     echo -e "${GREEN}  ✓${NC} Updated pack files at: $target_pack_dir"
                 else
                     echo -e "${RED}  ✗${NC} Failed to update pack"
                     exit 1
+                fi
+
+                # Restore static binaries that were overwritten
+                if [ -n "$_skip_bins" ]; then
+                    for _b in $_skip_bins; do
+                        cp "$_tmpdir/$_b" "$target_pack_dir/sensors/$_b"
+                        echo -e "${GREEN}  ✓${NC} Preserved static binary: sensors/$_b"
+                    done
+                    rm -rf "$_tmpdir"
                 fi
             else
                 # Copy pack to target directory

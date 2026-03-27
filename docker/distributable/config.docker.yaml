@@ -1,5 +1,15 @@
 # Attune Docker Environment Configuration
-# This file overrides base config.yaml settings for Docker deployments
+#
+# This file is mounted into containers at /opt/attune/config/config.yaml.
+# It provides base values for Docker deployments.
+#
+# Sensitive values (jwt_secret, encryption_key) are overridden by environment
+# variables set in docker-compose.yaml using the ATTUNE__ prefix convention:
+#   ATTUNE__SECURITY__JWT_SECRET=...
+#   ATTUNE__SECURITY__ENCRYPTION_KEY=...
+#
+# The `config` crate does NOT support ${VAR} shell interpolation in YAML.
+# All overrides must use ATTUNE__<SECTION>__<KEY> environment variables.
 
 environment: docker
 
@@ -8,36 +18,29 @@ database:
   url: postgresql://attune:attune@postgres:5432/attune
   max_connections: 20
   min_connections: 5
-  acquire_timeout: 30
+  connect_timeout: 30
   idle_timeout: 600
-  max_lifetime: 1800
   log_statements: false
-  schema: "attune"
+  schema: "public"
 
 # Docker message queue (RabbitMQ container)
 message_queue:
   url: amqp://attune:attune@rabbitmq:5672
-  connection_timeout: 30
-  heartbeat: 60
-  prefetch_count: 10
-  rabbitmq:
-    worker_queue_ttl_ms: 300000 # 5 minutes - expire unprocessed executions
-    dead_letter:
-      enabled: true
-      exchange: attune.dlx
-      ttl_ms: 86400000 # 24 hours - retain DLQ messages for debugging
+  exchange: attune
+  enable_dlq: true
+  message_ttl: 3600 # seconds
 
-# Docker cache (Redis container - optional)
-cache:
-  enabled: true
+# Docker cache (Redis container)
+redis:
   url: redis://redis:6379
-  connection_timeout: 5
-  default_ttl: 3600
+  pool_size: 10
 
 # API server configuration
 server:
   host: 0.0.0.0
   port: 8080
+  request_timeout: 60
+  enable_cors: true
   cors_origins:
     - http://localhost
     - http://localhost:3000
@@ -49,8 +52,8 @@ server:
     - http://127.0.0.1:3002
     - http://127.0.0.1:5173
     - http://web
-  request_timeout: 60
-  max_request_size: 10485760 # 10MB
+    - http://web:3000
+  max_body_size: 10485760 # 10MB
 
 # Logging configuration
 log:
@@ -58,30 +61,34 @@ log:
   format: json # Structured logs for container environments
   console: true
 
-# Security settings (MUST override via environment variables in production)
+# Security settings
+# jwt_secret and encryption_key are intentional placeholders — they MUST be
+# overridden via ATTUNE__SECURITY__JWT_SECRET and ATTUNE__SECURITY__ENCRYPTION_KEY
+# environment variables in docker-compose.yaml (or a .env file).
 security:
-  jwt_secret: ${JWT_SECRET}
+  jwt_secret: override-via-ATTUNE__SECURITY__JWT_SECRET-env-var
   jwt_access_expiration: 3600 # 1 hour
   jwt_refresh_expiration: 604800 # 7 days
-  encryption_key: ${ENCRYPTION_KEY}
+  encryption_key: override-via-ATTUNE__SECURITY__ENCRYPTION_KEY-env-var
   enable_auth: true
   allow_self_registration: false
   login_page:
     show_local_login: true
     show_oidc_login: true
+    show_ldap_login: true
   oidc:
-    # example local dev
     enabled: false
-    discovery_url: https://my.sso.provider.com/.well-known/openid-configuration
-    client_id: 31d194737840d32bd3afe6474826976bae346d77247a158c4dc43887278eb605
-    client_secret: xL2C9WOC8shZ2QrZs9VFa10JK1Ob95xcMtZU3N86H1Pz0my5
-    provider_name: my-sso-provider
-    provider_label: My SSO Provider
-    provider_icon_url: https://my.sso.provider.com/favicon.ico
-    redirect_uri: http://localhost:3000/auth/callback
-    post_logout_redirect_uri: http://localhost:3000/login
-    scopes:
-      - groups
+    # Uncomment and configure for your OIDC provider:
+    # discovery_url: https://auth.example.com/.well-known/openid-configuration
+    # client_id: your-client-id
+    # client_secret: your-client-secret
+    # provider_name: sso
+    # provider_label: SSO Login
+    # provider_icon_url: https://auth.example.com/favicon.ico
+    # redirect_uri: http://localhost:3000/auth/callback
+    # post_logout_redirect_uri: http://localhost:3000/login
+    # scopes:
+    #   - groups
 
 # Packs directory (mounted volume in containers)
 packs_base_dir: /opt/attune/packs
@@ -98,61 +105,34 @@ artifacts_dir: /opt/attune/artifacts
 
 # Executor service configuration
 executor:
-  service_name: attune-executor
-  max_concurrent_executions: 50
-  heartbeat_interval: 30
-  task_timeout: 300
-  cleanup_interval: 120
-  scheduling_interval: 5
-  retry_max_attempts: 3
-  retry_backoff_multiplier: 2.0
-  retry_backoff_max: 300
   scheduled_timeout: 300 # 5 minutes - fail executions stuck in SCHEDULED
   timeout_check_interval: 60 # Check every minute for stale executions
   enable_timeout_monitor: true
 
 # Worker service configuration
 worker:
-  service_name: attune-worker
   worker_type: container
   max_concurrent_tasks: 20
   heartbeat_interval: 10 # Reduced from 30s for faster stale detection (staleness = 30s)
   task_timeout: 300
-  cleanup_interval: 120
-  work_dir: /tmp/attune-worker
-  python:
-    executable: python3
-    venv_dir: /tmp/attune-worker/venvs
-    requirements_timeout: 300
-  nodejs:
-    executable: node
-    npm_executable: npm
-    modules_dir: /tmp/attune-worker/node_modules
-    install_timeout: 300
-  shell:
-    executable: /bin/bash
-    allowed_shells:
-      - /bin/bash
-      - /bin/sh
+  max_stdout_bytes: 10485760 # 10MB
+  max_stderr_bytes: 10485760 # 10MB
+  shutdown_timeout: 30
+  stream_logs: true
 
 # Sensor service configuration
 sensor:
-  service_name: attune-sensor
-  heartbeat_interval: 10 # Reduced from 30s for faster stale detection
   max_concurrent_sensors: 50
+  heartbeat_interval: 10 # Reduced from 30s for faster stale detection
+  poll_interval: 10
   sensor_timeout: 300
-  polling_interval: 10
-  cleanup_interval: 120
+  shutdown_timeout: 30
 
 # Notifier service configuration
 notifier:
-  service_name: attune-notifier
-  websocket_host: 0.0.0.0
-  websocket_port: 8081
-  heartbeat_interval: 30
-  connection_timeout: 60
+  host: 0.0.0.0
+  port: 8081
   max_connections: 1000
-  message_buffer_size: 10000
 
 # Agent binary distribution (serves the agent binary via API for remote downloads)
 agent:
