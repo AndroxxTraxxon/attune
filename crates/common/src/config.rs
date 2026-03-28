@@ -1029,12 +1029,10 @@ impl Config {
         }
 
         if let Some(ldap) = &self.security.ldap {
-            if ldap.enabled {
-                if ldap.url.as_deref().unwrap_or("").trim().is_empty() {
-                    return Err(crate::Error::validation(
-                        "LDAP server URL is required when LDAP is enabled",
-                    ));
-                }
+            if ldap.enabled && ldap.url.as_deref().unwrap_or("").trim().is_empty() {
+                return Err(crate::Error::validation(
+                    "LDAP server URL is required when LDAP is enabled",
+                ));
             }
         }
 

@@ -53,6 +53,7 @@ jobs:
       registry: ${{ steps.meta.outputs.registry }}
       namespace: ${{ steps.meta.outputs.namespace }}
       registry_plain_http: ${{ steps.meta.outputs.registry_plain_http }}
+      gitea_base_url: ${{ steps.meta.outputs.gitea_base_url }}
       image_tag: ${{ steps.meta.outputs.image_tag }}
       image_tags: ${{ steps.meta.outputs.image_tags }}
       artifact_ref_base: ${{ steps.meta.outputs.artifact_ref_base }}
@@ -99,6 +100,12 @@ jobs:
             registry_plain_http="$registry_plain_http_default"
           fi
 
+          if [ "$registry_plain_http" = "true" ]; then
+            gitea_base_url="http://${registry}"
+          else
+            gitea_base_url="https://${registry}"
+          fi
+
           short_sha="$(printf '%s' "${{ github.sha }}" | cut -c1-12)"
           ref_type="${{ github.ref_type }}"
           ref_name="${{ github.ref_name }}"
@@ -117,6 +124,7 @@ jobs:
             echo "registry=$registry"
             echo "namespace=$namespace"
             echo "registry_plain_http=$registry_plain_http"
+            echo "gitea_base_url=$gitea_base_url"
             echo "image_tag=$version"
             echo "image_tags=$image_tags"
             echo "artifact_ref_base=$artifact_ref_base"
@@ -321,6 +329,7 @@ jobs:
           set -euo pipefail
           push_args=()
           artifact_file="attune-binaries-${{ matrix.arch }}.tar.gz"
+          artifact_ref="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/${ARTIFACT_REPOSITORY}-${{ matrix.arch }}:rust-binaries-${{ needs.metadata.outputs.image_tag }}"
 
           if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
             push_args+=(--plain-http)
@@ -328,9 +337,15 @@ jobs:
 
           cp "dist/${artifact_file}" "${artifact_file}"
 
+          echo "Pushing binary bundle artifact"
+          echo "  artifact_ref: ${artifact_ref}"
+          echo "  registry_url: ${{ needs.metadata.outputs.gitea_base_url }}/v2/"
+          echo "  manifest_url: ${{ needs.metadata.outputs.gitea_base_url }}/v2/${{ needs.metadata.outputs.namespace }}/${ARTIFACT_REPOSITORY}-${{ matrix.arch }}/manifests/rust-binaries-${{ needs.metadata.outputs.image_tag }}"
+          echo "  artifact_file: ${artifact_file}"
+
           oras push \
             "${push_args[@]}" \
-            "${{ needs.metadata.outputs.artifact_ref_base }}:rust-binaries-${{ needs.metadata.outputs.image_tag }}-${{ matrix.arch }}" \
+            "${artifact_ref}" \
             --artifact-type application/vnd.attune.rust-binaries.v1 \
             "${artifact_file}:application/vnd.attune.rust-binaries.layer.v1.tar+gzip"
 
@@ -341,13 +356,19 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
         run: |
           set -euo pipefail
-          api_base="${{ github.server_url }}/api/v1"
-          package_name="${ARTIFACT_REPOSITORY}"
+          api_base="${{ needs.metadata.outputs.gitea_base_url }}/api/v1"
+          package_name="${ARTIFACT_REPOSITORY}-${{ matrix.arch }}"
           encoded_package_name="$(PACKAGE_NAME="${package_name}" python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["PACKAGE_NAME"], safe=""))')"
+          link_url="${api_base}/packages/${{ needs.metadata.outputs.namespace }}/container/${encoded_package_name}/-/link/${REPOSITORY_NAME}"
+
+          echo "Linking binary bundle package"
+          echo "  api_base: ${api_base}"
+          echo "  package_name: ${package_name}"
+          echo "  link_url: ${link_url}"
 
           status_code="$(curl -sS -o /tmp/package-link-response.txt -w '%{http_code}' -X POST \
             -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
-            "${api_base}/packages/${{ needs.metadata.outputs.namespace }}/container/${encoded_package_name}/-/link/${REPOSITORY_NAME}")"
+            "${link_url}")"
 
           case "${status_code}" in
             200|201|204|409)
@@ -380,12 +401,57 @@ jobs:
           set -euo pipefail
           bash scripts/package-docker-dist.sh docker/distributable artifacts/attune-docker-dist.tar.gz
 
-      - name: Upload docker dist archive
-        uses: actions/upload-artifact@v4
-        with:
-          name: attune-docker-dist-${{ needs.metadata.outputs.image_tag }}
-          path: artifacts/attune-docker-dist.tar.gz
-          if-no-files-found: error
+      - name: Publish docker dist generic package
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${REGISTRY_USERNAME:-}" ] || [ -z "${REGISTRY_PASSWORD:-}" ]; then
+            echo "CONTAINER_REGISTRY_USERNAME and CONTAINER_REGISTRY_PASSWORD are required to publish the docker dist package"
+            exit 1
+          fi
+
+          owner="${{ needs.metadata.outputs.namespace }}"
+          package_name="attune-docker-dist"
+          package_version="${{ needs.metadata.outputs.image_tag }}"
+          file_name="attune-docker-dist.tar.gz"
+          api_base="${{ needs.metadata.outputs.gitea_base_url }}/api/packages"
+          package_url="${api_base}/${owner}/generic/${package_name}/${package_version}/${file_name}"
+
+          # Generic packages reject overwriting the same file name. Delete it first on reruns.
+          delete_status="$(curl -sS -o /tmp/docker-dist-delete-response.txt -w '%{http_code}' \
+            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
+            -X DELETE \
+            "${package_url}")"
+
+          case "${delete_status}" in
+            204|404)
+              ;;
+            *)
+              echo "Failed to prepare generic package upload target"
+              cat /tmp/docker-dist-delete-response.txt
+              exit 1
+              ;;
+          esac
+
+          upload_status="$(curl -sS -o /tmp/docker-dist-upload-response.txt -w '%{http_code}' \
+            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
+            --upload-file artifacts/attune-docker-dist.tar.gz \
+            -X PUT \
+            "${package_url}")"
+
+          case "${upload_status}" in
+            201)
+              ;;
+            *)
+              echo "Failed to publish docker dist generic package"
+              cat /tmp/docker-dist-upload-response.txt
+              exit 1
+              ;;
+          esac
 
       - name: Attach docker dist archive to release
         if: github.ref_type == 'tag'
@@ -401,7 +467,7 @@ jobs:
             exit 1
           fi
 
-          api_base="${{ github.server_url }}/api/v1"
+          api_base="${{ needs.metadata.outputs.gitea_base_url }}/api/v1"
           owner_repo="${{ github.repository }}"
           tag_name="${{ github.ref_name }}"
           archive_path="artifacts/attune-docker-dist.tar.gz"
@@ -647,7 +713,7 @@ jobs:
         run: |
           set -euo pipefail
           pull_args=()
-          artifact_ref="${{ needs.metadata.outputs.artifact_ref_base }}:rust-binaries-${{ needs.metadata.outputs.image_tag }}-${{ matrix.arch }}"
+          artifact_ref="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/${ARTIFACT_REPOSITORY}-${{ matrix.arch }}:rust-binaries-${{ needs.metadata.outputs.image_tag }}"
 
           if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
             pull_args+=(--plain-http)
@@ -655,6 +721,8 @@ jobs:
 
           echo "Pulling binary bundle artifact"
           echo "  ref: ${artifact_ref}"
+          echo "  registry_url: ${{ needs.metadata.outputs.gitea_base_url }}/v2/"
+          echo "  manifest_url: ${{ needs.metadata.outputs.gitea_base_url }}/v2/${{ needs.metadata.outputs.namespace }}/${ARTIFACT_REPOSITORY}-${{ matrix.arch }}/manifests/rust-binaries-${{ needs.metadata.outputs.image_tag }}"
           echo "  arch: ${{ matrix.arch }}"
           echo "  plain_http: ${{ needs.metadata.outputs.registry_plain_http }}"
 
@@ -754,7 +822,7 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
         run: |
           set -euo pipefail
-          api_base="${{ github.server_url }}/api/v1"
+          api_base="${{ needs.metadata.outputs.gitea_base_url }}/api/v1"
           package_name="${{ matrix.image.repository }}"
           encoded_package_name="$(PACKAGE_NAME="${package_name}" python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["PACKAGE_NAME"], safe=""))')"
 
@@ -904,7 +972,7 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
         run: |
           set -euo pipefail
-          api_base="${{ github.server_url }}/api/v1"
+          api_base="${{ needs.metadata.outputs.gitea_base_url }}/api/v1"
           package_name="attune/web"
           encoded_package_name="$(PACKAGE_NAME="${package_name}" python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["PACKAGE_NAME"], safe=""))')"
 
