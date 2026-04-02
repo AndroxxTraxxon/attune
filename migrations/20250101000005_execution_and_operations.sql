@@ -4,13 +4,8 @@
 --              Consolidates former migrations: 000006 (execution_system), 000008
 --              (worker_notification), 000014 (worker_table), and 20260209 (phase3).
 --
---              NOTE: The execution table is converted to a TimescaleDB hypertable in
---              migration 000009. Hypertables cannot be the target of FK constraints,
---              so columns referencing execution (inquiry.execution, workflow_execution.execution)
---              are plain BIGINT with no FK. Similarly, columns ON the execution table that
---              would self-reference or reference other hypertables (parent, enforcement,
---              original_execution) are plain BIGINT. The action and executor FKs are also
---              omitted since they would need to be dropped during hypertable conversion.
+--              NOTE: `execution` remains a regular PostgreSQL table. Time-series
+--              audit and analytics are handled by `execution_history`.
 -- Version: 20250101000005
 
 -- ============================================================================
@@ -19,27 +14,27 @@
 
 CREATE TABLE execution (
     id BIGSERIAL PRIMARY KEY,
-    action BIGINT,          -- references action(id); no FK because execution becomes a hypertable
+    action BIGINT,
     action_ref TEXT NOT NULL,
     config JSONB,
     env_vars JSONB,
-    parent BIGINT,          -- self-reference; no FK because execution becomes a hypertable
-    enforcement BIGINT,     -- references enforcement(id); no FK (both are hypertables)
-    executor BIGINT,        -- references identity(id); no FK because execution becomes a hypertable
-    worker BIGINT,          -- references worker(id); no FK because execution becomes a hypertable
+    parent BIGINT,
+    enforcement BIGINT,
+    executor BIGINT,
+    worker BIGINT,
     status execution_status_enum NOT NULL DEFAULT 'requested',
     result JSONB,
     started_at TIMESTAMPTZ,         -- set when execution transitions to 'running'
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     is_workflow BOOLEAN DEFAULT false NOT NULL,
-    workflow_def BIGINT,    -- references workflow_definition(id); no FK because execution becomes a hypertable
+    workflow_def BIGINT,
     workflow_task JSONB,
 
     -- Retry tracking (baked in from phase 3)
     retry_count INTEGER NOT NULL DEFAULT 0,
     max_retries INTEGER,
     retry_reason TEXT,
-    original_execution BIGINT, -- self-reference; no FK because execution becomes a hypertable
+    original_execution BIGINT,
 
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -64,6 +59,11 @@ CREATE INDEX idx_execution_result_gin ON execution USING GIN (result);
 CREATE INDEX idx_execution_env_vars_gin ON execution USING GIN (env_vars);
 CREATE INDEX idx_execution_original_execution ON execution(original_execution) WHERE original_execution IS NOT NULL;
 CREATE INDEX idx_execution_status_retry ON execution(status, retry_count) WHERE status = 'failed' AND retry_count < COALESCE(max_retries, 0);
+CREATE UNIQUE INDEX uq_execution_top_level_enforcement
+    ON execution (enforcement)
+    WHERE enforcement IS NOT NULL
+      AND parent IS NULL
+      AND (config IS NULL OR NOT (config ? 'retry_of'));
 
 -- Trigger
 CREATE TRIGGER update_execution_updated
@@ -77,10 +77,10 @@ COMMENT ON COLUMN execution.action IS 'Action being executed (may be null if act
 COMMENT ON COLUMN execution.action_ref IS 'Action reference (preserved even if action deleted)';
 COMMENT ON COLUMN execution.config IS 'Snapshot of action configuration at execution time';
 COMMENT ON COLUMN execution.env_vars IS 'Environment variables for this execution as key-value pairs (string -> string). These are set in the execution environment and are separate from action parameters. Used for execution context, configuration, and non-sensitive metadata.';
-COMMENT ON COLUMN execution.parent IS 'Parent execution ID for workflow hierarchies (no FK — execution is a hypertable)';
-COMMENT ON COLUMN execution.enforcement IS 'Enforcement that triggered this execution (no FK — both are hypertables)';
-COMMENT ON COLUMN execution.executor IS 'Identity that initiated the execution (no FK — execution is a hypertable)';
-COMMENT ON COLUMN execution.worker IS 'Assigned worker handling this execution (no FK — execution is a hypertable)';
+COMMENT ON COLUMN execution.parent IS 'Parent execution ID for workflow hierarchies';
+COMMENT ON COLUMN execution.enforcement IS 'Enforcement that triggered this execution';
+COMMENT ON COLUMN execution.executor IS 'Identity that initiated the execution';
+COMMENT ON COLUMN execution.worker IS 'Assigned worker handling this execution';
 COMMENT ON COLUMN execution.status IS 'Current execution lifecycle status';
 COMMENT ON COLUMN execution.result IS 'Execution output/results';
 COMMENT ON COLUMN execution.retry_count IS 'Current retry attempt number (0 = first attempt, 1 = first retry, etc.)';
@@ -96,7 +96,7 @@ COMMENT ON COLUMN execution.original_execution IS 'ID of the original execution 
 
 CREATE TABLE inquiry (
     id BIGSERIAL PRIMARY KEY,
-    execution BIGINT NOT NULL, -- references execution(id); no FK because execution is a hypertable
+    execution BIGINT NOT NULL,
     prompt TEXT NOT NULL,
     response_schema JSONB,
     assigned_to BIGINT REFERENCES identity(id) ON DELETE SET NULL,
@@ -109,7 +109,7 @@ CREATE TABLE inquiry (
 );
 
 -- Indexes
-CREATE INDEX idx_inquiry_execution ON inquiry(execution);
+CREATE UNIQUE INDEX uq_inquiry_execution ON inquiry(execution) WHERE execution IS NOT NULL;
 CREATE INDEX idx_inquiry_assigned_to ON inquiry(assigned_to);
 CREATE INDEX idx_inquiry_status ON inquiry(status);
 CREATE INDEX idx_inquiry_timeout_at ON inquiry(timeout_at) WHERE timeout_at IS NOT NULL;
@@ -127,7 +127,31 @@ CREATE TRIGGER update_inquiry_updated
 
 -- Comments
 COMMENT ON TABLE inquiry IS 'Inquiries enable human-in-the-loop workflows with async user interactions';
-COMMENT ON COLUMN inquiry.execution IS 'Execution that is waiting on this inquiry (no FK — execution is a hypertable)';
+COMMENT ON COLUMN inquiry.execution IS 'Execution that is waiting on this inquiry';
+
+ALTER TABLE execution
+    ADD CONSTRAINT execution_action_fkey
+    FOREIGN KEY (action) REFERENCES action(id) ON DELETE SET NULL;
+
+ALTER TABLE execution
+    ADD CONSTRAINT execution_parent_fkey
+    FOREIGN KEY (parent) REFERENCES execution(id) ON DELETE SET NULL;
+
+ALTER TABLE execution
+    ADD CONSTRAINT execution_original_execution_fkey
+    FOREIGN KEY (original_execution) REFERENCES execution(id) ON DELETE SET NULL;
+
+ALTER TABLE execution
+    ADD CONSTRAINT execution_enforcement_fkey
+    FOREIGN KEY (enforcement) REFERENCES enforcement(id) ON DELETE SET NULL;
+
+ALTER TABLE execution
+    ADD CONSTRAINT execution_executor_fkey
+    FOREIGN KEY (executor) REFERENCES identity(id) ON DELETE SET NULL;
+
+ALTER TABLE inquiry
+    ADD CONSTRAINT inquiry_execution_fkey
+    FOREIGN KEY (execution) REFERENCES execution(id) ON DELETE CASCADE;
 COMMENT ON COLUMN inquiry.prompt IS 'Question or prompt text for the user';
 COMMENT ON COLUMN inquiry.response_schema IS 'JSON schema defining expected response format';
 COMMENT ON COLUMN inquiry.assigned_to IS 'Identity who should respond to this inquiry';
@@ -260,6 +284,10 @@ COMMENT ON COLUMN worker.status IS 'Worker operational status';
 COMMENT ON COLUMN worker.capabilities IS 'Worker capabilities (e.g., max_concurrent_executions, supported runtimes)';
 COMMENT ON COLUMN worker.meta IS 'Additional worker metadata';
 COMMENT ON COLUMN worker.last_heartbeat IS 'Timestamp of last heartbeat from worker';
+
+ALTER TABLE execution
+    ADD CONSTRAINT execution_worker_fkey
+    FOREIGN KEY (worker) REFERENCES worker(id) ON DELETE SET NULL;
 
 -- ============================================================================
 -- NOTIFICATION TABLE

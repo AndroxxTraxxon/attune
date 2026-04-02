@@ -612,6 +612,26 @@ impl Delete for WorkflowExecutionRepository {
 }
 
 impl WorkflowExecutionRepository {
+    pub async fn find_by_id_for_update<'e, E>(
+        executor: E,
+        id: Id,
+    ) -> Result<Option<WorkflowExecution>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, WorkflowExecution>(
+            "SELECT id, execution, workflow_def, current_tasks, completed_tasks, failed_tasks, skipped_tasks,
+                    variables, task_graph, status, error_message, paused, pause_reason, created, updated
+             FROM workflow_execution
+             WHERE id = $1
+             FOR UPDATE"
+        )
+        .bind(id)
+        .fetch_optional(executor)
+        .await
+        .map_err(Into::into)
+    }
+
     pub async fn create_or_get_by_execution<'e, E>(
         executor: E,
         input: CreateWorkflowExecutionInput,

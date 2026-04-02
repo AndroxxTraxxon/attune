@@ -19,7 +19,7 @@ use attune_common::{
         event::{EnforcementRepository, EventRepository, UpdateEnforcementInput},
         execution::{CreateExecutionInput, ExecutionRepository},
         rule::RuleRepository,
-        Create, FindById,
+        FindById,
     },
 };
 
@@ -116,6 +116,14 @@ impl EnforcementProcessor {
             .await?
             .ok_or_else(|| anyhow::anyhow!("Enforcement not found: {}", enforcement_id))?;
 
+        if enforcement.status != EnforcementStatus::Created {
+            debug!(
+                "Enforcement {} already left Created state ({:?}), skipping duplicate processing",
+                enforcement_id, enforcement.status
+            );
+            return Ok(());
+        }
+
         // Fetch associated rule
         let rule = RuleRepository::find_by_id(
             pool,
@@ -135,7 +143,7 @@ impl EnforcementProcessor {
 
         // Evaluate whether to create execution
         if Self::should_create_execution(&enforcement, &rule, event.as_ref())? {
-            Self::create_execution(
+            let execution_created = Self::create_execution(
                 pool,
                 publisher,
                 policy_enforcer,
@@ -145,10 +153,10 @@ impl EnforcementProcessor {
             )
             .await?;
 
-            // Update enforcement status to Processed after successful execution creation
-            EnforcementRepository::update_loaded(
+            let updated = EnforcementRepository::update_loaded_if_status(
                 pool,
                 &enforcement,
+                EnforcementStatus::Created,
                 UpdateEnforcementInput {
                     status: Some(EnforcementStatus::Processed),
                     payload: None,
@@ -157,17 +165,27 @@ impl EnforcementProcessor {
             )
             .await?;
 
-            debug!("Updated enforcement {} status to Processed", enforcement_id);
+            if updated.is_some() {
+                debug!(
+                    "Updated enforcement {} status to Processed after {} execution path",
+                    enforcement_id,
+                    if execution_created {
+                        "new"
+                    } else {
+                        "idempotent"
+                    }
+                );
+            }
         } else {
             info!(
                 "Skipping execution creation for enforcement: {}",
                 enforcement_id
             );
 
-            // Update enforcement status to Disabled since it was not actionable
-            EnforcementRepository::update_loaded(
+            let updated = EnforcementRepository::update_loaded_if_status(
                 pool,
                 &enforcement,
+                EnforcementStatus::Created,
                 UpdateEnforcementInput {
                     status: Some(EnforcementStatus::Disabled),
                     payload: None,
@@ -176,10 +194,12 @@ impl EnforcementProcessor {
             )
             .await?;
 
-            debug!(
-                "Updated enforcement {} status to Disabled (skipped)",
-                enforcement_id
-            );
+            if updated.is_some() {
+                debug!(
+                    "Updated enforcement {} status to Disabled (skipped)",
+                    enforcement_id
+                );
+            }
         }
 
         Ok(())
@@ -234,7 +254,7 @@ impl EnforcementProcessor {
         _queue_manager: &ExecutionQueueManager,
         enforcement: &Enforcement,
         rule: &Rule,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         // Extract action ID — should_create_execution already verified it's Some,
         // but guard defensively here as well.
         let action_id = match rule.action {
@@ -275,44 +295,60 @@ impl EnforcementProcessor {
             workflow_task: None, // Non-workflow execution
         };
 
-        let execution = ExecutionRepository::create(pool, execution_input).await?;
+        let execution_result = ExecutionRepository::create_top_level_for_enforcement_if_absent(
+            pool,
+            execution_input,
+            enforcement.id,
+        )
+        .await?;
+        let execution = execution_result.execution;
 
-        info!(
-            "Created execution: {} for enforcement: {}",
-            execution.id, enforcement.id
-        );
+        if execution_result.created {
+            info!(
+                "Created execution: {} for enforcement: {}",
+                execution.id, enforcement.id
+            );
+        } else {
+            info!(
+                "Reusing execution: {} for enforcement: {}",
+                execution.id, enforcement.id
+            );
+        }
 
-        // Publish ExecutionRequested message
-        let payload = ExecutionRequestedPayload {
-            execution_id: execution.id,
-            action_id: Some(action_id),
-            action_ref: action_ref.clone(),
-            parent_id: None,
-            enforcement_id: Some(enforcement.id),
-            config: enforcement.config.clone(),
-        };
+        if execution_result.created
+            || execution.status == attune_common::models::enums::ExecutionStatus::Requested
+        {
+            let payload = ExecutionRequestedPayload {
+                execution_id: execution.id,
+                action_id: Some(action_id),
+                action_ref: action_ref.clone(),
+                parent_id: None,
+                enforcement_id: Some(enforcement.id),
+                config: execution.config.clone(),
+            };
 
-        let envelope =
-            MessageEnvelope::new(attune_common::mq::MessageType::ExecutionRequested, payload)
-                .with_source("executor");
+            let envelope =
+                MessageEnvelope::new(attune_common::mq::MessageType::ExecutionRequested, payload)
+                    .with_source("executor");
 
-        // Publish to execution requests queue with routing key
-        let routing_key = "execution.requested";
-        let exchange = "attune.executions";
+            // Publish to execution requests queue with routing key
+            let routing_key = "execution.requested";
+            let exchange = "attune.executions";
 
-        publisher
-            .publish_envelope_with_routing(&envelope, exchange, routing_key)
-            .await?;
+            publisher
+                .publish_envelope_with_routing(&envelope, exchange, routing_key)
+                .await?;
 
-        info!(
-            "Published execution.requested message for execution: {} (enforcement: {}, action: {})",
-            execution.id, enforcement.id, action_id
-        );
+            info!(
+                "Published execution.requested message for execution: {} (enforcement: {}, action: {})",
+                execution.id, enforcement.id, action_id
+            );
+        }
 
         // NOTE: Queue slot will be released when worker publishes execution.completed
         // and CompletionListener calls queue_manager.notify_completion(action_id)
 
-        Ok(())
+        Ok(execution_result.created)
     }
 }
 

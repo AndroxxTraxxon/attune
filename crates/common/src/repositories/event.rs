@@ -65,6 +65,12 @@ pub struct EnforcementSearchResult {
     pub total: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct EnforcementCreateOrGetResult {
+    pub enforcement: Enforcement,
+    pub created: bool,
+}
+
 /// Repository for Event operations
 pub struct EventRepository;
 
@@ -493,11 +499,7 @@ impl EnforcementRepository {
         Ok(enforcement)
     }
 
-    /// Update an enforcement using the loaded row's hypertable keys.
-    ///
-    /// This avoids wide scans across compressed chunks by including both the
-    /// partitioning column (`created`) and compression segment key (`rule_ref`)
-    /// in the locator.
+    /// Update an enforcement using the loaded row's primary key.
     pub async fn update_loaded<'e, E>(
         executor: E,
         enforcement: &Enforcement,
@@ -510,17 +512,71 @@ impl EnforcementRepository {
             return Ok(enforcement.clone());
         }
 
-        let rule_ref = enforcement.rule_ref.clone();
-
         Self::update_with_locator(executor, input, |query| {
             query.push(" WHERE id = ");
             query.push_bind(enforcement.id);
-            query.push(" AND created = ");
-            query.push_bind(enforcement.created);
-            query.push(" AND rule_ref = ");
-            query.push_bind(rule_ref);
         })
         .await
+    }
+
+    pub async fn update_loaded_if_status<'e, E>(
+        executor: E,
+        enforcement: &Enforcement,
+        expected_status: EnforcementStatus,
+        input: UpdateEnforcementInput,
+    ) -> Result<Option<Enforcement>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        if input.status.is_none() && input.payload.is_none() && input.resolved_at.is_none() {
+            return Ok(Some(enforcement.clone()));
+        }
+
+        let mut query = QueryBuilder::new("UPDATE enforcement SET ");
+        let mut has_updates = false;
+
+        if let Some(status) = input.status {
+            query.push("status = ");
+            query.push_bind(status);
+            has_updates = true;
+        }
+
+        if let Some(payload) = &input.payload {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("payload = ");
+            query.push_bind(payload);
+            has_updates = true;
+        }
+
+        if let Some(resolved_at) = input.resolved_at {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("resolved_at = ");
+            query.push_bind(resolved_at);
+            has_updates = true;
+        }
+
+        if !has_updates {
+            return Ok(Some(enforcement.clone()));
+        }
+
+        query.push(" WHERE id = ");
+        query.push_bind(enforcement.id);
+        query.push(" AND status = ");
+        query.push_bind(expected_status);
+        query.push(
+            " RETURNING id, rule, rule_ref, trigger_ref, config, event, status, payload, \
+             condition, conditions, created, resolved_at",
+        );
+
+        query
+            .build_query_as::<Enforcement>()
+            .fetch_optional(executor)
+            .await
+            .map_err(Into::into)
     }
 
     /// Find enforcements by rule ID
@@ -587,6 +643,90 @@ impl EnforcementRepository {
         .await?;
 
         Ok(enforcements)
+    }
+
+    pub async fn find_by_rule_and_event<'e, E>(
+        executor: E,
+        rule_id: Id,
+        event_id: Id,
+    ) -> Result<Option<Enforcement>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, Enforcement>(
+            r#"
+            SELECT id, rule, rule_ref, trigger_ref, config, event, status, payload,
+                   condition, conditions, created, resolved_at
+            FROM enforcement
+            WHERE rule = $1 AND event = $2
+            LIMIT 1
+            "#,
+        )
+        .bind(rule_id)
+        .bind(event_id)
+        .fetch_optional(executor)
+        .await
+        .map_err(Into::into)
+    }
+
+    pub async fn create_or_get_by_rule_event<'e, E>(
+        executor: E,
+        input: CreateEnforcementInput,
+    ) -> Result<EnforcementCreateOrGetResult>
+    where
+        E: Executor<'e, Database = Postgres> + Copy + 'e,
+    {
+        let (Some(rule_id), Some(event_id)) = (input.rule, input.event) else {
+            let enforcement = Self::create(executor, input).await?;
+            return Ok(EnforcementCreateOrGetResult {
+                enforcement,
+                created: true,
+            });
+        };
+
+        let inserted = sqlx::query_as::<_, Enforcement>(
+            r#"
+            INSERT INTO enforcement (rule, rule_ref, trigger_ref, config, event, status,
+                                     payload, condition, conditions)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (rule, event) WHERE rule IS NOT NULL AND event IS NOT NULL DO NOTHING
+            RETURNING id, rule, rule_ref, trigger_ref, config, event, status, payload,
+                      condition, conditions, created, resolved_at
+            "#,
+        )
+        .bind(input.rule)
+        .bind(&input.rule_ref)
+        .bind(&input.trigger_ref)
+        .bind(&input.config)
+        .bind(input.event)
+        .bind(input.status)
+        .bind(&input.payload)
+        .bind(input.condition)
+        .bind(&input.conditions)
+        .fetch_optional(executor)
+        .await?;
+
+        if let Some(enforcement) = inserted {
+            return Ok(EnforcementCreateOrGetResult {
+                enforcement,
+                created: true,
+            });
+        }
+
+        let enforcement = Self::find_by_rule_and_event(executor, rule_id, event_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "enforcement for rule {} and event {} disappeared after dedupe conflict",
+                    rule_id,
+                    event_id
+                )
+            })?;
+
+        Ok(EnforcementCreateOrGetResult {
+            enforcement,
+            created: false,
+        })
     }
 
     /// Search enforcements with all filters pushed into SQL.

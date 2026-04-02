@@ -914,6 +914,115 @@ async fn test_queue_stats_persistence() {
 
 #[tokio::test]
 #[ignore] // Requires database
+async fn test_release_restore_recovers_active_slot_and_next_queue_head() {
+    let pool = setup_db().await;
+    let timestamp = Utc::now().timestamp();
+    let suffix = format!("restore_release_{}", timestamp);
+
+    let pack_id = create_test_pack(&pool, &suffix).await;
+    let pack_ref = format!("fifo_test_pack_{}", suffix);
+    let action_id = create_test_action(&pool, pack_id, &pack_ref, &suffix).await;
+    let action_ref = format!("fifo_test_action_{}", suffix);
+
+    let manager = ExecutionQueueManager::with_db_pool(QueueConfig::default(), pool.clone());
+
+    let first =
+        create_test_execution(&pool, action_id, &action_ref, ExecutionStatus::Requested).await;
+    let second =
+        create_test_execution(&pool, action_id, &action_ref, ExecutionStatus::Requested).await;
+    let third =
+        create_test_execution(&pool, action_id, &action_ref, ExecutionStatus::Requested).await;
+
+    manager.enqueue(action_id, first, 1, None).await.unwrap();
+    manager.enqueue(action_id, second, 1, None).await.unwrap();
+    manager.enqueue(action_id, third, 1, None).await.unwrap();
+
+    let stats = manager.get_queue_stats(action_id).await.unwrap();
+    assert_eq!(stats.active_count, 1);
+    assert_eq!(stats.queue_length, 2);
+
+    let release = manager
+        .release_active_slot(first)
+        .await
+        .unwrap()
+        .expect("first execution should own an active slot");
+    assert_eq!(release.next_execution_id, Some(second));
+
+    let stats = manager.get_queue_stats(action_id).await.unwrap();
+    assert_eq!(stats.active_count, 1);
+    assert_eq!(stats.queue_length, 1);
+
+    manager.restore_active_slot(first, &release).await.unwrap();
+
+    let stats = manager.get_queue_stats(action_id).await.unwrap();
+    assert_eq!(stats.active_count, 1);
+    assert_eq!(stats.queue_length, 2);
+    assert_eq!(stats.total_completed, 0);
+
+    let next = manager
+        .release_active_slot(first)
+        .await
+        .unwrap()
+        .expect("restored execution should still own the active slot");
+    assert_eq!(next.next_execution_id, Some(second));
+
+    cleanup_test_data(&pool, pack_id).await;
+}
+
+#[tokio::test]
+#[ignore] // Requires database
+async fn test_remove_restore_recovers_queued_execution_position() {
+    let pool = setup_db().await;
+    let timestamp = Utc::now().timestamp();
+    let suffix = format!("restore_queue_{}", timestamp);
+
+    let pack_id = create_test_pack(&pool, &suffix).await;
+    let pack_ref = format!("fifo_test_pack_{}", suffix);
+    let action_id = create_test_action(&pool, pack_id, &pack_ref, &suffix).await;
+    let action_ref = format!("fifo_test_action_{}", suffix);
+
+    let manager = ExecutionQueueManager::with_db_pool(QueueConfig::default(), pool.clone());
+
+    let first =
+        create_test_execution(&pool, action_id, &action_ref, ExecutionStatus::Requested).await;
+    let second =
+        create_test_execution(&pool, action_id, &action_ref, ExecutionStatus::Requested).await;
+    let third =
+        create_test_execution(&pool, action_id, &action_ref, ExecutionStatus::Requested).await;
+
+    manager.enqueue(action_id, first, 1, None).await.unwrap();
+    manager.enqueue(action_id, second, 1, None).await.unwrap();
+    manager.enqueue(action_id, third, 1, None).await.unwrap();
+
+    let removal = manager
+        .remove_queued_execution(second)
+        .await
+        .unwrap()
+        .expect("second execution should be queued");
+    assert_eq!(removal.next_execution_id, None);
+
+    let stats = manager.get_queue_stats(action_id).await.unwrap();
+    assert_eq!(stats.active_count, 1);
+    assert_eq!(stats.queue_length, 1);
+
+    manager.restore_queued_execution(&removal).await.unwrap();
+
+    let stats = manager.get_queue_stats(action_id).await.unwrap();
+    assert_eq!(stats.active_count, 1);
+    assert_eq!(stats.queue_length, 2);
+
+    let release = manager
+        .release_active_slot(first)
+        .await
+        .unwrap()
+        .expect("first execution should own the active slot");
+    assert_eq!(release.next_execution_id, Some(second));
+
+    cleanup_test_data(&pool, pack_id).await;
+}
+
+#[tokio::test]
+#[ignore] // Requires database
 async fn test_queue_full_rejection() {
     let pool = setup_db().await;
     let timestamp = Utc::now().timestamp();

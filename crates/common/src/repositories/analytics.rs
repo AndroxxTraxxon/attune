@@ -80,7 +80,7 @@ pub struct EnforcementVolumeBucket {
     pub enforcement_count: i64,
 }
 
-/// A single hourly bucket of execution volume (from execution hypertable directly).
+/// A single hourly bucket of execution volume (from the execution table directly).
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct ExecutionVolumeBucket {
     /// Start of the 1-hour bucket
@@ -468,7 +468,7 @@ impl AnalyticsRepository {
     }
 
     // =======================================================================
-    // Execution volume (from execution hypertable directly)
+    // Execution volume (from the execution table directly)
     // =======================================================================
 
     /// Query the `execution_volume_hourly` continuous aggregate for execution

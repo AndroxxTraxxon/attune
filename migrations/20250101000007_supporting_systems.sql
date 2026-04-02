@@ -1,6 +1,6 @@
 -- Migration: Supporting Systems
--- Description: Creates keys, artifacts, queue_stats, pack_environment, pack_testing,
---              and webhook function tables.
+-- Description: Creates keys, artifacts, queue_stats, execution_admission,
+--              pack_environment, pack_testing, and webhook function tables.
 --              Consolidates former migrations: 000009 (keys_artifacts), 000010 (webhook_system),
 --              000011 (pack_environments), and 000012 (pack_testing).
 -- Version: 20250101000007
@@ -205,6 +205,76 @@ COMMENT ON COLUMN queue_stats.oldest_enqueued_at IS 'Timestamp of oldest queued 
 COMMENT ON COLUMN queue_stats.total_enqueued IS 'Total executions enqueued since queue creation';
 COMMENT ON COLUMN queue_stats.total_completed IS 'Total executions completed since queue creation';
 COMMENT ON COLUMN queue_stats.last_updated IS 'Timestamp of last statistics update';
+
+-- ============================================================================
+-- EXECUTION ADMISSION TABLES
+-- ============================================================================
+
+CREATE TABLE execution_admission_state (
+    id BIGSERIAL PRIMARY KEY,
+    action_id BIGINT NOT NULL REFERENCES action(id) ON DELETE CASCADE,
+    group_key TEXT,
+    group_key_normalized TEXT GENERATED ALWAYS AS (COALESCE(group_key, '')) STORED,
+    max_concurrent INTEGER NOT NULL,
+    next_queue_order BIGINT NOT NULL DEFAULT 1,
+    total_enqueued BIGINT NOT NULL DEFAULT 0,
+    total_completed BIGINT NOT NULL DEFAULT 0,
+    created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_execution_admission_state_identity
+        UNIQUE (action_id, group_key_normalized)
+);
+
+CREATE TABLE execution_admission_entry (
+    id BIGSERIAL PRIMARY KEY,
+    state_id BIGINT NOT NULL REFERENCES execution_admission_state(id) ON DELETE CASCADE,
+    execution_id BIGINT NOT NULL UNIQUE REFERENCES execution(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('active', 'queued')),
+    queue_order BIGINT NOT NULL,
+    enqueued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    activated_at TIMESTAMPTZ,
+    created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_execution_admission_state_action
+    ON execution_admission_state (action_id);
+
+CREATE INDEX idx_execution_admission_entry_state_status_queue
+    ON execution_admission_entry (state_id, status, queue_order);
+
+CREATE INDEX idx_execution_admission_entry_execution
+    ON execution_admission_entry (execution_id);
+
+CREATE TRIGGER update_execution_admission_state_updated
+    BEFORE UPDATE ON execution_admission_state
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_column();
+
+CREATE TRIGGER update_execution_admission_entry_updated
+    BEFORE UPDATE ON execution_admission_entry
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_column();
+
+COMMENT ON TABLE execution_admission_state IS
+    'Shared admission state per action/group for executor concurrency and FIFO coordination';
+COMMENT ON COLUMN execution_admission_state.group_key IS
+    'Optional parameter-derived concurrency grouping key';
+COMMENT ON COLUMN execution_admission_state.max_concurrent IS
+    'Current concurrency limit for this action/group queue';
+COMMENT ON COLUMN execution_admission_state.next_queue_order IS
+    'Monotonic sequence used to preserve exact FIFO order for queued executions';
+COMMENT ON COLUMN execution_admission_state.total_enqueued IS
+    'Cumulative number of executions admitted into this queue';
+COMMENT ON COLUMN execution_admission_state.total_completed IS
+    'Cumulative number of active executions released from this queue';
+
+COMMENT ON TABLE execution_admission_entry IS
+    'Active slot ownership and queued executions for shared admission control';
+COMMENT ON COLUMN execution_admission_entry.status IS
+    'active rows own a concurrency slot; queued rows wait in FIFO order';
+COMMENT ON COLUMN execution_admission_entry.queue_order IS
+    'Durable FIFO position within an action/group queue';
 
 -- ============================================================================
 -- PACK ENVIRONMENT TABLE

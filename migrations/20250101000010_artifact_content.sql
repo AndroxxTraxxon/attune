@@ -26,7 +26,7 @@ ALTER TABLE artifact ADD COLUMN IF NOT EXISTS content_type TEXT;
 -- Total size in bytes of the latest version's content (NULL for progress artifacts)
 ALTER TABLE artifact ADD COLUMN IF NOT EXISTS size_bytes BIGINT;
 
--- Execution that produced/owns this artifact (plain BIGINT, no FK — execution is a hypertable)
+-- Execution that produced/owns this artifact (plain BIGINT, no FK by design)
 ALTER TABLE artifact ADD COLUMN IF NOT EXISTS execution BIGINT;
 
 -- Structured data for progress-type artifacts and small structured payloads.
@@ -52,7 +52,7 @@ COMMENT ON COLUMN artifact.name IS 'Human-readable artifact name';
 COMMENT ON COLUMN artifact.description IS 'Optional description of the artifact';
 COMMENT ON COLUMN artifact.content_type IS 'MIME content type (e.g. application/json, text/plain)';
 COMMENT ON COLUMN artifact.size_bytes IS 'Size of latest version content in bytes';
-COMMENT ON COLUMN artifact.execution IS 'Execution that produced this artifact (no FK — execution is a hypertable)';
+COMMENT ON COLUMN artifact.execution IS 'Execution that produced this artifact (no FK by design)';
 COMMENT ON COLUMN artifact.data IS 'Structured JSONB data for progress artifacts or metadata';
 COMMENT ON COLUMN artifact.visibility IS 'Access visibility: public (all users) or private (scope/owner-restricted)';
 

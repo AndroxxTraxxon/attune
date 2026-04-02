@@ -65,6 +65,35 @@ A workflow execution should have exactly one active mutator at a time when evalu
 
 ## Proposed Implementation Phases
 
+## Current Status
+
+As of the current implementation state:
+
+- Phase 1 is substantially implemented.
+- Phases 2, 3, 4, and 5 are implemented.
+
+Completed so far:
+
+- Atomic `requested -> scheduling` claim support was added in `ExecutionRepository`.
+- Scheduler state transitions for regular action dispatch were converted to conditional/CAS-style updates.
+- Redelivered `execution.requested` messages for stale `scheduling` rows are now retried/reclaimed instead of being silently acknowledged away.
+- Shared concurrency/FIFO coordination now uses durable PostgreSQL admission tables for action/group slot ownership and queued execution ordering.
+- `ExecutionQueueManager` now acts as a thin API-compatible facade over the DB-backed admission path when constructed with a pool.
+- Slot release, queued removal, and rollback/restore flows now operate against shared DB state rather than process-local memory.
+- `queue_stats` remains derived telemetry, but it is now refreshed transactionally from the shared admission state.
+- Workflow start is now idempotent at the parent workflow state level via `workflow_execution(execution)` uniqueness plus repository create-or-get behavior.
+- Workflow advancement now runs under a per-workflow PostgreSQL advisory lock, row-locks `workflow_execution` with `SELECT ... FOR UPDATE`, and performs serialized mutation inside an explicit SQL transaction.
+- Durable workflow child dispatch dedupe is now enforced with the `workflow_task_dispatch` coordination table and repository create-or-get helpers.
+- `execution` and `enforcement` were switched from Timescale hypertables back to normal PostgreSQL tables to remove HA/idempotency friction around foreign keys and unique constraints. `event` remains a hypertable, and history tables remain Timescale-backed.
+- Direct uniqueness/idempotency invariants were added for `enforcement(rule, event)`, top-level `execution(enforcement)`, and `inquiry(execution)`.
+- Event, enforcement, and inquiry handlers were updated to use create-or-get flows and conditional status transitions so duplicate delivery becomes safe.
+- Timeout and DLQ recovery loops now use conditional state transitions and only emit side effects when the guarded update succeeds.
+
+Partially complete / still open:
+
+- HA-focused integration and failure-injection coverage still needs to be expanded around the new invariants and recovery behavior.
+- The new migrations and DB-backed FIFO tests still need end-to-end validation against a real Postgres/Timescale environment.
+
 ## Phase 1: Atomic Execution Claiming
 
 ### Objective
@@ -92,6 +121,10 @@ Ensure only one executor replica can claim a `requested` execution for schedulin
 
 - Two schedulers racing on the same execution cannot both dispatch it
 - Redelivered `execution.requested` messages become harmless no-ops after the first successful claim
+
+### Status
+
+Implemented for regular action scheduling, with additional stale-claim recovery for redelivered `execution.requested` messages. The remaining gap for this area is broader integration with the still-pending shared admission/queueing work in Phase 2.
 
 ## Phase 2: Shared Concurrency Control and FIFO Queueing
 
@@ -147,6 +180,19 @@ Alternative naming is fine, but the design needs to support:
 - FIFO ordering holds across multiple executor replicas
 - Restarting an executor does not lose queue ownership state
 
+### Status
+
+Implemented.
+
+Completed:
+
+- Shared admission state now lives in PostgreSQL via durable action/group queue rows and execution entry rows.
+- Action-level concurrency limits and parameter-group concurrency keys are enforced against that shared admission state.
+- FIFO ordering is determined by durable queued-entry order rather than process-local memory.
+- Completion-time slot release promotes the next queued execution inside the same DB transaction.
+- Rollback helpers can restore released slots or removed queued entries if republish/cleanup fails after the DB mutation.
+- `ExecutionQueueManager` remains as a facade for the existing scheduler/policy code paths, but it no longer acts as the correctness source of truth when running with a DB pool.
+
 ## Phase 3: Workflow Start Idempotency and Serialized Advancement
 
 ### Objective
@@ -196,6 +242,20 @@ This may be implemented with explicit columns or a dedupe table if indexing the 
 - Duplicate `execution.completed` delivery for a workflow child cannot create duplicate successor executions
 - Two executor replicas cannot concurrently mutate the same workflow state
 
+### Status
+
+Implemented.
+
+Completed:
+
+- `workflow_execution(execution)` uniqueness is part of the workflow schema and workflow start uses create-or-get semantics.
+- Workflow parent executions are claimed before orchestration starts.
+- Workflow advancement now runs under a per-workflow PostgreSQL advisory lock held on the same DB connection that performs the serialized advancement work.
+- The serialized workflow path is wrapped in an explicit SQL transaction.
+- `workflow_execution` is row-locked with `SELECT ... FOR UPDATE` before mutation.
+- Successor/child dispatch dedupe is enforced with the durable `workflow_task_dispatch` table keyed by `(workflow_execution, task_name, COALESCE(task_index, -1))`.
+- Child `ExecutionRequested` messages are staged and published only after the workflow transaction commits.
+
 ## Phase 4: Idempotent Event, Enforcement, and Inquiry Handling
 
 ### Objective
@@ -241,6 +301,19 @@ WHERE event IS NOT NULL;
 - Duplicate `enforcement.created` does not create duplicate executions
 - Duplicate completion handling does not create duplicate inquiries
 
+### Status
+
+Implemented.
+
+Completed:
+
+- `enforcement(rule, event)` uniqueness is enforced directly with a partial unique index when both keys are present.
+- Top-level execution creation is deduped with a unique invariant on `execution(enforcement)` where `parent IS NULL`.
+- Inquiry creation is deduped with a unique invariant on `inquiry(execution)`.
+- `event_processor` now uses create-or-get enforcement handling and only republishes when the persisted enforcement still needs processing.
+- `enforcement_processor` now skips duplicate non-`created` enforcements, creates or reuses the top-level execution, and conditionally resolves enforcement state.
+- `inquiry_handler` now uses create-or-get inquiry handling and only emits `InquiryCreated` when the inquiry was actually created.
+
 ## Phase 5: Safe Recovery Loops
 
 ### Objective
@@ -273,6 +346,17 @@ Make timeout and DLQ processing safe under races and multiple replicas.
 - DLQ handler cannot overwrite newer state
 - Running multiple timeout monitors produces no conflicting state transitions
 
+### Status
+
+Implemented.
+
+Completed:
+
+- Timeout failure now uses a conditional transition that only succeeds when the execution is still `scheduled` and still older than the timeout cutoff.
+- Timeout-driven completion side effects are only published when that guarded update succeeds.
+- DLQ handling now treats messages as stale unless the execution is still exactly `scheduled`.
+- DLQ failure transitions now use conditional status updates and no longer overwrite newer `running` or terminal state.
+
 ## Testing Plan
 
 Add focused HA tests after the repository and scheduler primitives are in place.
@@ -298,13 +382,10 @@ Add focused HA tests after the repository and scheduler primitives are in place.
 
 ## Recommended Execution Order for Next Session
 
-1. Add migrations and repository primitives for atomic execution claim
-2. Convert scheduler to claim-first semantics
-3. Implement shared DB-backed concurrency/FIFO coordination
-4. Add workflow uniqueness and serialized advancement
-5. Add idempotency to event/enforcement/inquiry paths
-6. Fix timeout and DLQ handlers to use conditional transitions
-7. Add HA-focused tests
+1. Add more HA-focused integration tests for duplicate delivery, cross-replica completion, and recovery rollback paths
+2. Add failure-injection tests for crash/replay scenarios around `scheduling` reclaim, workflow advancement, and post-commit publish paths
+3. Validate the new migrations and DB-backed FIFO behavior end-to-end against a real Postgres/Timescale environment
+4. Consider a small follow-up cleanup pass to reduce or remove the in-memory fallback code in `ExecutionQueueManager` once the DB path is fully baked
 
 ## Expected Outcome
 
@@ -315,3 +396,5 @@ After this plan is implemented, the executor should be able to scale horizontall
 - correct workflow orchestration
 - safe replay handling
 - safe recovery behavior during failures and redelivery
+
+At the current state, the core executor HA phases are implemented. The remaining work is confidence-building: failure-injection coverage, multi-replica integration testing, and end-to-end migration validation in a live database environment.

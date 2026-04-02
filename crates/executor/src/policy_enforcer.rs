@@ -933,8 +933,8 @@ mod tests {
         assert_eq!(enforcer.get_concurrency_limit(2, Some(200)), Some(20));
     }
 
-    #[test]
-    fn test_build_parameter_group_key_uses_exact_values() {
+    #[tokio::test]
+    async fn test_build_parameter_group_key_uses_exact_values() {
         let pool = sqlx::PgPool::connect_lazy("postgresql://localhost/test").unwrap();
         let enforcer = PolicyEnforcer::new(pool);
         let config = serde_json::json!({

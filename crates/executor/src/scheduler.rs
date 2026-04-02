@@ -25,12 +25,12 @@ use attune_common::{
         workflow::{
             CreateWorkflowExecutionInput, WorkflowDefinitionRepository, WorkflowExecutionRepository,
         },
-        Create, FindById, FindByRef, Update,
+        FindById, FindByRef, Update,
     },
     runtime_detection::runtime_aliases_contain,
     workflow::WorkflowDefinition,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sqlx::{PgConnection, PgPool};
@@ -101,6 +101,17 @@ struct ExecutionScheduledPayload {
     execution_id: i64,
     worker_id: i64,
     action_ref: String,
+    config: Option<JsonValue>,
+    scheduled_attempt_updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingExecutionRequested {
+    execution_id: i64,
+    action_id: i64,
+    action_ref: String,
+    parent_id: i64,
+    enforcement_id: Option<i64>,
     config: Option<JsonValue>,
 }
 
@@ -509,6 +520,7 @@ impl ExecutionScheduler {
             &worker.id,
             &envelope.payload.action_ref,
             &execution_config,
+            scheduled_execution.updated,
             &action,
         )
         .await
@@ -1021,13 +1033,13 @@ impl ExecutionScheduler {
     #[allow(clippy::too_many_arguments)]
     async fn dispatch_workflow_task_with_conn(
         conn: &mut PgConnection,
-        publisher: &Publisher,
         _round_robin_counter: &AtomicUsize,
         parent_execution: &Execution,
         workflow_execution_id: &i64,
         task_node: &crate::workflow::graph::TaskNode,
         wf_ctx: &WorkflowContext,
         triggered_by: Option<&str>,
+        pending_messages: &mut Vec<PendingExecutionRequested>,
     ) -> Result<()> {
         let action_ref: String = match &task_node.action {
             Some(a) => a.clone(),
@@ -1059,7 +1071,6 @@ impl ExecutionScheduler {
         if let Some(ref with_items_expr) = task_node.with_items {
             return Self::dispatch_with_items_task_with_conn(
                 conn,
-                publisher,
                 parent_execution,
                 workflow_execution_id,
                 task_node,
@@ -1068,6 +1079,7 @@ impl ExecutionScheduler {
                 with_items_expr,
                 wf_ctx,
                 triggered_by,
+                pending_messages,
             )
             .await;
         }
@@ -1115,36 +1127,29 @@ impl ExecutionScheduler {
             completed_at: None,
         };
 
-        let child_execution = if let Some(existing) = ExecutionRepository::find_by_workflow_task(
+        let child_execution_result = ExecutionRepository::create_workflow_task_if_absent_with_conn(
             &mut *conn,
+            CreateExecutionInput {
+                action: Some(task_action.id),
+                action_ref: action_ref.clone(),
+                config: task_config,
+                env_vars: parent_execution.env_vars.clone(),
+                parent: Some(parent_execution.id),
+                enforcement: parent_execution.enforcement,
+                executor: None,
+                worker: None,
+                status: ExecutionStatus::Requested,
+                result: None,
+                workflow_task: Some(workflow_task),
+            },
             *workflow_execution_id,
             &task_node.name,
             None,
         )
-        .await?
-        {
-            existing
-        } else {
-            ExecutionRepository::create(
-                &mut *conn,
-                CreateExecutionInput {
-                    action: Some(task_action.id),
-                    action_ref: action_ref.clone(),
-                    config: task_config,
-                    env_vars: parent_execution.env_vars.clone(),
-                    parent: Some(parent_execution.id),
-                    enforcement: parent_execution.enforcement,
-                    executor: None,
-                    worker: None,
-                    status: ExecutionStatus::Requested,
-                    result: None,
-                    workflow_task: Some(workflow_task),
-                },
-            )
-            .await?
-        };
+        .await?;
+        let child_execution = child_execution_result.execution;
 
-        if child_execution.status == ExecutionStatus::Requested {
+        if child_execution_result.created {
             info!(
                 "Created child execution {} for workflow task '{}' (action '{}', workflow_execution {})",
                 child_execution.id, task_node.name, action_ref, workflow_execution_id
@@ -1157,24 +1162,14 @@ impl ExecutionScheduler {
         }
 
         if child_execution.status == ExecutionStatus::Requested {
-            let payload = ExecutionRequestedPayload {
+            pending_messages.push(PendingExecutionRequested {
                 execution_id: child_execution.id,
-                action_id: Some(task_action.id),
+                action_id: task_action.id,
                 action_ref: action_ref.clone(),
-                parent_id: Some(parent_execution.id),
+                parent_id: parent_execution.id,
                 enforcement_id: parent_execution.enforcement,
                 config: child_execution.config.clone(),
-            };
-
-            let envelope = MessageEnvelope::new(MessageType::ExecutionRequested, payload)
-                .with_source("executor-scheduler");
-
-            publisher.publish_envelope(&envelope).await?;
-
-            info!(
-                "Published ExecutionRequested for child execution {} (task '{}')",
-                child_execution.id, task_node.name
-            );
+            });
         }
 
         Ok(())
@@ -1392,7 +1387,6 @@ impl ExecutionScheduler {
     #[allow(clippy::too_many_arguments)]
     async fn dispatch_with_items_task_with_conn(
         conn: &mut PgConnection,
-        publisher: &Publisher,
         parent_execution: &Execution,
         workflow_execution_id: &i64,
         task_node: &crate::workflow::graph::TaskNode,
@@ -1401,6 +1395,7 @@ impl ExecutionScheduler {
         with_items_expr: &str,
         wf_ctx: &WorkflowContext,
         triggered_by: Option<&str>,
+        pending_messages: &mut Vec<PendingExecutionRequested>,
     ) -> Result<()> {
         let items_value = wf_ctx
             .render_json(&JsonValue::String(with_items_expr.to_string()))
@@ -1511,18 +1506,8 @@ impl ExecutionScheduler {
                 completed_at: None,
             };
 
-            let child_execution = if let Some(existing) =
-                ExecutionRepository::find_by_workflow_task(
-                    &mut *conn,
-                    *workflow_execution_id,
-                    &task_node.name,
-                    Some(index as i32),
-                )
-                .await?
-            {
-                existing
-            } else {
-                ExecutionRepository::create(
+            let child_execution_result =
+                ExecutionRepository::create_workflow_task_if_absent_with_conn(
                     &mut *conn,
                     CreateExecutionInput {
                         action: Some(task_action.id),
@@ -1537,11 +1522,14 @@ impl ExecutionScheduler {
                         result: None,
                         workflow_task: Some(workflow_task),
                     },
+                    *workflow_execution_id,
+                    &task_node.name,
+                    Some(index as i32),
                 )
-                .await?
-            };
+                .await?;
+            let child_execution = child_execution_result.execution;
 
-            if child_execution.status == ExecutionStatus::Requested {
+            if child_execution_result.created {
                 info!(
                     "Created with_items child execution {} for task '{}' item {} \
                      (action '{}', workflow_execution {})",
@@ -1566,11 +1554,11 @@ impl ExecutionScheduler {
             if child.status == ExecutionStatus::Requested {
                 Self::publish_execution_requested_with_conn(
                     &mut *conn,
-                    publisher,
                     child_id,
                     task_action.id,
                     action_ref,
                     parent_execution,
+                    pending_messages,
                 )
                 .await?;
             }
@@ -1622,25 +1610,17 @@ impl ExecutionScheduler {
         Ok(())
     }
 
-    async fn publish_execution_requested_with_conn(
-        conn: &mut PgConnection,
+    async fn publish_execution_requested_payload(
         publisher: &Publisher,
-        execution_id: i64,
-        action_id: i64,
-        action_ref: &str,
-        parent_execution: &Execution,
+        pending: PendingExecutionRequested,
     ) -> Result<()> {
-        let child = ExecutionRepository::find_by_id(&mut *conn, execution_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Execution {} not found", execution_id))?;
-
         let payload = ExecutionRequestedPayload {
-            execution_id: child.id,
-            action_id: Some(action_id),
-            action_ref: action_ref.to_string(),
-            parent_id: Some(parent_execution.id),
-            enforcement_id: parent_execution.enforcement,
-            config: child.config.clone(),
+            execution_id: pending.execution_id,
+            action_id: Some(pending.action_id),
+            action_ref: pending.action_ref,
+            parent_id: Some(pending.parent_id),
+            enforcement_id: pending.enforcement_id,
+            config: pending.config,
         };
 
         let envelope = MessageEnvelope::new(MessageType::ExecutionRequested, payload)
@@ -1650,8 +1630,32 @@ impl ExecutionScheduler {
 
         debug!(
             "Published deferred ExecutionRequested for child execution {}",
-            execution_id
+            envelope.payload.execution_id
         );
+
+        Ok(())
+    }
+
+    async fn publish_execution_requested_with_conn(
+        conn: &mut PgConnection,
+        execution_id: i64,
+        action_id: i64,
+        action_ref: &str,
+        parent_execution: &Execution,
+        pending_messages: &mut Vec<PendingExecutionRequested>,
+    ) -> Result<()> {
+        let child = ExecutionRepository::find_by_id(&mut *conn, execution_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Execution {} not found", execution_id))?;
+
+        pending_messages.push(PendingExecutionRequested {
+            execution_id: child.id,
+            action_id,
+            action_ref: action_ref.to_string(),
+            parent_id: parent_execution.id,
+            enforcement_id: parent_execution.enforcement,
+            config: child.config.clone(),
+        });
 
         Ok(())
     }
@@ -1734,11 +1738,11 @@ impl ExecutionScheduler {
 
     async fn publish_pending_with_items_children_with_conn(
         conn: &mut PgConnection,
-        publisher: &Publisher,
         parent_execution: &Execution,
         workflow_execution_id: i64,
         task_name: &str,
         slots: usize,
+        pending_messages: &mut Vec<PendingExecutionRequested>,
     ) -> Result<usize> {
         if slots == 0 {
             return Ok(0);
@@ -1768,11 +1772,11 @@ impl ExecutionScheduler {
 
             if let Err(e) = Self::publish_execution_requested_with_conn(
                 &mut *conn,
-                publisher,
                 *child_id,
                 *action_id,
                 &child.action_ref,
                 parent_execution,
+                pending_messages,
             )
             .await
             {
@@ -1819,12 +1823,35 @@ impl ExecutionScheduler {
             .execute(&mut *lock_conn)
             .await?;
 
-        let result = Self::advance_workflow_serialized(
-            &mut lock_conn,
-            publisher,
-            round_robin_counter,
-            execution,
-        )
+        let result = async {
+            sqlx::query("BEGIN").execute(&mut *lock_conn).await?;
+
+            let advance_result =
+                Self::advance_workflow_serialized(&mut lock_conn, round_robin_counter, execution)
+                    .await;
+
+            match advance_result {
+                Ok(pending_messages) => {
+                    sqlx::query("COMMIT").execute(&mut *lock_conn).await?;
+
+                    for pending in pending_messages {
+                        Self::publish_execution_requested_payload(publisher, pending).await?;
+                    }
+
+                    Ok(())
+                }
+                Err(err) => {
+                    let rollback_result = sqlx::query("ROLLBACK").execute(&mut *lock_conn).await;
+                    if let Err(rollback_err) = rollback_result {
+                        error!(
+                            "Failed to roll back workflow_execution {} advancement transaction: {}",
+                            workflow_execution_id, rollback_err
+                        );
+                    }
+                    Err(err)
+                }
+            }
+        }
         .await;
         let unlock_result = sqlx::query("SELECT pg_advisory_unlock($1)")
             .bind(workflow_execution_id)
@@ -1838,13 +1865,12 @@ impl ExecutionScheduler {
 
     async fn advance_workflow_serialized(
         conn: &mut PgConnection,
-        publisher: &Publisher,
         round_robin_counter: &AtomicUsize,
         execution: &Execution,
-    ) -> Result<()> {
+    ) -> Result<Vec<PendingExecutionRequested>> {
         let workflow_task = match &execution.workflow_task {
             Some(wt) => wt,
-            None => return Ok(()), // Not a workflow task, nothing to do
+            None => return Ok(vec![]), // Not a workflow task, nothing to do
         };
 
         let workflow_execution_id = workflow_task.workflow_execution;
@@ -1867,7 +1893,7 @@ impl ExecutionScheduler {
 
         // Load the workflow execution record
         let workflow_execution =
-            WorkflowExecutionRepository::find_by_id(&mut *conn, workflow_execution_id)
+            WorkflowExecutionRepository::find_by_id_for_update(&mut *conn, workflow_execution_id)
                 .await?
                 .ok_or_else(|| {
                     anyhow::anyhow!("Workflow execution {} not found", workflow_execution_id)
@@ -1882,8 +1908,10 @@ impl ExecutionScheduler {
                 "Workflow execution {} already in terminal state {:?}, skipping advance",
                 workflow_execution_id, workflow_execution.status
             );
-            return Ok(());
+            return Ok(vec![]);
         }
+
+        let mut pending_messages = Vec::new();
 
         let parent_execution =
             ExecutionRepository::find_by_id(&mut *conn, workflow_execution.execution)
@@ -1944,7 +1972,7 @@ impl ExecutionScheduler {
                 );
             }
 
-            return Ok(());
+            return Ok(pending_messages);
         }
 
         // Load the workflow definition so we can apply param_schema defaults
@@ -2021,11 +2049,11 @@ impl ExecutionScheduler {
             if free_slots > 0 {
                 if let Err(e) = Self::publish_pending_with_items_children_with_conn(
                     &mut *conn,
-                    publisher,
                     &parent_for_pending,
                     workflow_execution_id,
                     task_name,
                     free_slots,
+                    &mut pending_messages,
                 )
                 .await
                 {
@@ -2060,7 +2088,7 @@ impl ExecutionScheduler {
                     workflow_task.task_index.unwrap_or(-1),
                     siblings_remaining.len(),
                 );
-                return Ok(());
+                return Ok(pending_messages);
             }
 
             // ---------------------------------------------------------
@@ -2093,7 +2121,7 @@ impl ExecutionScheduler {
                      another advance_workflow call already handled final completion, skipping",
                     task_name,
                 );
-                return Ok(());
+                return Ok(pending_messages);
             }
 
             // All items done — check if any failed
@@ -2280,13 +2308,13 @@ impl ExecutionScheduler {
             if let Some(task_node) = graph.get_task(next_task_name) {
                 if let Err(e) = Self::dispatch_workflow_task_with_conn(
                     &mut *conn,
-                    publisher,
                     round_robin_counter,
                     &parent_execution,
                     &workflow_execution_id,
                     task_node,
                     &wf_ctx,
                     Some(task_name), // predecessor that triggered this task
+                    &mut pending_messages,
                 )
                 .await
                 {
@@ -2349,7 +2377,7 @@ impl ExecutionScheduler {
             .await?;
         }
 
-        Ok(())
+        Ok(pending_messages)
     }
 
     /// Count child executions that are still in progress for a workflow.
@@ -3139,6 +3167,7 @@ impl ExecutionScheduler {
         worker_id: &i64,
         action_ref: &str,
         config: &Option<JsonValue>,
+        scheduled_attempt_updated_at: DateTime<Utc>,
         _action: &Action,
     ) -> Result<()> {
         debug!("Queuing execution {} to worker {}", execution_id, worker_id);
@@ -3149,6 +3178,7 @@ impl ExecutionScheduler {
             worker_id: *worker_id,
             action_ref: action_ref.to_string(),
             config: config.clone(),
+            scheduled_attempt_updated_at,
         };
 
         let envelope =

@@ -12,7 +12,10 @@ use anyhow::Result;
 use attune_common::{
     models::{enums::ExecutionStatus, Execution},
     mq::{MessageEnvelope, MessageType, Publisher},
-    repositories::execution::SELECT_COLUMNS as EXECUTION_COLUMNS,
+    repositories::{
+        execution::{UpdateExecutionInput, SELECT_COLUMNS as EXECUTION_COLUMNS},
+        ExecutionRepository,
+    },
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -178,19 +181,26 @@ impl ExecutionTimeoutMonitor {
             "original_status": "scheduled"
         });
 
-        // Update execution status in database
-        sqlx::query(
-            "UPDATE execution
-             SET status = $1,
-                 result = $2,
-                 updated = NOW()
-             WHERE id = $3",
+        let updated = ExecutionRepository::update_if_status_and_updated_before(
+            &self.pool,
+            execution_id,
+            ExecutionStatus::Scheduled,
+            self.calculate_cutoff_time(),
+            UpdateExecutionInput {
+                status: Some(ExecutionStatus::Failed),
+                result: Some(result.clone()),
+                ..Default::default()
+            },
         )
-        .bind(ExecutionStatus::Failed)
-        .bind(&result)
-        .bind(execution_id)
-        .execute(&self.pool)
         .await?;
+
+        if updated.is_none() {
+            debug!(
+                "Skipping timeout failure for execution {} because it already left Scheduled or is no longer stale",
+                execution_id
+            );
+            return Ok(());
+        }
 
         info!("Execution {} marked as failed in database", execution_id);
 

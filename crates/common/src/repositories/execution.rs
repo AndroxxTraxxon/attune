@@ -4,7 +4,8 @@ use chrono::{DateTime, Utc};
 
 use crate::models::{enums::ExecutionStatus, execution::*, Id, JsonDict};
 use crate::Result;
-use sqlx::{Executor, Postgres, QueryBuilder};
+use sqlx::{Executor, PgConnection, PgPool, Postgres, QueryBuilder};
+use tokio::time::{sleep, Duration};
 
 use super::{Create, Delete, FindById, List, Repository, Update};
 
@@ -43,6 +44,12 @@ pub struct ExecutionSearchResult {
 
 #[derive(Debug, Clone)]
 pub struct WorkflowTaskExecutionCreateOrGetResult {
+    pub execution: Execution,
+    pub created: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnforcementExecutionCreateOrGetResult {
     pub execution: Execution,
     pub created: bool,
 }
@@ -215,32 +222,392 @@ impl Update for ExecutionRepository {
 }
 
 impl ExecutionRepository {
-    pub async fn create_workflow_task_if_absent<'e, E>(
+    pub async fn find_top_level_by_enforcement<'e, E>(
         executor: E,
+        enforcement_id: Id,
+    ) -> Result<Option<Execution>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let sql = format!(
+            "SELECT {SELECT_COLUMNS} \
+             FROM execution \
+             WHERE enforcement = $1
+               AND parent IS NULL
+               AND (config IS NULL OR NOT (config ? 'retry_of')) \
+             ORDER BY created ASC \
+             LIMIT 1"
+        );
+
+        sqlx::query_as::<_, Execution>(&sql)
+            .bind(enforcement_id)
+            .fetch_optional(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn create_top_level_for_enforcement_if_absent<'e, E>(
+        executor: E,
+        input: CreateExecutionInput,
+        enforcement_id: Id,
+    ) -> Result<EnforcementExecutionCreateOrGetResult>
+    where
+        E: Executor<'e, Database = Postgres> + Copy + 'e,
+    {
+        let inserted = sqlx::query_as::<_, Execution>(&format!(
+            "INSERT INTO execution \
+             (action, action_ref, config, env_vars, parent, enforcement, executor, worker, status, result, workflow_task) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             ON CONFLICT (enforcement)
+             WHERE enforcement IS NOT NULL
+               AND parent IS NULL
+               AND (config IS NULL OR NOT (config ? 'retry_of'))
+             DO NOTHING \
+             RETURNING {SELECT_COLUMNS}"
+        ))
+        .bind(input.action)
+        .bind(&input.action_ref)
+        .bind(&input.config)
+        .bind(&input.env_vars)
+        .bind(input.parent)
+        .bind(input.enforcement)
+        .bind(input.executor)
+        .bind(input.worker)
+        .bind(input.status)
+        .bind(&input.result)
+        .bind(sqlx::types::Json(&input.workflow_task))
+        .fetch_optional(executor)
+        .await?;
+
+        if let Some(execution) = inserted {
+            return Ok(EnforcementExecutionCreateOrGetResult {
+                execution,
+                created: true,
+            });
+        }
+
+        let execution = Self::find_top_level_by_enforcement(executor, enforcement_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "top-level execution for enforcement {} disappeared after dedupe conflict",
+                    enforcement_id
+                )
+            })?;
+
+        Ok(EnforcementExecutionCreateOrGetResult {
+            execution,
+            created: false,
+        })
+    }
+
+    async fn claim_workflow_task_dispatch<'e, E>(
+        executor: E,
+        workflow_execution_id: Id,
+        task_name: &str,
+        task_index: Option<i32>,
+    ) -> Result<bool>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let inserted: Option<(i64,)> = sqlx::query_as(
+            "INSERT INTO workflow_task_dispatch (workflow_execution, task_name, task_index)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (workflow_execution, task_name, COALESCE(task_index, -1)) DO NOTHING
+             RETURNING id",
+        )
+        .bind(workflow_execution_id)
+        .bind(task_name)
+        .bind(task_index)
+        .fetch_optional(executor)
+        .await?;
+
+        Ok(inserted.is_some())
+    }
+
+    async fn assign_workflow_task_dispatch_execution<'e, E>(
+        executor: E,
+        workflow_execution_id: Id,
+        task_name: &str,
+        task_index: Option<i32>,
+        execution_id: Id,
+    ) -> Result<()>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query(
+            "UPDATE workflow_task_dispatch
+             SET execution_id = COALESCE(execution_id, $4)
+             WHERE workflow_execution = $1
+               AND task_name = $2
+               AND task_index IS NOT DISTINCT FROM $3",
+        )
+        .bind(workflow_execution_id)
+        .bind(task_name)
+        .bind(task_index)
+        .bind(execution_id)
+        .execute(executor)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn lock_workflow_task_dispatch<'e, E>(
+        executor: E,
+        workflow_execution_id: Id,
+        task_name: &str,
+        task_index: Option<i32>,
+    ) -> Result<Option<Option<Id>>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let row: Option<(Option<i64>,)> = sqlx::query_as(
+            "SELECT execution_id
+             FROM workflow_task_dispatch
+             WHERE workflow_execution = $1
+               AND task_name = $2
+               AND task_index IS NOT DISTINCT FROM $3
+             FOR UPDATE",
+        )
+        .bind(workflow_execution_id)
+        .bind(task_name)
+        .bind(task_index)
+        .fetch_optional(executor)
+        .await?;
+
+        // Map the outer Option to distinguish three cases:
+        // - None            → no row exists
+        // - Some(None)      → row exists but execution_id is still NULL (mid-creation)
+        // - Some(Some(id))  → row exists with a completed execution_id
+        Ok(row.map(|(execution_id,)| execution_id))
+    }
+
+    async fn create_workflow_task_if_absent_in_conn(
+        conn: &mut PgConnection,
         input: CreateExecutionInput,
         workflow_execution_id: Id,
         task_name: &str,
         task_index: Option<i32>,
-    ) -> Result<WorkflowTaskExecutionCreateOrGetResult>
-    where
-        E: Executor<'e, Database = Postgres> + Copy + 'e,
-    {
-        if let Some(execution) =
-            Self::find_by_workflow_task(executor, workflow_execution_id, task_name, task_index)
-                .await?
-        {
+    ) -> Result<WorkflowTaskExecutionCreateOrGetResult> {
+        let claimed = Self::claim_workflow_task_dispatch(
+            &mut *conn,
+            workflow_execution_id,
+            task_name,
+            task_index,
+        )
+        .await?;
+
+        if claimed {
+            let execution = Self::create(&mut *conn, input).await?;
+            Self::assign_workflow_task_dispatch_execution(
+                &mut *conn,
+                workflow_execution_id,
+                task_name,
+                task_index,
+                execution.id,
+            )
+            .await?;
+
             return Ok(WorkflowTaskExecutionCreateOrGetResult {
                 execution,
-                created: false,
+                created: true,
             });
         }
 
-        let execution = Self::create(executor, input).await?;
+        let dispatch_state = Self::lock_workflow_task_dispatch(
+            &mut *conn,
+            workflow_execution_id,
+            task_name,
+            task_index,
+        )
+        .await?;
 
-        Ok(WorkflowTaskExecutionCreateOrGetResult {
-            execution,
-            created: true,
-        })
+        match dispatch_state {
+            Some(Some(existing_execution_id)) => {
+                // Row exists with execution_id — return the existing execution.
+                let execution = Self::find_by_id(&mut *conn, existing_execution_id)
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "workflow child execution {} missing for workflow_execution {} task '{}' index {:?}",
+                            existing_execution_id,
+                            workflow_execution_id,
+                            task_name,
+                            task_index
+                        )
+                    })?;
+
+                Ok(WorkflowTaskExecutionCreateOrGetResult {
+                    execution,
+                    created: false,
+                })
+            }
+
+            Some(None) => {
+                // Row exists but execution_id is still NULL: another transaction is
+                // mid-creation (between claim and assign). Retry until it's filled in.
+                // If the original creator's transaction rolled back, the row also
+                // disappears — handled by the `None` branch inside the loop.
+                'wait: {
+                    for _ in 0..20_u32 {
+                        sleep(Duration::from_millis(50)).await;
+                        match Self::lock_workflow_task_dispatch(
+                            &mut *conn,
+                            workflow_execution_id,
+                            task_name,
+                            task_index,
+                        )
+                        .await?
+                        {
+                            Some(Some(execution_id)) => {
+                                let execution =
+                                    Self::find_by_id(&mut *conn, execution_id).await?.ok_or_else(
+                                        || {
+                                            anyhow::anyhow!(
+                                                "workflow child execution {} missing for workflow_execution {} task '{}' index {:?}",
+                                                execution_id,
+                                                workflow_execution_id,
+                                                task_name,
+                                                task_index
+                                            )
+                                        },
+                                    )?;
+                                return Ok(WorkflowTaskExecutionCreateOrGetResult {
+                                    execution,
+                                    created: false,
+                                });
+                            }
+                            Some(None) => {}     // still NULL, keep waiting
+                            None => break 'wait, // row rolled back; fall through to re-claim
+                        }
+                    }
+                    // Exhausted all retries without the execution_id being set.
+                    return Err(anyhow::anyhow!(
+                        "Timed out waiting for workflow task dispatch execution_id to be set \
+                         for workflow_execution {} task '{}' index {:?}",
+                        workflow_execution_id,
+                        task_name,
+                        task_index
+                    )
+                    .into());
+                }
+
+                // Row disappeared (original creator rolled back) — re-claim and create.
+                let re_claimed = Self::claim_workflow_task_dispatch(
+                    &mut *conn,
+                    workflow_execution_id,
+                    task_name,
+                    task_index,
+                )
+                .await?;
+                if !re_claimed {
+                    return Err(anyhow::anyhow!(
+                        "Workflow task dispatch for workflow_execution {} task '{}' index {:?} \
+                         was reclaimed by another executor after rollback",
+                        workflow_execution_id,
+                        task_name,
+                        task_index
+                    )
+                    .into());
+                }
+                let execution = Self::create(&mut *conn, input).await?;
+                Self::assign_workflow_task_dispatch_execution(
+                    &mut *conn,
+                    workflow_execution_id,
+                    task_name,
+                    task_index,
+                    execution.id,
+                )
+                .await?;
+                Ok(WorkflowTaskExecutionCreateOrGetResult {
+                    execution,
+                    created: true,
+                })
+            }
+
+            None => {
+                // No row at all — the original INSERT was rolled back before we arrived.
+                // Attempt to re-claim and create as if this were a fresh dispatch.
+                let re_claimed = Self::claim_workflow_task_dispatch(
+                    &mut *conn,
+                    workflow_execution_id,
+                    task_name,
+                    task_index,
+                )
+                .await?;
+                if !re_claimed {
+                    return Err(anyhow::anyhow!(
+                        "Workflow task dispatch for workflow_execution {} task '{}' index {:?} \
+                         was claimed by another executor",
+                        workflow_execution_id,
+                        task_name,
+                        task_index
+                    )
+                    .into());
+                }
+                let execution = Self::create(&mut *conn, input).await?;
+                Self::assign_workflow_task_dispatch_execution(
+                    &mut *conn,
+                    workflow_execution_id,
+                    task_name,
+                    task_index,
+                    execution.id,
+                )
+                .await?;
+                Ok(WorkflowTaskExecutionCreateOrGetResult {
+                    execution,
+                    created: true,
+                })
+            }
+        }
+    }
+
+    pub async fn create_workflow_task_if_absent(
+        pool: &PgPool,
+        input: CreateExecutionInput,
+        workflow_execution_id: Id,
+        task_name: &str,
+        task_index: Option<i32>,
+    ) -> Result<WorkflowTaskExecutionCreateOrGetResult> {
+        let mut conn = pool.acquire().await?;
+        sqlx::query("BEGIN").execute(&mut *conn).await?;
+
+        let result = Self::create_workflow_task_if_absent_in_conn(
+            &mut conn,
+            input,
+            workflow_execution_id,
+            task_name,
+            task_index,
+        )
+        .await;
+
+        match result {
+            Ok(result) => {
+                sqlx::query("COMMIT").execute(&mut *conn).await?;
+                Ok(result)
+            }
+            Err(err) => {
+                sqlx::query("ROLLBACK").execute(&mut *conn).await?;
+                Err(err)
+            }
+        }
+    }
+
+    pub async fn create_workflow_task_if_absent_with_conn(
+        conn: &mut PgConnection,
+        input: CreateExecutionInput,
+        workflow_execution_id: Id,
+        task_name: &str,
+        task_index: Option<i32>,
+    ) -> Result<WorkflowTaskExecutionCreateOrGetResult> {
+        Self::create_workflow_task_if_absent_in_conn(
+            conn,
+            input,
+            workflow_execution_id,
+            task_name,
+            task_index,
+        )
+        .await
     }
 
     pub async fn claim_for_scheduling<'e, E>(
@@ -316,6 +683,62 @@ impl ExecutionRepository {
         Self::update_with_locator_optional(executor, input, |query| {
             query.push(" WHERE id = ").push_bind(id);
             query.push(" AND status = ").push_bind(expected_status);
+        })
+        .await
+    }
+
+    pub async fn update_if_status_and_updated_before<'e, E>(
+        executor: E,
+        id: Id,
+        expected_status: ExecutionStatus,
+        stale_before: DateTime<Utc>,
+        input: UpdateExecutionInput,
+    ) -> Result<Option<Execution>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        if input.status.is_none()
+            && input.result.is_none()
+            && input.executor.is_none()
+            && input.worker.is_none()
+            && input.started_at.is_none()
+            && input.workflow_task.is_none()
+        {
+            return Self::find_by_id(executor, id).await;
+        }
+
+        Self::update_with_locator_optional(executor, input, |query| {
+            query.push(" WHERE id = ").push_bind(id);
+            query.push(" AND status = ").push_bind(expected_status);
+            query.push(" AND updated < ").push_bind(stale_before);
+        })
+        .await
+    }
+
+    pub async fn update_if_status_and_updated_at<'e, E>(
+        executor: E,
+        id: Id,
+        expected_status: ExecutionStatus,
+        expected_updated: DateTime<Utc>,
+        input: UpdateExecutionInput,
+    ) -> Result<Option<Execution>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        if input.status.is_none()
+            && input.result.is_none()
+            && input.executor.is_none()
+            && input.worker.is_none()
+            && input.started_at.is_none()
+            && input.workflow_task.is_none()
+        {
+            return Self::find_by_id(executor, id).await;
+        }
+
+        Self::update_with_locator_optional(executor, input, |query| {
+            query.push(" WHERE id = ").push_bind(id);
+            query.push(" AND status = ").push_bind(expected_status);
+            query.push(" AND updated = ").push_bind(expected_updated);
         })
         .await
     }
@@ -473,10 +896,7 @@ impl ExecutionRepository {
             .map_err(Into::into)
     }
 
-    /// Update an execution using the loaded row's hypertable keys.
-    ///
-    /// Including both the partition key (`created`) and compression segment key
-    /// (`action_ref`) avoids broad scans across compressed chunks.
+    /// Update an execution using the loaded row's primary key.
     pub async fn update_loaded<'e, E>(
         executor: E,
         execution: &Execution,
@@ -495,12 +915,8 @@ impl ExecutionRepository {
             return Ok(execution.clone());
         }
 
-        let action_ref = execution.action_ref.clone();
-
         Self::update_with_locator(executor, input, |query| {
             query.push(" WHERE id = ").push_bind(execution.id);
-            query.push(" AND created = ").push_bind(execution.created);
-            query.push(" AND action_ref = ").push_bind(action_ref);
         })
         .await
     }
