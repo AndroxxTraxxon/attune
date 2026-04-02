@@ -292,6 +292,7 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
         ))
     })?;
 
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Pack storage copy recursively processes validated local directories under the configured pack store.
     for entry in fs::read_dir(src).map_err(|e| {
         Error::io(format!(
             "Failed to read source directory {}: {}",

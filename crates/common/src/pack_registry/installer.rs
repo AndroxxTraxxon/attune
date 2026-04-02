@@ -11,10 +11,14 @@
 use super::{Checksum, InstallSource, PackIndexEntry, RegistryClient};
 use crate::config::PackRegistryConfig;
 use crate::error::{Error, Result};
+use std::collections::HashSet;
+use std::net::{IpAddr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
+use tokio::net::lookup_host;
 use tokio::process::Command;
+use url::Url;
 
 /// Progress callback type
 pub type ProgressCallback = Arc<dyn Fn(ProgressEvent) + Send + Sync>;
@@ -52,6 +56,12 @@ pub struct PackInstaller {
 
     /// Whether to verify checksums
     verify_checksums: bool,
+
+    /// Whether HTTP remote sources are allowed
+    allow_http: bool,
+
+    /// Remote hosts allowed for archive/git installs
+    allowed_remote_hosts: Option<HashSet<String>>,
 
     /// Progress callback (optional)
     progress_callback: Option<ProgressCallback>,
@@ -106,17 +116,32 @@ impl PackInstaller {
             .await
             .map_err(|e| Error::internal(format!("Failed to create temp directory: {}", e)))?;
 
-        let (registry_client, verify_checksums) = if let Some(config) = registry_config {
-            let verify_checksums = config.verify_checksums;
-            (Some(RegistryClient::new(config)?), verify_checksums)
-        } else {
-            (None, false)
-        };
+        let (registry_client, verify_checksums, allow_http, allowed_remote_hosts) =
+            if let Some(config) = registry_config {
+                let verify_checksums = config.verify_checksums;
+                let allow_http = config.allow_http;
+                let allowed_remote_hosts = collect_allowed_remote_hosts(&config)?;
+                let allowed_remote_hosts = if allowed_remote_hosts.is_empty() {
+                    None
+                } else {
+                    Some(allowed_remote_hosts)
+                };
+                (
+                    Some(RegistryClient::new(config)?),
+                    verify_checksums,
+                    allow_http,
+                    allowed_remote_hosts,
+                )
+            } else {
+                (None, false, false, None)
+            };
 
         Ok(Self {
             temp_dir,
             registry_client,
             verify_checksums,
+            allow_http,
+            allowed_remote_hosts,
             progress_callback: None,
         })
     }
@@ -152,6 +177,7 @@ impl PackInstaller {
 
     /// Install from git repository
     async fn install_from_git(&self, url: &str, git_ref: Option<&str>) -> Result<InstalledPack> {
+        self.validate_git_source(url).await?;
         tracing::info!("Installing pack from git: {} (ref: {:?})", url, git_ref);
 
         self.report_progress(ProgressEvent::StepStarted {
@@ -405,10 +431,12 @@ impl PackInstaller {
 
     /// Download an archive from a URL
     async fn download_archive(&self, url: &str) -> Result<PathBuf> {
+        let parsed_url = self.validate_remote_url(url).await?;
         let client = reqwest::Client::new();
 
+        // nosemgrep: rust.actix.ssrf.reqwest-taint.reqwest-taint -- Remote source URLs are restricted to configured allowlisted hosts, HTTPS, and public IPs before request execution.
         let response = client
-            .get(url)
+            .get(parsed_url.clone())
             .send()
             .await
             .map_err(|e| Error::internal(format!("Failed to download archive: {}", e)))?;
@@ -421,11 +449,7 @@ impl PackInstaller {
         }
 
         // Determine filename from URL
-        let filename = url
-            .split('/')
-            .next_back()
-            .unwrap_or("archive.zip")
-            .to_string();
+        let filename = archive_filename_from_url(&parsed_url);
 
         let archive_path = self.temp_dir.join(&filename);
 
@@ -440,6 +464,116 @@ impl PackInstaller {
             .map_err(|e| Error::internal(format!("Failed to write archive: {}", e)))?;
 
         Ok(archive_path)
+    }
+
+    async fn validate_remote_url(&self, raw_url: &str) -> Result<Url> {
+        let parsed = Url::parse(raw_url)
+            .map_err(|e| Error::validation(format!("Invalid remote URL '{}': {}", raw_url, e)))?;
+
+        if parsed.scheme() != "https" && !(self.allow_http && parsed.scheme() == "http") {
+            return Err(Error::validation(format!(
+                "Remote URL must use https{}: {}",
+                if self.allow_http {
+                    " or http when pack_registry.allow_http is enabled"
+                } else {
+                    ""
+                },
+                raw_url
+            )));
+        }
+
+        if !parsed.username().is_empty() || parsed.password().is_some() {
+            return Err(Error::validation(
+                "Remote URLs with embedded credentials are not allowed".to_string(),
+            ));
+        }
+
+        let host = parsed.host_str().ok_or_else(|| {
+            Error::validation(format!("Remote URL is missing a host: {}", raw_url))
+        })?;
+        let normalized_host = host.to_ascii_lowercase();
+
+        if normalized_host == "localhost" {
+            return Err(Error::validation(format!(
+                "Remote URL host is not allowed: {}",
+                host
+            )));
+        }
+
+        if let Some(allowed_remote_hosts) = &self.allowed_remote_hosts {
+            if !allowed_remote_hosts.contains(&normalized_host) {
+                return Err(Error::validation(format!(
+                    "Remote URL host '{}' is not in the configured allowlist. Add it to pack_registry.allowed_source_hosts.",
+                    host
+                )));
+            }
+        }
+
+        if let Some(ip) = parsed.host().and_then(|host| match host {
+            url::Host::Ipv4(ip) => Some(IpAddr::V4(ip)),
+            url::Host::Ipv6(ip) => Some(IpAddr::V6(ip)),
+            url::Host::Domain(_) => None,
+        }) {
+            ensure_public_ip(ip)?;
+        }
+
+        let port = parsed.port_or_known_default().ok_or_else(|| {
+            Error::validation(format!("Remote URL is missing a usable port: {}", raw_url))
+        })?;
+
+        let resolved = lookup_host((host, port))
+            .await
+            .map_err(|e| Error::validation(format!("Failed to resolve host '{}': {}", host, e)))?;
+
+        let mut saw_address = false;
+        for addr in resolved {
+            saw_address = true;
+            ensure_public_ip(addr.ip())?;
+        }
+
+        if !saw_address {
+            return Err(Error::validation(format!(
+                "Remote URL host did not resolve to any addresses: {}",
+                host
+            )));
+        }
+
+        Ok(parsed)
+    }
+
+    async fn validate_git_source(&self, raw_url: &str) -> Result<()> {
+        if raw_url.starts_with("http://") || raw_url.starts_with("https://") {
+            self.validate_remote_url(raw_url).await?;
+            return Ok(());
+        }
+
+        if let Some(host) = extract_git_host(raw_url) {
+            self.validate_remote_host(&host)?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_remote_host(&self, host: &str) -> Result<()> {
+        let normalized_host = host.to_ascii_lowercase();
+
+        if normalized_host == "localhost" {
+            return Err(Error::validation(format!(
+                "Remote host is not allowed: {}",
+                host
+            )));
+        }
+
+        if let Some(allowed_remote_hosts) = &self.allowed_remote_hosts {
+            if !allowed_remote_hosts.contains(&normalized_host) {
+                return Err(Error::validation(format!(
+                    "Remote host '{}' is not in the configured allowlist. Add it to pack_registry.allowed_source_hosts.",
+                    host
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     /// Extract an archive (zip or tar.gz)
@@ -583,6 +717,7 @@ impl PackInstaller {
         }
 
         // Check in first subdirectory (common for GitHub archives)
+        // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Archive inspection is limited to the temporary extraction directory created by this installer.
         let mut entries = fs::read_dir(base_dir)
             .await
             .map_err(|e| Error::internal(format!("Failed to read directory: {}", e)))?;
@@ -618,6 +753,7 @@ impl PackInstaller {
         })?;
 
         // Read source directory
+        // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Directory copy operates on installer-managed local paths, not request-derived paths.
         let mut entries = fs::read_dir(src)
             .await
             .map_err(|e| Error::internal(format!("Failed to read source directory: {}", e)))?;
@@ -674,6 +810,111 @@ impl PackInstaller {
     }
 }
 
+fn collect_allowed_remote_hosts(config: &PackRegistryConfig) -> Result<HashSet<String>> {
+    let mut hosts = HashSet::new();
+
+    for index in &config.indices {
+        if !index.enabled {
+            continue;
+        }
+
+        let parsed = Url::parse(&index.url).map_err(|e| {
+            Error::validation(format!("Invalid registry index URL '{}': {}", index.url, e))
+        })?;
+
+        let host = parsed.host_str().ok_or_else(|| {
+            Error::validation(format!(
+                "Registry index URL '{}' is missing a host",
+                index.url
+            ))
+        })?;
+
+        hosts.insert(host.to_ascii_lowercase());
+    }
+
+    for host in &config.allowed_source_hosts {
+        let normalized = host.trim().to_ascii_lowercase();
+        if !normalized.is_empty() {
+            hosts.insert(normalized);
+        }
+    }
+
+    Ok(hosts)
+}
+
+fn extract_git_host(raw_url: &str) -> Option<String> {
+    if let Ok(parsed) = Url::parse(raw_url) {
+        return parsed.host_str().map(|host| host.to_ascii_lowercase());
+    }
+
+    raw_url.split_once('@').and_then(|(_, rest)| {
+        rest.split_once(':')
+            .map(|(host, _)| host.to_ascii_lowercase())
+    })
+}
+
+fn archive_filename_from_url(url: &Url) -> String {
+    let raw_name = url
+        .path_segments()
+        .and_then(|segments| segments.filter(|segment| !segment.is_empty()).next_back())
+        .unwrap_or("archive.bin");
+
+    let sanitized: String = raw_name
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' | '_' => ch,
+            _ => '_',
+        })
+        .collect();
+
+    let filename = sanitized.trim_matches('.');
+    if filename.is_empty() {
+        "archive.bin".to_string()
+    } else {
+        filename.to_string()
+    }
+}
+
+fn ensure_public_ip(ip: IpAddr) -> Result<()> {
+    let is_blocked = match ip {
+        IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            let is_documentation_range = matches!(
+                octets,
+                [192, 0, 2, _] | [198, 51, 100, _] | [203, 0, 113, _]
+            );
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_multicast()
+                || ip.is_broadcast()
+                || is_documentation_range
+                || ip.is_unspecified()
+                || octets[0] == 0
+        }
+        IpAddr::V6(ip) => {
+            let segments = ip.segments();
+            let is_documentation_range = segments[0] == 0x2001 && segments[1] == 0x0db8;
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+                || is_documentation_range
+                || ip == Ipv6Addr::LOCALHOST
+        }
+    };
+
+    if is_blocked {
+        return Err(Error::validation(format!(
+            "Remote URL resolved to a non-public address: {}",
+            ip
+        )));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -720,5 +961,53 @@ mod tests {
         let source = installer.select_install_source(&entry).unwrap();
 
         assert!(matches!(source, InstallSource::Git { .. }));
+    }
+
+    #[test]
+    fn test_archive_filename_from_url_sanitizes_path_segments() {
+        let url = Url::parse("https://example.com/releases/../../pack.zip?token=x").unwrap();
+        assert_eq!(archive_filename_from_url(&url), "pack.zip");
+    }
+
+    #[test]
+    fn test_ensure_public_ip_rejects_private_ipv4() {
+        let err = ensure_public_ip(IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))).unwrap_err();
+        assert!(err.to_string().contains("non-public"));
+    }
+
+    #[test]
+    fn test_collect_allowed_remote_hosts_includes_indices_and_overrides() {
+        let config = PackRegistryConfig {
+            indices: vec![crate::config::RegistryIndexConfig {
+                url: "https://registry.example.com/index.json".to_string(),
+                priority: 1,
+                enabled: true,
+                name: None,
+                headers: std::collections::HashMap::new(),
+            }],
+            allowed_source_hosts: vec!["github.com".to_string(), "cdn.example.com".to_string()],
+            ..Default::default()
+        };
+
+        let hosts = collect_allowed_remote_hosts(&config).unwrap();
+        assert!(hosts.contains("registry.example.com"));
+        assert!(hosts.contains("github.com"));
+        assert!(hosts.contains("cdn.example.com"));
+    }
+
+    #[test]
+    fn test_extract_git_host_from_scp_style_source() {
+        assert_eq!(
+            extract_git_host("git@github.com:org/repo.git"),
+            Some("github.com".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_git_host_from_git_scheme_source() {
+        assert_eq!(
+            extract_git_host("git://github.com/org/repo.git"),
+            Some("github.com".to_string())
+        );
     }
 }

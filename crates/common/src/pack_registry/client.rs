@@ -349,6 +349,7 @@ mod tests {
             cache_enabled: true,
             timeout: 120,
             verify_checksums: true,
+            allowed_source_hosts: Vec::new(),
             allow_http: false,
         };
 

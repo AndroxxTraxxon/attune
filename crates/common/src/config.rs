@@ -658,6 +658,11 @@ pub struct PackRegistryConfig {
     #[serde(default = "default_true")]
     pub verify_checksums: bool,
 
+    /// Additional remote hosts allowed for pack archive/git downloads.
+    /// Hosts from enabled registry indices are implicitly allowed.
+    #[serde(default)]
+    pub allowed_source_hosts: Vec<String>,
+
     /// Allow HTTP (non-HTTPS) registries
     #[serde(default)]
     pub allow_http: bool,
@@ -680,6 +685,7 @@ impl Default for PackRegistryConfig {
             cache_enabled: true,
             timeout: default_registry_timeout(),
             verify_checksums: true,
+            allowed_source_hosts: Vec::new(),
             allow_http: false,
         }
     }

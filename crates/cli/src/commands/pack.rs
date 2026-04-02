@@ -840,6 +840,7 @@ async fn handle_upload(
     api_url: &Option<String>,
     output_format: OutputFormat,
 ) -> Result<()> {
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- CLI pack commands intentionally operate on operator-supplied local paths.
     let pack_dir = Path::new(&path);
 
     // Validate the directory exists and contains pack.yaml
@@ -855,6 +856,7 @@ async fn handle_upload(
     }
 
     // Read pack ref from pack.yaml so we can display it
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Reading local pack metadata from the user-selected pack directory is expected CLI behavior.
     let pack_yaml_content =
         std::fs::read_to_string(&pack_yaml_path).context("Failed to read pack.yaml")?;
     let pack_yaml: serde_yaml_ng::Value =
@@ -957,6 +959,7 @@ fn append_dir_to_tar<W: std::io::Write>(
     base: &Path,
     dir: &Path,
 ) -> Result<()> {
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- The archiver walks a validated local directory selected by the CLI operator.
     for entry in std::fs::read_dir(dir).context("Failed to read directory")? {
         let entry = entry.context("Failed to read directory entry")?;
         let entry_path = entry.path();
@@ -1061,6 +1064,7 @@ async fn handle_test(
     use std::path::{Path, PathBuf};
 
     // Determine if pack is a path or a pack name
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Pack test targets are local CLI inputs, not remote request paths.
     let pack_path = Path::new(&pack);
     let (pack_dir, pack_ref, pack_version) = if pack_path.exists() && pack_path.is_dir() {
         // Local pack directory
@@ -1072,6 +1076,7 @@ async fn handle_test(
             anyhow::bail!("pack.yaml not found in directory: {}", pack);
         }
 
+        // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- This reads pack.yaml from a local directory explicitly selected by the CLI operator.
         let pack_yaml_content = std::fs::read_to_string(&pack_yaml_path)?;
         let pack_yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&pack_yaml_content)?;
 
@@ -1107,6 +1112,7 @@ async fn handle_test(
             anyhow::bail!("pack.yaml not found for pack: {}", pack);
         }
 
+        // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Installed pack tests intentionally read local metadata from the workspace packs directory.
         let pack_yaml_content = std::fs::read_to_string(&pack_yaml_path)?;
         let pack_yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&pack_yaml_content)?;
 
@@ -1120,6 +1126,7 @@ async fn handle_test(
 
     // Load pack.yaml and extract test configuration
     let pack_yaml_path = pack_dir.join("pack.yaml");
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Test configuration is loaded from the validated local pack directory.
     let pack_yaml_content = std::fs::read_to_string(&pack_yaml_path)?;
     let pack_yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&pack_yaml_content)?;
 
@@ -1484,6 +1491,7 @@ fn detect_source_type(source: &str, ref_spec: Option<&str>, no_registry: bool) -
 async fn handle_checksum(path: String, json: bool, output_format: OutputFormat) -> Result<()> {
     use attune_common::pack_registry::{calculate_directory_checksum, calculate_file_checksum};
 
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Checksum generation intentionally accepts arbitrary local paths from the CLI operator.
     let path_obj = Path::new(&path);
 
     if !path_obj.exists() {
@@ -1581,6 +1589,7 @@ async fn handle_index_entry(
 ) -> Result<()> {
     use attune_common::pack_registry::calculate_directory_checksum;
 
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Index-entry generation intentionally inspects a local pack directory chosen by the CLI operator.
     let path_obj = Path::new(&path);
 
     if !path_obj.exists() {
@@ -1606,6 +1615,7 @@ async fn handle_index_entry(
     }
 
     // Read and parse pack.yaml
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Reading local pack metadata for index generation is expected CLI behavior.
     let pack_yaml_content = std::fs::read_to_string(&pack_yaml_path)?;
     let pack_yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&pack_yaml_content)?;
 

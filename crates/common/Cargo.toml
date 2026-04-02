@@ -73,6 +73,7 @@ regex = { workspace = true }
 
 # Version matching
 semver = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
 mockall = { workspace = true }

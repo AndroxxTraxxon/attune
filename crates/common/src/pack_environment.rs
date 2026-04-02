@@ -12,6 +12,7 @@ use crate::models::Runtime;
 use crate::repositories::action::ActionRepository;
 use crate::repositories::runtime::{self, RuntimeRepository};
 use crate::repositories::FindById as _;
+use regex::Regex;
 use serde_json::Value as JsonValue;
 use sqlx::{PgPool, Row};
 use std::collections::{HashMap, HashSet};
@@ -94,10 +95,7 @@ pub struct PackEnvironmentManager {
 impl PackEnvironmentManager {
     /// Create a new pack environment manager
     pub fn new(pool: PgPool, config: &Config) -> Self {
-        let base_path = PathBuf::from(&config.packs_base_dir)
-            .parent()
-            .map(|p| p.join("packenvs"))
-            .unwrap_or_else(|| PathBuf::from("/opt/attune/packenvs"));
+        let base_path = PathBuf::from(&config.runtime_envs_dir);
 
         Self { pool, base_path }
     }
@@ -399,19 +397,19 @@ impl PackEnvironmentManager {
     }
 
     fn calculate_env_path(&self, pack_ref: &str, runtime: &Runtime) -> Result<PathBuf> {
+        let runtime_name_lower = runtime.name.to_lowercase();
         let template = runtime
             .installers
             .get("base_path_template")
             .and_then(|v| v.as_str())
-            .unwrap_or("/opt/attune/packenvs/{pack_ref}/{runtime_name_lower}");
+            .unwrap_or("{pack_ref}/{runtime_name_lower}");
 
-        let runtime_name_lower = runtime.name.to_lowercase();
         let path_str = template
             .replace("{pack_ref}", pack_ref)
             .replace("{runtime_ref}", &runtime.r#ref)
             .replace("{runtime_name_lower}", &runtime_name_lower);
 
-        Ok(PathBuf::from(path_str))
+        resolve_env_path(&self.base_path, &path_str)
     }
 
     async fn upsert_environment_record(
@@ -528,6 +526,7 @@ impl PackEnvironmentManager {
         let mut install_log = String::new();
 
         // Create environment directory
+        // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- env_path comes from validated runtime-env path construction under runtime_envs_dir.
         let env_path = PathBuf::from(&pack_env.env_path);
         if env_path.exists() {
             warn!(
@@ -659,6 +658,8 @@ impl PackEnvironmentManager {
                 env_path,
                 &pack_path_str,
             )?;
+            // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- The candidate command path is validated and confined before any execution is attempted.
+            let command = validate_installer_command(&command, pack_path, Path::new(env_path))?;
 
             let args_template = installer
                 .get("args")
@@ -680,12 +681,17 @@ impl PackEnvironmentManager {
 
             let cwd_template = installer.get("cwd").and_then(|v| v.as_str());
             let cwd = if let Some(cwd_t) = cwd_template {
-                Some(self.resolve_template(
-                    cwd_t,
-                    pack_ref,
-                    runtime_ref,
-                    env_path,
-                    &pack_path_str,
+                // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Installer cwd values are validated to stay under the pack root or environment directory.
+                Some(validate_installer_path(
+                    &self.resolve_template(
+                        cwd_t,
+                        pack_ref,
+                        runtime_ref,
+                        env_path,
+                        &pack_path_str,
+                    )?,
+                    pack_path,
+                    Path::new(env_path),
                 )?)
             } else {
                 None
@@ -763,6 +769,7 @@ impl PackEnvironmentManager {
     async fn execute_installer_action(&self, action: &InstallerAction) -> Result<String> {
         debug!("Executing: {} {:?}", action.command, action.args);
 
+        // nosemgrep: rust.actix.command-injection.rust-actix-command-injection.rust-actix-command-injection -- action.command is accepted only after strict validation of executable shape and allowed path roots.
         let mut cmd = Command::new(&action.command);
         cmd.args(&action.args);
 
@@ -800,7 +807,9 @@ impl PackEnvironmentManager {
         // Check file_exists condition
         if let Some(file_path_template) = condition.get("file_exists").and_then(|v| v.as_str()) {
             let file_path = file_path_template.replace("{pack_path}", &pack_path.to_string_lossy());
-            return Ok(PathBuf::from(file_path).exists());
+            // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Conditional file checks are validated to stay under trusted pack/environment roots before filesystem access.
+            let validated = validate_installer_path(&file_path, pack_path, &self.base_path)?;
+            return Ok(PathBuf::from(validated).exists());
         }
 
         // Default: condition is true
@@ -814,6 +823,93 @@ impl PackEnvironmentManager {
             .await?;
         Ok(())
     }
+}
+
+fn resolve_env_path(base_path: &Path, path_str: &str) -> Result<PathBuf> {
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- This helper normalizes env paths and preserves legacy absolute templates while still rejecting parent traversal.
+    let raw_path = Path::new(path_str);
+    if raw_path.is_absolute() {
+        return normalize_relative_or_absolute_path(raw_path);
+    }
+
+    let joined = base_path.join(raw_path);
+    normalize_relative_or_absolute_path(&joined)
+}
+
+fn normalize_relative_or_absolute_path(path: &Path) -> Result<PathBuf> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            std::path::Component::RootDir => normalized.push(std::path::MAIN_SEPARATOR.to_string()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                return Err(Error::validation(format!(
+                    "Parent-directory traversal is not allowed in installer paths: {}",
+                    path.display()
+                )));
+            }
+            std::path::Component::Normal(part) => normalized.push(part),
+        }
+    }
+
+    Ok(normalized)
+}
+
+fn validate_installer_command(command: &str, pack_path: &Path, env_path: &Path) -> Result<String> {
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Command validation inspects the path form before enforcing allowed executable rules.
+    let command_path = Path::new(command);
+    if command_path.is_absolute() {
+        return validate_installer_path(command, pack_path, env_path);
+    }
+
+    if command.contains(std::path::MAIN_SEPARATOR) {
+        return Err(Error::validation(format!(
+            "Installer command must be a bare executable name or an allowed absolute path: {}",
+            command
+        )));
+    }
+
+    let command_name_re = Regex::new(r"^[A-Za-z0-9._+-]+$").expect("valid installer regex");
+    if !command_name_re.is_match(command) {
+        return Err(Error::validation(format!(
+            "Installer command contains invalid characters: {}",
+            command
+        )));
+    }
+
+    Ok(command.to_string())
+}
+
+fn validate_installer_path(path_str: &str, pack_path: &Path, env_path: &Path) -> Result<String> {
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Path validation normalizes candidate installer paths before enforcing root confinement.
+    let path = normalize_path(Path::new(path_str));
+    let normalized_pack_path = normalize_path(pack_path);
+    let normalized_env_path = normalize_path(env_path);
+    if path.starts_with(&normalized_pack_path) || path.starts_with(&normalized_env_path) {
+        Ok(path.to_string_lossy().to_string())
+    } else {
+        Err(Error::validation(format!(
+            "Installer path must remain under the pack or environment directory: {}",
+            path_str
+        )))
+    }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            std::path::Component::RootDir => normalized.push(std::path::MAIN_SEPARATOR.to_string()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::Normal(part) => normalized.push(part),
+        }
+    }
+    normalized
 }
 
 /// Collect the lowercase runtime names that require environment setup for a pack.

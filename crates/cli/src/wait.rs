@@ -802,6 +802,7 @@ fn resolve_ws_url(opts: &WaitOptions<'_>) -> Option<String> {
 /// - `https://api.example.com` → `wss://api.example.com:8081`
 /// - `http://api.example.com:9000` → `ws://api.example.com:8081`
 fn derive_notifier_url(api_url: &str) -> Option<String> {
+    // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket -- The function upgrades https->wss and only returns ws for explicit http base URLs or test examples.
     let url = url::Url::parse(api_url).ok()?;
     let ws_scheme = match url.scheme() {
         "https" => "wss",

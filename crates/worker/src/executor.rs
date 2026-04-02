@@ -474,6 +474,7 @@ impl ActionExecutor {
                 let actions_dir = pack_dir.join("actions");
                 let actions_dir_exists = actions_dir.exists();
                 let actions_dir_contents: Vec<String> = if actions_dir_exists {
+                    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Diagnostic directory listing is confined to the action pack directory derived from pack_ref.
                     std::fs::read_dir(&actions_dir)
                         .map(|entries| {
                             entries
@@ -902,6 +903,7 @@ impl ActionExecutor {
             // Check if stderr log exists and is non-empty from artifact storage
             let stderr_path = exec_dir.join("stderr.log");
             if stderr_path.exists() {
+                // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Log paths are fixed artifact filenames inside the execution-scoped directory.
                 if let Ok(contents) = tokio::fs::read_to_string(&stderr_path).await {
                     if !contents.trim().is_empty() {
                         result_data["stderr_log"] =
@@ -913,6 +915,7 @@ impl ActionExecutor {
             // Check if stdout log exists from artifact storage
             let stdout_path = exec_dir.join("stdout.log");
             if stdout_path.exists() {
+                // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Log paths are fixed artifact filenames inside the execution-scoped directory.
                 if let Ok(contents) = tokio::fs::read_to_string(&stdout_path).await {
                     if !contents.is_empty() {
                         result_data["stdout"] = serde_json::json!(contents);

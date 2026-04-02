@@ -62,6 +62,8 @@ pack_registry:
   enabled: true
   default_registry: https://registry.attune.example.com
   cache_ttl: 300
+  allowed_source_hosts:
+    - registry.attune.example.com
 
 # Test worker configuration
 # worker:
