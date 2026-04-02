@@ -26,6 +26,7 @@ use attune_executor::queue_manager::{ExecutionQueueManager, QueueConfig};
 use chrono::Utc;
 use serde_json::json;
 use sqlx::PgPool;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -172,6 +173,26 @@ async fn cleanup_test_data(pool: &PgPool, pack_id: i64) {
         .ok();
 }
 
+async fn release_next_active(
+    manager: &ExecutionQueueManager,
+    active_execution_ids: &mut VecDeque<i64>,
+) -> Option<i64> {
+    let execution_id = active_execution_ids
+        .pop_front()
+        .expect("Expected an active execution to release");
+    let release = manager
+        .release_active_slot(execution_id)
+        .await
+        .expect("Release should succeed")
+        .expect("Active execution should have a tracked slot");
+
+    if let Some(next_execution_id) = release.next_execution_id {
+        active_execution_ids.push_back(next_execution_id);
+    }
+
+    release.next_execution_id
+}
+
 #[tokio::test]
 #[ignore] // Requires database
 async fn test_fifo_ordering_with_database() {
@@ -198,6 +219,7 @@ async fn test_fifo_ordering_with_database() {
     // Create first execution in database and enqueue
     let first_exec_id =
         create_test_execution(&pool, action_id, &action_ref, ExecutionStatus::Requested).await;
+    let mut active_execution_ids = VecDeque::from([first_exec_id]);
     manager
         .enqueue_and_wait(action_id, first_exec_id, max_concurrent, None)
         .await
@@ -250,10 +272,7 @@ async fn test_fifo_ordering_with_database() {
     // Release them one by one
     for _ in 0..num_executions {
         sleep(Duration::from_millis(50)).await;
-        manager
-            .notify_completion(action_id)
-            .await
-            .expect("Notify should succeed");
+        release_next_active(&manager, &mut active_execution_ids).await;
     }
 
     // Wait for all to complete
@@ -295,6 +314,7 @@ async fn test_high_concurrency_stress() {
     let num_executions: i64 = 1000;
     let execution_order = Arc::new(Mutex::new(Vec::new()));
     let mut handles = vec![];
+    let execution_ids = Arc::new(Mutex::new(vec![None; num_executions as usize]));
 
     println!("Starting stress test with {} executions...", num_executions);
     let start_time = std::time::Instant::now();
@@ -305,6 +325,7 @@ async fn test_high_concurrency_stress() {
         let manager_clone = manager.clone();
         let action_ref_clone = action_ref.clone();
         let order = execution_order.clone();
+        let ids = execution_ids.clone();
 
         let handle = tokio::spawn(async move {
             let exec_id = create_test_execution(
@@ -314,6 +335,7 @@ async fn test_high_concurrency_stress() {
                 ExecutionStatus::Requested,
             )
             .await;
+            ids.lock().await[i as usize] = Some(exec_id);
 
             manager_clone
                 .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
@@ -332,6 +354,7 @@ async fn test_high_concurrency_stress() {
         let manager_clone = manager.clone();
         let action_ref_clone = action_ref.clone();
         let order = execution_order.clone();
+        let ids = execution_ids.clone();
 
         let handle = tokio::spawn(async move {
             let exec_id = create_test_execution(
@@ -341,6 +364,7 @@ async fn test_high_concurrency_stress() {
                 ExecutionStatus::Requested,
             )
             .await;
+            ids.lock().await[i as usize] = Some(exec_id);
 
             manager_clone
                 .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
@@ -376,15 +400,21 @@ async fn test_high_concurrency_stress() {
     );
 
     // Release all executions
+    let ids = execution_ids.lock().await;
+    let mut active_execution_ids = VecDeque::from(
+        ids.iter()
+            .take(max_concurrent as usize)
+            .map(|id| id.expect("Initial execution id should be recorded"))
+            .collect::<Vec<_>>(),
+    );
+    drop(ids);
+
     println!("Releasing executions...");
     for i in 0..num_executions {
         if i % 100 == 0 {
             println!("Released {} executions", i);
         }
-        manager
-            .notify_completion(action_id)
-            .await
-            .expect("Notify should succeed");
+        release_next_active(&manager, &mut active_execution_ids).await;
 
         // Small delay to allow queue processing
         if i % 50 == 0 {
@@ -416,7 +446,7 @@ async fn test_high_concurrency_stress() {
         "All executions should complete"
     );
 
-    let expected: Vec<i64> = (0..num_executions).collect();
+    let expected: Vec<_> = (0..num_executions).collect();
     assert_eq!(
         *order, expected,
         "Executions should complete in strict FIFO order"
@@ -461,9 +491,31 @@ async fn test_multiple_workers_simulation() {
     let num_executions = 30;
     let execution_order = Arc::new(Mutex::new(Vec::new()));
     let mut handles = vec![];
+    let mut active_execution_ids = VecDeque::new();
 
-    // Spawn all executions
-    for i in 0..num_executions {
+    // Fill the initial worker slots deterministically.
+    for i in 0..max_concurrent {
+        let exec_id =
+            create_test_execution(&pool, action_id, &action_ref, ExecutionStatus::Requested).await;
+        active_execution_ids.push_back(exec_id);
+
+        let manager_clone = manager.clone();
+        let order = execution_order.clone();
+
+        let handle = tokio::spawn(async move {
+            manager_clone
+                .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
+                .await
+                .expect("Enqueue should succeed");
+
+            order.lock().await.push(i);
+        });
+
+        handles.push(handle);
+    }
+
+    // Queue the remaining executions.
+    for i in max_concurrent..num_executions {
         let pool_clone = pool.clone();
         let manager_clone = manager.clone();
         let action_ref_clone = action_ref.clone();
@@ -499,6 +551,8 @@ async fn test_multiple_workers_simulation() {
     let worker_completions = Arc::new(Mutex::new(vec![0, 0, 0]));
     let worker_completions_clone = worker_completions.clone();
     let manager_clone = manager.clone();
+    let active_execution_ids = Arc::new(Mutex::new(active_execution_ids));
+    let active_execution_ids_clone = active_execution_ids.clone();
 
     // Spawn worker simulators
     let worker_handle = tokio::spawn(async move {
@@ -514,10 +568,8 @@ async fn test_multiple_workers_simulation() {
             sleep(Duration::from_millis(delay)).await;
 
             // Worker completes and notifies
-            manager_clone
-                .notify_completion(action_id)
-                .await
-                .expect("Notify should succeed");
+            let mut active_execution_ids = active_execution_ids_clone.lock().await;
+            release_next_active(&manager_clone, &mut active_execution_ids).await;
 
             worker_completions_clone.lock().await[next_worker] += 1;
 
@@ -536,7 +588,7 @@ async fn test_multiple_workers_simulation() {
 
     // Verify FIFO order maintained despite different worker speeds
     let order = execution_order.lock().await;
-    let expected: Vec<i64> = (0..num_executions).collect();
+    let expected: Vec<_> = (0..num_executions).collect();
     assert_eq!(
         *order, expected,
         "FIFO order should be maintained regardless of worker speed"
@@ -576,25 +628,28 @@ async fn test_cross_action_independence() {
 
     let executions_per_action = 50;
     let mut handles = vec![];
+    let mut action1_active = VecDeque::new();
+    let mut action2_active = VecDeque::new();
+    let mut action3_active = VecDeque::new();
 
     // Spawn executions for all three actions simultaneously
     for action_id in [action1_id, action2_id, action3_id] {
         let action_ref = format!("fifo_test_action_{}_{}", suffix, action_id);
 
         for i in 0..executions_per_action {
-            let pool_clone = pool.clone();
+            let exec_id =
+                create_test_execution(&pool, action_id, &action_ref, ExecutionStatus::Requested)
+                    .await;
+
+            match action_id {
+                id if id == action1_id && i == 0 => action1_active.push_back(exec_id),
+                id if id == action2_id && i == 0 => action2_active.push_back(exec_id),
+                id if id == action3_id && i == 0 => action3_active.push_back(exec_id),
+                _ => {}
+            }
+
             let manager_clone = manager.clone();
-            let action_ref_clone = action_ref.clone();
-
             let handle = tokio::spawn(async move {
-                let exec_id = create_test_execution(
-                    &pool_clone,
-                    action_id,
-                    &action_ref_clone,
-                    ExecutionStatus::Requested,
-                )
-                .await;
-
                 manager_clone
                     .enqueue_and_wait(action_id, exec_id, 1, None)
                     .await
@@ -634,18 +689,9 @@ async fn test_cross_action_independence() {
     // Release all actions in an interleaved pattern
     for i in 0..executions_per_action {
         // Release one from each action
-        manager
-            .notify_completion(action1_id)
-            .await
-            .expect("Notify should succeed");
-        manager
-            .notify_completion(action2_id)
-            .await
-            .expect("Notify should succeed");
-        manager
-            .notify_completion(action3_id)
-            .await
-            .expect("Notify should succeed");
+        release_next_active(&manager, &mut action1_active).await;
+        release_next_active(&manager, &mut action2_active).await;
+        release_next_active(&manager, &mut action3_active).await;
 
         if i % 10 == 0 {
             sleep(Duration::from_millis(10)).await;
@@ -698,6 +744,7 @@ async fn test_cancellation_during_queue() {
     // Fill capacity
     let exec_id =
         create_test_execution(&pool, action_id, &action_ref, ExecutionStatus::Requested).await;
+    let mut active_execution_ids = VecDeque::from([exec_id]);
     manager
         .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
         .await
@@ -757,7 +804,7 @@ async fn test_cancellation_during_queue() {
 
     // Release remaining
     for _ in 0..8 {
-        manager.notify_completion(action_id).await.unwrap();
+        release_next_active(&manager, &mut active_execution_ids).await;
         sleep(Duration::from_millis(20)).await;
     }
 
@@ -798,11 +845,15 @@ async fn test_queue_stats_persistence() {
 
     let max_concurrent = 5;
     let num_executions = 50;
+    let mut active_execution_ids = VecDeque::new();
 
     // Enqueue executions
     for i in 0..num_executions {
         let exec_id =
             create_test_execution(&pool, action_id, &action_ref, ExecutionStatus::Requested).await;
+        if i < max_concurrent {
+            active_execution_ids.push_back(exec_id);
+        }
 
         // Start the enqueue in background
         let manager_clone = manager.clone();
@@ -838,7 +889,7 @@ async fn test_queue_stats_persistence() {
 
     // Release all
     for _ in 0..num_executions {
-        manager.notify_completion(action_id).await.unwrap();
+        release_next_active(&manager, &mut active_execution_ids).await;
         sleep(Duration::from_millis(10)).await;
     }
 
@@ -854,8 +905,8 @@ async fn test_queue_stats_persistence() {
 
     assert_eq!(final_db_stats.queue_length, 0);
     assert_eq!(final_mem_stats.queue_length, 0);
-    assert_eq!(final_db_stats.total_enqueued, num_executions);
-    assert_eq!(final_db_stats.total_completed, num_executions);
+    assert_eq!(final_db_stats.total_enqueued, num_executions as i64);
+    assert_eq!(final_db_stats.total_completed, num_executions as i64);
 
     // Cleanup
     cleanup_test_data(&pool, pack_id).await;
@@ -951,6 +1002,7 @@ async fn test_extreme_stress_10k_executions() {
     let max_concurrent = 10;
     let num_executions: i64 = 10000;
     let completed = Arc::new(Mutex::new(0u64));
+    let execution_ids = Arc::new(Mutex::new(vec![None; num_executions as usize]));
 
     println!(
         "Starting extreme stress test with {} executions...",
@@ -965,6 +1017,7 @@ async fn test_extreme_stress_10k_executions() {
         let manager_clone = manager.clone();
         let action_ref_clone = action_ref.clone();
         let completed_clone = completed.clone();
+        let ids = execution_ids.clone();
 
         let handle = tokio::spawn(async move {
             let exec_id = create_test_execution(
@@ -974,6 +1027,7 @@ async fn test_extreme_stress_10k_executions() {
                 ExecutionStatus::Requested,
             )
             .await;
+            ids.lock().await[i as usize] = Some(exec_id);
 
             manager_clone
                 .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
@@ -999,12 +1053,18 @@ async fn test_extreme_stress_10k_executions() {
     println!("All executions spawned");
 
     // Release all
+    let ids = execution_ids.lock().await;
+    let mut active_execution_ids = VecDeque::from(
+        ids.iter()
+            .take(max_concurrent as usize)
+            .map(|id| id.expect("Initial execution id should be recorded"))
+            .collect::<Vec<_>>(),
+    );
+    drop(ids);
+
     let release_start = std::time::Instant::now();
     for i in 0i64..num_executions {
-        manager
-            .notify_completion(action_id)
-            .await
-            .expect("Notify should succeed");
+        release_next_active(&manager, &mut active_execution_ids).await;
 
         if i % 1000 == 0 {
             println!("Released: {}", i);

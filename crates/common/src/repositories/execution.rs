@@ -191,7 +191,33 @@ impl Update for ExecutionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        // Build update query
+        if input.status.is_none()
+            && input.result.is_none()
+            && input.executor.is_none()
+            && input.worker.is_none()
+            && input.started_at.is_none()
+            && input.workflow_task.is_none()
+        {
+            return Self::get_by_id(executor, id).await;
+        }
+
+        Self::update_with_locator(executor, input, |query| {
+            query.push(" WHERE id = ").push_bind(id);
+        })
+        .await
+    }
+}
+
+impl ExecutionRepository {
+    async fn update_with_locator<'e, E, F>(
+        executor: E,
+        input: UpdateExecutionInput,
+        where_clause: F,
+    ) -> Result<Execution>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+        F: FnOnce(&mut QueryBuilder<'_, Postgres>),
+    {
         let mut query = QueryBuilder::new("UPDATE execution SET ");
         let mut has_updates = false;
 
@@ -234,15 +260,10 @@ impl Update for ExecutionRepository {
             query
                 .push("workflow_task = ")
                 .push_bind(sqlx::types::Json(workflow_task));
-            has_updates = true;
         }
 
-        if !has_updates {
-            // No updates requested, fetch and return existing entity
-            return Self::get_by_id(executor, id).await;
-        }
-
-        query.push(", updated = NOW() WHERE id = ").push_bind(id);
+        query.push(", updated = NOW()");
+        where_clause(&mut query);
         query.push(" RETURNING ");
         query.push(SELECT_COLUMNS);
 
@@ -251,6 +272,38 @@ impl Update for ExecutionRepository {
             .fetch_one(executor)
             .await
             .map_err(Into::into)
+    }
+
+    /// Update an execution using the loaded row's hypertable keys.
+    ///
+    /// Including both the partition key (`created`) and compression segment key
+    /// (`action_ref`) avoids broad scans across compressed chunks.
+    pub async fn update_loaded<'e, E>(
+        executor: E,
+        execution: &Execution,
+        input: UpdateExecutionInput,
+    ) -> Result<Execution>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        if input.status.is_none()
+            && input.result.is_none()
+            && input.executor.is_none()
+            && input.worker.is_none()
+            && input.started_at.is_none()
+            && input.workflow_task.is_none()
+        {
+            return Ok(execution.clone());
+        }
+
+        let action_ref = execution.action_ref.clone();
+
+        Self::update_with_locator(executor, input, |query| {
+            query.push(" WHERE id = ").push_bind(execution.id);
+            query.push(" AND created = ").push_bind(execution.created);
+            query.push(" AND action_ref = ").push_bind(action_ref);
+        })
+        .await
     }
 }
 

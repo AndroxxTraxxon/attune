@@ -357,9 +357,12 @@ impl ExecutionScheduler {
         let mut execution_for_update = execution;
         execution_for_update.status = ExecutionStatus::Scheduled;
         execution_for_update.worker = Some(worker.id);
-        if let Err(err) =
-            ExecutionRepository::update(pool, execution_for_update.id, execution_for_update.into())
-                .await
+        if let Err(err) = ExecutionRepository::update_loaded(
+            pool,
+            &execution_for_update,
+            execution_for_update.clone().into(),
+        )
+        .await
         {
             Self::release_acquired_policy_slot(policy_enforcer, pool, publisher, execution_id)
                 .await?;
@@ -480,7 +483,8 @@ impl ExecutionScheduler {
         // Mark the parent execution as Running
         let mut running_exec = execution.clone();
         running_exec.status = ExecutionStatus::Running;
-        ExecutionRepository::update(pool, running_exec.id, running_exec.into()).await?;
+        ExecutionRepository::update_loaded(pool, &running_exec, running_exec.clone().into())
+            .await?;
 
         if graph.entry_points.is_empty() {
             warn!(

@@ -1003,7 +1003,11 @@ impl ActionExecutor {
             ..Default::default()
         };
 
-        ExecutionRepository::update(&self.pool, execution_id, input).await?;
+        let execution = ExecutionRepository::find_by_id(&self.pool, execution_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Execution {} not found", execution_id))?;
+
+        ExecutionRepository::update_loaded(&self.pool, &execution, input).await?;
 
         Ok(())
     }

@@ -1430,3 +1430,70 @@ async fn test_enforcement_resolved_at_lifecycle() {
     assert!(updated.resolved_at.is_some());
     assert!(updated.resolved_at.unwrap() >= enforcement.created);
 }
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_update_loaded_enforcement_uses_loaded_locator() {
+    let pool = create_test_pool().await.unwrap();
+
+    let pack = PackFixture::new_unique("targeted_update_pack")
+        .create(&pool)
+        .await
+        .unwrap();
+
+    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "webhook")
+        .create(&pool)
+        .await
+        .unwrap();
+
+    let action = ActionFixture::new_unique(pack.id, &pack.r#ref, "action")
+        .create(&pool)
+        .await
+        .unwrap();
+
+    use attune_common::repositories::rule::{CreateRuleInput, RuleRepository};
+    let rule = RuleRepository::create(
+        &pool,
+        CreateRuleInput {
+            r#ref: format!("{}.test_rule", pack.r#ref),
+            pack: pack.id,
+            pack_ref: pack.r#ref.clone(),
+            label: "Test Rule".to_string(),
+            description: Some("Test".to_string()),
+            action: action.id,
+            action_ref: action.r#ref.clone(),
+            trigger: trigger.id,
+            trigger_ref: trigger.r#ref.clone(),
+            conditions: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
+            enabled: true,
+            is_adhoc: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let enforcement = EnforcementFixture::new_unique(Some(rule.id), &rule.r#ref, &trigger.r#ref)
+        .create(&pool)
+        .await
+        .unwrap();
+
+    let updated = EnforcementRepository::update_loaded(
+        &pool,
+        &enforcement,
+        UpdateEnforcementInput {
+            status: Some(EnforcementStatus::Processed),
+            payload: None,
+            resolved_at: Some(chrono::Utc::now()),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(updated.id, enforcement.id);
+    assert_eq!(updated.created, enforcement.created);
+    assert_eq!(updated.rule_ref, enforcement.rule_ref);
+    assert_eq!(updated.status, EnforcementStatus::Processed);
+    assert!(updated.resolved_at.is_some());
+}

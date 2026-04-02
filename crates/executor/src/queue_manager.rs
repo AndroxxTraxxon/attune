@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::sync::{Mutex, Notify};
-use tokio::time::{timeout, Duration};
+use tokio::sync::Mutex;
+use tokio::time::{sleep, Duration, Instant};
 use tracing::{debug, info, warn};
 
 use attune_common::models::Id;
@@ -53,8 +53,6 @@ struct QueueEntry {
     execution_id: Id,
     /// When this entry was added to the queue
     enqueued_at: DateTime<Utc>,
-    /// Notifier to wake up this specific waiter
-    notifier: Arc<Notify>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -244,9 +242,6 @@ impl ExecutionQueueManager {
             .get_or_create_queue(queue_key.clone(), max_concurrent)
             .await;
 
-        // Create notifier for this execution
-        let notifier = Arc::new(Notify::new());
-
         // Try to enqueue
         {
             let mut queue = queue_arc.lock().await;
@@ -276,7 +271,7 @@ impl ExecutionQueueManager {
             }
 
             // Check if we can run immediately
-            if queue.has_capacity() {
+            if queue.has_capacity() && queue.queue.is_empty() {
                 debug!(
                     "Execution {} can run immediately for action {} (active: {}/{}, group: {:?})",
                     execution_id,
@@ -317,7 +312,6 @@ impl ExecutionQueueManager {
             let entry = QueueEntry {
                 execution_id,
                 enqueued_at: Utc::now(),
-                notifier: notifier.clone(),
             };
 
             queue.queue.push_back(entry);
@@ -337,16 +331,40 @@ impl ExecutionQueueManager {
         // Persist stats to database if available
         self.persist_queue_stats(action_id).await;
 
-        // Wait for notification with timeout
-        let wait_duration = Duration::from_secs(self.config.queue_timeout_seconds);
+        // Wait until this execution reaches the front of the queue and can
+        // activate itself. Production code uses non-blocking queue advancement;
+        // this blocking helper exists mainly for tests and legacy call sites.
+        let deadline = Instant::now() + Duration::from_secs(self.config.queue_timeout_seconds);
+        loop {
+            {
+                let mut queue = queue_arc.lock().await;
+                let queued_index = queue
+                    .queue
+                    .iter()
+                    .position(|entry| entry.execution_id == execution_id);
 
-        match timeout(wait_duration, notifier.notified()).await {
-            Ok(_) => {
-                debug!("Execution {} notified, can proceed", execution_id);
-                Ok(())
+                if let Some(0) = queued_index {
+                    if queue.has_capacity() {
+                        let entry = queue.queue.pop_front().expect("front entry just checked");
+                        queue.active_count += 1;
+                        self.active_execution_keys
+                            .insert(entry.execution_id, queue_key.clone());
+                        drop(queue);
+                        self.persist_queue_stats(action_id).await;
+                        debug!(
+                            "Execution {} reached front of queue and can proceed",
+                            execution_id
+                        );
+                        return Ok(());
+                    }
+                } else if queued_index.is_none()
+                    && self.active_execution_keys.contains_key(&execution_id)
+                {
+                    return Ok(());
+                }
             }
-            Err(_) => {
-                // Timeout - remove from queue
+
+            if Instant::now() >= deadline {
                 let mut queue = queue_arc.lock().await;
                 queue.queue.retain(|e| e.execution_id != execution_id);
 
@@ -355,12 +373,14 @@ impl ExecutionQueueManager {
                     execution_id, self.config.queue_timeout_seconds
                 );
 
-                Err(anyhow::anyhow!(
+                return Err(anyhow::anyhow!(
                     "Queue timeout for execution {}: waited {} seconds",
                     execution_id,
                     self.config.queue_timeout_seconds
-                ))
+                ));
             }
+
+            sleep(Duration::from_millis(10)).await;
         }
     }
 
@@ -415,7 +435,7 @@ impl ExecutionQueueManager {
                 return Ok(SlotEnqueueOutcome::Enqueued);
             }
 
-            if queue.has_capacity() {
+            if queue.has_capacity() && queue.queue.is_empty() {
                 queue.active_count += 1;
                 queue.total_enqueued += 1;
                 self.active_execution_keys
@@ -444,7 +464,6 @@ impl ExecutionQueueManager {
             queue.queue.push_back(QueueEntry {
                 execution_id,
                 enqueued_at: Utc::now(),
-                notifier: Arc::new(Notify::new()),
             });
             queue.total_enqueued += 1;
         }
@@ -481,7 +500,7 @@ impl ExecutionQueueManager {
             });
         }
 
-        if queue.has_capacity() {
+        if queue.has_capacity() && queue.queue.is_empty() {
             queue.active_count += 1;
             queue.total_enqueued += 1;
             self.active_execution_keys
@@ -507,39 +526,6 @@ impl ExecutionQueueManager {
     /// 2. Check if there are queued executions
     /// 3. Notify the first (oldest) queued execution
     /// 4. Increment active count for the notified execution
-    ///
-    /// # Arguments
-    /// * `execution_id` - The execution that completed
-    ///
-    /// # Returns
-    /// * `Ok(true)` - A queued execution was notified
-    /// * `Ok(false)` - No executions were waiting
-    /// * `Err(_)` - Error accessing queue
-    pub async fn notify_completion(&self, execution_id: Id) -> Result<bool> {
-        Ok(self
-            .notify_completion_with_next(execution_id)
-            .await?
-            .is_some())
-    }
-
-    pub async fn notify_completion_with_next(&self, execution_id: Id) -> Result<Option<Id>> {
-        let release = match self.release_active_slot(execution_id).await? {
-            Some(release) => release,
-            None => return Ok(None),
-        };
-
-        let Some(next_execution_id) = release.next_execution_id else {
-            return Ok(None);
-        };
-
-        if self.activate_queued_execution(next_execution_id).await? {
-            Ok(Some(next_execution_id))
-        } else {
-            self.restore_active_slot(execution_id, &release).await?;
-            Ok(None)
-        }
-    }
-
     pub async fn release_active_slot(
         &self,
         execution_id: Id,
@@ -602,6 +588,7 @@ impl ExecutionQueueManager {
         }
 
         let next_execution_id = queue.queue.front().map(|entry| entry.execution_id);
+
         if let Some(next_execution_id) = next_execution_id {
             info!(
                 "Execution {} is next for action {} group {:?}",
@@ -637,45 +624,6 @@ impl ExecutionQueueManager {
         drop(queue);
         self.persist_queue_stats(action_id).await;
         Ok(())
-    }
-
-    pub async fn activate_queued_execution(&self, execution_id: Id) -> Result<bool> {
-        for entry in self.queues.iter() {
-            let queue_key = entry.key().clone();
-            let queue_arc = entry.value().clone();
-            let mut queue = queue_arc.lock().await;
-
-            let Some(front) = queue.queue.front() else {
-                continue;
-            };
-
-            if front.execution_id != execution_id {
-                continue;
-            }
-
-            if !queue.has_capacity() {
-                return Ok(false);
-            }
-
-            let entry = queue.queue.pop_front().expect("front entry just checked");
-            info!(
-                "Activating queued execution {} for action {} group {:?} (queued for {:?})",
-                entry.execution_id,
-                queue_key.action_id,
-                queue_key.group_key,
-                Utc::now() - entry.enqueued_at
-            );
-            queue.active_count += 1;
-            self.active_execution_keys
-                .insert(entry.execution_id, queue_key.clone());
-
-            drop(queue);
-            entry.notifier.notify_one();
-            self.persist_queue_stats(queue_key.action_id).await;
-            return Ok(true);
-        }
-
-        Ok(false)
     }
 
     pub async fn remove_queued_execution(
@@ -787,7 +735,7 @@ impl ExecutionQueueManager {
             total_enqueued += queue.total_enqueued;
             total_completed += queue.total_completed;
 
-            if let Some(candidate) = queue.queue.front().map(|e| e.enqueued_at) {
+            if let Some(candidate) = queue.queue.front().map(|entry| entry.enqueued_at) {
                 oldest_enqueued_at = Some(match oldest_enqueued_at {
                     Some(current) => current.min(candidate),
                     None => candidate,
@@ -854,8 +802,12 @@ impl ExecutionQueueManager {
         for queue_arc in queue_arcs {
             let mut queue = queue_arc.lock().await;
             let initial_len = queue.queue.len();
-            queue.queue.retain(|e| e.execution_id != execution_id);
+            queue
+                .queue
+                .retain(|entry| entry.execution_id != execution_id);
             if initial_len != queue.queue.len() {
+                drop(queue);
+                self.persist_queue_stats(action_id).await;
                 info!("Cancelled execution {} from queue", execution_id);
                 return Ok(true);
             }
@@ -961,7 +913,7 @@ mod tests {
         // Release them one by one
         for execution_id in 100..103 {
             sleep(Duration::from_millis(50)).await;
-            manager.notify_completion(execution_id).await.unwrap();
+            manager.release_active_slot(execution_id).await.unwrap();
         }
 
         // Wait for all to complete
@@ -1005,8 +957,9 @@ mod tests {
         assert_eq!(stats.active_count, 1);
 
         // Notify completion
-        let notified = manager_clone.notify_completion(100).await.unwrap();
-        assert!(notified);
+        let release = manager_clone.release_active_slot(100).await.unwrap();
+        assert!(release.is_some());
+        assert_eq!(release.unwrap().next_execution_id, Some(101));
 
         // Wait for queued execution to proceed
         handle.await.unwrap();
@@ -1033,13 +986,58 @@ mod tests {
         assert_eq!(stats2.active_count, 1);
 
         // Completion on action 1 shouldn't affect action 2
-        manager.notify_completion(100).await.unwrap();
+        manager.release_active_slot(100).await.unwrap();
 
         let stats1 = manager.get_queue_stats(1).await.unwrap();
         let stats2 = manager.get_queue_stats(2).await.unwrap();
 
         assert_eq!(stats1.active_count, 0);
         assert_eq!(stats2.active_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_release_reserves_front_of_queue_before_new_enqueues() {
+        let manager = Arc::new(ExecutionQueueManager::with_defaults());
+        let action_id = 1;
+
+        manager
+            .enqueue_and_wait(action_id, 100, 1, None)
+            .await
+            .unwrap();
+
+        let manager_clone = manager.clone();
+        let waiting = tokio::spawn(async move {
+            manager_clone
+                .enqueue_and_wait(action_id, 101, 1, None)
+                .await
+                .unwrap();
+        });
+
+        sleep(Duration::from_millis(100)).await;
+
+        let release = manager.release_active_slot(100).await.unwrap().unwrap();
+        assert_eq!(release.next_execution_id, Some(101));
+
+        let enqueue_outcome = manager.enqueue(action_id, 102, 1, None).await.unwrap();
+        assert_eq!(enqueue_outcome, SlotEnqueueOutcome::Enqueued);
+
+        let stats = manager.get_queue_stats(action_id).await.unwrap();
+        assert_eq!(stats.active_count, 0);
+        assert_eq!(stats.queue_length, 2);
+
+        assert_eq!(
+            manager.enqueue(action_id, 101, 1, None).await.unwrap(),
+            SlotEnqueueOutcome::Acquired
+        );
+        let stats = manager.get_queue_stats(action_id).await.unwrap();
+        assert_eq!(stats.active_count, 1);
+        assert_eq!(stats.queue_length, 1);
+
+        let stats = manager.get_queue_stats(action_id).await.unwrap();
+        assert_eq!(stats.active_count, 1);
+        assert_eq!(stats.queue_length, 1);
+
+        waiting.await.unwrap();
     }
 
     #[tokio::test]
@@ -1199,7 +1197,7 @@ mod tests {
         // Release them all
         for execution_id in 0..num_executions {
             sleep(Duration::from_millis(10)).await;
-            manager.notify_completion(execution_id).await.unwrap();
+            manager.release_active_slot(execution_id).await.unwrap();
         }
 
         // Wait for completion

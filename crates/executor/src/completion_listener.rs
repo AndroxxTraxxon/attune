@@ -304,7 +304,7 @@ mod tests {
     use crate::queue_manager::ExecutionQueueManager;
 
     #[tokio::test]
-    async fn test_notify_completion_releases_slot() {
+    async fn test_release_active_slot_releases_slot() {
         let queue_manager = Arc::new(ExecutionQueueManager::with_defaults());
         let action_id = 1;
 
@@ -320,8 +320,9 @@ mod tests {
         assert_eq!(stats.queue_length, 0);
 
         // Simulate completion notification
-        let notified = queue_manager.notify_completion(100).await.unwrap();
-        assert!(!notified); // No one waiting
+        let release = queue_manager.release_active_slot(100).await.unwrap();
+        assert!(release.is_some());
+        assert_eq!(release.unwrap().next_execution_id, None);
 
         // Verify slot is released
         let stats = queue_manager.get_queue_stats(action_id).await.unwrap();
@@ -329,7 +330,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_notify_completion_wakes_waiting() {
+    async fn test_release_active_slot_wakes_waiting() {
         let queue_manager = Arc::new(ExecutionQueueManager::with_defaults());
         let action_id = 1;
 
@@ -357,8 +358,8 @@ mod tests {
         assert_eq!(stats.queue_length, 1);
 
         // Notify completion
-        let notified = queue_manager.notify_completion(100).await.unwrap();
-        assert!(notified); // Should wake the waiting execution
+        let release = queue_manager.release_active_slot(100).await.unwrap();
+        assert_eq!(release.unwrap().next_execution_id, Some(101));
 
         // Wait for queued execution to proceed
         handle.await.unwrap();
@@ -406,7 +407,11 @@ mod tests {
         // Release them one by one
         for execution_id in 100..103 {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            queue_manager.notify_completion(execution_id).await.unwrap();
+            let release = queue_manager
+                .release_active_slot(execution_id)
+                .await
+                .unwrap();
+            assert!(release.is_some());
         }
 
         // Wait for all to complete
@@ -425,8 +430,8 @@ mod tests {
         let execution_id = 999; // Non-existent execution
 
         // Should succeed but not notify anyone
-        let result = queue_manager.notify_completion(execution_id).await;
+        let result = queue_manager.release_active_slot(execution_id).await;
         assert!(result.is_ok());
-        assert!(!result.unwrap());
+        assert!(result.unwrap().is_none());
     }
 }

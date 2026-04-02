@@ -416,8 +416,43 @@ impl Update for EnforcementRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        // Build update query
+        if input.status.is_none() && input.payload.is_none() && input.resolved_at.is_none() {
+            return Self::get_by_id(executor, id).await;
+        }
 
+        Self::update_with_locator(executor, input, |query| {
+            query.push(" WHERE id = ");
+            query.push_bind(id);
+        })
+        .await
+    }
+}
+
+#[async_trait::async_trait]
+impl Delete for EnforcementRepository {
+    async fn delete<'e, E>(executor: E, id: i64) -> Result<bool>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = sqlx::query("DELETE FROM enforcement WHERE id = $1")
+            .bind(id)
+            .execute(executor)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+impl EnforcementRepository {
+    async fn update_with_locator<'e, E, F>(
+        executor: E,
+        input: UpdateEnforcementInput,
+        where_clause: F,
+    ) -> Result<Enforcement>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+        F: FnOnce(&mut QueryBuilder<'_, Postgres>),
+    {
         let mut query = QueryBuilder::new("UPDATE enforcement SET ");
         let mut has_updates = false;
 
@@ -442,17 +477,13 @@ impl Update for EnforcementRepository {
             }
             query.push("resolved_at = ");
             query.push_bind(resolved_at);
-            has_updates = true;
         }
 
-        if !has_updates {
-            // No updates requested, fetch and return existing entity
-            return Self::get_by_id(executor, id).await;
-        }
-
-        query.push(" WHERE id = ");
-        query.push_bind(id);
-        query.push(" RETURNING id, rule, rule_ref, trigger_ref, config, event, status, payload, condition, conditions, created, resolved_at");
+        where_clause(&mut query);
+        query.push(
+            " RETURNING id, rule, rule_ref, trigger_ref, config, event, status, payload, \
+             condition, conditions, created, resolved_at",
+        );
 
         let enforcement = query
             .build_query_as::<Enforcement>()
@@ -461,24 +492,37 @@ impl Update for EnforcementRepository {
 
         Ok(enforcement)
     }
-}
 
-#[async_trait::async_trait]
-impl Delete for EnforcementRepository {
-    async fn delete<'e, E>(executor: E, id: i64) -> Result<bool>
+    /// Update an enforcement using the loaded row's hypertable keys.
+    ///
+    /// This avoids wide scans across compressed chunks by including both the
+    /// partitioning column (`created`) and compression segment key (`rule_ref`)
+    /// in the locator.
+    pub async fn update_loaded<'e, E>(
+        executor: E,
+        enforcement: &Enforcement,
+        input: UpdateEnforcementInput,
+    ) -> Result<Enforcement>
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let result = sqlx::query("DELETE FROM enforcement WHERE id = $1")
-            .bind(id)
-            .execute(executor)
-            .await?;
+        if input.status.is_none() && input.payload.is_none() && input.resolved_at.is_none() {
+            return Ok(enforcement.clone());
+        }
 
-        Ok(result.rows_affected() > 0)
+        let rule_ref = enforcement.rule_ref.clone();
+
+        Self::update_with_locator(executor, input, |query| {
+            query.push(" WHERE id = ");
+            query.push_bind(enforcement.id);
+            query.push(" AND created = ");
+            query.push_bind(enforcement.created);
+            query.push(" AND rule_ref = ");
+            query.push_bind(rule_ref);
+        })
+        .await
     }
-}
 
-impl EnforcementRepository {
     /// Find enforcements by rule ID
     pub async fn find_by_rule<'e, E>(executor: E, rule_id: Id) -> Result<Vec<Enforcement>>
     where

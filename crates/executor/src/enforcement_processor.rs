@@ -19,7 +19,7 @@ use attune_common::{
         event::{EnforcementRepository, EventRepository, UpdateEnforcementInput},
         execution::{CreateExecutionInput, ExecutionRepository},
         rule::RuleRepository,
-        Create, FindById, Update,
+        Create, FindById,
     },
 };
 
@@ -146,9 +146,9 @@ impl EnforcementProcessor {
             .await?;
 
             // Update enforcement status to Processed after successful execution creation
-            EnforcementRepository::update(
+            EnforcementRepository::update_loaded(
                 pool,
-                enforcement_id,
+                &enforcement,
                 UpdateEnforcementInput {
                     status: Some(EnforcementStatus::Processed),
                     payload: None,
@@ -165,9 +165,9 @@ impl EnforcementProcessor {
             );
 
             // Update enforcement status to Disabled since it was not actionable
-            EnforcementRepository::update(
+            EnforcementRepository::update_loaded(
                 pool,
-                enforcement_id,
+                &enforcement,
                 UpdateEnforcementInput {
                     status: Some(EnforcementStatus::Disabled),
                     payload: None,
