@@ -3,7 +3,7 @@
 //! Provides database operations for queue statistics persistence.
 
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Postgres, QueryBuilder};
+use sqlx::{Executor, PgPool, Postgres, QueryBuilder};
 
 use crate::error::Result;
 use crate::models::Id;
@@ -38,7 +38,10 @@ pub struct QueueStatsRepository;
 
 impl QueueStatsRepository {
     /// Upsert queue statistics (insert or update)
-    pub async fn upsert(pool: &PgPool, input: UpsertQueueStatsInput) -> Result<QueueStats> {
+    pub async fn upsert<'e, E>(executor: E, input: UpsertQueueStatsInput) -> Result<QueueStats>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
         let stats = sqlx::query_as::<Postgres, QueueStats>(
             r#"
             INSERT INTO queue_stats (
@@ -69,14 +72,17 @@ impl QueueStatsRepository {
         .bind(input.oldest_enqueued_at)
         .bind(input.total_enqueued)
         .bind(input.total_completed)
-        .fetch_one(pool)
+        .fetch_one(executor)
         .await?;
 
         Ok(stats)
     }
 
     /// Get queue statistics for a specific action
-    pub async fn find_by_action(pool: &PgPool, action_id: Id) -> Result<Option<QueueStats>> {
+    pub async fn find_by_action<'e, E>(executor: E, action_id: Id) -> Result<Option<QueueStats>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
         let stats = sqlx::query_as::<Postgres, QueueStats>(
             r#"
             SELECT
@@ -93,14 +99,17 @@ impl QueueStatsRepository {
             "#,
         )
         .bind(action_id)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await?;
 
         Ok(stats)
     }
 
     /// List all queue statistics with active queues (queue_length > 0 or active_count > 0)
-    pub async fn list_active(pool: &PgPool) -> Result<Vec<QueueStats>> {
+    pub async fn list_active<'e, E>(executor: E) -> Result<Vec<QueueStats>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
         let stats = sqlx::query_as::<Postgres, QueueStats>(
             r#"
             SELECT
@@ -117,14 +126,17 @@ impl QueueStatsRepository {
             ORDER BY last_updated DESC
             "#,
         )
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?;
 
         Ok(stats)
     }
 
     /// List all queue statistics
-    pub async fn list_all(pool: &PgPool) -> Result<Vec<QueueStats>> {
+    pub async fn list_all<'e, E>(executor: E) -> Result<Vec<QueueStats>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
         let stats = sqlx::query_as::<Postgres, QueueStats>(
             r#"
             SELECT
@@ -140,14 +152,17 @@ impl QueueStatsRepository {
             ORDER BY last_updated DESC
             "#,
         )
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?;
 
         Ok(stats)
     }
 
     /// Delete queue statistics for a specific action
-    pub async fn delete(pool: &PgPool, action_id: Id) -> Result<bool> {
+    pub async fn delete<'e, E>(executor: E, action_id: Id) -> Result<bool>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
         let result = sqlx::query(
             r#"
             DELETE FROM queue_stats
@@ -155,7 +170,7 @@ impl QueueStatsRepository {
             "#,
         )
         .bind(action_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
 
         Ok(result.rows_affected() > 0)
@@ -163,7 +178,7 @@ impl QueueStatsRepository {
 
     /// Batch upsert multiple queue statistics
     pub async fn batch_upsert(
-        pool: &PgPool,
+        executor: &PgPool,
         inputs: Vec<UpsertQueueStatsInput>,
     ) -> Result<Vec<QueueStats>> {
         if inputs.is_empty() {
@@ -213,14 +228,17 @@ impl QueueStatsRepository {
 
         let stats = query_builder
             .build_query_as::<QueueStats>()
-            .fetch_all(pool)
+            .fetch_all(executor)
             .await?;
 
         Ok(stats)
     }
 
     /// Clear stale statistics (older than specified duration)
-    pub async fn clear_stale(pool: &PgPool, older_than_seconds: i64) -> Result<u64> {
+    pub async fn clear_stale<'e, E>(executor: E, older_than_seconds: i64) -> Result<u64>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
         let result = sqlx::query(
             r#"
             DELETE FROM queue_stats
@@ -230,7 +248,7 @@ impl QueueStatsRepository {
             "#,
         )
         .bind(older_than_seconds)
-        .execute(pool)
+        .execute(executor)
         .await?;
 
         Ok(result.rows_affected())

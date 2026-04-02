@@ -1,13 +1,11 @@
 -- Migration: Workflow System
--- Description: Creates workflow_definition and workflow_execution tables
+-- Description: Creates workflow_definition, workflow_execution, and
+--              workflow_task_dispatch tables
 --              (workflow_task_execution consolidated into execution.workflow_task JSONB)
 --
---              NOTE: The execution table is converted to a TimescaleDB hypertable in
---              migration 000009. Hypertables cannot be the target of FK constraints,
---              so workflow_execution.execution is a plain BIGINT with no FK.
---              execution.workflow_def also has no FK (added as plain BIGINT in 000005)
---              since execution is a hypertable and FKs from hypertables are only
---              supported for simple cases — we omit it for consistency.
+--              NOTE: `execution` remains a regular PostgreSQL table, so
+--              workflow_execution.execution, workflow_task_dispatch.execution_id,
+--              and execution.workflow_def use normal foreign keys.
 -- Version: 20250101000006
 
 -- ============================================================================
@@ -54,7 +52,7 @@ COMMENT ON COLUMN workflow_definition.out_schema IS 'JSON schema for workflow ou
 
 CREATE TABLE workflow_execution (
     id BIGSERIAL PRIMARY KEY,
-    execution BIGINT NOT NULL, -- references execution(id); no FK because execution is a hypertable
+    execution BIGINT NOT NULL REFERENCES execution(id) ON DELETE CASCADE,
     workflow_def BIGINT NOT NULL REFERENCES workflow_definition(id) ON DELETE CASCADE,
     current_tasks TEXT[] DEFAULT '{}',
     completed_tasks TEXT[] DEFAULT '{}',
@@ -67,11 +65,11 @@ CREATE TABLE workflow_execution (
     paused BOOLEAN DEFAULT false NOT NULL,
     pause_reason TEXT,
     created TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    updated TIMESTAMPTZ DEFAULT NOW() NOT NULL
+    updated TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_workflow_execution_execution UNIQUE (execution)
 );
 
 -- Indexes
-CREATE INDEX idx_workflow_exec_execution ON workflow_execution(execution);
 CREATE INDEX idx_workflow_exec_workflow_def ON workflow_execution(workflow_def);
 CREATE INDEX idx_workflow_exec_status ON workflow_execution(status);
 CREATE INDEX idx_workflow_exec_paused ON workflow_execution(paused) WHERE paused = true;
@@ -83,11 +81,50 @@ CREATE TRIGGER update_workflow_execution_updated
     EXECUTE FUNCTION update_updated_column();
 
 -- Comments
-COMMENT ON TABLE workflow_execution IS 'Runtime state tracking for workflow executions. execution column has no FK — execution is a hypertable.';
+COMMENT ON TABLE workflow_execution IS 'Runtime state tracking for workflow executions.';
 COMMENT ON COLUMN workflow_execution.variables IS 'Workflow-scoped variables, updated via publish directives';
 COMMENT ON COLUMN workflow_execution.task_graph IS 'Execution graph with dependencies and transitions';
 COMMENT ON COLUMN workflow_execution.current_tasks IS 'Array of task names currently executing';
 COMMENT ON COLUMN workflow_execution.paused IS 'True if workflow execution is paused (can be resumed)';
+
+-- ============================================================================
+-- WORKFLOW TASK DISPATCH TABLE
+-- ============================================================================
+
+CREATE TABLE workflow_task_dispatch (
+    id BIGSERIAL PRIMARY KEY,
+    workflow_execution BIGINT NOT NULL REFERENCES workflow_execution(id) ON DELETE CASCADE,
+    task_name TEXT NOT NULL,
+    task_index INT,
+    execution_id BIGINT,
+    created TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE UNIQUE INDEX uq_workflow_task_dispatch_identity
+    ON workflow_task_dispatch (
+        workflow_execution,
+        task_name,
+        COALESCE(task_index, -1)
+    );
+
+CREATE INDEX idx_workflow_task_dispatch_execution_id
+    ON workflow_task_dispatch (execution_id)
+    WHERE execution_id IS NOT NULL;
+
+CREATE TRIGGER update_workflow_task_dispatch_updated
+    BEFORE UPDATE ON workflow_task_dispatch
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_column();
+
+COMMENT ON TABLE workflow_task_dispatch IS
+    'Durable dedupe/ownership records for workflow child execution dispatch';
+COMMENT ON COLUMN workflow_task_dispatch.execution_id IS
+    'Associated execution.id';
+
+ALTER TABLE workflow_task_dispatch
+    ADD CONSTRAINT workflow_task_dispatch_execution_id_fkey
+    FOREIGN KEY (execution_id) REFERENCES execution(id) ON DELETE CASCADE;
 
 -- ============================================================================
 -- MODIFY ACTION TABLE - Add Workflow Support
@@ -100,9 +137,9 @@ CREATE INDEX idx_action_workflow_def ON action(workflow_def);
 
 COMMENT ON COLUMN action.workflow_def IS 'Reference to workflow definition (non-null means this action is a workflow)';
 
--- NOTE: execution.workflow_def has no FK constraint because execution is a
--- TimescaleDB hypertable (converted in migration 000009). The column was
--- created as a plain BIGINT in migration 000005.
+ALTER TABLE execution
+    ADD CONSTRAINT execution_workflow_def_fkey
+    FOREIGN KEY (workflow_def) REFERENCES workflow_definition(id) ON DELETE SET NULL;
 
 -- ============================================================================
 -- WORKFLOW VIEWS

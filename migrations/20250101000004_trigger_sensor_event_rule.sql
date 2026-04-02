@@ -201,6 +201,9 @@ CREATE INDEX idx_enforcement_rule_status ON enforcement(rule, status);
 CREATE INDEX idx_enforcement_event_status ON enforcement(event, status);
 CREATE INDEX idx_enforcement_payload_gin ON enforcement USING GIN (payload);
 CREATE INDEX idx_enforcement_conditions_gin ON enforcement USING GIN (conditions);
+CREATE UNIQUE INDEX uq_enforcement_rule_event
+    ON enforcement (rule, event)
+    WHERE rule IS NOT NULL AND event IS NOT NULL;
 
 -- Comments
 COMMENT ON TABLE enforcement IS 'Enforcements represent rule triggering by events';

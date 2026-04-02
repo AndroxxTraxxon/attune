@@ -1412,7 +1412,7 @@ pub mod artifact {
         pub content_type: Option<String>,
         /// Size of the latest version's content in bytes
         pub size_bytes: Option<i64>,
-        /// Execution that produced this artifact (no FK — execution is a hypertable)
+        /// Execution that produced this artifact (no FK by design)
         pub execution: Option<Id>,
         /// Structured JSONB data for progress artifacts or metadata
         pub data: Option<serde_json::Value>,

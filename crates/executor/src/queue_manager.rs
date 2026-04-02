@@ -23,7 +23,13 @@ use tokio::time::{sleep, Duration, Instant};
 use tracing::{debug, info, warn};
 
 use attune_common::models::Id;
-use attune_common::repositories::queue_stats::{QueueStatsRepository, UpsertQueueStatsInput};
+use attune_common::repositories::{
+    execution_admission::{
+        AdmissionEnqueueOutcome, AdmissionQueueStats, AdmissionQueuedRemovalOutcome,
+        AdmissionSlotReleaseOutcome, ExecutionAdmissionRepository,
+    },
+    queue_stats::{QueueStatsRepository, UpsertQueueStatsInput},
+};
 
 /// Configuration for the queue manager
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +57,8 @@ impl Default for QueueConfig {
 struct QueueEntry {
     /// Execution or enforcement ID being queued
     execution_id: Id,
+    /// Durable FIFO position for the DB-backed admission path.
+    queue_order: Option<i64>,
     /// When this entry was added to the queue
     enqueued_at: DateTime<Utc>,
 }
@@ -224,6 +232,12 @@ impl ExecutionQueueManager {
         max_concurrent: u32,
         group_key: Option<String>,
     ) -> Result<()> {
+        if self.db_pool.is_some() {
+            return self
+                .enqueue_and_wait_db(action_id, execution_id, max_concurrent, group_key)
+                .await;
+        }
+
         if self.active_execution_keys.contains_key(&execution_id) {
             debug!(
                 "Execution {} already owns an active slot, skipping queue wait",
@@ -311,6 +325,7 @@ impl ExecutionQueueManager {
             // Add to queue
             let entry = QueueEntry {
                 execution_id,
+                queue_order: None,
                 enqueued_at: Utc::now(),
             };
 
@@ -392,6 +407,24 @@ impl ExecutionQueueManager {
         max_concurrent: u32,
         group_key: Option<String>,
     ) -> Result<SlotEnqueueOutcome> {
+        if let Some(pool) = &self.db_pool {
+            return Ok(
+                match ExecutionAdmissionRepository::enqueue(
+                    pool,
+                    self.config.max_queue_length,
+                    action_id,
+                    execution_id,
+                    max_concurrent,
+                    group_key,
+                )
+                .await?
+                {
+                    AdmissionEnqueueOutcome::Acquired => SlotEnqueueOutcome::Acquired,
+                    AdmissionEnqueueOutcome::Enqueued => SlotEnqueueOutcome::Enqueued,
+                },
+            );
+        }
+
         if self.active_execution_keys.contains_key(&execution_id) {
             debug!(
                 "Execution {} already owns an active slot, treating as acquired",
@@ -463,6 +496,7 @@ impl ExecutionQueueManager {
 
             queue.queue.push_back(QueueEntry {
                 execution_id,
+                queue_order: None,
                 enqueued_at: Utc::now(),
             });
             queue.total_enqueued += 1;
@@ -480,6 +514,21 @@ impl ExecutionQueueManager {
         max_concurrent: u32,
         group_key: Option<String>,
     ) -> Result<SlotAcquireOutcome> {
+        if let Some(pool) = &self.db_pool {
+            let outcome = ExecutionAdmissionRepository::try_acquire(
+                pool,
+                action_id,
+                execution_id,
+                max_concurrent,
+                group_key,
+            )
+            .await?;
+            return Ok(SlotAcquireOutcome {
+                acquired: outcome.acquired,
+                current_count: outcome.current_count,
+            });
+        }
+
         let queue_key = self.queue_key(action_id, group_key);
         let queue_arc = self
             .get_or_create_queue(queue_key.clone(), max_concurrent)
@@ -530,6 +579,14 @@ impl ExecutionQueueManager {
         &self,
         execution_id: Id,
     ) -> Result<Option<SlotReleaseOutcome>> {
+        if let Some(pool) = &self.db_pool {
+            return Ok(
+                ExecutionAdmissionRepository::release_active_slot(pool, execution_id)
+                    .await?
+                    .map(Self::map_release_outcome),
+            );
+        }
+
         let Some((_, queue_key)) = self.active_execution_keys.remove(&execution_id) else {
             debug!(
                 "No active queue slot found for execution {} (queue may have been cleared)",
@@ -610,6 +667,16 @@ impl ExecutionQueueManager {
         execution_id: Id,
         outcome: &SlotReleaseOutcome,
     ) -> Result<()> {
+        if let Some(pool) = &self.db_pool {
+            ExecutionAdmissionRepository::restore_active_slot(
+                pool,
+                execution_id,
+                &Self::to_admission_release_outcome(outcome),
+            )
+            .await?;
+            return Ok(());
+        }
+
         let action_id = outcome.queue_key.action_id;
         let queue_arc = self.get_or_create_queue(outcome.queue_key.clone(), 1).await;
         let mut queue = queue_arc.lock().await;
@@ -630,6 +697,14 @@ impl ExecutionQueueManager {
         &self,
         execution_id: Id,
     ) -> Result<Option<QueuedRemovalOutcome>> {
+        if let Some(pool) = &self.db_pool {
+            return Ok(
+                ExecutionAdmissionRepository::remove_queued_execution(pool, execution_id)
+                    .await?
+                    .map(Self::map_removal_outcome),
+            );
+        }
+
         for entry in self.queues.iter() {
             let queue_key = entry.key().clone();
             let queue_arc = entry.value().clone();
@@ -666,6 +741,15 @@ impl ExecutionQueueManager {
     }
 
     pub async fn restore_queued_execution(&self, outcome: &QueuedRemovalOutcome) -> Result<()> {
+        if let Some(pool) = &self.db_pool {
+            ExecutionAdmissionRepository::restore_queued_execution(
+                pool,
+                &Self::to_admission_removal_outcome(outcome),
+            )
+            .await?;
+            return Ok(());
+        }
+
         let action_id = outcome.queue_key.action_id;
         let queue_arc = self.get_or_create_queue(outcome.queue_key.clone(), 1).await;
         let mut queue = queue_arc.lock().await;
@@ -709,6 +793,19 @@ impl ExecutionQueueManager {
 
     /// Get statistics for a specific action's queue
     pub async fn get_queue_stats(&self, action_id: Id) -> Option<QueueStats> {
+        if let Some(pool) = &self.db_pool {
+            return ExecutionAdmissionRepository::get_queue_stats(pool, action_id)
+                .await
+                .map(|stats| stats.map(Self::map_queue_stats))
+                .unwrap_or_else(|err| {
+                    warn!(
+                        "Failed to load shared queue stats for action {}: {}",
+                        action_id, err
+                    );
+                    None
+                });
+        }
+
         let queue_arcs: Vec<Arc<Mutex<ActionQueue>>> = self
             .queues
             .iter()
@@ -757,6 +854,26 @@ impl ExecutionQueueManager {
     /// Get statistics for all queues
     #[allow(dead_code)]
     pub async fn get_all_queue_stats(&self) -> Vec<QueueStats> {
+        if let Some(pool) = &self.db_pool {
+            return QueueStatsRepository::list_all(pool)
+                .await
+                .map(|stats| {
+                    stats
+                        .into_iter()
+                        .map(|stat| QueueStats {
+                            action_id: stat.action_id,
+                            queue_length: stat.queue_length as usize,
+                            active_count: stat.active_count as u32,
+                            max_concurrent: stat.max_concurrent as u32,
+                            oldest_enqueued_at: stat.oldest_enqueued_at,
+                            total_enqueued: stat.total_enqueued as u64,
+                            total_completed: stat.total_completed as u64,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
+
         let mut stats = Vec::new();
 
         let mut action_ids = std::collections::BTreeSet::new();
@@ -787,6 +904,14 @@ impl ExecutionQueueManager {
     /// * `Ok(false)` - Execution not found in queue
     #[allow(dead_code)]
     pub async fn cancel_execution(&self, action_id: Id, execution_id: Id) -> Result<bool> {
+        if let Some(pool) = &self.db_pool {
+            return Ok(
+                ExecutionAdmissionRepository::remove_queued_execution(pool, execution_id)
+                    .await?
+                    .is_some(),
+            );
+        }
+
         debug!(
             "Attempting to cancel execution {} for action {}",
             execution_id, action_id
@@ -838,11 +963,146 @@ impl ExecutionQueueManager {
     /// Get the number of actions with active queues
     #[allow(dead_code)]
     pub fn active_queue_count(&self) -> usize {
+        if self.db_pool.is_some() {
+            return 0;
+        }
+
         self.queues
             .iter()
             .map(|entry| entry.key().action_id)
             .collect::<std::collections::BTreeSet<_>>()
             .len()
+    }
+
+    async fn enqueue_and_wait_db(
+        &self,
+        action_id: Id,
+        execution_id: Id,
+        max_concurrent: u32,
+        group_key: Option<String>,
+    ) -> Result<()> {
+        let pool = self
+            .db_pool
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("database pool required for shared admission"))?;
+
+        match ExecutionAdmissionRepository::enqueue(
+            pool,
+            self.config.max_queue_length,
+            action_id,
+            execution_id,
+            max_concurrent,
+            group_key.clone(),
+        )
+        .await?
+        {
+            AdmissionEnqueueOutcome::Acquired => return Ok(()),
+            AdmissionEnqueueOutcome::Enqueued => {}
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(self.config.queue_timeout_seconds);
+        loop {
+            sleep(Duration::from_millis(10)).await;
+
+            match ExecutionAdmissionRepository::wait_status(pool, execution_id).await? {
+                Some(true) => return Ok(()),
+                Some(false) => {}
+                None => {
+                    return Err(anyhow::anyhow!(
+                        "Queue state for execution {} disappeared while waiting",
+                        execution_id
+                    ));
+                }
+            }
+
+            if Instant::now() < deadline {
+                continue;
+            }
+
+            match ExecutionAdmissionRepository::remove_queued_execution(pool, execution_id).await? {
+                Some(_) => {
+                    return Err(anyhow::anyhow!(
+                        "Queue timeout for execution {}: waited {} seconds",
+                        execution_id,
+                        self.config.queue_timeout_seconds
+                    ));
+                }
+                None => {
+                    if matches!(
+                        ExecutionAdmissionRepository::wait_status(pool, execution_id).await?,
+                        Some(true)
+                    ) {
+                        return Ok(());
+                    }
+
+                    return Err(anyhow::anyhow!(
+                        "Queue timeout for execution {}: waited {} seconds",
+                        execution_id,
+                        self.config.queue_timeout_seconds
+                    ));
+                }
+            }
+        }
+    }
+
+    fn map_release_outcome(outcome: AdmissionSlotReleaseOutcome) -> SlotReleaseOutcome {
+        SlotReleaseOutcome {
+            next_execution_id: outcome.next_execution_id,
+            queue_key: QueueKey {
+                action_id: outcome.action_id,
+                group_key: outcome.group_key,
+            },
+        }
+    }
+
+    fn to_admission_release_outcome(outcome: &SlotReleaseOutcome) -> AdmissionSlotReleaseOutcome {
+        AdmissionSlotReleaseOutcome {
+            action_id: outcome.queue_key.action_id,
+            group_key: outcome.queue_key.group_key.clone(),
+            next_execution_id: outcome.next_execution_id,
+        }
+    }
+
+    fn map_removal_outcome(outcome: AdmissionQueuedRemovalOutcome) -> QueuedRemovalOutcome {
+        QueuedRemovalOutcome {
+            next_execution_id: outcome.next_execution_id,
+            queue_key: QueueKey {
+                action_id: outcome.action_id,
+                group_key: outcome.group_key,
+            },
+            removed_entry: QueueEntry {
+                execution_id: outcome.execution_id,
+                queue_order: Some(outcome.queue_order),
+                enqueued_at: outcome.enqueued_at,
+            },
+            removed_index: outcome.removed_index,
+        }
+    }
+
+    fn to_admission_removal_outcome(
+        outcome: &QueuedRemovalOutcome,
+    ) -> AdmissionQueuedRemovalOutcome {
+        AdmissionQueuedRemovalOutcome {
+            action_id: outcome.queue_key.action_id,
+            group_key: outcome.queue_key.group_key.clone(),
+            next_execution_id: outcome.next_execution_id,
+            execution_id: outcome.removed_entry.execution_id,
+            queue_order: outcome.removed_entry.queue_order.unwrap_or_default(),
+            enqueued_at: outcome.removed_entry.enqueued_at,
+            removed_index: outcome.removed_index,
+        }
+    }
+
+    fn map_queue_stats(stats: AdmissionQueueStats) -> QueueStats {
+        QueueStats {
+            action_id: stats.action_id,
+            queue_length: stats.queue_length,
+            active_count: stats.active_count,
+            max_concurrent: stats.max_concurrent,
+            oldest_enqueued_at: stats.oldest_enqueued_at,
+            total_enqueued: stats.total_enqueued,
+            total_completed: stats.total_completed,
+        }
     }
 }
 

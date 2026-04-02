@@ -9,13 +9,14 @@
 
 use anyhow::Result;
 use attune_common::{
+    error::Error as AttuneError,
     models::{enums::InquiryStatus, inquiry::Inquiry, Execution, Id},
     mq::{
         Consumer, InquiryCreatedPayload, InquiryRespondedPayload, MessageEnvelope, MessageType,
         Publisher,
     },
     repositories::{
-        execution::{ExecutionRepository, UpdateExecutionInput},
+        execution::{ExecutionRepository, UpdateExecutionInput, SELECT_COLUMNS},
         inquiry::{CreateInquiryInput, InquiryRepository},
         Create, FindById, Update,
     },
@@ -28,6 +29,8 @@ use tracing::{debug, error, info, warn};
 
 /// Special key in action result to indicate an inquiry should be created
 pub const INQUIRY_RESULT_KEY: &str = "__inquiry";
+const INQUIRY_ID_RESULT_KEY: &str = "__inquiry_id";
+const INQUIRY_CREATED_PUBLISHED_RESULT_KEY: &str = "__inquiry_created_published";
 
 /// Structure for inquiry data in action results
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -104,67 +107,196 @@ impl InquiryHandler {
         let inquiry_request: InquiryRequest = serde_json::from_value(inquiry_value.clone())?;
         Ok(inquiry_request)
     }
+}
 
+/// Returns true when `e` represents a PostgreSQL unique constraint violation (code 23505).
+fn is_db_unique_violation(e: &AttuneError) -> bool {
+    if let AttuneError::Database(sqlx_err) = e {
+        return sqlx_err
+            .as_database_error()
+            .and_then(|db| db.code())
+            .as_deref()
+            == Some("23505");
+    }
+    false
+}
+
+impl InquiryHandler {
     /// Create an inquiry for an execution and pause it
     pub async fn create_inquiry_from_result(
         pool: &PgPool,
         publisher: &Publisher,
         execution_id: Id,
-        result: &JsonValue,
+        _result: &JsonValue,
     ) -> Result<Inquiry> {
         info!("Creating inquiry for execution {}", execution_id);
 
-        // Extract inquiry request
-        let inquiry_request = Self::extract_inquiry_request(result)?;
+        let mut tx = pool.begin().await?;
+        let execution = sqlx::query_as::<_, Execution>(&format!(
+            "SELECT {SELECT_COLUMNS} FROM execution WHERE id = $1 FOR UPDATE"
+        ))
+        .bind(execution_id)
+        .fetch_one(&mut *tx)
+        .await?;
 
-        // Calculate timeout if specified
+        let mut result = execution
+            .result
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Execution {} has no result", execution_id))?;
+        let inquiry_request = Self::extract_inquiry_request(&result)?;
         let timeout_at = inquiry_request
             .timeout_seconds
             .map(|seconds| Utc::now() + chrono::Duration::seconds(seconds));
 
-        // Create inquiry in database
-        let inquiry_input = CreateInquiryInput {
-            execution: execution_id,
-            prompt: inquiry_request.prompt.clone(),
-            response_schema: inquiry_request.response_schema.clone(),
-            assigned_to: inquiry_request.assigned_to,
-            status: InquiryStatus::Pending,
-            response: None,
-            timeout_at,
+        let existing_inquiry_id = result
+            .get(INQUIRY_ID_RESULT_KEY)
+            .and_then(|value| value.as_i64());
+        let published = result
+            .get(INQUIRY_CREATED_PUBLISHED_RESULT_KEY)
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+
+        let (inquiry, should_publish) = if let Some(inquiry_id) = existing_inquiry_id {
+            let inquiry = InquiryRepository::find_by_id(&mut *tx, inquiry_id)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Inquiry {} referenced by execution {} result not found",
+                        inquiry_id,
+                        execution_id
+                    )
+                })?;
+            let should_publish = !published && inquiry.status == InquiryStatus::Pending;
+            (inquiry, should_publish)
+        } else {
+            let create_result = InquiryRepository::create(
+                &mut *tx,
+                CreateInquiryInput {
+                    execution: execution_id,
+                    prompt: inquiry_request.prompt.clone(),
+                    response_schema: inquiry_request.response_schema.clone(),
+                    assigned_to: inquiry_request.assigned_to,
+                    status: InquiryStatus::Pending,
+                    response: None,
+                    timeout_at,
+                },
+            )
+            .await;
+
+            let inquiry = match create_result {
+                Ok(inq) => inq,
+                Err(e) => {
+                    // Unique constraint violation (23505): another replica already
+                    // created the inquiry for this execution. Treat as idempotent
+                    // success — drop the aborted transaction and return the existing row.
+                    if is_db_unique_violation(&e) {
+                        info!(
+                            "Inquiry for execution {} already created by another replica \
+                             (unique constraint 23505); treating as idempotent",
+                            execution_id
+                        );
+                        // tx is in an aborted state; dropping it issues ROLLBACK.
+                        drop(tx);
+                        let inquiries =
+                            InquiryRepository::find_by_execution(pool, execution_id).await?;
+                        let existing = inquiries.into_iter().next().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Inquiry for execution {} not found after unique constraint violation",
+                                execution_id
+                            )
+                        })?;
+                        return Ok(existing);
+                    }
+                    return Err(e.into());
+                }
+            };
+
+            Self::set_inquiry_result_metadata(&mut result, inquiry.id, false)?;
+            ExecutionRepository::update(
+                &mut *tx,
+                execution_id,
+                UpdateExecutionInput {
+                    result: Some(result),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+            (inquiry, true)
         };
 
-        let inquiry = InquiryRepository::create(pool, inquiry_input).await?;
+        tx.commit().await?;
 
-        info!(
-            "Created inquiry {} for execution {}",
-            inquiry.id, execution_id
-        );
+        if should_publish {
+            let payload = InquiryCreatedPayload {
+                inquiry_id: inquiry.id,
+                execution_id,
+                prompt: inquiry_request.prompt,
+                response_schema: inquiry_request.response_schema,
+                assigned_to: inquiry_request.assigned_to,
+                timeout_at,
+            };
 
-        // Update execution status to paused/waiting
-        // Note: We use a special status or keep it as "running" with inquiry tracking
-        // For now, we'll keep status as-is and track via inquiry relationship
+            let envelope =
+                MessageEnvelope::new(MessageType::InquiryCreated, payload).with_source("executor");
 
-        // Publish InquiryCreated message
-        let payload = InquiryCreatedPayload {
-            inquiry_id: inquiry.id,
-            execution_id,
-            prompt: inquiry_request.prompt,
-            response_schema: inquiry_request.response_schema,
-            assigned_to: inquiry_request.assigned_to,
-            timeout_at,
-        };
+            publisher.publish_envelope(&envelope).await?;
+            Self::mark_inquiry_created_published(pool, execution_id).await?;
 
-        let envelope =
-            MessageEnvelope::new(MessageType::InquiryCreated, payload).with_source("executor");
-
-        publisher.publish_envelope(&envelope).await?;
-
-        debug!(
-            "Published InquiryCreated message for inquiry {}",
-            inquiry.id
-        );
+            debug!(
+                "Published InquiryCreated message for inquiry {}",
+                inquiry.id
+            );
+        }
 
         Ok(inquiry)
+    }
+
+    fn set_inquiry_result_metadata(
+        result: &mut JsonValue,
+        inquiry_id: Id,
+        published: bool,
+    ) -> Result<()> {
+        let obj = result
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("execution result is not a JSON object"))?;
+
+        obj.insert(
+            INQUIRY_ID_RESULT_KEY.to_string(),
+            JsonValue::Number(inquiry_id.into()),
+        );
+        obj.insert(
+            INQUIRY_CREATED_PUBLISHED_RESULT_KEY.to_string(),
+            JsonValue::Bool(published),
+        );
+        Ok(())
+    }
+
+    async fn mark_inquiry_created_published(pool: &PgPool, execution_id: Id) -> Result<()> {
+        let execution = ExecutionRepository::find_by_id(pool, execution_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Execution {} not found", execution_id))?;
+        let mut result = execution
+            .result
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Execution {} has no result", execution_id))?;
+        let inquiry_id = result
+            .get(INQUIRY_ID_RESULT_KEY)
+            .and_then(|value| value.as_i64())
+            .ok_or_else(|| anyhow::anyhow!("Execution {} missing __inquiry_id", execution_id))?;
+
+        Self::set_inquiry_result_metadata(&mut result, inquiry_id, true)?;
+        ExecutionRepository::update(
+            pool,
+            execution_id,
+            UpdateExecutionInput {
+                result: Some(result),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+        Ok(())
     }
 
     /// Handle an inquiry response message
@@ -235,8 +367,12 @@ impl InquiryHandler {
         if let Some(obj) = updated_result.as_object_mut() {
             obj.insert("__inquiry_response".to_string(), response.clone());
             obj.insert(
-                "__inquiry_id".to_string(),
+                INQUIRY_ID_RESULT_KEY.to_string(),
                 JsonValue::Number(inquiry.id.into()),
+            );
+            obj.insert(
+                INQUIRY_CREATED_PUBLISHED_RESULT_KEY.to_string(),
+                JsonValue::Bool(true),
             );
         }
 

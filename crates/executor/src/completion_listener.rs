@@ -157,7 +157,11 @@ impl CompletionListener {
                         "Failed to advance workflow for execution {}: {}",
                         execution_id, e
                     );
-                    // Continue processing — don't fail the entire completion
+                    if let Some(mq_err) = Self::retryable_mq_error(&e) {
+                        return Err(mq_err.into());
+                    }
+                    // Non-retryable workflow advancement errors are logged but
+                    // do not fail the entire completion processing path.
                 }
             }
 

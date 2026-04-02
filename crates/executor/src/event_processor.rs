@@ -19,7 +19,7 @@ use attune_common::{
         event::{CreateEnforcementInput, EnforcementRepository, EventRepository},
         pack::PackRepository,
         rule::RuleRepository,
-        Create, FindById, List,
+        FindById, List,
     },
     template_resolver::{resolve_templates, TemplateContext},
 };
@@ -206,32 +206,43 @@ impl EventProcessor {
             conditions: rule.conditions.clone(),
         };
 
-        let enforcement = EnforcementRepository::create(pool, create_input).await?;
+        let enforcement_result =
+            EnforcementRepository::create_or_get_by_rule_event(pool, create_input).await?;
+        let enforcement = enforcement_result.enforcement;
 
-        info!(
-            "Enforcement {} created for rule {} (event: {})",
-            enforcement.id, rule.r#ref, event.id
-        );
+        if enforcement_result.created {
+            info!(
+                "Enforcement {} created for rule {} (event: {})",
+                enforcement.id, rule.r#ref, event.id
+            );
+        } else {
+            info!(
+                "Reusing enforcement {} for rule {} (event: {})",
+                enforcement.id, rule.r#ref, event.id
+            );
+        }
 
-        // Publish EnforcementCreated message
-        let enforcement_payload = EnforcementCreatedPayload {
-            enforcement_id: enforcement.id,
-            rule_id: Some(rule.id),
-            rule_ref: rule.r#ref.clone(),
-            event_id: Some(event.id),
-            trigger_ref: event.trigger_ref.clone(),
-            payload: payload.clone(),
-        };
+        if enforcement_result.created || enforcement.status == EnforcementStatus::Created {
+            let enforcement_payload = EnforcementCreatedPayload {
+                enforcement_id: enforcement.id,
+                rule_id: Some(rule.id),
+                rule_ref: rule.r#ref.clone(),
+                event_id: Some(event.id),
+                trigger_ref: event.trigger_ref.clone(),
+                payload: payload.clone(),
+            };
 
-        let envelope = MessageEnvelope::new(MessageType::EnforcementCreated, enforcement_payload)
-            .with_source("event-processor");
+            let envelope =
+                MessageEnvelope::new(MessageType::EnforcementCreated, enforcement_payload)
+                    .with_source("event-processor");
 
-        publisher.publish_envelope(&envelope).await?;
+            publisher.publish_envelope(&envelope).await?;
 
-        debug!(
-            "Published EnforcementCreated message for enforcement {}",
-            enforcement.id
-        );
+            debug!(
+                "Published EnforcementCreated message for enforcement {}",
+                enforcement.id
+            );
+        }
 
         Ok(())
     }

@@ -14,7 +14,7 @@ use attune_common::{
     error::Error,
     models::ExecutionStatus,
     mq::{Consumer, ConsumerConfig, MessageEnvelope, MessageType, MqResult},
-    repositories::{execution::UpdateExecutionInput, ExecutionRepository, FindById, Update},
+    repositories::{execution::UpdateExecutionInput, ExecutionRepository, FindById},
 };
 use chrono::Utc;
 use serde_json::json;
@@ -179,13 +179,12 @@ async fn handle_execution_requested(
         }
     };
 
-    // Only fail if still in a non-terminal state
-    if !matches!(
-        execution.status,
-        ExecutionStatus::Scheduled | ExecutionStatus::Running
-    ) {
+    // Only scheduled executions are still legitimately owned by the scheduler.
+    // If the execution already moved to running or a terminal state, this DLQ
+    // delivery is stale and must not overwrite newer state.
+    if execution.status != ExecutionStatus::Scheduled {
         info!(
-            "Execution {} already in terminal state {:?}, skipping",
+            "Execution {} already left Scheduled state ({:?}), skipping stale DLQ handling",
             execution_id, execution.status
         );
         return Ok(()); // Acknowledge to remove from queue
@@ -193,6 +192,12 @@ async fn handle_execution_requested(
 
     // Get worker info from payload for better error message
     let worker_id = envelope.payload.get("worker_id").and_then(|v| v.as_i64());
+    let scheduled_attempt_updated_at = envelope
+        .payload
+        .get("scheduled_attempt_updated_at")
+        .and_then(|v| v.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&Utc));
 
     let error_message = if let Some(wid) = worker_id {
         format!(
@@ -214,24 +219,85 @@ async fn handle_execution_requested(
         ..Default::default()
     };
 
-    match ExecutionRepository::update(pool, execution_id, update_input).await {
-        Ok(_) => {
-            info!(
-                "Successfully failed execution {} due to worker queue expiration",
-                execution_id
-            );
-            Ok(())
+    if let Some(timestamp) = scheduled_attempt_updated_at {
+        // Guard on both status and the exact updated_at from when the execution was
+        // scheduled — prevents overwriting state that changed after this DLQ message
+        // was enqueued.
+        match ExecutionRepository::update_if_status_and_updated_at(
+            pool,
+            execution_id,
+            ExecutionStatus::Scheduled,
+            timestamp,
+            update_input,
+        )
+        .await
+        {
+            Ok(Some(_)) => {
+                info!(
+                    "Successfully failed execution {} due to worker queue expiration",
+                    execution_id
+                );
+                Ok(())
+            }
+            Ok(None) => {
+                info!(
+                    "Skipping DLQ failure for execution {} because it already left Scheduled state",
+                    execution_id
+                );
+                Ok(())
+            }
+            Err(e) => {
+                error!(
+                    "Failed to update execution {} to failed state: {}",
+                    execution_id, e
+                );
+                Err(attune_common::mq::MqError::Consume(format!(
+                    "Failed to update execution: {}",
+                    e
+                )))
+            }
         }
-        Err(e) => {
-            error!(
-                "Failed to update execution {} to failed state: {}",
-                execution_id, e
-            );
-            // Return error to nack and potentially retry
-            Err(attune_common::mq::MqError::Consume(format!(
-                "Failed to update execution: {}",
-                e
-            )))
+    } else {
+        // Fallback for DLQ messages that predate the scheduled_attempt_updated_at
+        // field. Use a status-only guard — same safety guarantee as the original code
+        // (never overwrites terminal or running state).
+        warn!(
+            "DLQ message for execution {} lacks scheduled_attempt_updated_at; \
+             falling back to status-only guard",
+            execution_id
+        );
+        match ExecutionRepository::update_if_status(
+            pool,
+            execution_id,
+            ExecutionStatus::Scheduled,
+            update_input,
+        )
+        .await
+        {
+            Ok(Some(_)) => {
+                info!(
+                    "Successfully failed execution {} due to worker queue expiration (status-only guard)",
+                    execution_id
+                );
+                Ok(())
+            }
+            Ok(None) => {
+                info!(
+                    "Skipping DLQ failure for execution {} because it already left Scheduled state",
+                    execution_id
+                );
+                Ok(())
+            }
+            Err(e) => {
+                error!(
+                    "Failed to update execution {} to failed state: {}",
+                    execution_id, e
+                );
+                Err(attune_common::mq::MqError::Consume(format!(
+                    "Failed to update execution: {}",
+                    e
+                )))
+            }
         }
     }
 }
