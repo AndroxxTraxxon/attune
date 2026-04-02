@@ -411,6 +411,12 @@ impl WorkflowDefinitionRepository {
 
 pub struct WorkflowExecutionRepository;
 
+#[derive(Debug, Clone)]
+pub struct WorkflowExecutionCreateOrGetResult {
+    pub workflow_execution: WorkflowExecution,
+    pub created: bool,
+}
+
 impl Repository for WorkflowExecutionRepository {
     type Entity = WorkflowExecution;
     fn table_name() -> &'static str {
@@ -606,6 +612,51 @@ impl Delete for WorkflowExecutionRepository {
 }
 
 impl WorkflowExecutionRepository {
+    pub async fn create_or_get_by_execution<'e, E>(
+        executor: E,
+        input: CreateWorkflowExecutionInput,
+    ) -> Result<WorkflowExecutionCreateOrGetResult>
+    where
+        E: Executor<'e, Database = Postgres> + Copy + 'e,
+    {
+        let inserted = sqlx::query_as::<_, WorkflowExecution>(
+            "INSERT INTO workflow_execution
+             (execution, workflow_def, task_graph, variables, status)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (execution) DO NOTHING
+             RETURNING id, execution, workflow_def, current_tasks, completed_tasks, failed_tasks, skipped_tasks,
+                       variables, task_graph, status, error_message, paused, pause_reason, created, updated"
+        )
+        .bind(input.execution)
+        .bind(input.workflow_def)
+        .bind(&input.task_graph)
+        .bind(&input.variables)
+        .bind(input.status)
+        .fetch_optional(executor)
+        .await?;
+
+        if let Some(workflow_execution) = inserted {
+            return Ok(WorkflowExecutionCreateOrGetResult {
+                workflow_execution,
+                created: true,
+            });
+        }
+
+        let workflow_execution = Self::find_by_execution(executor, input.execution)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "workflow_execution for parent execution {} disappeared after conflict",
+                    input.execution
+                )
+            })?;
+
+        Ok(WorkflowExecutionCreateOrGetResult {
+            workflow_execution,
+            created: false,
+        })
+    }
+
     /// Find workflow execution by the parent execution ID
     pub async fn find_by_execution<'e, E>(
         executor: E,

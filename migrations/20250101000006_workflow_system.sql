@@ -67,11 +67,11 @@ CREATE TABLE workflow_execution (
     paused BOOLEAN DEFAULT false NOT NULL,
     pause_reason TEXT,
     created TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    updated TIMESTAMPTZ DEFAULT NOW() NOT NULL
+    updated TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    CONSTRAINT uq_workflow_execution_execution UNIQUE (execution)
 );
 
 -- Indexes
-CREATE INDEX idx_workflow_exec_execution ON workflow_execution(execution);
 CREATE INDEX idx_workflow_exec_workflow_def ON workflow_execution(workflow_def);
 CREATE INDEX idx_workflow_exec_status ON workflow_execution(status);
 CREATE INDEX idx_workflow_exec_paused ON workflow_execution(paused) WHERE paused = true;

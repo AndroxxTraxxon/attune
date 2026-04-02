@@ -41,6 +41,12 @@ pub struct ExecutionSearchResult {
     pub total: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct WorkflowTaskExecutionCreateOrGetResult {
+    pub execution: Execution,
+    pub created: bool,
+}
+
 /// An execution row with optional `rule_ref` / `trigger_ref` populated from
 /// the joined `enforcement` table. This avoids a separate in-memory lookup.
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -209,6 +215,134 @@ impl Update for ExecutionRepository {
 }
 
 impl ExecutionRepository {
+    pub async fn create_workflow_task_if_absent<'e, E>(
+        executor: E,
+        input: CreateExecutionInput,
+        workflow_execution_id: Id,
+        task_name: &str,
+        task_index: Option<i32>,
+    ) -> Result<WorkflowTaskExecutionCreateOrGetResult>
+    where
+        E: Executor<'e, Database = Postgres> + Copy + 'e,
+    {
+        if let Some(execution) =
+            Self::find_by_workflow_task(executor, workflow_execution_id, task_name, task_index)
+                .await?
+        {
+            return Ok(WorkflowTaskExecutionCreateOrGetResult {
+                execution,
+                created: false,
+            });
+        }
+
+        let execution = Self::create(executor, input).await?;
+
+        Ok(WorkflowTaskExecutionCreateOrGetResult {
+            execution,
+            created: true,
+        })
+    }
+
+    pub async fn claim_for_scheduling<'e, E>(
+        executor: E,
+        id: Id,
+        claiming_executor: Option<Id>,
+    ) -> Result<Option<Execution>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let sql = format!(
+            "UPDATE execution \
+             SET status = $2, executor = COALESCE($3, executor), updated = NOW() \
+             WHERE id = $1 AND status = $4 \
+             RETURNING {SELECT_COLUMNS}"
+        );
+
+        sqlx::query_as::<_, Execution>(&sql)
+            .bind(id)
+            .bind(ExecutionStatus::Scheduling)
+            .bind(claiming_executor)
+            .bind(ExecutionStatus::Requested)
+            .fetch_optional(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn reclaim_stale_scheduling<'e, E>(
+        executor: E,
+        id: Id,
+        claiming_executor: Option<Id>,
+        stale_before: DateTime<Utc>,
+    ) -> Result<Option<Execution>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let sql = format!(
+            "UPDATE execution \
+             SET executor = COALESCE($2, executor), updated = NOW() \
+             WHERE id = $1 AND status = $3 AND updated <= $4 \
+             RETURNING {SELECT_COLUMNS}"
+        );
+
+        sqlx::query_as::<_, Execution>(&sql)
+            .bind(id)
+            .bind(claiming_executor)
+            .bind(ExecutionStatus::Scheduling)
+            .bind(stale_before)
+            .fetch_optional(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn update_if_status<'e, E>(
+        executor: E,
+        id: Id,
+        expected_status: ExecutionStatus,
+        input: UpdateExecutionInput,
+    ) -> Result<Option<Execution>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        if input.status.is_none()
+            && input.result.is_none()
+            && input.executor.is_none()
+            && input.worker.is_none()
+            && input.started_at.is_none()
+            && input.workflow_task.is_none()
+        {
+            return Self::find_by_id(executor, id).await;
+        }
+
+        Self::update_with_locator_optional(executor, input, |query| {
+            query.push(" WHERE id = ").push_bind(id);
+            query.push(" AND status = ").push_bind(expected_status);
+        })
+        .await
+    }
+
+    pub async fn revert_scheduled_to_requested<'e, E>(
+        executor: E,
+        id: Id,
+    ) -> Result<Option<Execution>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let sql = format!(
+            "UPDATE execution \
+             SET status = $2, worker = NULL, executor = NULL, updated = NOW() \
+             WHERE id = $1 AND status = $3 \
+             RETURNING {SELECT_COLUMNS}"
+        );
+
+        sqlx::query_as::<_, Execution>(&sql)
+            .bind(id)
+            .bind(ExecutionStatus::Requested)
+            .bind(ExecutionStatus::Scheduled)
+            .fetch_optional(executor)
+            .await
+            .map_err(Into::into)
+    }
+
     async fn update_with_locator<'e, E, F>(
         executor: E,
         input: UpdateExecutionInput,
@@ -270,6 +404,71 @@ impl ExecutionRepository {
         query
             .build_query_as::<Execution>()
             .fetch_one(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn update_with_locator_optional<'e, E, F>(
+        executor: E,
+        input: UpdateExecutionInput,
+        where_clause: F,
+    ) -> Result<Option<Execution>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+        F: FnOnce(&mut QueryBuilder<'_, Postgres>),
+    {
+        let mut query = QueryBuilder::new("UPDATE execution SET ");
+        let mut has_updates = false;
+
+        if let Some(status) = input.status {
+            query.push("status = ").push_bind(status);
+            has_updates = true;
+        }
+        if let Some(result) = &input.result {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("result = ").push_bind(result);
+            has_updates = true;
+        }
+        if let Some(executor_id) = input.executor {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("executor = ").push_bind(executor_id);
+            has_updates = true;
+        }
+        if let Some(worker_id) = input.worker {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("worker = ").push_bind(worker_id);
+            has_updates = true;
+        }
+        if let Some(started_at) = input.started_at {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("started_at = ").push_bind(started_at);
+            has_updates = true;
+        }
+        if let Some(workflow_task) = &input.workflow_task {
+            if has_updates {
+                query.push(", ");
+            }
+            query
+                .push("workflow_task = ")
+                .push_bind(sqlx::types::Json(workflow_task));
+        }
+
+        query.push(", updated = NOW()");
+        where_clause(&mut query);
+        query.push(" RETURNING ");
+        query.push(SELECT_COLUMNS);
+
+        query
+            .build_query_as::<Execution>()
+            .fetch_optional(executor)
             .await
             .map_err(Into::into)
     }
@@ -352,6 +551,34 @@ impl ExecutionRepository {
         sqlx::query_as::<_, Execution>(&sql)
             .bind(enforcement_id)
             .fetch_all(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn find_by_workflow_task<'e, E>(
+        executor: E,
+        workflow_execution_id: Id,
+        task_name: &str,
+        task_index: Option<i32>,
+    ) -> Result<Option<Execution>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let sql = format!(
+            "SELECT {SELECT_COLUMNS} \
+             FROM execution \
+             WHERE workflow_task->>'workflow_execution' = $1::text \
+               AND workflow_task->>'task_name' = $2 \
+               AND (workflow_task->>'task_index')::int IS NOT DISTINCT FROM $3 \
+             ORDER BY created ASC \
+             LIMIT 1"
+        );
+
+        sqlx::query_as::<_, Execution>(&sql)
+            .bind(workflow_execution_id.to_string())
+            .bind(task_name)
+            .bind(task_index)
+            .fetch_optional(executor)
             .await
             .map_err(Into::into)
     }

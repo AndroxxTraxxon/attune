@@ -1153,3 +1153,108 @@ async fn test_execution_result_json() {
 
     assert_eq!(updated.result, Some(complex_result));
 }
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_claim_for_scheduling_succeeds_once() {
+    let pool = create_test_pool().await.unwrap();
+
+    let pack = PackFixture::new_unique("claim_pack")
+        .create(&pool)
+        .await
+        .unwrap();
+    let action = ActionFixture::new_unique(pack.id, &pack.r#ref, "claim_action")
+        .create(&pool)
+        .await
+        .unwrap();
+
+    let created = ExecutionRepository::create(
+        &pool,
+        CreateExecutionInput {
+            action: Some(action.id),
+            action_ref: action.r#ref.clone(),
+            config: None,
+            env_vars: None,
+            parent: None,
+            enforcement: None,
+            executor: None,
+            worker: None,
+            status: ExecutionStatus::Requested,
+            result: None,
+            workflow_task: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let first = ExecutionRepository::claim_for_scheduling(&pool, created.id, None)
+        .await
+        .unwrap();
+    let second = ExecutionRepository::claim_for_scheduling(&pool, created.id, None)
+        .await
+        .unwrap();
+
+    assert_eq!(first.unwrap().status, ExecutionStatus::Scheduling);
+    assert!(second.is_none());
+}
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_update_if_status_only_updates_matching_row() {
+    let pool = create_test_pool().await.unwrap();
+
+    let pack = PackFixture::new_unique("conditional_pack")
+        .create(&pool)
+        .await
+        .unwrap();
+    let action = ActionFixture::new_unique(pack.id, &pack.r#ref, "conditional_action")
+        .create(&pool)
+        .await
+        .unwrap();
+
+    let created = ExecutionRepository::create(
+        &pool,
+        CreateExecutionInput {
+            action: Some(action.id),
+            action_ref: action.r#ref.clone(),
+            config: None,
+            env_vars: None,
+            parent: None,
+            enforcement: None,
+            executor: None,
+            worker: None,
+            status: ExecutionStatus::Scheduling,
+            result: None,
+            workflow_task: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let updated = ExecutionRepository::update_if_status(
+        &pool,
+        created.id,
+        ExecutionStatus::Scheduling,
+        UpdateExecutionInput {
+            status: Some(ExecutionStatus::Scheduled),
+            worker: Some(77),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let skipped = ExecutionRepository::update_if_status(
+        &pool,
+        created.id,
+        ExecutionStatus::Scheduling,
+        UpdateExecutionInput {
+            status: Some(ExecutionStatus::Failed),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(updated.unwrap().status, ExecutionStatus::Scheduled);
+    assert!(skipped.is_none());
+}
