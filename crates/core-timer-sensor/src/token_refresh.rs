@@ -182,6 +182,7 @@ mod tests {
     #[test]
     fn test_decode_valid_token() {
         // Valid JWT with exp and iat claims
+        // nosemgrep: generic.secrets.security.detected-jwt-token.detected-jwt-token -- This is a non-secret test fixture with a dummy signature used only for JWT parsing tests.
         let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJzZW5zb3I6Y29yZS50aW1lciIsImlhdCI6MTcwNjM1NjQ5NiwiZXhwIjoxNzE0MTMyNDk2fQ.signature";
 
         let manager = TokenRefreshManager::new(

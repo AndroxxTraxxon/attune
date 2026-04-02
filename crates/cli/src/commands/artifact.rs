@@ -803,6 +803,7 @@ async fn handle_upload(
     api_url: &Option<String>,
     output_format: OutputFormat,
 ) -> Result<()> {
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- CLI users explicitly choose a local file to upload; this is not a server-side path sink.
     let file_path = Path::new(&file);
     if !file_path.exists() {
         anyhow::bail!("File not found: {}", file);
@@ -811,6 +812,7 @@ async fn handle_upload(
         anyhow::bail!("Not a file: {}", file);
     }
 
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- The validated CLI-selected upload path is intentionally read and sent to the API.
     let file_bytes = tokio::fs::read(file_path).await?;
     let file_name = file_path
         .file_name()

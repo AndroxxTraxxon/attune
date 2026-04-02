@@ -19,11 +19,13 @@ pub async fn handle_index_update(
     output_format: OutputFormat,
 ) -> Result<()> {
     // Load existing index
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Registry index maintenance is a local CLI/admin operation over operator-supplied files.
     let index_file_path = Path::new(&index_path);
     if !index_file_path.exists() {
         return Err(anyhow::anyhow!("Index file not found: {}", index_path));
     }
 
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- The CLI intentionally reads the local index file selected by the operator.
     let index_content = fs::read_to_string(index_file_path)?;
     let mut index: JsonValue = serde_json::from_str(&index_content)?;
 
@@ -34,6 +36,7 @@ pub async fn handle_index_update(
         .ok_or_else(|| anyhow::anyhow!("Invalid index format: missing 'packs' array"))?;
 
     // Load pack.yaml from the pack directory
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Local pack directories are explicit CLI inputs, not remote taint.
     let pack_dir = Path::new(&pack_path);
     if !pack_dir.exists() || !pack_dir.is_dir() {
         return Err(anyhow::anyhow!("Pack directory not found: {}", pack_path));
@@ -47,6 +50,7 @@ pub async fn handle_index_update(
         ));
     }
 
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Reading pack.yaml from a local operator-selected pack directory is expected CLI behavior.
     let pack_yaml_content = fs::read_to_string(&pack_yaml_path)?;
     let pack_yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&pack_yaml_content)?;
 
@@ -250,6 +254,7 @@ pub async fn handle_index_merge(
     output_format: OutputFormat,
 ) -> Result<()> {
     // Check if output file exists
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Index merge output is a local CLI path controlled by the operator.
     let output_file_path = Path::new(&output_path);
     if output_file_path.exists() && !force {
         return Err(anyhow::anyhow!(
@@ -265,6 +270,7 @@ pub async fn handle_index_merge(
 
     // Load and merge all input files
     for input_path in &input_paths {
+        // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Index merge inputs are local operator-selected files.
         let input_file_path = Path::new(input_path);
         if !input_file_path.exists() {
             if output_format == OutputFormat::Table {
@@ -277,6 +283,7 @@ pub async fn handle_index_merge(
             output::print_info(&format!("Loading: {}", input_path));
         }
 
+        // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- The CLI intentionally reads each local input index file during merge.
         let index_content = fs::read_to_string(input_file_path)?;
         let index: JsonValue = serde_json::from_str(&index_content)?;
 

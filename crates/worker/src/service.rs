@@ -171,6 +171,7 @@ impl WorkerService {
         let registration = Arc::new(RwLock::new(WorkerRegistration::new(pool.clone(), &config)));
 
         // Initialize artifact manager (legacy, for stdout/stderr log storage)
+        // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Worker artifact/config directories come from trusted process configuration, not request data.
         let artifact_base_dir = std::path::PathBuf::from(
             config
                 .worker
@@ -184,6 +185,7 @@ impl WorkerService {
 
         // Initialize artifacts directory for file-backed artifact storage (shared volume).
         // Execution processes write artifact files here; the API serves them from the same path.
+        // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Artifact storage root is a trusted deployment configuration value.
         let artifacts_dir = std::path::PathBuf::from(&config.artifacts_dir);
         if let Err(e) = tokio::fs::create_dir_all(&artifacts_dir).await {
             warn!(
@@ -198,7 +200,9 @@ impl WorkerService {
             );
         }
 
+        // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Pack/runtime roots are trusted deployment configuration values.
         let packs_base_dir = std::path::PathBuf::from(&config.packs_base_dir);
+        // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Pack/runtime roots are trusted deployment configuration values.
         let runtime_envs_dir = std::path::PathBuf::from(&config.runtime_envs_dir);
 
         // Determine which runtimes to register based on configuration

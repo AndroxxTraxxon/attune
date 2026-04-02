@@ -172,6 +172,7 @@ impl WorkflowLoader {
         }
 
         // Read and parse YAML
+        // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Workflow files come from previously discovered pack directories under packs_base_dir.
         let content = fs::read_to_string(&file.path)
             .await
             .map_err(|e| Error::validation(format!("Failed to read workflow file: {}", e)))?;
@@ -292,6 +293,7 @@ impl WorkflowLoader {
         pack_name: &str,
     ) -> Result<Vec<WorkflowFile>> {
         let mut workflow_files = Vec::new();
+        // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Workflow scanning only traverses pack workflow directories derived from packs_base_dir.
         let mut entries = fs::read_dir(workflows_dir)
             .await
             .map_err(|e| Error::validation(format!("Failed to read workflows directory: {}", e)))?;

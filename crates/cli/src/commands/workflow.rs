@@ -172,6 +172,7 @@ async fn handle_upload(
     api_url: &Option<String>,
     output_format: OutputFormat,
 ) -> Result<()> {
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Workflow upload reads local files chosen by the CLI operator; it is not a server-side path sink.
     let action_path = Path::new(&action_file);
 
     // ── 1. Validate & read the action YAML ──────────────────────────────
@@ -182,6 +183,7 @@ async fn handle_upload(
         anyhow::bail!("Path is not a file: {}", action_file);
     }
 
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- The action YAML is intentionally read from the validated local CLI path.
     let action_yaml_content =
         std::fs::read_to_string(action_path).context("Failed to read action YAML file")?;
 
@@ -216,6 +218,7 @@ async fn handle_upload(
     }
 
     // ── 4. Read and parse the workflow YAML ─────────────────────────────
+    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- The workflow file path is confined to the pack directory before this local read occurs.
     let workflow_yaml_content =
         std::fs::read_to_string(&workflow_path).context("Failed to read workflow YAML file")?;
 
@@ -616,12 +619,41 @@ fn split_action_ref(action_ref: &str) -> Result<(String, String)> {
 /// resolved relative to the action YAML's parent directory.
 fn resolve_workflow_path(action_yaml_path: &Path, workflow_file: &str) -> Result<PathBuf> {
     let action_dir = action_yaml_path.parent().unwrap_or(Path::new("."));
+    let pack_root = action_dir
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Action YAML must live inside a pack actions/ directory"))?;
+    let canonical_pack_root = pack_root
+        .canonicalize()
+        .context("Failed to resolve pack root for workflow file")?;
+    let canonical_action_dir = action_dir
+        .canonicalize()
+        .context("Failed to resolve action directory for workflow file")?;
+    let canonical_workflow_path = normalize_path_from_base(&canonical_action_dir, workflow_file);
 
-    let resolved = action_dir.join(workflow_file);
+    if !canonical_workflow_path.starts_with(&canonical_pack_root) {
+        anyhow::bail!(
+            "Workflow file resolves outside the pack directory: {}",
+            workflow_file
+        );
+    }
 
-    // Canonicalize if possible (for better error messages), but don't fail
-    // if the file doesn't exist yet — we'll check existence later.
-    Ok(resolved)
+    Ok(canonical_workflow_path)
+}
+
+fn normalize_path_from_base(base: &Path, relative_path: &str) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in base.join(relative_path).components() {
+        match component {
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            std::path::Component::RootDir => normalized.push(std::path::MAIN_SEPARATOR.to_string()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::Normal(part) => normalized.push(part),
+        }
+    }
+    normalized
 }
 
 #[cfg(test)]
@@ -655,23 +687,62 @@ mod tests {
 
     #[test]
     fn test_resolve_workflow_path() {
-        let action_path = Path::new("/packs/mypack/actions/deploy.yaml");
+        let temp = tempfile::tempdir().unwrap();
+        let pack_dir = temp.path().join("mypack");
+        let actions_dir = pack_dir.join("actions");
+        let workflow_dir = actions_dir.join("workflows");
+        std::fs::create_dir_all(&workflow_dir).unwrap();
+
+        let action_path = actions_dir.join("deploy.yaml");
+        let workflow_path = workflow_dir.join("deploy.workflow.yaml");
+        std::fs::write(
+            &action_path,
+            "ref: mypack.deploy\nworkflow_file: workflows/deploy.workflow.yaml\n",
+        )
+        .unwrap();
+        std::fs::write(&workflow_path, "version: 1.0.0\n").unwrap();
+
         let resolved =
-            resolve_workflow_path(action_path, "workflows/deploy.workflow.yaml").unwrap();
-        assert_eq!(
-            resolved,
-            PathBuf::from("/packs/mypack/actions/workflows/deploy.workflow.yaml")
-        );
+            resolve_workflow_path(&action_path, "workflows/deploy.workflow.yaml").unwrap();
+        assert_eq!(resolved, workflow_path.canonicalize().unwrap());
     }
 
     #[test]
     fn test_resolve_workflow_path_relative() {
-        let action_path = Path::new("actions/deploy.yaml");
+        let temp = tempfile::tempdir().unwrap();
+        let pack_dir = temp.path().join("mypack");
+        let actions_dir = pack_dir.join("actions");
+        let workflows_dir = pack_dir.join("workflows");
+        std::fs::create_dir_all(&actions_dir).unwrap();
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+
+        let action_path = actions_dir.join("deploy.yaml");
+        let workflow_path = workflows_dir.join("deploy.workflow.yaml");
+        std::fs::write(
+            &action_path,
+            "ref: mypack.deploy\nworkflow_file: ../workflows/deploy.workflow.yaml\n",
+        )
+        .unwrap();
+        std::fs::write(&workflow_path, "version: 1.0.0\n").unwrap();
+
         let resolved =
-            resolve_workflow_path(action_path, "workflows/deploy.workflow.yaml").unwrap();
-        assert_eq!(
-            resolved,
-            PathBuf::from("actions/workflows/deploy.workflow.yaml")
-        );
+            resolve_workflow_path(&action_path, "../workflows/deploy.workflow.yaml").unwrap();
+        assert_eq!(resolved, workflow_path.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_workflow_path_rejects_traversal_outside_pack() {
+        let temp = tempfile::tempdir().unwrap();
+        let pack_dir = temp.path().join("mypack");
+        let actions_dir = pack_dir.join("actions");
+        std::fs::create_dir_all(&actions_dir).unwrap();
+
+        let action_path = actions_dir.join("deploy.yaml");
+        let outside = temp.path().join("outside.yaml");
+        std::fs::write(&action_path, "ref: mypack.deploy\n").unwrap();
+        std::fs::write(&outside, "version: 1.0.0\n").unwrap();
+
+        let err = resolve_workflow_path(&action_path, "../../outside.yaml").unwrap_err();
+        assert!(err.to_string().contains("outside the pack directory"));
     }
 }
