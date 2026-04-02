@@ -230,7 +230,7 @@ impl EnforcementProcessor {
     async fn create_execution(
         pool: &PgPool,
         publisher: &Publisher,
-        policy_enforcer: &PolicyEnforcer,
+        _policy_enforcer: &PolicyEnforcer,
         _queue_manager: &ExecutionQueueManager,
         enforcement: &Enforcement,
         rule: &Rule,
@@ -257,33 +257,10 @@ impl EnforcementProcessor {
             enforcement.id, rule.id, action_id
         );
 
-        let pack_id = rule.pack;
         let action_ref = &rule.action_ref;
 
-        // Enforce policies and wait for queue slot if needed
-        info!(
-            "Enforcing policies for action {} (enforcement: {})",
-            action_id, enforcement.id
-        );
-
-        // Use enforcement ID for queue tracking (execution doesn't exist yet)
-        if let Err(e) = policy_enforcer
-            .enforce_and_wait(action_id, Some(pack_id), enforcement.id)
-            .await
-        {
-            error!(
-                "Policy enforcement failed for enforcement {}: {}",
-                enforcement.id, e
-            );
-            return Err(e);
-        }
-
-        info!(
-            "Policy check passed and queue slot obtained for enforcement: {}",
-            enforcement.id
-        );
-
-        // Now create execution in database (we have a queue slot)
+        // Create the execution row first; scheduler-side policy enforcement
+        // now handles both rule-triggered and manual executions uniformly.
         let execution_input = CreateExecutionInput {
             action: Some(action_id),
             action_ref: action_ref.clone(),

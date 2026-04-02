@@ -571,7 +571,7 @@ impl Repository for PolicyRepository {
     type Entity = Policy;
 
     fn table_name() -> &'static str {
-        "policies"
+        "policy"
     }
 }
 
@@ -612,7 +612,7 @@ impl FindById for PolicyRepository {
             r#"
             SELECT id, ref, pack, pack_ref, action, action_ref, parameters, method,
                    threshold, name, description, tags, created, updated
-            FROM policies
+            FROM policy
             WHERE id = $1
             "#,
         )
@@ -634,7 +634,7 @@ impl FindByRef for PolicyRepository {
             r#"
             SELECT id, ref, pack, pack_ref, action, action_ref, parameters, method,
                    threshold, name, description, tags, created, updated
-            FROM policies
+            FROM policy
             WHERE ref = $1
             "#,
         )
@@ -656,7 +656,7 @@ impl List for PolicyRepository {
             r#"
             SELECT id, ref, pack, pack_ref, action, action_ref, parameters, method,
                    threshold, name, description, tags, created, updated
-            FROM policies
+            FROM policy
             ORDER BY ref ASC
             "#,
         )
@@ -678,7 +678,7 @@ impl Create for PolicyRepository {
         // Try to insert - database will enforce uniqueness constraint
         let policy = sqlx::query_as::<_, Policy>(
             r#"
-            INSERT INTO policies (ref, pack, pack_ref, action, action_ref, parameters,
+            INSERT INTO policy (ref, pack, pack_ref, action, action_ref, parameters,
                                  method, threshold, name, description, tags)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id, ref, pack, pack_ref, action, action_ref, parameters, method,
@@ -720,7 +720,7 @@ impl Update for PolicyRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let mut query = QueryBuilder::new("UPDATE policies SET ");
+        let mut query = QueryBuilder::new("UPDATE policy SET ");
         let mut has_updates = false;
 
         if let Some(parameters) = &input.parameters {
@@ -798,7 +798,7 @@ impl Delete for PolicyRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let result = sqlx::query("DELETE FROM policies WHERE id = $1")
+        let result = sqlx::query("DELETE FROM policy WHERE id = $1")
             .bind(id)
             .execute(executor)
             .await?;
@@ -817,7 +817,7 @@ impl PolicyRepository {
             r#"
             SELECT id, ref, pack, pack_ref, action, action_ref, parameters, method,
                    threshold, name, description, tags, created, updated
-            FROM policies
+            FROM policy
             WHERE action = $1
             ORDER BY ref ASC
             "#,
@@ -838,7 +838,7 @@ impl PolicyRepository {
             r#"
             SELECT id, ref, pack, pack_ref, action, action_ref, parameters, method,
                    threshold, name, description, tags, created, updated
-            FROM policies
+            FROM policy
             WHERE $1 = ANY(tags)
             ORDER BY ref ASC
             "#,
@@ -848,5 +848,70 @@ impl PolicyRepository {
         .await?;
 
         Ok(policies)
+    }
+
+    /// Find the most recent action-specific policy.
+    pub async fn find_latest_by_action<'e, E>(executor: E, action_id: Id) -> Result<Option<Policy>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let policy = sqlx::query_as::<_, Policy>(
+            r#"
+            SELECT id, ref, pack, pack_ref, action, action_ref, parameters, method,
+                   threshold, name, description, tags, created, updated
+            FROM policy
+            WHERE action = $1
+            ORDER BY created DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(action_id)
+        .fetch_optional(executor)
+        .await?;
+
+        Ok(policy)
+    }
+
+    /// Find the most recent pack-specific policy.
+    pub async fn find_latest_by_pack<'e, E>(executor: E, pack_id: Id) -> Result<Option<Policy>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let policy = sqlx::query_as::<_, Policy>(
+            r#"
+            SELECT id, ref, pack, pack_ref, action, action_ref, parameters, method,
+                   threshold, name, description, tags, created, updated
+            FROM policy
+            WHERE pack = $1 AND action IS NULL
+            ORDER BY created DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(pack_id)
+        .fetch_optional(executor)
+        .await?;
+
+        Ok(policy)
+    }
+
+    /// Find the most recent global policy.
+    pub async fn find_latest_global<'e, E>(executor: E) -> Result<Option<Policy>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let policy = sqlx::query_as::<_, Policy>(
+            r#"
+            SELECT id, ref, pack, pack_ref, action, action_ref, parameters, method,
+                   threshold, name, description, tags, created, updated
+            FROM policy
+            WHERE pack IS NULL AND action IS NULL
+            ORDER BY created DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(executor)
+        .await?;
+
+        Ok(policy)
     }
 }

@@ -102,7 +102,12 @@ impl MqError {
     pub fn is_retriable(&self) -> bool {
         matches!(
             self,
-            MqError::Connection(_) | MqError::Channel(_) | MqError::Timeout(_) | MqError::Pool(_)
+            MqError::Connection(_)
+                | MqError::Channel(_)
+                | MqError::Publish(_)
+                | MqError::Timeout(_)
+                | MqError::Pool(_)
+                | MqError::Lapin(_)
         )
     }
 

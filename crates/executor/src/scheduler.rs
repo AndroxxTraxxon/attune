@@ -16,7 +16,7 @@ use attune_common::{
     models::{enums::ExecutionStatus, execution::WorkflowTaskMetadata, Action, Execution, Runtime},
     mq::{
         Consumer, ExecutionCompletedPayload, ExecutionRequestedPayload, MessageEnvelope,
-        MessageType, Publisher,
+        MessageType, MqError, Publisher,
     },
     repositories::{
         action::ActionRepository,
@@ -40,6 +40,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
+use crate::policy_enforcer::{PolicyEnforcer, SchedulingPolicyOutcome};
 use crate::workflow::context::{TaskOutcome, WorkflowContext};
 use crate::workflow::graph::TaskGraph;
 
@@ -108,6 +109,7 @@ pub struct ExecutionScheduler {
     pool: PgPool,
     publisher: Arc<Publisher>,
     consumer: Arc<Consumer>,
+    policy_enforcer: Arc<PolicyEnforcer>,
     /// Round-robin counter for distributing executions across workers
     round_robin_counter: AtomicUsize,
 }
@@ -120,12 +122,31 @@ const DEFAULT_HEARTBEAT_INTERVAL: u64 = 30;
 const HEARTBEAT_STALENESS_MULTIPLIER: u64 = 3;
 
 impl ExecutionScheduler {
+    fn retryable_mq_error(error: &anyhow::Error) -> Option<MqError> {
+        let mq_error = error.downcast_ref::<MqError>()?;
+        Some(match mq_error {
+            MqError::Connection(msg) => MqError::Connection(msg.clone()),
+            MqError::Channel(msg) => MqError::Channel(msg.clone()),
+            MqError::Publish(msg) => MqError::Publish(msg.clone()),
+            MqError::Timeout(msg) => MqError::Timeout(msg.clone()),
+            MqError::Pool(msg) => MqError::Pool(msg.clone()),
+            MqError::Lapin(err) => MqError::Connection(err.to_string()),
+            _ => return None,
+        })
+    }
+
     /// Create a new execution scheduler
-    pub fn new(pool: PgPool, publisher: Arc<Publisher>, consumer: Arc<Consumer>) -> Self {
+    pub fn new(
+        pool: PgPool,
+        publisher: Arc<Publisher>,
+        consumer: Arc<Consumer>,
+        policy_enforcer: Arc<PolicyEnforcer>,
+    ) -> Self {
         Self {
             pool,
             publisher,
             consumer,
+            policy_enforcer,
             round_robin_counter: AtomicUsize::new(0),
         }
     }
@@ -136,6 +157,7 @@ impl ExecutionScheduler {
 
         let pool = self.pool.clone();
         let publisher = self.publisher.clone();
+        let policy_enforcer = self.policy_enforcer.clone();
         // Share the counter with the handler closure via Arc.
         // We wrap &self's AtomicUsize in a new Arc<AtomicUsize> by copying the
         // current value so the closure is 'static.
@@ -149,16 +171,24 @@ impl ExecutionScheduler {
                 move |envelope: MessageEnvelope<ExecutionRequestedPayload>| {
                     let pool = pool.clone();
                     let publisher = publisher.clone();
+                    let policy_enforcer = policy_enforcer.clone();
                     let counter = counter.clone();
 
                     async move {
                         if let Err(e) = Self::process_execution_requested(
-                            &pool, &publisher, &counter, &envelope,
+                            &pool,
+                            &publisher,
+                            &policy_enforcer,
+                            &counter,
+                            &envelope,
                         )
                         .await
                         {
                             error!("Error scheduling execution: {}", e);
                             // Return error to trigger nack with requeue
+                            if let Some(mq_err) = Self::retryable_mq_error(&e) {
+                                return Err(mq_err);
+                            }
                             return Err(format!("Failed to schedule execution: {}", e).into());
                         }
                         Ok(())
@@ -174,6 +204,7 @@ impl ExecutionScheduler {
     async fn process_execution_requested(
         pool: &PgPool,
         publisher: &Publisher,
+        policy_enforcer: &PolicyEnforcer,
         round_robin_counter: &AtomicUsize,
         envelope: &MessageEnvelope<ExecutionRequestedPayload>,
     ) -> Result<()> {
@@ -184,9 +215,30 @@ impl ExecutionScheduler {
         info!("Scheduling execution: {}", execution_id);
 
         // Fetch execution from database
-        let execution = ExecutionRepository::find_by_id(pool, execution_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Execution not found: {}", execution_id))?;
+        let execution = match ExecutionRepository::find_by_id(pool, execution_id).await? {
+            Some(execution) => execution,
+            None => {
+                warn!("Execution {} not found during scheduling", execution_id);
+                Self::remove_queued_policy_execution(
+                    policy_enforcer,
+                    pool,
+                    publisher,
+                    execution_id,
+                )
+                .await;
+                return Ok(());
+            }
+        };
+
+        if execution.status != ExecutionStatus::Requested {
+            debug!(
+                "Skipping execution {} with status {:?}; only Requested executions are schedulable",
+                execution_id, execution.status
+            );
+            Self::remove_queued_policy_execution(policy_enforcer, pool, publisher, execution_id)
+                .await;
+            return Ok(());
+        }
 
         // Fetch action to determine runtime requirements
         let action = Self::get_action_for_execution(pool, &execution).await?;
@@ -207,30 +259,6 @@ impl ExecutionScheduler {
             .await;
         }
 
-        // Regular action: select appropriate worker (round-robin among compatible workers)
-        let worker = match Self::select_worker(pool, &action, round_robin_counter).await {
-            Ok(worker) => worker,
-            Err(err) if Self::is_unschedulable_error(&err) => {
-                Self::fail_unschedulable_execution(
-                    pool,
-                    publisher,
-                    envelope,
-                    execution_id,
-                    action.id,
-                    &action.r#ref,
-                    &err.to_string(),
-                )
-                .await?;
-                return Ok(());
-            }
-            Err(err) => return Err(err),
-        };
-
-        info!(
-            "Selected worker {} for execution {}",
-            worker.id, execution_id
-        );
-
         // Apply parameter defaults from the action's param_schema.
         // This mirrors what `process_workflow_execution` does for workflows
         // so that non-workflow executions also get missing parameters filled
@@ -249,16 +277,97 @@ impl ExecutionScheduler {
             }
         };
 
+        match policy_enforcer
+            .enforce_for_scheduling(
+                action.id,
+                Some(action.pack),
+                execution_id,
+                execution_config.as_ref(),
+            )
+            .await
+        {
+            Ok(SchedulingPolicyOutcome::Queued) => {
+                info!(
+                    "Execution {} queued by policy for action {}; deferring worker selection",
+                    execution_id, action.id
+                );
+                return Ok(());
+            }
+            Ok(SchedulingPolicyOutcome::Ready) => {}
+            Err(err) => {
+                if Self::is_policy_cancellation_error(&err) {
+                    Self::remove_queued_policy_execution(
+                        policy_enforcer,
+                        pool,
+                        publisher,
+                        execution_id,
+                    )
+                    .await;
+                    Self::cancel_execution_for_policy_violation(
+                        pool,
+                        publisher,
+                        envelope,
+                        execution_id,
+                        action.id,
+                        &action.r#ref,
+                        &err.to_string(),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+
+                return Err(err);
+            }
+        }
+
+        // Regular action: select appropriate worker only after policy
+        // readiness is confirmed, so queued executions don't reserve stale
+        // workers while they wait.
+        let worker = match Self::select_worker(pool, &action, round_robin_counter).await {
+            Ok(worker) => worker,
+            Err(err) if Self::is_unschedulable_error(&err) => {
+                Self::release_acquired_policy_slot(policy_enforcer, pool, publisher, execution_id)
+                    .await?;
+                Self::fail_unschedulable_execution(
+                    pool,
+                    publisher,
+                    envelope,
+                    execution_id,
+                    action.id,
+                    &action.r#ref,
+                    &err.to_string(),
+                )
+                .await?;
+                return Ok(());
+            }
+            Err(err) => {
+                Self::release_acquired_policy_slot(policy_enforcer, pool, publisher, execution_id)
+                    .await?;
+                return Err(err);
+            }
+        };
+
+        info!(
+            "Selected worker {} for execution {}",
+            worker.id, execution_id
+        );
+
         // Persist the selected worker so later cancellation requests can be
         // routed to the correct per-worker cancel queue.
         let mut execution_for_update = execution;
         execution_for_update.status = ExecutionStatus::Scheduled;
         execution_for_update.worker = Some(worker.id);
-        ExecutionRepository::update(pool, execution_for_update.id, execution_for_update.into())
-            .await?;
+        if let Err(err) =
+            ExecutionRepository::update(pool, execution_for_update.id, execution_for_update.into())
+                .await
+        {
+            Self::release_acquired_policy_slot(policy_enforcer, pool, publisher, execution_id)
+                .await?;
+            return Err(err.into());
+        }
 
         // Publish message to worker-specific queue
-        Self::queue_to_worker(
+        if let Err(err) = Self::queue_to_worker(
             publisher,
             &execution_id,
             &worker.id,
@@ -266,7 +375,27 @@ impl ExecutionScheduler {
             &execution_config,
             &action,
         )
-        .await?;
+        .await
+        {
+            if let Err(revert_err) = ExecutionRepository::update(
+                pool,
+                execution_id,
+                UpdateExecutionInput {
+                    status: Some(ExecutionStatus::Requested),
+                    ..Default::default()
+                },
+            )
+            .await
+            {
+                warn!(
+                    "Failed to revert execution {} back to Requested after worker publish error: {}",
+                    execution_id, revert_err
+                );
+            }
+            Self::release_acquired_policy_slot(policy_enforcer, pool, publisher, execution_id)
+                .await?;
+            return Err(err);
+        }
 
         info!(
             "Execution {} scheduled to worker {}",
@@ -1698,6 +1827,131 @@ impl ExecutionScheduler {
             || message.starts_with("No workers with fresh heartbeats available")
     }
 
+    fn is_policy_cancellation_error(error: &anyhow::Error) -> bool {
+        let message = error.to_string();
+        message.contains("Policy violation:")
+            || message.starts_with("Queue full for action ")
+            || message.starts_with("Queue timeout for execution ")
+    }
+
+    async fn release_acquired_policy_slot(
+        policy_enforcer: &PolicyEnforcer,
+        pool: &PgPool,
+        publisher: &Publisher,
+        execution_id: i64,
+    ) -> Result<()> {
+        let release = match policy_enforcer.release_execution_slot(execution_id).await {
+            Ok(release) => release,
+            Err(release_err) => {
+                warn!(
+                    "Failed to release acquired policy slot for execution {} after scheduling error: {}",
+                    execution_id, release_err
+                );
+                return Err(release_err);
+            }
+        };
+
+        let Some(release) = release else {
+            return Ok(());
+        };
+
+        if let Some(next_execution_id) = release.next_execution_id {
+            if let Err(republish_err) =
+                Self::republish_execution_requested(pool, publisher, next_execution_id).await
+            {
+                warn!(
+                    "Failed to republish deferred execution {} after releasing slot from execution {}: {}",
+                    next_execution_id, execution_id, republish_err
+                );
+                if let Err(restore_err) = policy_enforcer
+                    .restore_execution_slot(execution_id, &release)
+                    .await
+                {
+                    warn!(
+                        "Failed to restore policy slot for execution {} after republish error: {}",
+                        execution_id, restore_err
+                    );
+                }
+                return Err(republish_err);
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn remove_queued_policy_execution(
+        policy_enforcer: &PolicyEnforcer,
+        pool: &PgPool,
+        publisher: &Publisher,
+        execution_id: i64,
+    ) {
+        let removal = match policy_enforcer.remove_queued_execution(execution_id).await {
+            Ok(removal) => removal,
+            Err(remove_err) => {
+                warn!(
+                    "Failed to remove queued policy execution {} during scheduler cleanup: {}",
+                    execution_id, remove_err
+                );
+                return;
+            }
+        };
+
+        let Some(removal) = removal else {
+            return;
+        };
+
+        if let Some(next_execution_id) = removal.next_execution_id {
+            if let Err(republish_err) =
+                Self::republish_execution_requested(pool, publisher, next_execution_id).await
+            {
+                warn!(
+                    "Failed to republish successor {} after removing queued execution {}: {}",
+                    next_execution_id, execution_id, republish_err
+                );
+                if let Err(restore_err) = policy_enforcer.restore_queued_execution(&removal).await {
+                    warn!(
+                        "Failed to restore queued execution {} after republish error: {}",
+                        execution_id, restore_err
+                    );
+                }
+            }
+        }
+    }
+
+    async fn republish_execution_requested(
+        pool: &PgPool,
+        publisher: &Publisher,
+        execution_id: i64,
+    ) -> Result<()> {
+        let execution = ExecutionRepository::find_by_id(pool, execution_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Execution {} not found", execution_id))?;
+
+        let action_id = execution
+            .action
+            .ok_or_else(|| anyhow::anyhow!("Execution {} has no action", execution_id))?;
+        let payload = ExecutionRequestedPayload {
+            execution_id,
+            action_id: Some(action_id),
+            action_ref: execution.action_ref.clone(),
+            parent_id: execution.parent,
+            enforcement_id: execution.enforcement,
+            config: execution.config.clone(),
+        };
+
+        let envelope = MessageEnvelope::new(MessageType::ExecutionRequested, payload)
+            .with_source("executor-scheduler");
+
+        publisher.publish_envelope(&envelope).await?;
+
+        debug!(
+            "Republished deferred ExecutionRequested for execution {}",
+            execution_id
+        );
+
+        Ok(())
+    }
+
     async fn fail_unschedulable_execution(
         pool: &PgPool,
         publisher: &Publisher,
@@ -1745,6 +1999,59 @@ impl ExecutionScheduler {
 
         warn!(
             "Execution {} marked failed as unschedulable: {}",
+            execution_id, error_message
+        );
+
+        Ok(())
+    }
+
+    async fn cancel_execution_for_policy_violation(
+        pool: &PgPool,
+        publisher: &Publisher,
+        envelope: &MessageEnvelope<ExecutionRequestedPayload>,
+        execution_id: i64,
+        action_id: i64,
+        action_ref: &str,
+        error_message: &str,
+    ) -> Result<()> {
+        let completed_at = Utc::now();
+        let result = serde_json::json!({
+            "error": "Execution cancelled by policy",
+            "message": error_message,
+            "action_ref": action_ref,
+            "cancelled_by": "execution_scheduler",
+            "cancelled_at": completed_at.to_rfc3339(),
+        });
+
+        ExecutionRepository::update(
+            pool,
+            execution_id,
+            UpdateExecutionInput {
+                status: Some(ExecutionStatus::Cancelled),
+                result: Some(result.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+        let completed = MessageEnvelope::new(
+            MessageType::ExecutionCompleted,
+            ExecutionCompletedPayload {
+                execution_id,
+                action_id,
+                action_ref: action_ref.to_string(),
+                status: "cancelled".to_string(),
+                result: Some(result),
+                completed_at,
+            },
+        )
+        .with_correlation_id(envelope.correlation_id)
+        .with_source("attune-executor");
+
+        publisher.publish_envelope(&completed).await?;
+
+        warn!(
+            "Execution {} cancelled due to policy violation: {}",
             execution_id, error_message
         );
 
@@ -1977,6 +2284,24 @@ mod tests {
         ));
         assert!(!ExecutionScheduler::is_unschedulable_error(
             &anyhow::anyhow!("database temporarily unavailable")
+        ));
+    }
+
+    #[test]
+    fn test_policy_cancellation_error_classification() {
+        assert!(ExecutionScheduler::is_policy_cancellation_error(
+            &anyhow::anyhow!(
+                "Policy violation: Concurrency limit exceeded: 1 running executions (limit: 1)"
+            )
+        ));
+        assert!(ExecutionScheduler::is_policy_cancellation_error(
+            &anyhow::anyhow!("Queue full for action 42: maximum 100 entries")
+        ));
+        assert!(ExecutionScheduler::is_policy_cancellation_error(
+            &anyhow::anyhow!("Queue timeout for execution 99: waited 60 seconds")
+        ));
+        assert!(!ExecutionScheduler::is_policy_cancellation_error(
+            &anyhow::anyhow!("rabbitmq publish failed")
         ));
     }
 

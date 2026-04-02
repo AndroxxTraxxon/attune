@@ -199,7 +199,7 @@ async fn test_fifo_ordering_with_database() {
     let first_exec_id =
         create_test_execution(&pool, action_id, &action_ref, ExecutionStatus::Requested).await;
     manager
-        .enqueue_and_wait(action_id, first_exec_id, max_concurrent)
+        .enqueue_and_wait(action_id, first_exec_id, max_concurrent, None)
         .await
         .expect("First execution should enqueue");
 
@@ -222,7 +222,7 @@ async fn test_fifo_ordering_with_database() {
 
             // Enqueue and wait
             manager_clone
-                .enqueue_and_wait(action_id, exec_id, max_concurrent)
+                .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
                 .await
                 .expect("Enqueue should succeed");
 
@@ -316,7 +316,7 @@ async fn test_high_concurrency_stress() {
             .await;
 
             manager_clone
-                .enqueue_and_wait(action_id, exec_id, max_concurrent)
+                .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
                 .await
                 .expect("Enqueue should succeed");
 
@@ -343,7 +343,7 @@ async fn test_high_concurrency_stress() {
             .await;
 
             manager_clone
-                .enqueue_and_wait(action_id, exec_id, max_concurrent)
+                .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
                 .await
                 .expect("Enqueue should succeed");
 
@@ -479,7 +479,7 @@ async fn test_multiple_workers_simulation() {
             .await;
 
             manager_clone
-                .enqueue_and_wait(action_id, exec_id, max_concurrent)
+                .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
                 .await
                 .expect("Enqueue should succeed");
 
@@ -596,7 +596,7 @@ async fn test_cross_action_independence() {
                 .await;
 
                 manager_clone
-                    .enqueue_and_wait(action_id, exec_id, 1)
+                    .enqueue_and_wait(action_id, exec_id, 1, None)
                     .await
                     .expect("Enqueue should succeed");
 
@@ -699,7 +699,7 @@ async fn test_cancellation_during_queue() {
     let exec_id =
         create_test_execution(&pool, action_id, &action_ref, ExecutionStatus::Requested).await;
     manager
-        .enqueue_and_wait(action_id, exec_id, max_concurrent)
+        .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
         .await
         .unwrap();
 
@@ -722,7 +722,7 @@ async fn test_cancellation_during_queue() {
             ids.lock().await.push(exec_id);
 
             manager_clone
-                .enqueue_and_wait(action_id, exec_id, max_concurrent)
+                .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
                 .await
         });
 
@@ -808,7 +808,7 @@ async fn test_queue_stats_persistence() {
         let manager_clone = manager.clone();
         tokio::spawn(async move {
             manager_clone
-                .enqueue_and_wait(action_id, exec_id, max_concurrent)
+                .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
                 .await
                 .ok();
         });
@@ -888,7 +888,7 @@ async fn test_queue_full_rejection() {
     let exec_id =
         create_test_execution(&pool, action_id, &action_ref, ExecutionStatus::Requested).await;
     manager
-        .enqueue_and_wait(action_id, exec_id, max_concurrent)
+        .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
         .await
         .unwrap();
 
@@ -900,7 +900,7 @@ async fn test_queue_full_rejection() {
 
         tokio::spawn(async move {
             manager_clone
-                .enqueue_and_wait(action_id, exec_id, max_concurrent)
+                .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
                 .await
                 .ok();
         });
@@ -917,7 +917,7 @@ async fn test_queue_full_rejection() {
     let exec_id =
         create_test_execution(&pool, action_id, &action_ref, ExecutionStatus::Requested).await;
     let result = manager
-        .enqueue_and_wait(action_id, exec_id, max_concurrent)
+        .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
         .await;
 
     assert!(result.is_err(), "Should reject when queue is full");
@@ -976,7 +976,7 @@ async fn test_extreme_stress_10k_executions() {
             .await;
 
             manager_clone
-                .enqueue_and_wait(action_id, exec_id, max_concurrent)
+                .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
                 .await
                 .expect("Enqueue should succeed");
 

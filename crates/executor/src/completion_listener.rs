@@ -11,7 +11,10 @@
 
 use anyhow::Result;
 use attune_common::{
-    mq::{Consumer, ExecutionCompletedPayload, MessageEnvelope, Publisher},
+    mq::{
+        Consumer, ExecutionCompletedPayload, ExecutionRequestedPayload, MessageEnvelope,
+        MessageType, MqError, Publisher,
+    },
     repositories::{execution::ExecutionRepository, FindById},
 };
 use sqlx::PgPool;
@@ -36,6 +39,19 @@ pub struct CompletionListener {
 }
 
 impl CompletionListener {
+    fn retryable_mq_error(error: &anyhow::Error) -> Option<MqError> {
+        let mq_error = error.downcast_ref::<MqError>()?;
+        Some(match mq_error {
+            MqError::Connection(msg) => MqError::Connection(msg.clone()),
+            MqError::Channel(msg) => MqError::Channel(msg.clone()),
+            MqError::Publish(msg) => MqError::Publish(msg.clone()),
+            MqError::Timeout(msg) => MqError::Timeout(msg.clone()),
+            MqError::Pool(msg) => MqError::Pool(msg.clone()),
+            MqError::Lapin(err) => MqError::Connection(err.to_string()),
+            _ => return None,
+        })
+    }
+
     /// Create a new completion listener
     pub fn new(
         pool: PgPool,
@@ -82,6 +98,9 @@ impl CompletionListener {
                         {
                             error!("Error processing execution completion: {}", e);
                             // Return error to trigger nack with requeue
+                            if let Some(mq_err) = Self::retryable_mq_error(&e) {
+                                return Err(mq_err);
+                            }
                             return Err(
                                 format!("Failed to process execution completion: {}", e).into()
                             );
@@ -187,17 +206,37 @@ impl CompletionListener {
             action_id, execution_id
         );
 
-        match queue_manager.notify_completion(action_id).await {
-            Ok(notified) => {
-                if notified {
-                    info!(
-                        "Queue slot released for action {}, next execution notified",
-                        action_id
-                    );
+        match queue_manager.release_active_slot(execution_id).await {
+            Ok(release) => {
+                if let Some(release) = release {
+                    if let Some(next_execution_id) = release.next_execution_id {
+                        info!(
+                            "Queue slot released for action {}, next execution {} can proceed",
+                            action_id, next_execution_id
+                        );
+                        if let Err(republish_err) = Self::publish_execution_requested(
+                            pool,
+                            publisher,
+                            action_id,
+                            next_execution_id,
+                        )
+                        .await
+                        {
+                            queue_manager
+                                .restore_active_slot(execution_id, &release)
+                                .await?;
+                            return Err(republish_err);
+                        }
+                    } else {
+                        debug!(
+                            "Queue slot released for action {}, no executions waiting",
+                            action_id
+                        );
+                    }
                 } else {
                     debug!(
-                        "Queue slot released for action {}, no executions waiting",
-                        action_id
+                        "Execution {} had no active queue slot to release",
+                        execution_id
                     );
                 }
             }
@@ -225,6 +264,38 @@ impl CompletionListener {
 
         Ok(())
     }
+
+    async fn publish_execution_requested(
+        pool: &PgPool,
+        publisher: &Publisher,
+        action_id: i64,
+        execution_id: i64,
+    ) -> Result<()> {
+        let execution = ExecutionRepository::find_by_id(pool, execution_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Execution {} not found", execution_id))?;
+
+        let payload = ExecutionRequestedPayload {
+            execution_id,
+            action_id: Some(action_id),
+            action_ref: execution.action_ref.clone(),
+            parent_id: execution.parent,
+            enforcement_id: execution.enforcement,
+            config: execution.config.clone(),
+        };
+
+        let envelope = MessageEnvelope::new(MessageType::ExecutionRequested, payload)
+            .with_source("executor-completion-listener");
+
+        publisher.publish_envelope(&envelope).await?;
+
+        debug!(
+            "Republished deferred ExecutionRequested for execution {}",
+            execution_id
+        );
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -239,7 +310,7 @@ mod tests {
 
         // Simulate acquiring a slot
         queue_manager
-            .enqueue_and_wait(action_id, 100, 1)
+            .enqueue_and_wait(action_id, 100, 1, None)
             .await
             .unwrap();
 
@@ -249,7 +320,7 @@ mod tests {
         assert_eq!(stats.queue_length, 0);
 
         // Simulate completion notification
-        let notified = queue_manager.notify_completion(action_id).await.unwrap();
+        let notified = queue_manager.notify_completion(100).await.unwrap();
         assert!(!notified); // No one waiting
 
         // Verify slot is released
@@ -264,7 +335,7 @@ mod tests {
 
         // Fill capacity
         queue_manager
-            .enqueue_and_wait(action_id, 100, 1)
+            .enqueue_and_wait(action_id, 100, 1, None)
             .await
             .unwrap();
 
@@ -272,7 +343,7 @@ mod tests {
         let queue_manager_clone = queue_manager.clone();
         let handle = tokio::spawn(async move {
             queue_manager_clone
-                .enqueue_and_wait(action_id, 101, 1)
+                .enqueue_and_wait(action_id, 101, 1, None)
                 .await
                 .unwrap();
         });
@@ -286,7 +357,7 @@ mod tests {
         assert_eq!(stats.queue_length, 1);
 
         // Notify completion
-        let notified = queue_manager.notify_completion(action_id).await.unwrap();
+        let notified = queue_manager.notify_completion(100).await.unwrap();
         assert!(notified); // Should wake the waiting execution
 
         // Wait for queued execution to proceed
@@ -306,7 +377,7 @@ mod tests {
 
         // Fill capacity
         queue_manager
-            .enqueue_and_wait(action_id, 100, 1)
+            .enqueue_and_wait(action_id, 100, 1, None)
             .await
             .unwrap();
 
@@ -320,7 +391,7 @@ mod tests {
 
             let handle = tokio::spawn(async move {
                 queue_manager
-                    .enqueue_and_wait(action_id, exec_id, 1)
+                    .enqueue_and_wait(action_id, exec_id, 1, None)
                     .await
                     .unwrap();
                 order.lock().await.push(exec_id);
@@ -333,9 +404,9 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // Release them one by one
-        for _ in 0..3 {
+        for execution_id in 100..103 {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            queue_manager.notify_completion(action_id).await.unwrap();
+            queue_manager.notify_completion(execution_id).await.unwrap();
         }
 
         // Wait for all to complete
@@ -351,10 +422,10 @@ mod tests {
     #[tokio::test]
     async fn test_completion_with_no_queue() {
         let queue_manager = Arc::new(ExecutionQueueManager::with_defaults());
-        let action_id = 999; // Non-existent action
+        let execution_id = 999; // Non-existent execution
 
         // Should succeed but not notify anyone
-        let result = queue_manager.notify_completion(action_id).await;
+        let result = queue_manager.notify_completion(execution_id).await;
         assert!(result.is_ok());
         assert!(!result.unwrap());
     }

@@ -297,6 +297,7 @@ impl ExecutorService {
             self.inner.pool.clone(),
             self.inner.publisher.clone(),
             Arc::new(scheduler_consumer),
+            self.inner.policy_enforcer.clone(),
         );
         handles.push(tokio::spawn(async move { scheduler.start().await }));
 

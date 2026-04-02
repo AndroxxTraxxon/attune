@@ -47,7 +47,7 @@ impl Default for QueueConfig {
 }
 
 /// Entry in the execution queue
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct QueueEntry {
     /// Execution or enforcement ID being queued
     execution_id: Id,
@@ -57,7 +57,13 @@ struct QueueEntry {
     notifier: Arc<Notify>,
 }
 
-/// Queue state for a single action
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct QueueKey {
+    action_id: Id,
+    group_key: Option<String>,
+}
+
+/// Queue state for a single action/group pair
 struct ActionQueue {
     /// FIFO queue of waiting executions
     queue: VecDeque<QueueEntry>,
@@ -93,6 +99,32 @@ impl ActionQueue {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotAcquireOutcome {
+    pub acquired: bool,
+    pub current_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotEnqueueOutcome {
+    Acquired,
+    Enqueued,
+}
+
+#[derive(Debug, Clone)]
+pub struct SlotReleaseOutcome {
+    pub next_execution_id: Option<Id>,
+    queue_key: QueueKey,
+}
+
+#[derive(Debug, Clone)]
+pub struct QueuedRemovalOutcome {
+    pub next_execution_id: Option<Id>,
+    queue_key: QueueKey,
+    removed_entry: QueueEntry,
+    removed_index: usize,
+}
+
 /// Statistics about a queue
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueStats {
@@ -114,8 +146,10 @@ pub struct QueueStats {
 
 /// Manages execution queues with FIFO ordering guarantees
 pub struct ExecutionQueueManager {
-    /// Per-action queues (key: action_id)
-    queues: DashMap<Id, Arc<Mutex<ActionQueue>>>,
+    /// Per-action/per-group queues.
+    queues: DashMap<QueueKey, Arc<Mutex<ActionQueue>>>,
+    /// Tracks which queue key currently owns an active execution slot.
+    active_execution_keys: DashMap<Id, QueueKey>,
     /// Configuration
     config: QueueConfig,
     /// Database connection pool (optional for stats persistence)
@@ -128,6 +162,7 @@ impl ExecutionQueueManager {
     pub fn new(config: QueueConfig) -> Self {
         Self {
             queues: DashMap::new(),
+            active_execution_keys: DashMap::new(),
             config,
             db_pool: None,
         }
@@ -137,6 +172,7 @@ impl ExecutionQueueManager {
     pub fn with_db_pool(config: QueueConfig, db_pool: PgPool) -> Self {
         Self {
             queues: DashMap::new(),
+            active_execution_keys: DashMap::new(),
             config,
             db_pool: Some(db_pool),
         }
@@ -146,6 +182,24 @@ impl ExecutionQueueManager {
     #[allow(dead_code)]
     pub fn with_defaults() -> Self {
         Self::new(QueueConfig::default())
+    }
+
+    fn queue_key(&self, action_id: Id, group_key: Option<String>) -> QueueKey {
+        QueueKey {
+            action_id,
+            group_key,
+        }
+    }
+
+    async fn get_or_create_queue(
+        &self,
+        queue_key: QueueKey,
+        max_concurrent: u32,
+    ) -> Arc<Mutex<ActionQueue>> {
+        self.queues
+            .entry(queue_key)
+            .or_insert_with(|| Arc::new(Mutex::new(ActionQueue::new(max_concurrent))))
+            .clone()
     }
 
     /// Enqueue an execution and wait until it can proceed
@@ -164,23 +218,31 @@ impl ExecutionQueueManager {
     /// # Returns
     /// * `Ok(())` - Execution can proceed
     /// * `Err(_)` - Queue full or timeout
+    #[allow(dead_code)]
     pub async fn enqueue_and_wait(
         &self,
         action_id: Id,
         execution_id: Id,
         max_concurrent: u32,
+        group_key: Option<String>,
     ) -> Result<()> {
+        if self.active_execution_keys.contains_key(&execution_id) {
+            debug!(
+                "Execution {} already owns an active slot, skipping queue wait",
+                execution_id
+            );
+            return Ok(());
+        }
+
         debug!(
-            "Enqueuing execution {} for action {} (max_concurrent: {})",
-            execution_id, action_id, max_concurrent
+            "Enqueuing execution {} for action {} (max_concurrent: {}, group: {:?})",
+            execution_id, action_id, max_concurrent, group_key
         );
 
-        // Get or create queue for this action
+        let queue_key = self.queue_key(action_id, group_key);
         let queue_arc = self
-            .queues
-            .entry(action_id)
-            .or_insert_with(|| Arc::new(Mutex::new(ActionQueue::new(max_concurrent))))
-            .clone();
+            .get_or_create_queue(queue_key.clone(), max_concurrent)
+            .await;
 
         // Create notifier for this execution
         let notifier = Arc::new(Notify::new());
@@ -192,14 +254,41 @@ impl ExecutionQueueManager {
             // Update max_concurrent if it changed
             queue.max_concurrent = max_concurrent;
 
+            let queued_index = queue
+                .queue
+                .iter()
+                .position(|entry| entry.execution_id == execution_id);
+            if let Some(queued_index) = queued_index {
+                if queued_index == 0 && queue.has_capacity() {
+                    let entry = queue.queue.pop_front().expect("front entry just checked");
+                    queue.active_count += 1;
+                    self.active_execution_keys
+                        .insert(entry.execution_id, queue_key.clone());
+                    drop(queue);
+                    self.persist_queue_stats(action_id).await;
+                    return Ok(());
+                }
+                debug!(
+                    "Execution {} is already queued for action {} (group: {:?})",
+                    execution_id, action_id, queue_key.group_key
+                );
+                return Ok(());
+            }
+
             // Check if we can run immediately
             if queue.has_capacity() {
                 debug!(
-                    "Execution {} can run immediately (active: {}/{})",
-                    execution_id, queue.active_count, queue.max_concurrent
+                    "Execution {} can run immediately for action {} (active: {}/{}, group: {:?})",
+                    execution_id,
+                    action_id,
+                    queue.active_count,
+                    queue.max_concurrent,
+                    queue_key.group_key
                 );
                 queue.active_count += 1;
                 queue.total_enqueued += 1;
+                self.active_execution_keys
+                    .insert(execution_id, queue_key.clone());
 
                 // Persist stats to database if available
                 drop(queue);
@@ -211,8 +300,9 @@ impl ExecutionQueueManager {
             // Check if queue is full
             if queue.is_full(self.config.max_queue_length) {
                 warn!(
-                    "Queue full for action {}: {} entries (limit: {})",
+                    "Queue full for action {} group {:?}: {} entries (limit: {})",
                     action_id,
+                    queue_key.group_key,
                     queue.queue.len(),
                     self.config.max_queue_length
                 );
@@ -234,12 +324,13 @@ impl ExecutionQueueManager {
             queue.total_enqueued += 1;
 
             info!(
-                "Execution {} queued for action {} at position {} (active: {}/{})",
+                "Execution {} queued for action {} at position {} (active: {}/{}, group: {:?})",
                 execution_id,
                 action_id,
                 queue.queue.len() - 1,
                 queue.active_count,
-                queue.max_concurrent
+                queue.max_concurrent,
+                queue_key.group_key
             );
         }
 
@@ -273,6 +364,142 @@ impl ExecutionQueueManager {
         }
     }
 
+    /// Acquire a slot immediately or enqueue without blocking the caller.
+    pub async fn enqueue(
+        &self,
+        action_id: Id,
+        execution_id: Id,
+        max_concurrent: u32,
+        group_key: Option<String>,
+    ) -> Result<SlotEnqueueOutcome> {
+        if self.active_execution_keys.contains_key(&execution_id) {
+            debug!(
+                "Execution {} already owns an active slot, treating as acquired",
+                execution_id
+            );
+            return Ok(SlotEnqueueOutcome::Acquired);
+        }
+
+        debug!(
+            "Enqueuing execution {} for action {} without waiting (max_concurrent: {}, group: {:?})",
+            execution_id, action_id, max_concurrent, group_key
+        );
+
+        let queue_key = self.queue_key(action_id, group_key);
+        let queue_arc = self
+            .get_or_create_queue(queue_key.clone(), max_concurrent)
+            .await;
+
+        {
+            let mut queue = queue_arc.lock().await;
+            queue.max_concurrent = max_concurrent;
+
+            let queued_index = queue
+                .queue
+                .iter()
+                .position(|entry| entry.execution_id == execution_id);
+            if let Some(queued_index) = queued_index {
+                if queued_index == 0 && queue.has_capacity() {
+                    let entry = queue.queue.pop_front().expect("front entry just checked");
+                    queue.active_count += 1;
+                    self.active_execution_keys
+                        .insert(entry.execution_id, queue_key.clone());
+                    drop(queue);
+                    self.persist_queue_stats(action_id).await;
+                    return Ok(SlotEnqueueOutcome::Acquired);
+                }
+                debug!(
+                    "Execution {} is already queued for action {} (group: {:?})",
+                    execution_id, action_id, queue_key.group_key
+                );
+                return Ok(SlotEnqueueOutcome::Enqueued);
+            }
+
+            if queue.has_capacity() {
+                queue.active_count += 1;
+                queue.total_enqueued += 1;
+                self.active_execution_keys
+                    .insert(execution_id, queue_key.clone());
+
+                drop(queue);
+                self.persist_queue_stats(action_id).await;
+                return Ok(SlotEnqueueOutcome::Acquired);
+            }
+
+            if queue.is_full(self.config.max_queue_length) {
+                warn!(
+                    "Queue full for action {} group {:?}: {} entries (limit: {})",
+                    action_id,
+                    queue_key.group_key,
+                    queue.queue.len(),
+                    self.config.max_queue_length
+                );
+                return Err(anyhow::anyhow!(
+                    "Queue full for action {}: maximum {} entries",
+                    action_id,
+                    self.config.max_queue_length
+                ));
+            }
+
+            queue.queue.push_back(QueueEntry {
+                execution_id,
+                enqueued_at: Utc::now(),
+                notifier: Arc::new(Notify::new()),
+            });
+            queue.total_enqueued += 1;
+        }
+
+        self.persist_queue_stats(action_id).await;
+        Ok(SlotEnqueueOutcome::Enqueued)
+    }
+
+    /// Try to acquire a slot immediately without queueing.
+    pub async fn try_acquire(
+        &self,
+        action_id: Id,
+        execution_id: Id,
+        max_concurrent: u32,
+        group_key: Option<String>,
+    ) -> Result<SlotAcquireOutcome> {
+        let queue_key = self.queue_key(action_id, group_key);
+        let queue_arc = self
+            .get_or_create_queue(queue_key.clone(), max_concurrent)
+            .await;
+        let mut queue = queue_arc.lock().await;
+
+        queue.max_concurrent = max_concurrent;
+        let current_count = queue.active_count;
+
+        if self.active_execution_keys.contains_key(&execution_id) {
+            debug!(
+                "Execution {} already owns a slot for action {} (group: {:?})",
+                execution_id, action_id, queue_key.group_key
+            );
+            return Ok(SlotAcquireOutcome {
+                acquired: true,
+                current_count,
+            });
+        }
+
+        if queue.has_capacity() {
+            queue.active_count += 1;
+            queue.total_enqueued += 1;
+            self.active_execution_keys
+                .insert(execution_id, queue_key.clone());
+            drop(queue);
+            self.persist_queue_stats(action_id).await;
+            return Ok(SlotAcquireOutcome {
+                acquired: true,
+                current_count,
+            });
+        }
+
+        Ok(SlotAcquireOutcome {
+            acquired: false,
+            current_count,
+        })
+    }
+
     /// Notify that an execution has completed, releasing a queue slot
     ///
     /// This method will:
@@ -282,27 +509,64 @@ impl ExecutionQueueManager {
     /// 4. Increment active count for the notified execution
     ///
     /// # Arguments
-    /// * `action_id` - The action that completed
+    /// * `execution_id` - The execution that completed
     ///
     /// # Returns
     /// * `Ok(true)` - A queued execution was notified
     /// * `Ok(false)` - No executions were waiting
     /// * `Err(_)` - Error accessing queue
-    pub async fn notify_completion(&self, action_id: Id) -> Result<bool> {
+    pub async fn notify_completion(&self, execution_id: Id) -> Result<bool> {
+        Ok(self
+            .notify_completion_with_next(execution_id)
+            .await?
+            .is_some())
+    }
+
+    pub async fn notify_completion_with_next(&self, execution_id: Id) -> Result<Option<Id>> {
+        let release = match self.release_active_slot(execution_id).await? {
+            Some(release) => release,
+            None => return Ok(None),
+        };
+
+        let Some(next_execution_id) = release.next_execution_id else {
+            return Ok(None);
+        };
+
+        if self.activate_queued_execution(next_execution_id).await? {
+            Ok(Some(next_execution_id))
+        } else {
+            self.restore_active_slot(execution_id, &release).await?;
+            Ok(None)
+        }
+    }
+
+    pub async fn release_active_slot(
+        &self,
+        execution_id: Id,
+    ) -> Result<Option<SlotReleaseOutcome>> {
+        let Some((_, queue_key)) = self.active_execution_keys.remove(&execution_id) else {
+            debug!(
+                "No active queue slot found for execution {} (queue may have been cleared)",
+                execution_id
+            );
+            return Ok(None);
+        };
+        let action_id = queue_key.action_id;
+
         debug!(
-            "Processing completion notification for action {}",
-            action_id
+            "Processing completion notification for execution {} on action {} (group: {:?})",
+            execution_id, action_id, queue_key.group_key
         );
 
-        // Get queue for this action
-        let queue_arc = match self.queues.get(&action_id) {
+        // Get queue for this action/group
+        let queue_arc = match self.queues.get(&queue_key) {
             Some(q) => q.clone(),
             None => {
                 debug!(
-                    "No queue found for action {} (no executions queued)",
-                    action_id
+                    "No queue found for action {} group {:?}",
+                    action_id, queue_key.group_key
                 );
-                return Ok(false);
+                return Ok(None);
             }
         };
 
@@ -313,49 +577,162 @@ impl ExecutionQueueManager {
             queue.active_count -= 1;
             queue.total_completed += 1;
             debug!(
-                "Decremented active count for action {} to {}",
-                action_id, queue.active_count
+                "Decremented active count for action {} group {:?} to {}",
+                action_id, queue_key.group_key, queue.active_count
             );
         } else {
             warn!(
-                "Completion notification for action {} but active_count is 0",
-                action_id
+                "Completion notification for action {} group {:?} but active_count is 0",
+                action_id, queue_key.group_key
             );
         }
 
         // Check if there are queued executions
         if queue.queue.is_empty() {
             debug!(
-                "No executions queued for action {} after completion",
-                action_id
+                "No executions queued for action {} group {:?} after completion",
+                action_id, queue_key.group_key
             );
-            return Ok(false);
+            drop(queue);
+            self.persist_queue_stats(action_id).await;
+            return Ok(Some(SlotReleaseOutcome {
+                next_execution_id: None,
+                queue_key,
+            }));
         }
 
-        // Pop the first (oldest) entry from queue
-        if let Some(entry) = queue.queue.pop_front() {
+        let next_execution_id = queue.queue.front().map(|entry| entry.execution_id);
+        if let Some(next_execution_id) = next_execution_id {
             info!(
-                "Notifying execution {} for action {} (was queued for {:?})",
+                "Execution {} is next for action {} group {:?}",
+                next_execution_id, action_id, queue_key.group_key
+            );
+        }
+
+        drop(queue);
+        self.persist_queue_stats(action_id).await;
+
+        Ok(Some(SlotReleaseOutcome {
+            next_execution_id,
+            queue_key,
+        }))
+    }
+
+    pub async fn restore_active_slot(
+        &self,
+        execution_id: Id,
+        outcome: &SlotReleaseOutcome,
+    ) -> Result<()> {
+        let action_id = outcome.queue_key.action_id;
+        let queue_arc = self.get_or_create_queue(outcome.queue_key.clone(), 1).await;
+        let mut queue = queue_arc.lock().await;
+
+        queue.active_count += 1;
+        if queue.total_completed > 0 {
+            queue.total_completed -= 1;
+        }
+        self.active_execution_keys
+            .insert(execution_id, outcome.queue_key.clone());
+
+        drop(queue);
+        self.persist_queue_stats(action_id).await;
+        Ok(())
+    }
+
+    pub async fn activate_queued_execution(&self, execution_id: Id) -> Result<bool> {
+        for entry in self.queues.iter() {
+            let queue_key = entry.key().clone();
+            let queue_arc = entry.value().clone();
+            let mut queue = queue_arc.lock().await;
+
+            let Some(front) = queue.queue.front() else {
+                continue;
+            };
+
+            if front.execution_id != execution_id {
+                continue;
+            }
+
+            if !queue.has_capacity() {
+                return Ok(false);
+            }
+
+            let entry = queue.queue.pop_front().expect("front entry just checked");
+            info!(
+                "Activating queued execution {} for action {} group {:?} (queued for {:?})",
                 entry.execution_id,
-                action_id,
+                queue_key.action_id,
+                queue_key.group_key,
                 Utc::now() - entry.enqueued_at
             );
-
-            // Increment active count for the execution we're about to notify
             queue.active_count += 1;
+            self.active_execution_keys
+                .insert(entry.execution_id, queue_key.clone());
 
-            // Notify the waiter (after releasing lock)
             drop(queue);
             entry.notifier.notify_one();
+            self.persist_queue_stats(queue_key.action_id).await;
+            return Ok(true);
+        }
 
-            // Persist stats to database if available
+        Ok(false)
+    }
+
+    pub async fn remove_queued_execution(
+        &self,
+        execution_id: Id,
+    ) -> Result<Option<QueuedRemovalOutcome>> {
+        for entry in self.queues.iter() {
+            let queue_key = entry.key().clone();
+            let queue_arc = entry.value().clone();
+            let mut queue = queue_arc.lock().await;
+
+            let Some(index) = queue
+                .queue
+                .iter()
+                .position(|queued| queued.execution_id == execution_id)
+            else {
+                continue;
+            };
+
+            let removed_entry = queue.queue.remove(index).expect("queue index just checked");
+            let next_execution_id = if index == 0 {
+                queue.queue.front().map(|queued| queued.execution_id)
+            } else {
+                None
+            };
+            let action_id = queue_key.action_id;
+
+            drop(queue);
             self.persist_queue_stats(action_id).await;
 
-            Ok(true)
-        } else {
-            // Race condition check - queue was empty after all
-            Ok(false)
+            return Ok(Some(QueuedRemovalOutcome {
+                next_execution_id,
+                queue_key,
+                removed_entry,
+                removed_index: index,
+            }));
         }
+
+        Ok(None)
+    }
+
+    pub async fn restore_queued_execution(&self, outcome: &QueuedRemovalOutcome) -> Result<()> {
+        let action_id = outcome.queue_key.action_id;
+        let queue_arc = self.get_or_create_queue(outcome.queue_key.clone(), 1).await;
+        let mut queue = queue_arc.lock().await;
+
+        if outcome.removed_index <= queue.queue.len() {
+            queue
+                .queue
+                .insert(outcome.removed_index, outcome.removed_entry.clone());
+        } else {
+            queue.queue.push_back(outcome.removed_entry.clone());
+        }
+
+        drop(queue);
+        self.persist_queue_stats(action_id).await;
+        Ok(())
     }
 
     /// Persist queue statistics to database (if database pool is available)
@@ -384,19 +761,48 @@ impl ExecutionQueueManager {
 
     /// Get statistics for a specific action's queue
     pub async fn get_queue_stats(&self, action_id: Id) -> Option<QueueStats> {
-        let queue_arc = self.queues.get(&action_id)?.clone();
-        let queue = queue_arc.lock().await;
+        let queue_arcs: Vec<Arc<Mutex<ActionQueue>>> = self
+            .queues
+            .iter()
+            .filter(|entry| entry.key().action_id == action_id)
+            .map(|entry| entry.value().clone())
+            .collect();
 
-        let oldest_enqueued_at = queue.queue.front().map(|e| e.enqueued_at);
+        if queue_arcs.is_empty() {
+            return None;
+        }
+
+        let mut queue_length = 0usize;
+        let mut active_count = 0u32;
+        let mut max_concurrent = 0u32;
+        let mut oldest_enqueued_at: Option<DateTime<Utc>> = None;
+        let mut total_enqueued = 0u64;
+        let mut total_completed = 0u64;
+
+        for queue_arc in queue_arcs {
+            let queue = queue_arc.lock().await;
+            queue_length += queue.queue.len();
+            active_count += queue.active_count;
+            max_concurrent += queue.max_concurrent;
+            total_enqueued += queue.total_enqueued;
+            total_completed += queue.total_completed;
+
+            if let Some(candidate) = queue.queue.front().map(|e| e.enqueued_at) {
+                oldest_enqueued_at = Some(match oldest_enqueued_at {
+                    Some(current) => current.min(candidate),
+                    None => candidate,
+                });
+            }
+        }
 
         Some(QueueStats {
             action_id,
-            queue_length: queue.queue.len(),
-            active_count: queue.active_count,
-            max_concurrent: queue.max_concurrent,
+            queue_length,
+            active_count,
+            max_concurrent,
             oldest_enqueued_at,
-            total_enqueued: queue.total_enqueued,
-            total_completed: queue.total_completed,
+            total_enqueued,
+            total_completed,
         })
     }
 
@@ -405,22 +811,15 @@ impl ExecutionQueueManager {
     pub async fn get_all_queue_stats(&self) -> Vec<QueueStats> {
         let mut stats = Vec::new();
 
+        let mut action_ids = std::collections::BTreeSet::new();
         for entry in self.queues.iter() {
-            let action_id = *entry.key();
-            let queue_arc = entry.value().clone();
-            let queue = queue_arc.lock().await;
+            action_ids.insert(entry.key().action_id);
+        }
 
-            let oldest_enqueued_at = queue.queue.front().map(|e| e.enqueued_at);
-
-            stats.push(QueueStats {
-                action_id,
-                queue_length: queue.queue.len(),
-                active_count: queue.active_count,
-                max_concurrent: queue.max_concurrent,
-                oldest_enqueued_at,
-                total_enqueued: queue.total_enqueued,
-                total_completed: queue.total_completed,
-            });
+        for action_id in action_ids {
+            if let Some(action_stats) = self.get_queue_stats(action_id).await {
+                stats.push(action_stats);
+            }
         }
 
         stats
@@ -445,27 +844,29 @@ impl ExecutionQueueManager {
             execution_id, action_id
         );
 
-        let queue_arc = match self.queues.get(&action_id) {
-            Some(q) => q.clone(),
-            None => return Ok(false),
-        };
+        let queue_arcs: Vec<Arc<Mutex<ActionQueue>>> = self
+            .queues
+            .iter()
+            .filter(|entry| entry.key().action_id == action_id)
+            .map(|entry| entry.value().clone())
+            .collect();
 
-        let mut queue = queue_arc.lock().await;
-
-        let initial_len = queue.queue.len();
-        queue.queue.retain(|e| e.execution_id != execution_id);
-        let removed = initial_len != queue.queue.len();
-
-        if removed {
-            info!("Cancelled execution {} from queue", execution_id);
-        } else {
-            debug!(
-                "Execution {} not found in queue (may be running)",
-                execution_id
-            );
+        for queue_arc in queue_arcs {
+            let mut queue = queue_arc.lock().await;
+            let initial_len = queue.queue.len();
+            queue.queue.retain(|e| e.execution_id != execution_id);
+            if initial_len != queue.queue.len() {
+                info!("Cancelled execution {} from queue", execution_id);
+                return Ok(true);
+            }
         }
 
-        Ok(removed)
+        debug!(
+            "Execution {} not found in queue (may be running)",
+            execution_id
+        );
+
+        Ok(false)
     }
 
     /// Clear all queues (for testing or emergency situations)
@@ -479,12 +880,17 @@ impl ExecutionQueueManager {
             queue.queue.clear();
             queue.active_count = 0;
         }
+        self.active_execution_keys.clear();
     }
 
     /// Get the number of actions with active queues
     #[allow(dead_code)]
     pub fn active_queue_count(&self) -> usize {
-        self.queues.len()
+        self.queues
+            .iter()
+            .map(|entry| entry.key().action_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
     }
 }
 
@@ -504,7 +910,7 @@ mod tests {
         let manager = ExecutionQueueManager::with_defaults();
 
         // Should execute immediately when there's capacity
-        let result = manager.enqueue_and_wait(1, 100, 2).await;
+        let result = manager.enqueue_and_wait(1, 100, 2, None).await;
         assert!(result.is_ok());
 
         // Check stats
@@ -521,7 +927,7 @@ mod tests {
 
         // First execution should run immediately
         let result = manager
-            .enqueue_and_wait(action_id, 100, max_concurrent)
+            .enqueue_and_wait(action_id, 100, max_concurrent, None)
             .await;
         assert!(result.is_ok());
 
@@ -535,7 +941,7 @@ mod tests {
 
             let handle = tokio::spawn(async move {
                 manager
-                    .enqueue_and_wait(action_id, exec_id, max_concurrent)
+                    .enqueue_and_wait(action_id, exec_id, max_concurrent, None)
                     .await
                     .unwrap();
                 order.lock().await.push(exec_id);
@@ -553,9 +959,9 @@ mod tests {
         assert_eq!(stats.active_count, 1);
 
         // Release them one by one
-        for _ in 0..3 {
+        for execution_id in 100..103 {
             sleep(Duration::from_millis(50)).await;
-            manager.notify_completion(action_id).await.unwrap();
+            manager.notify_completion(execution_id).await.unwrap();
         }
 
         // Wait for all to complete
@@ -574,7 +980,10 @@ mod tests {
         let action_id = 1;
 
         // Start first execution
-        manager.enqueue_and_wait(action_id, 100, 1).await.unwrap();
+        manager
+            .enqueue_and_wait(action_id, 100, 1, None)
+            .await
+            .unwrap();
 
         // Queue second execution
         let manager_clone = Arc::new(manager);
@@ -582,7 +991,7 @@ mod tests {
 
         let handle = tokio::spawn(async move {
             manager_ref
-                .enqueue_and_wait(action_id, 101, 1)
+                .enqueue_and_wait(action_id, 101, 1, None)
                 .await
                 .unwrap();
         });
@@ -596,7 +1005,7 @@ mod tests {
         assert_eq!(stats.active_count, 1);
 
         // Notify completion
-        let notified = manager_clone.notify_completion(action_id).await.unwrap();
+        let notified = manager_clone.notify_completion(100).await.unwrap();
         assert!(notified);
 
         // Wait for queued execution to proceed
@@ -613,8 +1022,8 @@ mod tests {
         let manager = Arc::new(ExecutionQueueManager::with_defaults());
 
         // Start executions on different actions
-        manager.enqueue_and_wait(1, 100, 1).await.unwrap();
-        manager.enqueue_and_wait(2, 200, 1).await.unwrap();
+        manager.enqueue_and_wait(1, 100, 1, None).await.unwrap();
+        manager.enqueue_and_wait(2, 200, 1, None).await.unwrap();
 
         // Both should be active
         let stats1 = manager.get_queue_stats(1).await.unwrap();
@@ -624,7 +1033,7 @@ mod tests {
         assert_eq!(stats2.active_count, 1);
 
         // Completion on action 1 shouldn't affect action 2
-        manager.notify_completion(1).await.unwrap();
+        manager.notify_completion(100).await.unwrap();
 
         let stats1 = manager.get_queue_stats(1).await.unwrap();
         let stats2 = manager.get_queue_stats(2).await.unwrap();
@@ -634,19 +1043,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_grouped_queues_are_independent() {
+        let manager = ExecutionQueueManager::with_defaults();
+        let action_id = 1;
+
+        manager
+            .enqueue_and_wait(action_id, 100, 1, Some("prod".to_string()))
+            .await
+            .unwrap();
+        manager
+            .enqueue_and_wait(action_id, 200, 1, Some("staging".to_string()))
+            .await
+            .unwrap();
+
+        let stats = manager.get_queue_stats(action_id).await.unwrap();
+        assert_eq!(stats.active_count, 2);
+        assert_eq!(stats.queue_length, 0);
+        assert_eq!(stats.max_concurrent, 2);
+    }
+
+    #[tokio::test]
     async fn test_cancel_execution() {
         let manager = ExecutionQueueManager::with_defaults();
         let action_id = 1;
 
         // Fill capacity
-        manager.enqueue_and_wait(action_id, 100, 1).await.unwrap();
+        manager
+            .enqueue_and_wait(action_id, 100, 1, None)
+            .await
+            .unwrap();
 
         // Queue more executions
         let manager_arc = Arc::new(manager);
         let manager_ref = manager_arc.clone();
 
         let handle = tokio::spawn(async move {
-            let result = manager_ref.enqueue_and_wait(action_id, 101, 1).await;
+            let result = manager_ref.enqueue_and_wait(action_id, 101, 1, None).await;
             result
         });
 
@@ -675,7 +1107,10 @@ mod tests {
         assert!(manager.get_queue_stats(action_id).await.is_none());
 
         // After enqueue, stats should exist
-        manager.enqueue_and_wait(action_id, 100, 2).await.unwrap();
+        manager
+            .enqueue_and_wait(action_id, 100, 2, None)
+            .await
+            .unwrap();
 
         let stats = manager.get_queue_stats(action_id).await.unwrap();
         assert_eq!(stats.action_id, action_id);
@@ -696,13 +1131,16 @@ mod tests {
         let action_id = 1;
 
         // Fill capacity
-        manager.enqueue_and_wait(action_id, 100, 1).await.unwrap();
+        manager
+            .enqueue_and_wait(action_id, 100, 1, None)
+            .await
+            .unwrap();
 
         // Queue 2 more (should reach limit)
         let manager_ref = manager.clone();
         tokio::spawn(async move {
             manager_ref
-                .enqueue_and_wait(action_id, 101, 1)
+                .enqueue_and_wait(action_id, 101, 1, None)
                 .await
                 .unwrap();
         });
@@ -710,7 +1148,7 @@ mod tests {
         let manager_ref = manager.clone();
         tokio::spawn(async move {
             manager_ref
-                .enqueue_and_wait(action_id, 102, 1)
+                .enqueue_and_wait(action_id, 102, 1, None)
                 .await
                 .unwrap();
         });
@@ -718,7 +1156,7 @@ mod tests {
         sleep(Duration::from_millis(100)).await;
 
         // Next one should fail
-        let result = manager.enqueue_and_wait(action_id, 103, 1).await;
+        let result = manager.enqueue_and_wait(action_id, 103, 1, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Queue full"));
     }
@@ -732,7 +1170,7 @@ mod tests {
 
         // Start first execution
         manager
-            .enqueue_and_wait(action_id, 0, max_concurrent)
+            .enqueue_and_wait(action_id, 0, max_concurrent, None)
             .await
             .unwrap();
 
@@ -746,7 +1184,7 @@ mod tests {
 
             let handle = tokio::spawn(async move {
                 manager
-                    .enqueue_and_wait(action_id, i, max_concurrent)
+                    .enqueue_and_wait(action_id, i, max_concurrent, None)
                     .await
                     .unwrap();
                 order.lock().await.push(i);
@@ -759,9 +1197,9 @@ mod tests {
         sleep(Duration::from_millis(200)).await;
 
         // Release them all
-        for _ in 0..num_executions {
+        for execution_id in 0..num_executions {
             sleep(Duration::from_millis(10)).await;
-            manager.notify_completion(action_id).await.unwrap();
+            manager.notify_completion(execution_id).await.unwrap();
         }
 
         // Wait for completion

@@ -9,7 +9,7 @@
 use attune_common::{
     config::Config,
     db::Database,
-    models::enums::ExecutionStatus,
+    models::enums::{ExecutionStatus, PolicyMethod},
     repositories::{
         action::{ActionRepository, CreateActionInput},
         execution::{CreateExecutionInput, ExecutionRepository},
@@ -190,6 +190,8 @@ async fn test_global_rate_limit() {
             window_seconds: 60,
         }),
         concurrency_limit: None,
+        concurrency_method: PolicyMethod::Enqueue,
+        concurrency_parameters: Vec::new(),
         quotas: None,
     };
 
@@ -242,6 +244,8 @@ async fn test_concurrency_limit() {
     let policy = ExecutionPolicy {
         rate_limit: None,
         concurrency_limit: Some(2),
+        concurrency_method: PolicyMethod::Enqueue,
+        concurrency_parameters: Vec::new(),
         quotas: None,
     };
 
@@ -300,6 +304,8 @@ async fn test_action_specific_policy() {
             window_seconds: 60,
         }),
         concurrency_limit: None,
+        concurrency_method: PolicyMethod::Enqueue,
+        concurrency_parameters: Vec::new(),
         quotas: None,
     };
     enforcer.set_action_policy(action_id, action_policy);
@@ -345,6 +351,8 @@ async fn test_pack_specific_policy() {
     let pack_policy = ExecutionPolicy {
         rate_limit: None,
         concurrency_limit: Some(1),
+        concurrency_method: PolicyMethod::Enqueue,
+        concurrency_parameters: Vec::new(),
         quotas: None,
     };
     enforcer.set_pack_policy(pack_id, pack_policy);
@@ -388,6 +396,8 @@ async fn test_policy_priority() {
             window_seconds: 60,
         }),
         concurrency_limit: None,
+        concurrency_method: PolicyMethod::Enqueue,
+        concurrency_parameters: Vec::new(),
         quotas: None,
     };
     let mut enforcer = PolicyEnforcer::with_global_policy(pool.clone(), global_policy);
@@ -399,6 +409,8 @@ async fn test_policy_priority() {
             window_seconds: 60,
         }),
         concurrency_limit: None,
+        concurrency_method: PolicyMethod::Enqueue,
+        concurrency_parameters: Vec::new(),
         quotas: None,
     };
     enforcer.set_action_policy(action_id, action_policy);

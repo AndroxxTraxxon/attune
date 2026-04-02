@@ -10,14 +10,23 @@
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use sqlx::PgPool;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
-use attune_common::models::{enums::ExecutionStatus, Id};
+use attune_common::{
+    models::{
+        enums::{ExecutionStatus, PolicyMethod},
+        Id, Policy,
+    },
+    repositories::action::PolicyRepository,
+};
 
-use crate::queue_manager::ExecutionQueueManager;
+use crate::queue_manager::{
+    ExecutionQueueManager, QueuedRemovalOutcome, SlotEnqueueOutcome, SlotReleaseOutcome,
+};
 
 /// Policy violation type
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,14 +88,36 @@ impl std::fmt::Display for PolicyViolation {
 }
 
 /// Execution policy configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionPolicy {
     /// Rate limit: maximum executions per time window
     pub rate_limit: Option<RateLimit>,
     /// Concurrency limit: maximum concurrent executions
     pub concurrency_limit: Option<u32>,
+    /// How a concurrency violation should be handled.
+    pub concurrency_method: PolicyMethod,
+    /// Parameter paths used to scope concurrency grouping.
+    pub concurrency_parameters: Vec<String>,
     /// Resource quotas
     pub quotas: Option<HashMap<String, u64>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchedulingPolicyOutcome {
+    Ready,
+    Queued,
+}
+
+impl Default for ExecutionPolicy {
+    fn default() -> Self {
+        Self {
+            rate_limit: None,
+            concurrency_limit: None,
+            concurrency_method: PolicyMethod::Enqueue,
+            concurrency_parameters: Vec::new(),
+            quotas: None,
+        }
+    }
 }
 
 /// Rate limit configuration
@@ -96,6 +127,25 @@ pub struct RateLimit {
     pub max_executions: u32,
     /// Time window in seconds
     pub window_seconds: u32,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedConcurrencyPolicy {
+    limit: u32,
+    method: PolicyMethod,
+    parameters: Vec<String>,
+}
+
+impl From<Policy> for ExecutionPolicy {
+    fn from(policy: Policy) -> Self {
+        Self {
+            rate_limit: None,
+            concurrency_limit: Some(policy.threshold as u32),
+            concurrency_method: policy.method,
+            concurrency_parameters: policy.parameters,
+            quotas: None,
+        }
+    }
 }
 
 /// Policy enforcement scope
@@ -185,6 +235,174 @@ impl PolicyEnforcer {
         self.action_policies.insert(action_id, policy);
     }
 
+    /// Best-effort release for a slot acquired during scheduling when the
+    /// execution never reaches the worker/completion path.
+    pub async fn release_execution_slot(
+        &self,
+        execution_id: Id,
+    ) -> Result<Option<SlotReleaseOutcome>> {
+        match &self.queue_manager {
+            Some(queue_manager) => queue_manager.release_active_slot(execution_id).await,
+            None => Ok(None),
+        }
+    }
+
+    pub async fn restore_execution_slot(
+        &self,
+        execution_id: Id,
+        outcome: &SlotReleaseOutcome,
+    ) -> Result<()> {
+        match &self.queue_manager {
+            Some(queue_manager) => {
+                queue_manager
+                    .restore_active_slot(execution_id, outcome)
+                    .await
+            }
+            None => Ok(()),
+        }
+    }
+
+    pub async fn remove_queued_execution(
+        &self,
+        execution_id: Id,
+    ) -> Result<Option<QueuedRemovalOutcome>> {
+        match &self.queue_manager {
+            Some(queue_manager) => queue_manager.remove_queued_execution(execution_id).await,
+            None => Ok(None),
+        }
+    }
+
+    pub async fn restore_queued_execution(&self, outcome: &QueuedRemovalOutcome) -> Result<()> {
+        match &self.queue_manager {
+            Some(queue_manager) => queue_manager.restore_queued_execution(outcome).await,
+            None => Ok(()),
+        }
+    }
+
+    pub async fn enforce_for_scheduling(
+        &self,
+        action_id: Id,
+        pack_id: Option<Id>,
+        execution_id: Id,
+        config: Option<&JsonValue>,
+    ) -> Result<SchedulingPolicyOutcome> {
+        if let Some(violation) = self
+            .check_policies_except_concurrency(action_id, pack_id)
+            .await?
+        {
+            warn!("Policy violation for action {}: {}", action_id, violation);
+            return Err(anyhow::anyhow!("Policy violation: {}", violation));
+        }
+
+        if let Some(concurrency) = self.resolve_concurrency_policy(action_id, pack_id).await? {
+            let group_key = self.build_parameter_group_key(&concurrency.parameters, config);
+
+            if let Some(queue_manager) = &self.queue_manager {
+                match concurrency.method {
+                    PolicyMethod::Enqueue => {
+                        return match queue_manager
+                            .enqueue(action_id, execution_id, concurrency.limit, group_key)
+                            .await?
+                        {
+                            SlotEnqueueOutcome::Acquired => Ok(SchedulingPolicyOutcome::Ready),
+                            SlotEnqueueOutcome::Enqueued => Ok(SchedulingPolicyOutcome::Queued),
+                        };
+                    }
+                    PolicyMethod::Cancel => {
+                        let outcome = queue_manager
+                            .try_acquire(
+                                action_id,
+                                execution_id,
+                                concurrency.limit,
+                                group_key.clone(),
+                            )
+                            .await?;
+
+                        if !outcome.acquired {
+                            let violation = PolicyViolation::ConcurrencyLimitExceeded {
+                                limit: concurrency.limit,
+                                current_count: outcome.current_count,
+                            };
+                            warn!("Policy violation for action {}: {}", action_id, violation);
+                            return Err(anyhow::anyhow!("Policy violation: {}", violation));
+                        }
+                    }
+                }
+            } else {
+                let scope = PolicyScope::Action(action_id);
+                if let Some(violation) = self
+                    .check_concurrency_limit(concurrency.limit, &scope)
+                    .await?
+                {
+                    return Err(anyhow::anyhow!("Policy violation: {}", violation));
+                }
+            }
+        }
+
+        Ok(SchedulingPolicyOutcome::Ready)
+    }
+
+    async fn resolve_policy(&self, action_id: Id, pack_id: Option<Id>) -> Result<ExecutionPolicy> {
+        if let Some(policy) = self.action_policies.get(&action_id) {
+            return Ok(policy.clone());
+        }
+
+        if let Some(policy) = PolicyRepository::find_latest_by_action(&self.pool, action_id).await?
+        {
+            return Ok(policy.into());
+        }
+
+        if let Some(pack_id) = pack_id {
+            if let Some(policy) = self.pack_policies.get(&pack_id) {
+                return Ok(policy.clone());
+            }
+
+            if let Some(policy) = PolicyRepository::find_latest_by_pack(&self.pool, pack_id).await?
+            {
+                return Ok(policy.into());
+            }
+        }
+
+        if let Some(policy) = PolicyRepository::find_latest_global(&self.pool).await? {
+            return Ok(policy.into());
+        }
+
+        Ok(self.global_policy.clone())
+    }
+
+    async fn resolve_concurrency_policy(
+        &self,
+        action_id: Id,
+        pack_id: Option<Id>,
+    ) -> Result<Option<ResolvedConcurrencyPolicy>> {
+        let policy = self.resolve_policy(action_id, pack_id).await?;
+
+        Ok(policy
+            .concurrency_limit
+            .map(|limit| ResolvedConcurrencyPolicy {
+                limit,
+                method: policy.concurrency_method,
+                parameters: policy.concurrency_parameters,
+            }))
+    }
+
+    fn build_parameter_group_key(
+        &self,
+        parameter_paths: &[String],
+        config: Option<&JsonValue>,
+    ) -> Option<String> {
+        if parameter_paths.is_empty() {
+            return None;
+        }
+
+        let values: BTreeMap<String, JsonValue> = parameter_paths
+            .iter()
+            .map(|path| (path.clone(), extract_parameter_value(config, path)))
+            .collect();
+
+        serde_json::to_string(&values).ok()
+    }
+
     /// Get the concurrency limit for a specific action
     ///
     /// Returns the most specific concurrency limit found:
@@ -192,6 +410,7 @@ impl PolicyEnforcer {
     /// 2. Pack policy
     /// 3. Global policy
     /// 4. None (unlimited)
+    #[allow(dead_code)]
     pub fn get_concurrency_limit(&self, action_id: Id, pack_id: Option<Id>) -> Option<u32> {
         // Check action-specific policy first
         if let Some(policy) = self.action_policies.get(&action_id) {
@@ -229,11 +448,13 @@ impl PolicyEnforcer {
     /// * `Ok(())` - Policy allows execution and queue slot obtained
     /// * `Err(PolicyViolation)` - Policy prevents execution
     /// * `Err(QueueError)` - Queue timeout or other queue error
+    #[allow(dead_code)]
     pub async fn enforce_and_wait(
         &self,
         action_id: Id,
         pack_id: Option<Id>,
         execution_id: Id,
+        config: Option<&JsonValue>,
     ) -> Result<()> {
         // First, check for policy violations (rate limit, quotas, etc.)
         // Note: We skip concurrency check here since queue manages that
@@ -246,36 +467,61 @@ impl PolicyEnforcer {
         }
 
         // If queue manager is available, use it for concurrency control
-        if let Some(queue_manager) = &self.queue_manager {
-            let concurrency_limit = self
-                .get_concurrency_limit(action_id, pack_id)
-                .unwrap_or(u32::MAX); // Default to unlimited if no policy
+        if let Some(concurrency) = self.resolve_concurrency_policy(action_id, pack_id).await? {
+            let group_key = self.build_parameter_group_key(&concurrency.parameters, config);
 
-            debug!(
-                "Enqueuing execution {} for action {} with concurrency limit {}",
-                execution_id, action_id, concurrency_limit
-            );
+            if let Some(queue_manager) = &self.queue_manager {
+                debug!(
+                    "Applying concurrency policy to execution {} for action {} (limit: {}, method: {:?}, group: {:?})",
+                    execution_id, action_id, concurrency.limit, concurrency.method, group_key
+                );
 
-            queue_manager
-                .enqueue_and_wait(action_id, execution_id, concurrency_limit)
-                .await?;
+                match concurrency.method {
+                    PolicyMethod::Enqueue => {
+                        queue_manager
+                            .enqueue_and_wait(
+                                action_id,
+                                execution_id,
+                                concurrency.limit,
+                                group_key.clone(),
+                            )
+                            .await?;
+                    }
+                    PolicyMethod::Cancel => {
+                        let outcome = queue_manager
+                            .try_acquire(
+                                action_id,
+                                execution_id,
+                                concurrency.limit,
+                                group_key.clone(),
+                            )
+                            .await?;
 
-            info!(
-                "Execution {} obtained queue slot for action {}",
-                execution_id, action_id
-            );
-        } else {
-            // No queue manager - use legacy polling behavior
-            debug!(
-                "No queue manager configured, using legacy policy wait for action {}",
-                action_id
-            );
+                        if !outcome.acquired {
+                            let violation = PolicyViolation::ConcurrencyLimitExceeded {
+                                limit: concurrency.limit,
+                                current_count: outcome.current_count,
+                            };
+                            warn!("Policy violation for action {}: {}", action_id, violation);
+                            return Err(anyhow::anyhow!("Policy violation: {}", violation));
+                        }
+                    }
+                }
 
-            if let Some(concurrency_limit) = self.get_concurrency_limit(action_id, pack_id) {
-                // Check concurrency with old method
+                info!(
+                    "Execution {} obtained queue slot for action {} (group: {:?})",
+                    execution_id, action_id, group_key
+                );
+            } else {
+                // No queue manager - use legacy polling behavior
+                debug!(
+                    "No queue manager configured, using legacy policy wait for action {}",
+                    action_id
+                );
+
                 let scope = PolicyScope::Action(action_id);
                 if let Some(violation) = self
-                    .check_concurrency_limit(concurrency_limit, &scope)
+                    .check_concurrency_limit(concurrency.limit, &scope)
                     .await?
                 {
                     return Err(anyhow::anyhow!("Policy violation: {}", violation));
@@ -631,6 +877,25 @@ impl PolicyEnforcer {
     }
 }
 
+fn extract_parameter_value(config: Option<&JsonValue>, path: &str) -> JsonValue {
+    let mut current = match config {
+        Some(value) => value,
+        None => return JsonValue::Null,
+    };
+
+    for segment in path.split('.') {
+        match current {
+            JsonValue::Object(map) => match map.get(segment) {
+                Some(next) => current = next,
+                None => return JsonValue::Null,
+            },
+            _ => return JsonValue::Null,
+        }
+    }
+
+    current.clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -665,6 +930,8 @@ mod tests {
         let policy = ExecutionPolicy::default();
         assert!(policy.rate_limit.is_none());
         assert!(policy.concurrency_limit.is_none());
+        assert_eq!(policy.concurrency_method, PolicyMethod::Enqueue);
+        assert!(policy.concurrency_parameters.is_empty());
         assert!(policy.quotas.is_none());
     }
 
@@ -784,7 +1051,7 @@ mod tests {
         );
 
         // First execution should proceed immediately
-        let result = enforcer.enforce_and_wait(1, None, 100).await;
+        let result = enforcer.enforce_and_wait(1, None, 100, None).await;
         assert!(result.is_ok());
 
         // Check queue stats
@@ -809,7 +1076,7 @@ mod tests {
         let enforcer = Arc::new(enforcer);
 
         // First execution
-        let result = enforcer.enforce_and_wait(1, None, 100).await;
+        let result = enforcer.enforce_and_wait(1, None, 100, None).await;
         assert!(result.is_ok());
 
         // Queue multiple executions
@@ -822,11 +1089,14 @@ mod tests {
             let order = execution_order.clone();
 
             let handle = tokio::spawn(async move {
-                enforcer.enforce_and_wait(1, None, exec_id).await.unwrap();
+                enforcer
+                    .enforce_and_wait(1, None, exec_id, None)
+                    .await
+                    .unwrap();
                 order.lock().await.push(exec_id);
                 // Simulate work
                 sleep(Duration::from_millis(10)).await;
-                queue_manager.notify_completion(1).await.unwrap();
+                queue_manager.notify_completion(exec_id).await.unwrap();
             });
 
             handles.push(handle);
@@ -836,7 +1106,7 @@ mod tests {
         sleep(Duration::from_millis(100)).await;
 
         // Release first execution
-        queue_manager.notify_completion(1).await.unwrap();
+        queue_manager.notify_completion(100).await.unwrap();
 
         // Wait for all
         for handle in handles {
@@ -863,7 +1133,7 @@ mod tests {
         );
 
         // Should work without queue manager (legacy behavior)
-        let result = enforcer.enforce_and_wait(1, None, 100).await;
+        let result = enforcer.enforce_and_wait(1, None, 100, None).await;
         assert!(result.is_ok());
     }
 
@@ -889,12 +1159,34 @@ mod tests {
         );
 
         // First execution proceeds
-        enforcer.enforce_and_wait(1, None, 100).await.unwrap();
+        enforcer.enforce_and_wait(1, None, 100, None).await.unwrap();
 
         // Second execution should timeout
-        let result = enforcer.enforce_and_wait(1, None, 101).await;
+        let result = enforcer.enforce_and_wait(1, None, 101, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("timeout"));
+    }
+
+    #[test]
+    fn test_build_parameter_group_key_uses_exact_values() {
+        let pool = sqlx::PgPool::connect_lazy("postgresql://localhost/test").unwrap();
+        let enforcer = PolicyEnforcer::new(pool);
+        let config = serde_json::json!({
+            "environment": "prod",
+            "target": {
+                "region": "us-east-1"
+            }
+        });
+
+        let group_key = enforcer.build_parameter_group_key(
+            &["target.region".to_string(), "environment".to_string()],
+            Some(&config),
+        );
+
+        assert_eq!(
+            group_key.as_deref(),
+            Some("{\"environment\":\"prod\",\"target.region\":\"us-east-1\"}")
+        );
     }
 
     // Integration tests would require database setup
