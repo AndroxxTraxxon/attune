@@ -21,6 +21,11 @@ pub struct ApiResponse<T> {
     pub data: T,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct PaginatedResponse<T> {
+    data: Vec<T>,
+}
+
 /// API error response
 #[derive(Debug, serde::Deserialize)]
 pub struct ApiError {
@@ -53,6 +58,10 @@ impl ApiClient {
     /// Return the base URL this client is configured to talk to.
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    pub fn auth_token(&self) -> Option<&str> {
+        self.auth_token.as_deref()
     }
 
     #[cfg(test)]
@@ -255,6 +264,31 @@ impl ApiClient {
         }
     }
 
+    async fn handle_paginated_response<T: DeserializeOwned>(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<Vec<T>> {
+        let status = response.status();
+        if status.is_success() {
+            let paginated: PaginatedResponse<T> = response
+                .json()
+                .await
+                .context("Failed to parse paginated API response")?;
+            Ok(paginated.data)
+        } else {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+
+            if let Ok(api_error) = serde_json::from_str::<ApiError>(&error_text) {
+                anyhow::bail!("API error ({}): {}", status, api_error.error);
+            } else {
+                anyhow::bail!("API error ({}): {}", status, error_text);
+            }
+        }
+    }
+
     /// Handle a response where we only care about success/failure, not a body.
     async fn handle_empty_response(&self, response: reqwest::Response) -> Result<()> {
         let status = response.status();
@@ -279,6 +313,25 @@ impl ApiClient {
     /// GET request
     pub async fn get<T: DeserializeOwned>(&mut self, path: &str) -> Result<T> {
         self.execute_json::<T, ()>(Method::GET, path, None).await
+    }
+
+    pub async fn get_paginated<T: DeserializeOwned>(&mut self, path: &str) -> Result<Vec<T>> {
+        let req = self.build_request(Method::GET, path);
+        let response = req.send().await.context("Failed to send request to API")?;
+
+        if response.status() == StatusCode::UNAUTHORIZED
+            && self.refresh_token.is_some()
+            && self.refresh_auth_token().await?
+        {
+            let req = self.build_request(Method::GET, path);
+            let response = req
+                .send()
+                .await
+                .context("Failed to send request to API (retry)")?;
+            return self.handle_paginated_response(response).await;
+        }
+
+        self.handle_paginated_response(response).await
     }
 
     /// GET request with query parameters (query string must be in path)

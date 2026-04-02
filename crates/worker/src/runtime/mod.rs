@@ -48,7 +48,7 @@ pub use dependency::{
     DependencyError, DependencyManager, DependencyManagerRegistry, DependencyResult,
     DependencySpec, EnvironmentInfo,
 };
-pub use log_writer::{BoundedLogResult, BoundedLogWriter};
+pub use log_writer::{BoundedLogFileWriter, BoundedLogResult, BoundedLogWriter};
 pub use parameter_passing::{ParameterDeliveryConfig, PreparedParameters};
 
 // Re-export parameter types from common
@@ -148,6 +148,12 @@ pub struct ExecutionContext {
     /// Maximum stderr size in bytes (for log truncation)
     pub max_stderr_bytes: usize,
 
+    /// Optional live stdout log path for incremental writes during execution.
+    pub stdout_log_path: Option<PathBuf>,
+
+    /// Optional live stderr log path for incremental writes during execution.
+    pub stderr_log_path: Option<PathBuf>,
+
     /// How parameters should be delivered to the action
     pub parameter_delivery: ParameterDelivery,
 
@@ -185,6 +191,8 @@ impl ExecutionContext {
             selected_runtime_version: None,
             max_stdout_bytes: 10 * 1024 * 1024,
             max_stderr_bytes: 10 * 1024 * 1024,
+            stdout_log_path: None,
+            stderr_log_path: None,
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),

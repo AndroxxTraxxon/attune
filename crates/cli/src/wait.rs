@@ -11,7 +11,13 @@
 
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
+use reqwest_eventsource::{Event as SseEvent, EventSource};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -52,6 +58,22 @@ pub struct WaitOptions<'a> {
     pub notifier_ws_url: Option<String>,
     /// If `true`, print progress lines to stderr.
     pub verbose: bool,
+}
+
+pub struct OutputWatchTask {
+    pub handle: tokio::task::JoinHandle<()>,
+    delivered_output: Arc<AtomicBool>,
+    root_stdout_completed: Arc<AtomicBool>,
+}
+
+impl OutputWatchTask {
+    pub fn delivered_output(&self) -> bool {
+        self.delivered_output.load(Ordering::Relaxed)
+    }
+
+    pub fn root_stdout_completed(&self) -> bool {
+        self.root_stdout_completed.load(Ordering::Relaxed)
+    }
 }
 
 // ── notifier WebSocket messages (mirrors websocket_server.rs) ────────────────
@@ -100,6 +122,41 @@ struct RestExecution {
     result: Option<serde_json::Value>,
     created: String,
     updated: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WorkflowTaskMetadata {
+    task_name: String,
+    #[serde(default)]
+    task_index: Option<i32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ExecutionListItem {
+    id: i64,
+    action_ref: String,
+    status: String,
+    #[serde(default)]
+    workflow_task: Option<WorkflowTaskMetadata>,
+}
+
+#[derive(Debug)]
+struct ChildWatchState {
+    label: String,
+    status: String,
+    announced_terminal: bool,
+    stream_handles: Vec<StreamWatchHandle>,
+}
+
+struct RootWatchState {
+    stream_handles: Vec<StreamWatchHandle>,
+}
+
+#[derive(Debug)]
+struct StreamWatchHandle {
+    stream_name: &'static str,
+    offset: Arc<AtomicU64>,
+    handle: tokio::task::JoinHandle<()>,
 }
 
 impl From<RestExecution> for ExecutionSummary {
@@ -175,6 +232,269 @@ pub async fn wait_for_execution(opts: WaitOptions<'_>) -> Result<ExecutionSummar
         opts.verbose,
     )
     .await
+}
+
+pub fn spawn_execution_output_watch(
+    mut client: ApiClient,
+    execution_id: i64,
+    verbose: bool,
+) -> OutputWatchTask {
+    let delivered_output = Arc::new(AtomicBool::new(false));
+    let root_stdout_completed = Arc::new(AtomicBool::new(false));
+    let delivered_output_for_task = delivered_output.clone();
+    let root_stdout_completed_for_task = root_stdout_completed.clone();
+    let handle = tokio::spawn(async move {
+        if let Err(err) = watch_execution_output(
+            &mut client,
+            execution_id,
+            verbose,
+            delivered_output_for_task,
+            root_stdout_completed_for_task,
+        )
+        .await
+        {
+            if verbose {
+                eprintln!("  [watch] {}", err);
+            }
+        }
+    });
+
+    OutputWatchTask {
+        handle,
+        delivered_output,
+        root_stdout_completed,
+    }
+}
+
+async fn watch_execution_output(
+    client: &mut ApiClient,
+    execution_id: i64,
+    verbose: bool,
+    delivered_output: Arc<AtomicBool>,
+    root_stdout_completed: Arc<AtomicBool>,
+) -> Result<()> {
+    let base_url = client.base_url().to_string();
+    let mut root_watch: Option<RootWatchState> = None;
+    let mut children: HashMap<i64, ChildWatchState> = HashMap::new();
+
+    loop {
+        let execution: RestExecution = client.get(&format!("/executions/{}", execution_id)).await?;
+
+        if root_watch
+            .as_ref()
+            .is_none_or(|state| streams_need_restart(&state.stream_handles))
+        {
+            if let Some(token) = client.auth_token().map(str::to_string) {
+                match root_watch.as_mut() {
+                    Some(state) => restart_finished_streams(
+                        &mut state.stream_handles,
+                        &base_url,
+                        token,
+                        execution_id,
+                        None,
+                        verbose,
+                        delivered_output.clone(),
+                        Some(root_stdout_completed.clone()),
+                    ),
+                    None => {
+                        root_watch = Some(RootWatchState {
+                            stream_handles: spawn_execution_log_streams(
+                                &base_url,
+                                token,
+                                execution_id,
+                                None,
+                                verbose,
+                                delivered_output.clone(),
+                                Some(root_stdout_completed.clone()),
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        let child_items = list_child_executions(client, execution_id)
+            .await
+            .unwrap_or_default();
+
+        for child in child_items {
+            let label = format_task_label(&child.workflow_task, &child.action_ref, child.id);
+            let entry = children.entry(child.id).or_insert_with(|| {
+                if verbose {
+                    eprintln!("  [{}] started ({})", label, child.action_ref);
+                }
+                let stream_handles = client
+                    .auth_token()
+                    .map(str::to_string)
+                    .map(|token| {
+                        spawn_execution_log_streams(
+                            &base_url,
+                            token,
+                            child.id,
+                            Some(label.clone()),
+                            verbose,
+                            delivered_output.clone(),
+                            None,
+                        )
+                    })
+                    .unwrap_or_default();
+                ChildWatchState {
+                    label,
+                    status: child.status.clone(),
+                    announced_terminal: false,
+                    stream_handles,
+                }
+            });
+
+            if entry.status != child.status {
+                entry.status = child.status.clone();
+            }
+
+            let child_is_terminal = is_terminal(&entry.status);
+            if !child_is_terminal && streams_need_restart(&entry.stream_handles) {
+                if let Some(token) = client.auth_token().map(str::to_string) {
+                    restart_finished_streams(
+                        &mut entry.stream_handles,
+                        &base_url,
+                        token,
+                        child.id,
+                        Some(entry.label.clone()),
+                        verbose,
+                        delivered_output.clone(),
+                        None,
+                    );
+                }
+            }
+
+            if !entry.announced_terminal && is_terminal(&child.status) {
+                entry.announced_terminal = true;
+                if verbose {
+                    eprintln!("  [{}] {}", entry.label, child.status);
+                }
+            }
+        }
+
+        if is_terminal(&execution.status) {
+            break;
+        }
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    if let Some(root_watch) = root_watch {
+        wait_for_stream_handles(root_watch.stream_handles).await;
+    }
+
+    for child in children.into_values() {
+        wait_for_stream_handles(child.stream_handles).await;
+    }
+
+    Ok(())
+}
+
+fn spawn_execution_log_streams(
+    base_url: &str,
+    token: String,
+    execution_id: i64,
+    prefix: Option<String>,
+    verbose: bool,
+    delivered_output: Arc<AtomicBool>,
+    root_stdout_completed: Option<Arc<AtomicBool>>,
+) -> Vec<StreamWatchHandle> {
+    ["stdout", "stderr"]
+        .into_iter()
+        .map(|stream_name| {
+            let offset = Arc::new(AtomicU64::new(0));
+            let completion_flag = if stream_name == "stdout" {
+                root_stdout_completed.clone()
+            } else {
+                None
+            };
+            StreamWatchHandle {
+                stream_name,
+                handle: tokio::spawn(stream_execution_log(
+                    base_url.to_string(),
+                    token.clone(),
+                    execution_id,
+                    stream_name,
+                    prefix.clone(),
+                    verbose,
+                    offset.clone(),
+                    delivered_output.clone(),
+                    completion_flag,
+                )),
+                offset,
+            }
+        })
+        .collect()
+}
+
+fn streams_need_restart(handles: &[StreamWatchHandle]) -> bool {
+    handles.is_empty() || handles.iter().any(|handle| handle.handle.is_finished())
+}
+
+fn restart_finished_streams(
+    handles: &mut Vec<StreamWatchHandle>,
+    base_url: &str,
+    token: String,
+    execution_id: i64,
+    prefix: Option<String>,
+    verbose: bool,
+    delivered_output: Arc<AtomicBool>,
+    root_stdout_completed: Option<Arc<AtomicBool>>,
+) {
+    for stream in handles.iter_mut() {
+        if stream.handle.is_finished() {
+            let offset = stream.offset.clone();
+            let completion_flag = if stream.stream_name == "stdout" {
+                root_stdout_completed.clone()
+            } else {
+                None
+            };
+            stream.handle = tokio::spawn(stream_execution_log(
+                base_url.to_string(),
+                token.clone(),
+                execution_id,
+                stream.stream_name,
+                prefix.clone(),
+                verbose,
+                offset,
+                delivered_output.clone(),
+                completion_flag,
+            ));
+        }
+    }
+}
+
+async fn wait_for_stream_handles(handles: Vec<StreamWatchHandle>) {
+    for handle in handles {
+        let _ = handle.handle.await;
+    }
+}
+
+async fn list_child_executions(
+    client: &mut ApiClient,
+    execution_id: i64,
+) -> Result<Vec<ExecutionListItem>> {
+    const PER_PAGE: u32 = 100;
+
+    let mut page = 1;
+    let mut all_children = Vec::new();
+
+    loop {
+        let path = format!("/executions?parent={execution_id}&page={page}&per_page={PER_PAGE}");
+        let mut page_items: Vec<ExecutionListItem> = client.get_paginated(&path).await?;
+        let page_len = page_items.len();
+        all_children.append(&mut page_items);
+
+        if page_len < PER_PAGE as usize {
+            break;
+        }
+
+        page += 1;
+    }
+
+    Ok(all_children)
 }
 
 // ── WebSocket path ────────────────────────────────────────────────────────────
@@ -491,6 +811,143 @@ fn derive_notifier_url(api_url: &str) -> Option<String> {
     Some(format!("{}://{}:8081", ws_scheme, host))
 }
 
+pub fn extract_stdout(result: &Option<serde_json::Value>) -> Option<String> {
+    result
+        .as_ref()
+        .and_then(|value| value.get("stdout"))
+        .and_then(|stdout| stdout.as_str())
+        .filter(|stdout| !stdout.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn format_task_label(
+    workflow_task: &Option<WorkflowTaskMetadata>,
+    action_ref: &str,
+    execution_id: i64,
+) -> String {
+    if let Some(workflow_task) = workflow_task {
+        if let Some(index) = workflow_task.task_index {
+            format!("{}[{}]", workflow_task.task_name, index)
+        } else {
+            workflow_task.task_name.clone()
+        }
+    } else {
+        format!("{}#{}", action_ref, execution_id)
+    }
+}
+
+async fn stream_execution_log(
+    base_url: String,
+    token: String,
+    execution_id: i64,
+    stream_name: &'static str,
+    prefix: Option<String>,
+    verbose: bool,
+    offset: Arc<AtomicU64>,
+    delivered_output: Arc<AtomicBool>,
+    root_stdout_completed: Option<Arc<AtomicBool>>,
+) {
+    let mut stream_url = match url::Url::parse(&format!(
+        "{}/api/v1/executions/{}/logs/{}/stream",
+        base_url.trim_end_matches('/'),
+        execution_id,
+        stream_name
+    )) {
+        Ok(url) => url,
+        Err(err) => {
+            if verbose {
+                eprintln!("  [watch] failed to build stream URL: {}", err);
+            }
+            return;
+        }
+    };
+    let current_offset = offset.load(Ordering::Relaxed).to_string();
+    stream_url
+        .query_pairs_mut()
+        .append_pair("token", &token)
+        .append_pair("offset", &current_offset);
+
+    let mut event_source = EventSource::get(stream_url);
+    let mut carry = String::new();
+
+    while let Some(event) = event_source.next().await {
+        match event {
+            Ok(SseEvent::Open) => {}
+            Ok(SseEvent::Message(message)) => match message.event.as_str() {
+                "content" | "append" => {
+                    if let Ok(server_offset) = message.id.parse::<u64>() {
+                        offset.store(server_offset, Ordering::Relaxed);
+                    }
+                    if !message.data.is_empty() {
+                        delivered_output.store(true, Ordering::Relaxed);
+                    }
+                    print_stream_chunk(prefix.as_deref(), &message.data, &mut carry);
+                }
+                "done" => {
+                    if let Some(flag) = &root_stdout_completed {
+                        flag.store(true, Ordering::Relaxed);
+                    }
+                    flush_stream_chunk(prefix.as_deref(), &mut carry);
+                    break;
+                }
+                "error" => {
+                    if verbose && !message.data.is_empty() {
+                        eprintln!("  [watch] {}", message.data);
+                    }
+                    break;
+                }
+                _ => {}
+            },
+            Err(err) => {
+                flush_stream_chunk(prefix.as_deref(), &mut carry);
+                if verbose {
+                    eprintln!(
+                        "  [watch] stream error for execution {}: {}",
+                        execution_id, err
+                    );
+                }
+                break;
+            }
+        }
+    }
+
+    flush_stream_chunk(prefix.as_deref(), &mut carry);
+    let _ = event_source.close();
+}
+
+fn print_stream_chunk(prefix: Option<&str>, chunk: &str, carry: &mut String) {
+    carry.push_str(chunk);
+
+    while let Some(idx) = carry.find('\n') {
+        let mut line = carry.drain(..=idx).collect::<String>();
+        if line.ends_with('\n') {
+            line.pop();
+        }
+        if line.ends_with('\r') {
+            line.pop();
+        }
+
+        if let Some(prefix) = prefix {
+            eprintln!("[{}] {}", prefix, line);
+        } else {
+            eprintln!("{}", line);
+        }
+    }
+}
+
+fn flush_stream_chunk(prefix: Option<&str>, carry: &mut String) {
+    if carry.is_empty() {
+        return;
+    }
+
+    if let Some(prefix) = prefix {
+        eprintln!("[{}] {}", prefix, carry);
+    } else {
+        eprintln!("{}", carry);
+    }
+    carry.clear();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,5 +1009,27 @@ mod tests {
         assert_eq!(summary.id, 7);
         assert_eq!(summary.status, "failed");
         assert_eq!(summary.action_ref, "");
+    }
+
+    #[test]
+    fn test_extract_stdout() {
+        let result = Some(serde_json::json!({
+            "stdout": "hello world",
+            "stderr_log": "/tmp/stderr.log"
+        }));
+        assert_eq!(extract_stdout(&result).as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn test_format_task_label() {
+        let workflow_task = Some(WorkflowTaskMetadata {
+            task_name: "build".to_string(),
+            task_index: Some(2),
+        });
+        assert_eq!(
+            format_task_label(&workflow_task, "core.echo", 42),
+            "build[2]"
+        );
+        assert_eq!(format_task_label(&None, "core.echo", 42), "core.echo#42");
     }
 }

@@ -5,10 +5,11 @@
 
 use super::{
     parameter_passing::{self, ParameterDeliveryConfig},
-    BoundedLogWriter, ExecutionContext, ExecutionResult, Runtime, RuntimeError, RuntimeResult,
+    BoundedLogFileWriter, BoundedLogWriter, ExecutionContext, ExecutionResult, Runtime,
+    RuntimeError, RuntimeResult,
 };
 use async_trait::async_trait;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -45,6 +46,8 @@ impl NativeRuntime {
         timeout: Option<u64>,
         max_stdout_bytes: usize,
         max_stderr_bytes: usize,
+        stdout_log_path: Option<&Path>,
+        stderr_log_path: Option<&Path>,
     ) -> RuntimeResult<ExecutionResult> {
         let start = Instant::now();
 
@@ -131,6 +134,8 @@ impl NativeRuntime {
 
         let mut stdout_writer = BoundedLogWriter::new_stdout(max_stdout_bytes);
         let mut stderr_writer = BoundedLogWriter::new_stderr(max_stderr_bytes);
+        let mut stdout_file = open_live_log_file(stdout_log_path, max_stdout_bytes, true).await?;
+        let mut stderr_file = open_live_log_file(stderr_log_path, max_stderr_bytes, false).await?;
 
         // Create buffered readers
         let mut stdout_reader = BufReader::new(stdout_handle);
@@ -146,6 +151,9 @@ impl NativeRuntime {
                     Ok(_) => {
                         if stdout_writer.write_all(&line).await.is_err() {
                             break;
+                        }
+                        if let Some(file) = stdout_file.as_mut() {
+                            let _ = file.write_all(&line).await;
                         }
                     }
                     Err(_) => break,
@@ -163,6 +171,9 @@ impl NativeRuntime {
                     Ok(_) => {
                         if stderr_writer.write_all(&line).await.is_err() {
                             break;
+                        }
+                        if let Some(file) = stderr_file.as_mut() {
+                            let _ = file.write_all(&line).await;
                         }
                     }
                     Err(_) => break,
@@ -352,6 +363,8 @@ impl Runtime for NativeRuntime {
             context.timeout,
             context.max_stdout_bytes,
             context.max_stderr_bytes,
+            context.stdout_log_path.as_deref(),
+            context.stderr_log_path.as_deref(),
         )
         .await
     }
@@ -399,6 +412,23 @@ impl Runtime for NativeRuntime {
 
         Ok(())
     }
+}
+
+async fn open_live_log_file(
+    path: Option<&Path>,
+    max_bytes: usize,
+    is_stdout: bool,
+) -> std::io::Result<Option<BoundedLogFileWriter>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+
+    let writer = if is_stdout {
+        BoundedLogFileWriter::new_stdout(path, max_bytes).await?
+    } else {
+        BoundedLogFileWriter::new_stderr(path, max_bytes).await?
+    };
+    Ok(Some(writer))
 }
 
 #[cfg(test)]

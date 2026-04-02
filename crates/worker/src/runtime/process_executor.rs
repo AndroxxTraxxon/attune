@@ -12,10 +12,10 @@
 //! 1. SIGTERM is sent to the process immediately
 //! 2. After a 5-second grace period, SIGKILL is sent as a last resort
 
-use super::{BoundedLogWriter, ExecutionResult, OutputFormat, RuntimeResult};
+use super::{BoundedLogFileWriter, BoundedLogWriter, ExecutionResult, OutputFormat, RuntimeResult};
 use std::collections::HashMap;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -59,6 +59,8 @@ pub async fn execute_streaming(
         max_stderr_bytes,
         output_format,
         None,
+        None,
+        None,
     )
     .await
 }
@@ -93,6 +95,8 @@ pub async fn execute_streaming_cancellable(
     max_stderr_bytes: usize,
     output_format: OutputFormat,
     cancel_token: Option<CancellationToken>,
+    stdout_log_path: Option<&Path>,
+    stderr_log_path: Option<&Path>,
 ) -> RuntimeResult<ExecutionResult> {
     let start = Instant::now();
 
@@ -130,6 +134,8 @@ pub async fn execute_streaming_cancellable(
     // Create bounded writers
     let mut stdout_writer = BoundedLogWriter::new_stdout(max_stdout_bytes);
     let mut stderr_writer = BoundedLogWriter::new_stderr(max_stderr_bytes);
+    let mut stdout_file = open_live_log_file(stdout_log_path, max_stdout_bytes, true).await?;
+    let mut stderr_file = open_live_log_file(stderr_log_path, max_stderr_bytes, false).await?;
 
     // Take stdout and stderr streams
     let stdout = child.stdout.take().expect("stdout not captured");
@@ -150,6 +156,9 @@ pub async fn execute_streaming_cancellable(
                     if stdout_writer.write_all(&line).await.is_err() {
                         break;
                     }
+                    if let Some(file) = stdout_file.as_mut() {
+                        let _ = file.write_all(&line).await;
+                    }
                 }
                 Err(_) => break,
             }
@@ -166,6 +175,9 @@ pub async fn execute_streaming_cancellable(
                 Ok(_) => {
                     if stderr_writer.write_all(&line).await.is_err() {
                         break;
+                    }
+                    if let Some(file) = stderr_file.as_mut() {
+                        let _ = file.write_all(&line).await;
                     }
                 }
                 Err(_) => break,
@@ -349,6 +361,24 @@ pub async fn execute_streaming_cancellable(
         stdout_bytes_truncated: stdout_result.bytes_truncated,
         stderr_bytes_truncated: stderr_result.bytes_truncated,
     })
+}
+
+async fn open_live_log_file(
+    path: Option<&Path>,
+    max_bytes: usize,
+    is_stdout: bool,
+) -> io::Result<Option<BoundedLogFileWriter>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+
+    let path: PathBuf = path.to_path_buf();
+    let writer = if is_stdout {
+        BoundedLogFileWriter::new_stdout(&path, max_bytes).await?
+    } else {
+        BoundedLogFileWriter::new_stderr(&path, max_bytes).await?
+    };
+    Ok(Some(writer))
 }
 
 /// Parse stdout content according to the specified output format.

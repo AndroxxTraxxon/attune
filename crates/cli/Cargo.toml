@@ -23,6 +23,7 @@ clap = { workspace = true, features = ["derive", "env", "string"] }
 
 # HTTP client
 reqwest = { workspace = true, features = ["multipart", "stream"] }
+reqwest-eventsource = { workspace = true }
 
 # Serialization
 serde = { workspace = true }

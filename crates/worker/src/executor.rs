@@ -543,6 +543,16 @@ impl ActionExecutor {
             selected_runtime_version,
             max_stdout_bytes: self.max_stdout_bytes,
             max_stderr_bytes: self.max_stderr_bytes,
+            stdout_log_path: Some(
+                self.artifact_manager
+                    .get_execution_dir(execution.id)
+                    .join("stdout.log"),
+            ),
+            stderr_log_path: Some(
+                self.artifact_manager
+                    .get_execution_dir(execution.id)
+                    .join("stderr.log"),
+            ),
             parameter_delivery: action.parameter_delivery,
             parameter_format: action.parameter_format,
             output_format: action.output_format,

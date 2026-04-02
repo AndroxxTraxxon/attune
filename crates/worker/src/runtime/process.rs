@@ -962,6 +962,8 @@ impl Runtime for ProcessRuntime {
             context.max_stderr_bytes,
             context.output_format,
             context.cancel_token.clone(),
+            context.stdout_log_path.as_deref(),
+            context.stderr_log_path.as_deref(),
         )
         .await;
 

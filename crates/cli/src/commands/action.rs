@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::client::ApiClient;
 use crate::config::CliConfig;
 use crate::output::{self, OutputFormat};
-use crate::wait::{wait_for_execution, WaitOptions};
+use crate::wait::{extract_stdout, spawn_execution_output_watch, wait_for_execution, WaitOptions};
 
 #[derive(Subcommand)]
 pub enum ActionCommands {
@@ -493,6 +493,15 @@ async fn handle_execute(
     }
 
     let verbose = matches!(output_format, OutputFormat::Table);
+    let watch_task = if verbose {
+        Some(spawn_execution_output_watch(
+            ApiClient::from_config(&config, api_url),
+            execution.id,
+            verbose,
+        ))
+    } else {
+        None
+    };
     let summary = wait_for_execution(WaitOptions {
         execution_id: execution.id,
         timeout_secs: timeout,
@@ -501,6 +510,13 @@ async fn handle_execute(
         verbose,
     })
     .await?;
+    let suppress_final_stdout = watch_task
+        .as_ref()
+        .is_some_and(|task| task.delivered_output() && task.root_stdout_completed());
+
+    if let Some(task) = watch_task {
+        let _ = tokio::time::timeout(tokio::time::Duration::from_secs(2), task.handle).await;
+    }
 
     match output_format {
         OutputFormat::Json | OutputFormat::Yaml => {
@@ -517,7 +533,20 @@ async fn handle_execute(
                 ("Updated", output::format_timestamp(&summary.updated)),
             ]);
 
-            if let Some(result) = summary.result {
+            let stdout = extract_stdout(&summary.result);
+            if !suppress_final_stdout {
+                if let Some(stdout) = &stdout {
+                    output::print_section("Stdout");
+                    println!("{}", stdout);
+                }
+            }
+
+            if let Some(mut result) = summary.result {
+                if stdout.is_some() {
+                    if let Some(obj) = result.as_object_mut() {
+                        obj.remove("stdout");
+                    }
+                }
                 if !result.is_null() {
                     output::print_section("Result");
                     println!("{}", serde_json::to_string_pretty(&result)?);

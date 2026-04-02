@@ -2,9 +2,10 @@
 //!
 //! Provides bounded log writers that limit output size to prevent OOM issues.
 
+use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::io::AsyncWrite;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 const TRUNCATION_NOTICE_STDOUT: &str = "\n\n[OUTPUT TRUNCATED: stdout exceeded size limit]\n";
 const TRUNCATION_NOTICE_STDERR: &str = "\n\n[OUTPUT TRUNCATED: stderr exceeded size limit]\n";
@@ -73,6 +74,15 @@ pub struct BoundedLogWriter {
     data_bytes_written: usize,
 
     /// Truncation notice to append when limit is reached
+    truncation_notice: &'static str,
+}
+
+/// A file-backed writer that applies the same truncation policy as `BoundedLogWriter`.
+pub struct BoundedLogFileWriter {
+    file: tokio::fs::File,
+    max_bytes: usize,
+    truncated: bool,
+    data_bytes_written: usize,
     truncation_notice: &'static str,
 }
 
@@ -163,6 +173,76 @@ impl BoundedLogWriter {
         let notice_bytes = self.truncation_notice.as_bytes();
         // We reserved space, so the notice should always fit
         self.buffer.extend_from_slice(notice_bytes);
+    }
+}
+
+impl BoundedLogFileWriter {
+    pub async fn new_stdout(path: &Path, max_bytes: usize) -> std::io::Result<Self> {
+        Self::create(path, max_bytes, TRUNCATION_NOTICE_STDOUT).await
+    }
+
+    pub async fn new_stderr(path: &Path, max_bytes: usize) -> std::io::Result<Self> {
+        Self::create(path, max_bytes, TRUNCATION_NOTICE_STDERR).await
+    }
+
+    async fn create(
+        path: &Path,
+        max_bytes: usize,
+        truncation_notice: &'static str,
+    ) -> std::io::Result<Self> {
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        let file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)
+            .await?;
+
+        Ok(Self {
+            file,
+            max_bytes,
+            truncated: false,
+            data_bytes_written: 0,
+            truncation_notice,
+        })
+    }
+
+    pub async fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        if self.truncated {
+            return Ok(());
+        }
+
+        let effective_limit = self.max_bytes.saturating_sub(NOTICE_RESERVE_BYTES);
+        let remaining_space = effective_limit.saturating_sub(self.data_bytes_written);
+
+        if remaining_space == 0 {
+            self.add_truncation_notice().await?;
+            return Ok(());
+        }
+
+        let bytes_to_write = std::cmp::min(buf.len(), remaining_space);
+        if bytes_to_write > 0 {
+            self.file.write_all(&buf[..bytes_to_write]).await?;
+            self.data_bytes_written += bytes_to_write;
+        }
+
+        if bytes_to_write < buf.len() {
+            self.add_truncation_notice().await?;
+        }
+
+        self.file.flush().await
+    }
+
+    async fn add_truncation_notice(&mut self) -> std::io::Result<()> {
+        if self.truncated {
+            return Ok(());
+        }
+
+        self.truncated = true;
+        self.file.write_all(self.truncation_notice.as_bytes()).await
     }
 }
 
