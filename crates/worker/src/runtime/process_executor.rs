@@ -734,6 +734,8 @@ mod tests {
             1024 * 1024,
             OutputFormat::Text,
             Some(cancel_token),
+            None,
+            None,
         )
         .await
         .unwrap();

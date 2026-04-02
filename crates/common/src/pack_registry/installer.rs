@@ -856,7 +856,7 @@ fn extract_git_host(raw_url: &str) -> Option<String> {
 fn archive_filename_from_url(url: &Url) -> String {
     let raw_name = url
         .path_segments()
-        .and_then(|segments| segments.filter(|segment| !segment.is_empty()).next_back())
+        .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
         .unwrap_or("archive.bin");
 
     let sanitized: String = raw_name

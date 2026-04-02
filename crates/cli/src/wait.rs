@@ -159,6 +159,23 @@ struct StreamWatchHandle {
     handle: tokio::task::JoinHandle<()>,
 }
 
+#[derive(Clone)]
+struct StreamWatchConfig {
+    base_url: String,
+    token: String,
+    execution_id: i64,
+    prefix: Option<String>,
+    verbose: bool,
+    delivered_output: Arc<AtomicBool>,
+    root_stdout_completed: Option<Arc<AtomicBool>>,
+}
+
+struct StreamLogTask {
+    stream_name: &'static str,
+    offset: Arc<AtomicU64>,
+    config: StreamWatchConfig,
+}
+
 impl From<RestExecution> for ExecutionSummary {
     fn from(e: RestExecution) -> Self {
         Self {
@@ -288,25 +305,27 @@ async fn watch_execution_output(
                 match root_watch.as_mut() {
                     Some(state) => restart_finished_streams(
                         &mut state.stream_handles,
-                        &base_url,
-                        token,
-                        execution_id,
-                        None,
-                        verbose,
-                        delivered_output.clone(),
-                        Some(root_stdout_completed.clone()),
+                        &StreamWatchConfig {
+                            base_url: base_url.clone(),
+                            token,
+                            execution_id,
+                            prefix: None,
+                            verbose,
+                            delivered_output: delivered_output.clone(),
+                            root_stdout_completed: Some(root_stdout_completed.clone()),
+                        },
                     ),
                     None => {
                         root_watch = Some(RootWatchState {
-                            stream_handles: spawn_execution_log_streams(
-                                &base_url,
+                            stream_handles: spawn_execution_log_streams(StreamWatchConfig {
+                                base_url: base_url.clone(),
                                 token,
                                 execution_id,
-                                None,
                                 verbose,
-                                delivered_output.clone(),
-                                Some(root_stdout_completed.clone()),
-                            ),
+                                prefix: None,
+                                delivered_output: delivered_output.clone(),
+                                root_stdout_completed: Some(root_stdout_completed.clone()),
+                            }),
                         });
                     }
                 }
@@ -327,15 +346,15 @@ async fn watch_execution_output(
                     .auth_token()
                     .map(str::to_string)
                     .map(|token| {
-                        spawn_execution_log_streams(
-                            &base_url,
+                        spawn_execution_log_streams(StreamWatchConfig {
+                            base_url: base_url.clone(),
                             token,
-                            child.id,
-                            Some(label.clone()),
+                            execution_id: child.id,
+                            prefix: Some(label.clone()),
                             verbose,
-                            delivered_output.clone(),
-                            None,
-                        )
+                            delivered_output: delivered_output.clone(),
+                            root_stdout_completed: None,
+                        })
                     })
                     .unwrap_or_default();
                 ChildWatchState {
@@ -355,13 +374,15 @@ async fn watch_execution_output(
                 if let Some(token) = client.auth_token().map(str::to_string) {
                     restart_finished_streams(
                         &mut entry.stream_handles,
-                        &base_url,
-                        token,
-                        child.id,
-                        Some(entry.label.clone()),
-                        verbose,
-                        delivered_output.clone(),
-                        None,
+                        &StreamWatchConfig {
+                            base_url: base_url.clone(),
+                            token,
+                            execution_id: child.id,
+                            prefix: Some(entry.label.clone()),
+                            verbose,
+                            delivered_output: delivered_output.clone(),
+                            root_stdout_completed: None,
+                        },
                     );
                 }
             }
@@ -392,37 +413,31 @@ async fn watch_execution_output(
     Ok(())
 }
 
-fn spawn_execution_log_streams(
-    base_url: &str,
-    token: String,
-    execution_id: i64,
-    prefix: Option<String>,
-    verbose: bool,
-    delivered_output: Arc<AtomicBool>,
-    root_stdout_completed: Option<Arc<AtomicBool>>,
-) -> Vec<StreamWatchHandle> {
+fn spawn_execution_log_streams(config: StreamWatchConfig) -> Vec<StreamWatchHandle> {
     ["stdout", "stderr"]
         .into_iter()
         .map(|stream_name| {
             let offset = Arc::new(AtomicU64::new(0));
             let completion_flag = if stream_name == "stdout" {
-                root_stdout_completed.clone()
+                config.root_stdout_completed.clone()
             } else {
                 None
             };
             StreamWatchHandle {
                 stream_name,
-                handle: tokio::spawn(stream_execution_log(
-                    base_url.to_string(),
-                    token.clone(),
-                    execution_id,
+                handle: tokio::spawn(stream_execution_log(StreamLogTask {
                     stream_name,
-                    prefix.clone(),
-                    verbose,
-                    offset.clone(),
-                    delivered_output.clone(),
-                    completion_flag,
-                )),
+                    offset: offset.clone(),
+                    config: StreamWatchConfig {
+                        base_url: config.base_url.clone(),
+                        token: config.token.clone(),
+                        execution_id: config.execution_id,
+                        prefix: config.prefix.clone(),
+                        verbose: config.verbose,
+                        delivered_output: config.delivered_output.clone(),
+                        root_stdout_completed: completion_flag,
+                    },
+                })),
                 offset,
             }
         })
@@ -433,35 +448,28 @@ fn streams_need_restart(handles: &[StreamWatchHandle]) -> bool {
     handles.is_empty() || handles.iter().any(|handle| handle.handle.is_finished())
 }
 
-fn restart_finished_streams(
-    handles: &mut Vec<StreamWatchHandle>,
-    base_url: &str,
-    token: String,
-    execution_id: i64,
-    prefix: Option<String>,
-    verbose: bool,
-    delivered_output: Arc<AtomicBool>,
-    root_stdout_completed: Option<Arc<AtomicBool>>,
-) {
+fn restart_finished_streams(handles: &mut [StreamWatchHandle], config: &StreamWatchConfig) {
     for stream in handles.iter_mut() {
         if stream.handle.is_finished() {
             let offset = stream.offset.clone();
             let completion_flag = if stream.stream_name == "stdout" {
-                root_stdout_completed.clone()
+                config.root_stdout_completed.clone()
             } else {
                 None
             };
-            stream.handle = tokio::spawn(stream_execution_log(
-                base_url.to_string(),
-                token.clone(),
-                execution_id,
-                stream.stream_name,
-                prefix.clone(),
-                verbose,
+            stream.handle = tokio::spawn(stream_execution_log(StreamLogTask {
+                stream_name: stream.stream_name,
                 offset,
-                delivered_output.clone(),
-                completion_flag,
-            ));
+                config: StreamWatchConfig {
+                    base_url: config.base_url.clone(),
+                    token: config.token.clone(),
+                    execution_id: config.execution_id,
+                    prefix: config.prefix.clone(),
+                    verbose: config.verbose,
+                    delivered_output: config.delivered_output.clone(),
+                    root_stdout_completed: completion_flag,
+                },
+            }));
         }
     }
 }
@@ -837,17 +845,22 @@ fn format_task_label(
     }
 }
 
-async fn stream_execution_log(
-    base_url: String,
-    token: String,
-    execution_id: i64,
-    stream_name: &'static str,
-    prefix: Option<String>,
-    verbose: bool,
-    offset: Arc<AtomicU64>,
-    delivered_output: Arc<AtomicBool>,
-    root_stdout_completed: Option<Arc<AtomicBool>>,
-) {
+async fn stream_execution_log(task: StreamLogTask) {
+    let StreamLogTask {
+        stream_name,
+        offset,
+        config:
+            StreamWatchConfig {
+                base_url,
+                token,
+                execution_id,
+                prefix,
+                verbose,
+                delivered_output,
+                root_stdout_completed,
+            },
+    } = task;
+
     let mut stream_url = match url::Url::parse(&format!(
         "{}/api/v1/executions/{}/logs/{}/stream",
         base_url.trim_end_matches('/'),
@@ -913,7 +926,7 @@ async fn stream_execution_log(
     }
 
     flush_stream_chunk(prefix.as_deref(), &mut carry);
-    let _ = event_source.close();
+    event_source.close();
 }
 
 fn print_stream_chunk(prefix: Option<&str>, chunk: &str, carry: &mut String) {
