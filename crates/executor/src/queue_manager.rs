@@ -1426,7 +1426,7 @@ mod tests {
         let num_executions = 100;
         let max_concurrent = 1;
 
-        // Start first execution
+        // Start first execution to occupy the single slot before others enqueue
         manager
             .enqueue_and_wait(action_id, 0, max_concurrent, None)
             .await
@@ -1435,28 +1435,49 @@ mod tests {
         let execution_order = Arc::new(Mutex::new(Vec::new()));
         let mut handles = vec![];
 
+        // Each spawned execution signals on this channel when enqueue_and_wait
+        // returns (i.e. it has been granted the active slot).  Buffered so
+        // senders never block.
+        let (active_tx, mut active_rx) =
+            tokio::sync::mpsc::channel::<i64>(num_executions as usize);
+
         // Spawn many concurrent enqueues
         for i in 1..num_executions {
             let manager = manager.clone();
             let order = execution_order.clone();
+            let active_tx = active_tx.clone();
 
             let handle = tokio::spawn(async move {
                 manager
                     .enqueue_and_wait(action_id, i, max_concurrent, None)
                     .await
                     .unwrap();
+                // Record the activation order before signalling the release
+                // loop, so `execution_order` reflects slot-grant sequence.
                 order.lock().await.push(i);
+                let _ = active_tx.send(i).await;
             });
 
             handles.push(handle);
         }
 
-        // Give time to queue
+        // Drop the original sender; the channel closes once all task clones
+        // are dropped (i.e. after every execution has activated and sent).
+        drop(active_tx);
+
+        // Give all spawned tasks time to enqueue before we release slot 0
         sleep(Duration::from_millis(200)).await;
 
-        // Release them all
-        for execution_id in 0..num_executions {
-            sleep(Duration::from_millis(10)).await;
+        // Kick off the chain
+        manager.release_active_slot(0).await.unwrap();
+
+        // Release each execution only after it has confirmed activation.
+        // This eliminates the race in the previous approach where
+        // release_active_slot(i) could be called before execution i had
+        // registered itself in active_execution_keys, causing it to return
+        // Ok(None) without decrementing active_count and permanently stalling
+        // the queue.
+        while let Some(execution_id) = active_rx.recv().await {
             manager.release_active_slot(execution_id).await.unwrap();
         }
 
