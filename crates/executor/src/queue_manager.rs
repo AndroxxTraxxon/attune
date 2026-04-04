@@ -1438,8 +1438,7 @@ mod tests {
         // Each spawned execution signals on this channel when enqueue_and_wait
         // returns (i.e. it has been granted the active slot).  Buffered so
         // senders never block.
-        let (active_tx, mut active_rx) =
-            tokio::sync::mpsc::channel::<i64>(num_executions as usize);
+        let (active_tx, mut active_rx) = tokio::sync::mpsc::channel::<i64>(num_executions as usize);
 
         // Spawn many concurrent enqueues
         for i in 1..num_executions {
