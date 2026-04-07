@@ -20,7 +20,7 @@ repository = "https://git.rdrx.app/attune-system/attune"
 
 [workspace.dependencies]
 # Async runtime
-tokio = { version = "1.50", features = ["full"] }
+tokio = { version = "1.51", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 
@@ -52,7 +52,7 @@ config = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
 
 # UUID
-uuid = { version = "1.22", features = ["v4", "serde"] }
+uuid = { version = "1.23", features = ["v4", "serde"] }
 
 # Validation
 validator = { version = "0.20", features = ["derive"] }
@@ -62,9 +62,9 @@ clap = { version = "4.6", features = ["derive"] }
 
 # Message queue / PubSub
 # RabbitMQ
-lapin = "4.3"
+lapin = "4.4"
 # Redis
-redis = { version = "1.0", features = ["tokio-comp", "connection-manager"] }
+redis = { version = "1.2", features = ["tokio-comp", "connection-manager"] }
 
 # JSON Schema
 schemars = { version = "1.2", features = ["chrono04"] }
@@ -91,7 +91,7 @@ regex = "1.12"
 # HTTP client
 reqwest = { version = "0.13", features = ["json"] }
 reqwest-eventsource = "0.6"
-hyper = { version = "1.8", features = ["full"] }
+hyper = { version = "1.9", features = ["full"] }
 
 # File system utilities
 walkdir = "2.5"

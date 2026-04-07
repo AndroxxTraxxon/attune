@@ -175,11 +175,11 @@ attune action execute core.echo --param message="Hello World" --param count=3
 # With JSON parameters
 attune action execute core.echo --params-json '{"message": "Hello", "count": 5}'
 
-# Wait for completion
-attune action execute core.long_task --wait
+# Watch until completion
+attune action execute core.long_task --watch
 
-# Wait with custom timeout (default 300 seconds)
-attune action execute core.long_task --wait --timeout 600
+# Watch with custom timeout (default 300 seconds)
+attune action execute core.long_task --watch --timeout 600
 ```
 
 ## Rule Management

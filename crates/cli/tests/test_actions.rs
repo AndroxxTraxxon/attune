@@ -324,7 +324,7 @@ async fn test_action_execute_wait_for_completion() {
         .arg("core.echo")
         .arg("--param")
         .arg("message=test")
-        .arg("--wait");
+        .arg("--watch");
 
     cmd.assert()
         .success()
@@ -476,7 +476,7 @@ async fn test_action_execute_async_flag() {
         .arg("action")
         .arg("execute")
         .arg("core.long_running");
-    // Note: default behavior is async (no --wait), so no --async flag needed
+    // Note: default behavior is async (no --watch), so no --async flag needed
 
     cmd.assert()
         .success()
