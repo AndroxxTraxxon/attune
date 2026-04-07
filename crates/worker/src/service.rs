@@ -170,16 +170,11 @@ impl WorkerService {
         // Initialize worker registration
         let registration = Arc::new(RwLock::new(WorkerRegistration::new(pool.clone(), &config)));
 
-        // Initialize artifact manager (legacy, for stdout/stderr log storage)
-        // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Worker artifact/config directories come from trusted process configuration, not request data.
-        let artifact_base_dir = std::path::PathBuf::from(
-            config
-                .worker
-                .as_ref()
-                .and_then(|w| w.name.clone())
-                .map(|name| format!("/tmp/attune/artifacts/{}", name))
-                .unwrap_or_else(|| "/tmp/attune/artifacts".to_string()),
-        );
+        // Initialize artifact manager for execution stdout/stderr/result storage.
+        // This must use the shared artifacts_dir so the API log streaming endpoints
+        // and artifact download routes can see the same files the worker writes.
+        // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Artifact storage root is a trusted deployment configuration value.
+        let artifact_base_dir = std::path::PathBuf::from(&config.artifacts_dir);
         let artifact_manager = ArtifactManager::new(artifact_base_dir);
         artifact_manager.initialize().await?;
 

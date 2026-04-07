@@ -124,17 +124,17 @@ enum Commands {
         #[arg(long, conflicts_with = "param")]
         params_json: Option<String>,
 
-        /// Wait for execution to complete
+        /// Watch execution until it completes
         #[arg(short, long)]
-        wait: bool,
+        watch: bool,
 
-        /// Timeout in seconds when waiting (default: 300)
-        #[arg(long, default_value = "300", requires = "wait")]
+        /// Timeout in seconds when watching (default: 300)
+        #[arg(long, default_value = "300", requires = "watch")]
         timeout: u64,
 
         /// Notifier WebSocket base URL (e.g. ws://localhost:8081).
         /// Derived from --api-url automatically when not set.
-        #[arg(long, requires = "wait")]
+        #[arg(long, requires = "watch")]
         notifier_url: Option<String>,
     },
 }
@@ -243,7 +243,7 @@ async fn main() {
             action_ref,
             param,
             params_json,
-            wait,
+            watch,
             timeout,
             notifier_url,
         } => {
@@ -254,7 +254,7 @@ async fn main() {
                     action_ref,
                     param,
                     params_json,
-                    wait,
+                    watch,
                     timeout,
                     notifier_url,
                 },

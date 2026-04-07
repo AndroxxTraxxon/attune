@@ -68,17 +68,17 @@ pub enum ActionCommands {
         #[arg(long, conflicts_with = "param")]
         params_json: Option<String>,
 
-        /// Wait for execution to complete
+        /// Watch execution until it completes
         #[arg(short, long)]
-        wait: bool,
+        watch: bool,
 
-        /// Timeout in seconds when waiting (default: 300)
-        #[arg(long, default_value = "300", requires = "wait")]
+        /// Timeout in seconds when watching (default: 300)
+        #[arg(long, default_value = "300", requires = "watch")]
         timeout: u64,
 
         /// Notifier WebSocket base URL (e.g. ws://localhost:8081).
         /// Derived from --api-url automatically when not set.
-        #[arg(long, requires = "wait")]
+        #[arg(long, requires = "watch")]
         notifier_url: Option<String>,
     },
 }
@@ -186,7 +186,7 @@ pub async fn handle_action_command(
             action_ref,
             param,
             params_json,
-            wait,
+            watch,
             timeout,
             notifier_url,
         } => {
@@ -196,7 +196,7 @@ pub async fn handle_action_command(
                 params_json,
                 profile,
                 api_url,
-                wait,
+                watch,
                 timeout,
                 notifier_url,
                 output_format,
@@ -307,7 +307,7 @@ async fn handle_show(
             if let Some(params) = action.param_schema {
                 if !params.is_null() {
                     output::print_section("Parameters Schema");
-                    println!("{}", serde_json::to_string_pretty(&params)?);
+                    output::print_schema(&params)?;
                 }
             }
         }
@@ -428,7 +428,7 @@ async fn handle_execute(
     params_json: Option<String>,
     profile: &Option<String>,
     api_url: &Option<String>,
-    wait: bool,
+    watch: bool,
     timeout: u64,
     notifier_url: Option<String>,
     output_format: OutputFormat,
@@ -468,7 +468,7 @@ async fn handle_execute(
     let path = "/executions/execute".to_string();
     let execution: Execution = client.post(&path, &request).await?;
 
-    if !wait {
+    if !watch {
         match output_format {
             OutputFormat::Json | OutputFormat::Yaml => {
                 output::print_output(&execution, output_format)?;
@@ -492,22 +492,22 @@ async fn handle_execute(
         ));
     }
 
-    let verbose = matches!(output_format, OutputFormat::Table);
-    let watch_task = if verbose {
-        Some(spawn_execution_output_watch(
-            ApiClient::from_config(&config, api_url),
-            execution.id,
-            verbose,
-        ))
-    } else {
-        None
-    };
+    let interactive_wait = true;
+    let stream_live_logs = true;
+    let debug_wait = false;
+    let watch_task = Some(spawn_execution_output_watch(
+        ApiClient::from_config(&config, api_url),
+        execution.id,
+        interactive_wait,
+        stream_live_logs,
+        debug_wait,
+    ));
     let summary = wait_for_execution(WaitOptions {
         execution_id: execution.id,
         timeout_secs: timeout,
         api_client: &mut client,
         notifier_ws_url: notifier_url,
-        verbose,
+        verbose: debug_wait,
     })
     .await?;
     let suppress_final_stdout = watch_task

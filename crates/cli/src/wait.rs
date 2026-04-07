@@ -10,15 +10,19 @@
 //!   - [`wait_for_execution`] – the single entry point
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
+use colored::Colorize;
 use futures::{SinkExt, StreamExt};
 use reqwest_eventsource::{Event as SseEvent, EventSource};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::io::{self, IsTerminal, Write};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc,
+    Arc, Mutex,
 };
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use terminal_size::{terminal_size, Width};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use crate::client::ApiClient;
@@ -121,6 +125,8 @@ struct RestExecution {
     status: String,
     result: Option<serde_json::Value>,
     created: String,
+    #[serde(default)]
+    started_at: Option<String>,
     updated: String,
 }
 
@@ -136,6 +142,9 @@ struct ExecutionListItem {
     id: i64,
     action_ref: String,
     status: String,
+    #[serde(default)]
+    started_at: Option<String>,
+    updated: String,
     #[serde(default)]
     workflow_task: Option<WorkflowTaskMetadata>,
 }
@@ -165,7 +174,10 @@ struct StreamWatchConfig {
     token: String,
     execution_id: i64,
     prefix: Option<String>,
-    verbose: bool,
+    debug: bool,
+    emit_output: bool,
+    task_id: Option<i64>,
+    live_renderer: Option<LiveRenderer>,
     delivered_output: Arc<AtomicBool>,
     root_stdout_completed: Option<Arc<AtomicBool>>,
 }
@@ -174,6 +186,280 @@ struct StreamLogTask {
     stream_name: &'static str,
     offset: Arc<AtomicU64>,
     config: StreamWatchConfig,
+}
+
+const MAX_TASK_TAIL_LINES: usize = 4;
+const RENDER_TICK: Duration = Duration::from_millis(120);
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+#[derive(Debug, Clone)]
+struct LiveTaskState {
+    label: String,
+    task_name: String,
+    is_root: bool,
+    is_iterated: bool,
+    action_ref: String,
+    status: String,
+    started_at: Option<DateTime<Utc>>,
+    finished_at: Option<DateTime<Utc>>,
+    stderr_lines: VecDeque<String>,
+    stdout_lines: VecDeque<String>,
+}
+
+#[derive(Debug, Clone)]
+struct LiveTaskUpdate {
+    id: i64,
+    label: String,
+    task_name: String,
+    is_root: bool,
+    is_iterated: bool,
+    action_ref: String,
+    status: String,
+    started_at: Option<DateTime<Utc>>,
+    finished_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Default)]
+struct IteratedTaskSummary {
+    task_name: String,
+    pending: usize,
+    running: usize,
+    completed: usize,
+    failed: usize,
+    first_started_at: Option<DateTime<Utc>>,
+    first_seen_id: i64,
+}
+
+#[derive(Debug, Default)]
+struct LiveRendererState {
+    tasks: BTreeMap<i64, LiveTaskState>,
+    rendered_lines: usize,
+}
+
+#[derive(Clone)]
+struct LiveRenderer {
+    enabled: bool,
+    state: Arc<Mutex<LiveRendererState>>,
+    stop: Arc<AtomicBool>,
+}
+
+impl LiveRenderer {
+    fn new(show_progress: bool) -> Self {
+        Self {
+            enabled: show_progress && io::stderr().is_terminal(),
+            state: Arc::new(Mutex::new(LiveRendererState::default())),
+            stop: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn spawn(&self) -> Option<tokio::task::JoinHandle<()>> {
+        if !self.enabled {
+            return None;
+        }
+
+        let renderer = self.clone();
+        Some(tokio::spawn(async move {
+            loop {
+                renderer.render(false);
+                if renderer.stop.load(Ordering::Relaxed) {
+                    renderer.render(true);
+                    break;
+                }
+                tokio::time::sleep(RENDER_TICK).await;
+            }
+        }))
+    }
+
+    fn stop(&self) {
+        if self.enabled {
+            self.stop.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn upsert_task(&self, update: LiveTaskUpdate) {
+        if !self.enabled {
+            return;
+        }
+
+        let LiveTaskUpdate {
+            id,
+            label,
+            task_name,
+            is_root,
+            is_iterated,
+            action_ref,
+            status,
+            started_at,
+            finished_at,
+        } = update;
+
+        let mut state = self.state.lock().expect("live renderer poisoned");
+        let entry = state.tasks.entry(id).or_insert_with(|| LiveTaskState {
+            label: label.clone(),
+            task_name: task_name.clone(),
+            is_root,
+            is_iterated,
+            action_ref: action_ref.clone(),
+            status: status.clone(),
+            started_at,
+            finished_at,
+            stderr_lines: VecDeque::new(),
+            stdout_lines: VecDeque::new(),
+        });
+        entry.label = label;
+        entry.task_name = task_name;
+        entry.is_root = is_root;
+        entry.is_iterated = is_iterated;
+        entry.action_ref = action_ref;
+        entry.status = status.clone();
+        entry.started_at = started_at.or(entry.started_at);
+        entry.finished_at = if is_terminal(&status) {
+            finished_at
+        } else {
+            None
+        };
+        if should_clear_task_tail(&status) {
+            entry.stderr_lines.clear();
+            entry.stdout_lines.clear();
+        }
+    }
+
+    fn push_line(&self, id: i64, stream_name: &str, line: String) {
+        if !self.enabled || line.is_empty() {
+            return;
+        }
+
+        let mut state = self.state.lock().expect("live renderer poisoned");
+        if let Some(task) = state.tasks.get_mut(&id) {
+            if should_clear_task_tail(&task.status) {
+                task.stderr_lines.clear();
+                task.stdout_lines.clear();
+                return;
+            }
+
+            let target_lines = if stream_name == "stdout" {
+                &mut task.stdout_lines
+            } else {
+                &mut task.stderr_lines
+            };
+            target_lines.push_back(truncate_log_line(&line));
+            while target_lines.len() > MAX_TASK_TAIL_LINES {
+                target_lines.pop_front();
+            }
+        }
+    }
+
+    fn render(&self, force: bool) {
+        if !self.enabled {
+            return;
+        }
+
+        let mut state = self.state.lock().expect("live renderer poisoned");
+        if state.tasks.is_empty() && !force {
+            return;
+        }
+
+        let now = Instant::now();
+        let width = current_terminal_width();
+        let has_child_tasks = state.tasks.values().any(|task| !task.is_root);
+        let iterated_summaries = build_iterated_summaries(&state.tasks);
+        let mut lines = Vec::new();
+        let mut summary_by_name = HashMap::new();
+        for summary in &iterated_summaries {
+            summary_by_name.insert(summary.task_name.as_str(), summary);
+        }
+
+        let mut items = state
+            .tasks
+            .iter()
+            .filter_map(|(id, task)| {
+                if task.is_root && has_child_tasks {
+                    return None;
+                }
+                if task.is_iterated {
+                    return should_render_iterated_task(task).then(|| RenderItem {
+                        group_started_at: summary_by_name
+                            .get(task.task_name.as_str())
+                            .and_then(|summary| summary.first_started_at.as_ref())
+                            .map(DateTime::timestamp_millis),
+                        group_id: summary_by_name
+                            .get(task.task_name.as_str())
+                            .map_or(*id, |summary| summary.first_seen_id),
+                        within_group_rank: 1,
+                        started_at: task.started_at.as_ref().map(DateTime::timestamp_millis),
+                        id: *id,
+                        kind: RenderItemKind::Task(task),
+                    });
+                }
+
+                Some(RenderItem {
+                    group_started_at: task.started_at.as_ref().map(DateTime::timestamp_millis),
+                    group_id: *id,
+                    within_group_rank: 0,
+                    started_at: task.started_at.as_ref().map(DateTime::timestamp_millis),
+                    id: *id,
+                    kind: RenderItemKind::Task(task),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        items.extend(iterated_summaries.iter().map(|summary| {
+            RenderItem {
+                group_started_at: summary
+                    .first_started_at
+                    .as_ref()
+                    .map(DateTime::timestamp_millis),
+                group_id: summary.first_seen_id,
+                within_group_rank: 0,
+                started_at: summary
+                    .first_started_at
+                    .as_ref()
+                    .map(DateTime::timestamp_millis),
+                id: summary.first_seen_id,
+                kind: RenderItemKind::IteratedSummary(summary),
+            }
+        }));
+        items.sort_by(render_item_cmp);
+
+        for item in items {
+            match item.kind {
+                RenderItemKind::Task(task) => lines.extend(render_task_lines(task, now, width)),
+                RenderItemKind::IteratedSummary(summary) => {
+                    lines.push(render_iterated_summary_line(summary, now, width))
+                }
+            }
+        }
+
+        let mut stderr = io::stderr().lock();
+        if state.rendered_lines > 0 {
+            let _ = write!(stderr, "\x1b[{}F\x1b[J", state.rendered_lines);
+        }
+        for line in &lines {
+            let _ = writeln!(stderr, "{line}");
+        }
+        let _ = stderr.flush();
+        state.rendered_lines = lines.len();
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RenderItem<'a> {
+    group_started_at: Option<i64>,
+    group_id: i64,
+    within_group_rank: u8,
+    started_at: Option<i64>,
+    id: i64,
+    kind: RenderItemKind<'a>,
+}
+
+#[derive(Clone, Copy)]
+enum RenderItemKind<'a> {
+    Task(&'a LiveTaskState),
+    IteratedSummary(&'a IteratedTaskSummary),
 }
 
 impl From<RestExecution> for ExecutionSummary {
@@ -254,7 +540,9 @@ pub async fn wait_for_execution(opts: WaitOptions<'_>) -> Result<ExecutionSummar
 pub fn spawn_execution_output_watch(
     mut client: ApiClient,
     execution_id: i64,
-    verbose: bool,
+    show_progress: bool,
+    stream_logs: bool,
+    debug: bool,
 ) -> OutputWatchTask {
     let delivered_output = Arc::new(AtomicBool::new(false));
     let root_stdout_completed = Arc::new(AtomicBool::new(false));
@@ -264,13 +552,15 @@ pub fn spawn_execution_output_watch(
         if let Err(err) = watch_execution_output(
             &mut client,
             execution_id,
-            verbose,
+            show_progress,
+            stream_logs,
+            debug,
             delivered_output_for_task,
             root_stdout_completed_for_task,
         )
         .await
         {
-            if verbose {
+            if debug {
                 eprintln!("  [watch] {}", err);
             }
         }
@@ -286,20 +576,49 @@ pub fn spawn_execution_output_watch(
 async fn watch_execution_output(
     client: &mut ApiClient,
     execution_id: i64,
-    verbose: bool,
+    show_progress: bool,
+    stream_logs: bool,
+    debug: bool,
     delivered_output: Arc<AtomicBool>,
     root_stdout_completed: Arc<AtomicBool>,
 ) -> Result<()> {
     let base_url = client.base_url().to_string();
+    let live_renderer = LiveRenderer::new(show_progress);
+    let render_handle = live_renderer.spawn();
+    let plain_progress = show_progress && !live_renderer.enabled();
     let mut root_watch: Option<RootWatchState> = None;
     let mut children: HashMap<i64, ChildWatchState> = HashMap::new();
 
     loop {
         let execution: RestExecution = client.get(&format!("/executions/{}", execution_id)).await?;
+        let root_started_at = execution
+            .started_at
+            .as_deref()
+            .and_then(parse_api_timestamp);
+        let root_finished_at = if is_terminal(&execution.status) {
+            parse_api_timestamp(&execution.updated)
+        } else {
+            None
+        };
 
-        if root_watch
-            .as_ref()
-            .is_none_or(|state| streams_need_restart(&state.stream_handles))
+        if live_renderer.enabled() {
+            live_renderer.upsert_task(LiveTaskUpdate {
+                id: execution.id,
+                label: format!("execution#{}", execution.id),
+                task_name: execution.action_ref.clone(),
+                is_root: true,
+                is_iterated: false,
+                action_ref: execution.action_ref.clone(),
+                status: execution.status.clone(),
+                started_at: root_started_at,
+                finished_at: root_finished_at,
+            });
+        }
+
+        if stream_logs
+            && root_watch
+                .as_ref()
+                .is_none_or(|state| streams_need_restart(&state.stream_handles))
         {
             if let Some(token) = client.auth_token().map(str::to_string) {
                 match root_watch.as_mut() {
@@ -310,7 +629,10 @@ async fn watch_execution_output(
                             token,
                             execution_id,
                             prefix: None,
-                            verbose,
+                            debug,
+                            emit_output: !live_renderer.enabled(),
+                            task_id: live_renderer.enabled().then_some(execution_id),
+                            live_renderer: live_renderer.enabled().then_some(live_renderer.clone()),
                             delivered_output: delivered_output.clone(),
                             root_stdout_completed: Some(root_stdout_completed.clone()),
                         },
@@ -321,8 +643,13 @@ async fn watch_execution_output(
                                 base_url: base_url.clone(),
                                 token,
                                 execution_id,
-                                verbose,
+                                debug,
                                 prefix: None,
+                                emit_output: !live_renderer.enabled(),
+                                task_id: live_renderer.enabled().then_some(execution_id),
+                                live_renderer: live_renderer
+                                    .enabled()
+                                    .then_some(live_renderer.clone()),
                                 delivered_output: delivered_output.clone(),
                                 root_stdout_completed: Some(root_stdout_completed.clone()),
                             }),
@@ -338,25 +665,63 @@ async fn watch_execution_output(
 
         for child in child_items {
             let label = format_task_label(&child.workflow_task, &child.action_ref, child.id);
+            let task_name = child
+                .workflow_task
+                .as_ref()
+                .map(|task| task.task_name.clone())
+                .unwrap_or_else(|| label.clone());
+            let is_iterated = child
+                .workflow_task
+                .as_ref()
+                .and_then(|task| task.task_index)
+                .is_some();
+            let started_at = child.started_at.as_deref().and_then(parse_api_timestamp);
+            let finished_at = if is_terminal(&child.status) {
+                parse_api_timestamp(&child.updated)
+            } else {
+                None
+            };
             let entry = children.entry(child.id).or_insert_with(|| {
-                if verbose {
+                if plain_progress {
                     eprintln!("  [{}] started ({})", label, child.action_ref);
                 }
-                let stream_handles = client
-                    .auth_token()
-                    .map(str::to_string)
-                    .map(|token| {
-                        spawn_execution_log_streams(StreamWatchConfig {
-                            base_url: base_url.clone(),
-                            token,
-                            execution_id: child.id,
-                            prefix: Some(label.clone()),
-                            verbose,
-                            delivered_output: delivered_output.clone(),
-                            root_stdout_completed: None,
+                if live_renderer.enabled() {
+                    live_renderer.upsert_task(LiveTaskUpdate {
+                        id: child.id,
+                        label: label.clone(),
+                        task_name: task_name.clone(),
+                        is_root: false,
+                        is_iterated,
+                        action_ref: child.action_ref.clone(),
+                        status: child.status.clone(),
+                        started_at,
+                        finished_at,
+                    });
+                }
+                let stream_handles = if stream_logs && should_stream_logs(&child) {
+                    client
+                        .auth_token()
+                        .map(str::to_string)
+                        .map(|token| {
+                            spawn_execution_log_streams(StreamWatchConfig {
+                                base_url: base_url.clone(),
+                                token,
+                                execution_id: child.id,
+                                prefix: Some(label.clone()),
+                                debug,
+                                emit_output: !live_renderer.enabled(),
+                                task_id: Some(child.id),
+                                live_renderer: live_renderer
+                                    .enabled()
+                                    .then_some(live_renderer.clone()),
+                                delivered_output: delivered_output.clone(),
+                                root_stdout_completed: None,
+                            })
                         })
-                    })
-                    .unwrap_or_default();
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
                 ChildWatchState {
                     label,
                     status: child.status.clone(),
@@ -368,18 +733,38 @@ async fn watch_execution_output(
             if entry.status != child.status {
                 entry.status = child.status.clone();
             }
+            if live_renderer.enabled() {
+                live_renderer.upsert_task(LiveTaskUpdate {
+                    id: child.id,
+                    label: entry.label.clone(),
+                    task_name: task_name.clone(),
+                    is_root: false,
+                    is_iterated,
+                    action_ref: child.action_ref.clone(),
+                    status: child.status.clone(),
+                    started_at,
+                    finished_at,
+                });
+            }
 
             let child_is_terminal = is_terminal(&entry.status);
-            if !child_is_terminal && streams_need_restart(&entry.stream_handles) {
+            if stream_logs
+                && should_stream_logs(&child)
+                && !child_is_terminal
+                && streams_need_restart(&entry.stream_handles)
+            {
                 if let Some(token) = client.auth_token().map(str::to_string) {
-                    restart_finished_streams(
+                    ensure_streams_running(
                         &mut entry.stream_handles,
                         &StreamWatchConfig {
                             base_url: base_url.clone(),
                             token,
                             execution_id: child.id,
                             prefix: Some(entry.label.clone()),
-                            verbose,
+                            debug,
+                            emit_output: !live_renderer.enabled(),
+                            task_id: Some(child.id),
+                            live_renderer: live_renderer.enabled().then_some(live_renderer.clone()),
                             delivered_output: delivered_output.clone(),
                             root_stdout_completed: None,
                         },
@@ -389,7 +774,7 @@ async fn watch_execution_output(
 
             if !entry.announced_terminal && is_terminal(&child.status) {
                 entry.announced_terminal = true;
-                if verbose {
+                if plain_progress {
                     eprintln!("  [{}] {}", entry.label, child.status);
                 }
             }
@@ -408,6 +793,46 @@ async fn watch_execution_output(
 
     for child in children.into_values() {
         wait_for_stream_handles(child.stream_handles).await;
+    }
+
+    if live_renderer.enabled() {
+        if let Ok(final_children) = list_child_executions(client, execution_id).await {
+            for child in final_children {
+                let label = format_task_label(&child.workflow_task, &child.action_ref, child.id);
+                let task_name = child
+                    .workflow_task
+                    .as_ref()
+                    .map(|task| task.task_name.clone())
+                    .unwrap_or_else(|| label.clone());
+                let is_iterated = child
+                    .workflow_task
+                    .as_ref()
+                    .and_then(|task| task.task_index)
+                    .is_some();
+                let started_at = child.started_at.as_deref().and_then(parse_api_timestamp);
+                let finished_at = if is_terminal(&child.status) {
+                    parse_api_timestamp(&child.updated)
+                } else {
+                    None
+                };
+                live_renderer.upsert_task(LiveTaskUpdate {
+                    id: child.id,
+                    label,
+                    task_name,
+                    is_root: false,
+                    is_iterated,
+                    action_ref: child.action_ref,
+                    status: child.status,
+                    started_at,
+                    finished_at,
+                });
+            }
+        }
+    }
+
+    live_renderer.stop();
+    if let Some(handle) = render_handle {
+        let _ = handle.await;
     }
 
     Ok(())
@@ -433,7 +858,10 @@ fn spawn_execution_log_streams(config: StreamWatchConfig) -> Vec<StreamWatchHand
                         token: config.token.clone(),
                         execution_id: config.execution_id,
                         prefix: config.prefix.clone(),
-                        verbose: config.verbose,
+                        debug: config.debug,
+                        emit_output: config.emit_output,
+                        task_id: config.task_id,
+                        live_renderer: config.live_renderer.clone(),
                         delivered_output: config.delivered_output.clone(),
                         root_stdout_completed: completion_flag,
                     },
@@ -446,6 +874,15 @@ fn spawn_execution_log_streams(config: StreamWatchConfig) -> Vec<StreamWatchHand
 
 fn streams_need_restart(handles: &[StreamWatchHandle]) -> bool {
     handles.is_empty() || handles.iter().any(|handle| handle.handle.is_finished())
+}
+
+fn ensure_streams_running(handles: &mut Vec<StreamWatchHandle>, config: &StreamWatchConfig) {
+    if handles.is_empty() {
+        *handles = spawn_execution_log_streams(config.clone());
+        return;
+    }
+
+    restart_finished_streams(handles, config);
 }
 
 fn restart_finished_streams(handles: &mut [StreamWatchHandle], config: &StreamWatchConfig) {
@@ -465,7 +902,10 @@ fn restart_finished_streams(handles: &mut [StreamWatchHandle], config: &StreamWa
                     token: config.token.clone(),
                     execution_id: config.execution_id,
                     prefix: config.prefix.clone(),
-                    verbose: config.verbose,
+                    debug: config.debug,
+                    emit_output: config.emit_output,
+                    task_id: config.task_id,
+                    live_renderer: config.live_renderer.clone(),
                     delivered_output: config.delivered_output.clone(),
                     root_stdout_completed: completion_flag,
                 },
@@ -492,6 +932,7 @@ async fn list_child_executions(
     loop {
         let path = format!("/executions?parent={execution_id}&page={page}&per_page={PER_PAGE}");
         let mut page_items: Vec<ExecutionListItem> = client.get_paginated(&path).await?;
+        page_items.sort_by_key(|item| item.id);
         let page_len = page_items.len();
         all_children.append(&mut page_items);
 
@@ -855,7 +1296,10 @@ async fn stream_execution_log(task: StreamLogTask) {
                 token,
                 execution_id,
                 prefix,
-                verbose,
+                debug,
+                emit_output,
+                task_id,
+                live_renderer,
                 delivered_output,
                 root_stdout_completed,
             },
@@ -869,7 +1313,7 @@ async fn stream_execution_log(task: StreamLogTask) {
     )) {
         Ok(url) => url,
         Err(err) => {
-            if verbose {
+            if debug {
                 eprintln!("  [watch] failed to build stream URL: {}", err);
             }
             return;
@@ -895,17 +1339,34 @@ async fn stream_execution_log(task: StreamLogTask) {
                     if !message.data.is_empty() {
                         delivered_output.store(true, Ordering::Relaxed);
                     }
-                    print_stream_chunk(prefix.as_deref(), &message.data, &mut carry);
+                    let lines = consume_stream_chunk(&message.data, &mut carry);
+                    emit_stream_lines(
+                        prefix.as_deref(),
+                        stream_name,
+                        task_id,
+                        &live_renderer,
+                        emit_output,
+                        lines,
+                    );
                 }
                 "done" => {
                     if let Some(flag) = &root_stdout_completed {
                         flag.store(true, Ordering::Relaxed);
                     }
-                    flush_stream_chunk(prefix.as_deref(), &mut carry);
+                    if let Some(line) = take_remaining_stream_chunk(&mut carry) {
+                        emit_stream_lines(
+                            prefix.as_deref(),
+                            stream_name,
+                            task_id,
+                            &live_renderer,
+                            emit_output,
+                            vec![line],
+                        );
+                    }
                     break;
                 }
                 "error" => {
-                    if verbose && !message.data.is_empty() {
+                    if debug && !message.data.is_empty() {
                         eprintln!("  [watch] {}", message.data);
                     }
                     break;
@@ -913,8 +1374,20 @@ async fn stream_execution_log(task: StreamLogTask) {
                 _ => {}
             },
             Err(err) => {
-                flush_stream_chunk(prefix.as_deref(), &mut carry);
-                if verbose {
+                if let Some(line) = take_remaining_stream_chunk(&mut carry) {
+                    emit_stream_lines(
+                        prefix.as_deref(),
+                        stream_name,
+                        task_id,
+                        &live_renderer,
+                        emit_output,
+                        vec![line],
+                    );
+                }
+                if is_benign_stream_end_error(&err) {
+                    break;
+                }
+                if debug {
                     eprintln!(
                         "  [watch] stream error for execution {}: {}",
                         execution_id, err
@@ -925,12 +1398,26 @@ async fn stream_execution_log(task: StreamLogTask) {
         }
     }
 
-    flush_stream_chunk(prefix.as_deref(), &mut carry);
+    if let Some(line) = take_remaining_stream_chunk(&mut carry) {
+        emit_stream_lines(
+            prefix.as_deref(),
+            stream_name,
+            task_id,
+            &live_renderer,
+            emit_output,
+            vec![line],
+        );
+    }
     event_source.close();
 }
 
-fn print_stream_chunk(prefix: Option<&str>, chunk: &str, carry: &mut String) {
+fn is_benign_stream_end_error(err: &reqwest_eventsource::Error) -> bool {
+    err.to_string().contains("Stream ended")
+}
+
+fn consume_stream_chunk(chunk: &str, carry: &mut String) -> Vec<String> {
     carry.push_str(chunk);
+    let mut lines = Vec::new();
 
     while let Some(idx) = carry.find('\n') {
         let mut line = carry.drain(..=idx).collect::<String>();
@@ -940,26 +1427,285 @@ fn print_stream_chunk(prefix: Option<&str>, chunk: &str, carry: &mut String) {
         if line.ends_with('\r') {
             line.pop();
         }
+        lines.push(line);
+    }
 
-        if let Some(prefix) = prefix {
-            eprintln!("[{}] {}", prefix, line);
-        } else {
-            eprintln!("{}", line);
+    lines
+}
+
+fn take_remaining_stream_chunk(carry: &mut String) -> Option<String> {
+    if carry.is_empty() {
+        return None;
+    }
+    let line = carry.clone();
+    carry.clear();
+    Some(line)
+}
+
+fn emit_stream_lines(
+    prefix: Option<&str>,
+    _stream_name: &str,
+    task_id: Option<i64>,
+    live_renderer: &Option<LiveRenderer>,
+    emit_output: bool,
+    lines: Vec<String>,
+) {
+    if lines.is_empty() {
+        return;
+    }
+
+    if let (Some(renderer), Some(task_id)) = (live_renderer.as_ref(), task_id) {
+        for line in lines {
+            renderer.push_line(task_id, _stream_name, line);
+        }
+        return;
+    }
+
+    if emit_output {
+        for line in lines {
+            if let Some(prefix) = prefix {
+                eprintln!("[{}] {}", prefix, line);
+            } else {
+                eprintln!("{}", line);
+            }
         }
     }
 }
 
-fn flush_stream_chunk(prefix: Option<&str>, carry: &mut String) {
-    if carry.is_empty() {
-        return;
+fn should_clear_task_tail(status: &str) -> bool {
+    matches!(status.to_lowercase().as_str(), "completed" | "succeeded")
+}
+
+fn build_iterated_summaries(tasks: &BTreeMap<i64, LiveTaskState>) -> Vec<IteratedTaskSummary> {
+    let mut summaries: BTreeMap<String, IteratedTaskSummary> = BTreeMap::new();
+
+    for (id, task) in tasks.iter().filter(|(_, task)| task.is_iterated) {
+        let summary =
+            summaries
+                .entry(task.task_name.clone())
+                .or_insert_with(|| IteratedTaskSummary {
+                    task_name: task.task_name.clone(),
+                    first_seen_id: *id,
+                    ..Default::default()
+                });
+
+        if *id < summary.first_seen_id {
+            summary.first_seen_id = *id;
+        }
+        match (&summary.first_started_at, &task.started_at) {
+            (None, Some(started_at)) => summary.first_started_at = Some(*started_at),
+            (Some(current), Some(started_at)) if started_at < current => {
+                summary.first_started_at = Some(*started_at);
+            }
+            _ => {}
+        }
+
+        match normalized_task_state(&task.status) {
+            TaskStateBucket::Pending => summary.pending += 1,
+            TaskStateBucket::Running => summary.running += 1,
+            TaskStateBucket::Completed => summary.completed += 1,
+            TaskStateBucket::Failed => summary.failed += 1,
+        }
     }
 
-    if let Some(prefix) = prefix {
-        eprintln!("[{}] {}", prefix, carry);
+    summaries.into_values().collect()
+}
+
+fn render_iterated_summary_line(
+    summary: &IteratedTaskSummary,
+    now: Instant,
+    width: usize,
+) -> String {
+    let (icon, icon_width) = if summary.failed > 0 {
+        ("✗".red().bold().to_string(), 1)
+    } else if summary.running == 0 && summary.pending == 0 {
+        ("✓".green().bold().to_string(), 1)
     } else {
-        eprintln!("{}", carry);
+        (spinner_frame(now).cyan().to_string(), 1)
+    };
+    let left = format!(
+        "{}: {} running, {} pending, {} completed, {} failed",
+        summary.task_name, summary.running, summary.pending, summary.completed, summary.failed
+    );
+    format_row(&icon, icon_width, &left, None, None, width)
+}
+
+fn render_item_cmp(left: &RenderItem<'_>, right: &RenderItem<'_>) -> std::cmp::Ordering {
+    render_sort_tuple(left)
+        .cmp(&render_sort_tuple(right))
+        .then_with(|| left.started_at.cmp(&right.started_at))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn render_sort_tuple(item: &RenderItem<'_>) -> (bool, i64, i64, u8) {
+    (
+        item.group_started_at.is_none(),
+        item.group_started_at.unwrap_or(i64::MAX),
+        item.group_id,
+        item.within_group_rank,
+    )
+}
+
+fn should_render_iterated_task(task: &LiveTaskState) -> bool {
+    normalized_task_state(&task.status) == TaskStateBucket::Running && task.started_at.is_some()
+}
+
+fn render_task_lines(task: &LiveTaskState, now: Instant, width: usize) -> Vec<String> {
+    let elapsed = task
+        .started_at
+        .map(|started_at| {
+            let ended_at = task.finished_at.unwrap_or_else(Utc::now);
+            format_elapsed(
+                ended_at
+                    .signed_duration_since(started_at)
+                    .to_std()
+                    .unwrap_or_default(),
+            )
+        })
+        .unwrap_or_else(|| "--:--.-".to_string());
+    let status = task.status.to_lowercase();
+    let (icon, icon_width) = match status.as_str() {
+        "completed" | "succeeded" => ("✓".green().bold().to_string(), 1),
+        "failed" => ("✗".red().bold().to_string(), 1),
+        "cancelled" | "canceled" => ("○".bright_black().to_string(), 1),
+        "timeout" | "timed_out" => ("◷".yellow().bold().to_string(), 1),
+        _ => (spinner_frame(now).cyan().to_string(), 1),
+    };
+
+    let left = format!("{} {}", task.label, task.status);
+    let mut lines = vec![format_row(
+        &icon,
+        icon_width,
+        &left,
+        Some(&format!("[{}]", task.action_ref)),
+        Some(&elapsed),
+        width,
+    )];
+    for line in task.stderr_lines.iter().chain(task.stdout_lines.iter()) {
+        lines.push(format!(
+            "    {}",
+            truncate_to_width(line, width.saturating_sub(4))
+        ));
     }
-    carry.clear();
+    lines
+}
+
+fn spinner_frame(_now: Instant) -> &'static str {
+    let frame = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        / RENDER_TICK.as_millis();
+    let frame = frame as usize % SPINNER_FRAMES.len();
+    SPINNER_FRAMES[frame]
+}
+
+fn format_elapsed(duration: Duration) -> String {
+    let total_tenths = (duration.as_secs_f64() * 10.0).round() as u64;
+    let total = total_tenths / 10;
+    let tenths = total_tenths % 10;
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let seconds = total % 60;
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{seconds:02}.{tenths}")
+    } else {
+        format!("{minutes:02}:{seconds:02}.{tenths}")
+    }
+}
+
+fn truncate_log_line(line: &str) -> String {
+    truncate_to_width(line, 120)
+}
+
+fn format_row(
+    icon: &str,
+    icon_width: usize,
+    left: &str,
+    right_prefix: Option<&str>,
+    right: Option<&str>,
+    width: usize,
+) -> String {
+    let min_gap = 2;
+    let right_prefix_width = right_prefix.map_or(0, display_width);
+    let right_width = right.map_or(0, display_width);
+    let right_total_width =
+        right_prefix_width + usize::from(right_prefix.is_some() && right.is_some()) + right_width;
+    let reserved = icon_width + 1 + min_gap + right_total_width;
+    let available_left = width.saturating_sub(reserved).max(10);
+    let left = truncate_to_width(left, available_left);
+    let left_width = display_width(&left);
+
+    if right_prefix.is_some() || right.is_some() {
+        let gap = width
+            .saturating_sub(icon_width + 1 + left_width + right_total_width)
+            .max(min_gap);
+        let mut row = format!("{icon} {left}{}", " ".repeat(gap));
+        if let Some(right_prefix) = right_prefix {
+            row.push_str(right_prefix);
+        }
+        if let Some(right) = right {
+            if right_prefix.is_some() {
+                row.push(' ');
+            }
+            row.push_str(&right.bright_black().to_string());
+        }
+        row
+    } else {
+        format!("{icon} {left}")
+    }
+}
+
+fn current_terminal_width() -> usize {
+    terminal_size()
+        .map(|(Width(width), _)| width as usize)
+        .filter(|width| *width > 20)
+        .unwrap_or(100)
+}
+
+fn display_width(value: &str) -> usize {
+    value.chars().count()
+}
+
+fn truncate_to_width(value: &str, width: usize) -> String {
+    if display_width(value) <= width {
+        return value.to_string();
+    }
+
+    value
+        .chars()
+        .take(width.saturating_sub(1))
+        .collect::<String>()
+        + "…"
+}
+
+fn should_stream_logs(execution: &ExecutionListItem) -> bool {
+    execution.started_at.is_some()
+}
+
+fn parse_api_timestamp(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskStateBucket {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+}
+
+fn normalized_task_state(status: &str) -> TaskStateBucket {
+    match status {
+        "requested" | "scheduling" | "scheduled" => TaskStateBucket::Pending,
+        "completed" | "succeeded" => TaskStateBucket::Completed,
+        "failed" | "timeout" | "timed_out" | "cancelled" | "canceled" | "abandoned" => {
+            TaskStateBucket::Failed
+        }
+        _ => TaskStateBucket::Running,
+    }
 }
 
 #[cfg(test)]
@@ -1035,6 +1781,62 @@ mod tests {
     }
 
     #[test]
+    fn test_should_clear_task_tail() {
+        assert!(should_clear_task_tail("completed"));
+        assert!(should_clear_task_tail("succeeded"));
+        assert!(!should_clear_task_tail("failed"));
+        assert!(!should_clear_task_tail("running"));
+    }
+
+    #[test]
+    fn test_push_line_ignores_late_output_for_successful_task() {
+        let renderer = LiveRenderer {
+            enabled: true,
+            state: Arc::new(Mutex::new(LiveRendererState::default())),
+            stop: Arc::new(AtomicBool::new(false)),
+        };
+
+        renderer.upsert_task(LiveTaskUpdate {
+            id: 7,
+            label: "task".to_string(),
+            task_name: "task".to_string(),
+            is_root: false,
+            is_iterated: false,
+            action_ref: "core.echo".to_string(),
+            status: "completed".to_string(),
+            started_at: None,
+            finished_at: Some(Utc::now()),
+        });
+        renderer.push_line(7, "stderr", "should not persist".to_string());
+
+        let state = renderer.state.lock().expect("live renderer poisoned");
+        let task = state.tasks.get(&7).expect("task exists");
+        assert!(task.stderr_lines.is_empty());
+        assert!(task.stdout_lines.is_empty());
+    }
+
+    #[test]
+    fn test_render_task_lines_places_stdout_after_stderr() {
+        let task = LiveTaskState {
+            label: "task".to_string(),
+            task_name: "task".to_string(),
+            is_root: false,
+            is_iterated: false,
+            action_ref: "core.echo".to_string(),
+            status: "running".to_string(),
+            started_at: None,
+            finished_at: None,
+            stderr_lines: VecDeque::from(vec!["stderr line".to_string()]),
+            stdout_lines: VecDeque::from(vec!["stdout line".to_string()]),
+        };
+
+        let lines = render_task_lines(&task, Instant::now(), 100);
+
+        assert!(lines[1].contains("stderr line"));
+        assert!(lines[2].contains("stdout line"));
+    }
+
+    #[test]
     fn test_format_task_label() {
         let workflow_task = Some(WorkflowTaskMetadata {
             task_name: "build".to_string(),
@@ -1045,5 +1847,96 @@ mod tests {
             "build[2]"
         );
         assert_eq!(format_task_label(&None, "core.echo", 42), "core.echo#42");
+    }
+
+    #[test]
+    fn test_is_benign_stream_end_error_message() {
+        let err = reqwest_eventsource::Error::StreamEnded;
+        assert!(is_benign_stream_end_error(&err));
+    }
+
+    #[test]
+    fn test_consume_stream_chunk_splits_lines() {
+        let mut carry = String::new();
+        let lines = consume_stream_chunk("one\ntwo", &mut carry);
+        assert_eq!(lines, vec!["one".to_string()]);
+        assert_eq!(carry, "two");
+
+        let lines = consume_stream_chunk("\nthree\n", &mut carry);
+        assert_eq!(lines, vec!["two".to_string(), "three".to_string()]);
+        assert!(carry.is_empty());
+    }
+
+    #[test]
+    fn test_format_elapsed() {
+        assert_eq!(format_elapsed(Duration::from_millis(5300)), "00:05.3");
+        assert_eq!(format_elapsed(Duration::from_millis(65100)), "01:05.1");
+        assert_eq!(format_elapsed(Duration::from_millis(3665100)), "01:01:05.1");
+    }
+
+    #[test]
+    fn test_truncate_to_width() {
+        assert_eq!(truncate_to_width("abcdef", 4), "abc…");
+        assert_eq!(truncate_to_width("abc", 4), "abc");
+    }
+
+    #[tokio::test]
+    async fn test_ensure_streams_running_spawns_for_empty_handles() {
+        let mut handles = Vec::new();
+        let config = StreamWatchConfig {
+            base_url: "not a url".to_string(),
+            token: "token".to_string(),
+            execution_id: 42,
+            prefix: Some("process_items[1]".to_string()),
+            debug: false,
+            emit_output: false,
+            task_id: Some(42),
+            live_renderer: None,
+            delivered_output: Arc::new(AtomicBool::new(false)),
+            root_stdout_completed: None,
+        };
+
+        ensure_streams_running(&mut handles, &config);
+
+        assert_eq!(handles.len(), 2);
+
+        wait_for_stream_handles(handles).await;
+    }
+
+    #[test]
+    fn test_root_task_is_hidden_when_child_tasks_exist() {
+        let renderer = LiveRenderer {
+            enabled: true,
+            state: Arc::new(Mutex::new(LiveRendererState::default())),
+            stop: Arc::new(AtomicBool::new(false)),
+        };
+
+        renderer.upsert_task(LiveTaskUpdate {
+            id: 1,
+            label: "execution#1".to_string(),
+            task_name: "core.workflow".to_string(),
+            is_root: true,
+            is_iterated: false,
+            action_ref: "core.workflow".to_string(),
+            status: "running".to_string(),
+            started_at: None,
+            finished_at: None,
+        });
+        renderer.upsert_task(LiveTaskUpdate {
+            id: 2,
+            label: "task_a".to_string(),
+            task_name: "task_a".to_string(),
+            is_root: false,
+            is_iterated: false,
+            action_ref: "core.echo".to_string(),
+            status: "running".to_string(),
+            started_at: None,
+            finished_at: None,
+        });
+
+        renderer.render(false);
+
+        let state = renderer.state.lock().expect("live renderer poisoned");
+        assert_eq!(state.rendered_lines, 1);
     }
 }

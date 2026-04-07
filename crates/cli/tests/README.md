@@ -109,7 +109,7 @@ cargo test --package attune-cli --tests -- --test-threads=1
 - ✅ Execute with multiple parameters
 - ✅ Execute with JSON parameters
 - ✅ Execute without parameters
-- ✅ Execute with --wait flag
+- ✅ Execute with --watch flag
 - ✅ Execute with --async flag
 - ✅ List actions by pack
 - ✅ Invalid parameter formats

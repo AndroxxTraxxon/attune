@@ -493,7 +493,16 @@ impl PackInstaller {
         })?;
         let normalized_host = host.to_ascii_lowercase();
 
-        if normalized_host == "localhost" {
+        // Whether the host is explicitly trusted via the allowlist. Explicitly allowlisted hosts
+        // bypass private-IP checks so that local/private registries (e.g. a self-hosted Gitea)
+        // can be used in development or air-gapped environments.
+        let host_is_allowlisted = self
+            .allowed_remote_hosts
+            .as_ref()
+            .map(|set| set.contains(&normalized_host))
+            .unwrap_or(false);
+
+        if normalized_host == "localhost" && !host_is_allowlisted {
             return Err(Error::validation(format!(
                 "Remote URL host is not allowed: {}",
                 host
@@ -509,12 +518,14 @@ impl PackInstaller {
             }
         }
 
-        if let Some(ip) = parsed.host().and_then(|host| match host {
-            url::Host::Ipv4(ip) => Some(IpAddr::V4(ip)),
-            url::Host::Ipv6(ip) => Some(IpAddr::V6(ip)),
-            url::Host::Domain(_) => None,
-        }) {
-            ensure_public_ip(ip)?;
+        if !host_is_allowlisted {
+            if let Some(ip) = parsed.host().and_then(|host| match host {
+                url::Host::Ipv4(ip) => Some(IpAddr::V4(ip)),
+                url::Host::Ipv6(ip) => Some(IpAddr::V6(ip)),
+                url::Host::Domain(_) => None,
+            }) {
+                ensure_public_ip(ip)?;
+            }
         }
 
         let port = parsed.port_or_known_default().ok_or_else(|| {
@@ -528,7 +539,9 @@ impl PackInstaller {
         let mut saw_address = false;
         for addr in resolved {
             saw_address = true;
-            ensure_public_ip(addr.ip())?;
+            if !host_is_allowlisted {
+                ensure_public_ip(addr.ip())?;
+            }
         }
 
         if !saw_address {
@@ -557,7 +570,13 @@ impl PackInstaller {
     fn validate_remote_host(&self, host: &str) -> Result<()> {
         let normalized_host = host.to_ascii_lowercase();
 
-        if normalized_host == "localhost" {
+        let host_is_allowlisted = self
+            .allowed_remote_hosts
+            .as_ref()
+            .map(|set| set.contains(&normalized_host))
+            .unwrap_or(false);
+
+        if normalized_host == "localhost" && !host_is_allowlisted {
             return Err(Error::validation(format!(
                 "Remote host is not allowed: {}",
                 host
@@ -993,6 +1012,36 @@ mod tests {
         assert!(hosts.contains("registry.example.com"));
         assert!(hosts.contains("github.com"));
         assert!(hosts.contains("cdn.example.com"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_remote_url_allows_allowlisted_localhost() {
+        let temp_dir = std::env::temp_dir().join("attune-test");
+        let config = PackRegistryConfig {
+            allowed_source_hosts: vec!["localhost".to_string()],
+            allow_http: true,
+            ..Default::default()
+        };
+        let installer = PackInstaller::new(&temp_dir, Some(config)).await.unwrap();
+
+        installer
+            .validate_remote_url("http://localhost:3000/example/repo.git")
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn test_validate_remote_host_allows_allowlisted_localhost() {
+        let installer = PackInstaller {
+            temp_dir: std::env::temp_dir().join("attune-test"),
+            registry_client: None,
+            verify_checksums: false,
+            allow_http: false,
+            allowed_remote_hosts: Some(HashSet::from(["localhost".to_string()])),
+            progress_callback: None,
+        };
+
+        installer.validate_remote_host("localhost").unwrap();
     }
 
     #[test]

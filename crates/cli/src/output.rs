@@ -4,6 +4,7 @@ use colored::Colorize;
 use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, Color, Table};
 use serde::Serialize;
 use std::fmt::Display;
+use terminal_size::{terminal_size, Width};
 
 /// Output format for CLI commands
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
@@ -88,12 +89,67 @@ pub fn add_header(table: &mut Table, headers: Vec<&str>) {
 pub fn print_key_value_table(pairs: Vec<(&str, String)>) {
     let mut table = create_table();
     add_header(&mut table, vec!["Key", "Value"]);
+    let width = terminal_width();
+    let key_width = pairs
+        .iter()
+        .map(|(key, _)| display_width(key))
+        .max()
+        .unwrap_or(3)
+        .clamp(8, 18);
+    let value_width = width.saturating_sub(key_width + 9).max(20);
 
     for (key, value) in pairs {
-        table.add_row(vec![Cell::new(key).fg(Color::Yellow), Cell::new(value)]);
+        table.add_row(vec![
+            Cell::new(wrap_text(key, key_width)).fg(Color::Yellow),
+            Cell::new(wrap_text(&value, value_width)),
+        ]);
     }
 
     println!("{}", table);
+}
+
+/// Print a schema in a readable multi-line format instead of a raw JSON dump.
+pub fn print_schema(schema: &serde_json::Value) -> Result<()> {
+    if let Some(properties) = schema.as_object() {
+        if properties.values().all(|value| value.is_object()) {
+            let width = terminal_width();
+            let content_width = width.saturating_sub(4).max(24);
+            let mut names = properties.keys().collect::<Vec<_>>();
+            names.sort();
+
+            for (index, name) in names.into_iter().enumerate() {
+                if index > 0 {
+                    println!();
+                }
+
+                println!("{}", name.bold());
+                if let Some(definition) = properties.get(name).and_then(|value| value.as_object()) {
+                    print_schema_field("Type", &schema_type_label(definition), content_width);
+
+                    if let Some(default) = definition.get("default") {
+                        print_schema_field("Default", &compact_json(default), content_width);
+                    }
+
+                    if let Some(description) = definition
+                        .get("description")
+                        .and_then(|value| value.as_str())
+                    {
+                        print_schema_field("Description", description, content_width);
+                    }
+
+                    let constraints = schema_constraints(definition);
+                    if !constraints.is_empty() {
+                        print_schema_field("Constraints", &constraints.join(", "), content_width);
+                    }
+                }
+            }
+
+            return Ok(());
+        }
+    }
+
+    println!("{}", serde_yaml_ng::to_string(schema)?);
+    Ok(())
 }
 
 /// Print a simple list
@@ -134,6 +190,146 @@ pub fn truncate(s: &str, max_len: usize) -> String {
         s.to_string()
     } else {
         format!("{}...", &s[..max_len.saturating_sub(3)])
+    }
+}
+
+fn terminal_width() -> usize {
+    terminal_size()
+        .map(|(Width(width), _)| width as usize)
+        .filter(|width| *width > 20)
+        .unwrap_or(100)
+}
+
+fn display_width(value: &str) -> usize {
+    value.chars().count()
+}
+
+fn wrap_text(value: &str, width: usize) -> String {
+    let width = width.max(1);
+    let mut wrapped = Vec::new();
+
+    for paragraph in value.split('\n') {
+        if paragraph.is_empty() {
+            wrapped.push(String::new());
+            continue;
+        }
+
+        let mut line = String::new();
+        for word in paragraph.split_whitespace() {
+            if line.is_empty() {
+                append_wrapped_word(&mut wrapped, &mut line, word, width);
+                continue;
+            }
+
+            if display_width(&line) + 1 + display_width(word) <= width {
+                line.push(' ');
+                line.push_str(word);
+            } else {
+                wrapped.push(line);
+                line = String::new();
+                append_wrapped_word(&mut wrapped, &mut line, word, width);
+            }
+        }
+
+        if !line.is_empty() {
+            wrapped.push(line);
+        }
+    }
+
+    wrapped.join("\n")
+}
+
+fn append_wrapped_word(
+    lines: &mut Vec<String>,
+    current_line: &mut String,
+    word: &str,
+    width: usize,
+) {
+    if display_width(word) <= width {
+        current_line.push_str(word);
+        return;
+    }
+
+    let mut chunk = String::new();
+    for ch in word.chars() {
+        chunk.push(ch);
+        if display_width(&chunk) >= width {
+            if current_line.is_empty() {
+                lines.push(std::mem::take(&mut chunk));
+            } else {
+                lines.push(std::mem::take(current_line));
+                lines.push(std::mem::take(&mut chunk));
+            }
+        }
+    }
+
+    if !chunk.is_empty() {
+        current_line.push_str(&chunk);
+    }
+}
+
+fn schema_type_label(definition: &serde_json::Map<String, serde_json::Value>) -> String {
+    match definition.get("type") {
+        Some(serde_json::Value::String(kind)) => kind.clone(),
+        Some(serde_json::Value::Array(kinds)) => kinds
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>()
+            .join(" | "),
+        _ => "any".to_string(),
+    }
+}
+
+fn schema_constraints(definition: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    let mut constraints = Vec::new();
+
+    if let Some(values) = definition.get("enum").and_then(|value| value.as_array()) {
+        constraints.push(format!(
+            "enum: {}",
+            values
+                .iter()
+                .map(compact_json)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    for key in [
+        "minimum",
+        "maximum",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "format",
+    ] {
+        if let Some(value) = definition.get(key) {
+            constraints.push(format!("{key}: {}", compact_json(value)));
+        }
+    }
+
+    constraints
+}
+
+fn compact_json(value: &serde_json::Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
+}
+
+fn print_schema_field(label: &str, value: &str, width: usize) {
+    let indent = "  ";
+    let label_prefix = format!("{indent}{label}: ");
+    let continuation = " ".repeat(label_prefix.chars().count());
+    let wrapped = wrap_text(
+        value,
+        width.saturating_sub(label_prefix.chars().count()).max(12),
+    );
+    let mut lines = wrapped.lines();
+
+    if let Some(first_line) = lines.next() {
+        println!("{label_prefix}{first_line}");
+    }
+
+    for line in lines {
+        println!("{continuation}{line}");
     }
 }
 
