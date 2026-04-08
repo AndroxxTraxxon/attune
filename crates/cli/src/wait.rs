@@ -12,7 +12,10 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
-use futures::{SinkExt, StreamExt};
+use futures::{
+    stream::{SplitSink, SplitStream},
+    SinkExt, StreamExt,
+};
 use reqwest12::header;
 use reqwest_eventsource::{Event as SseEvent, EventSource};
 use serde::{Deserialize, Serialize};
@@ -193,8 +196,12 @@ struct StreamLogTask {
     config: StreamWatchConfig,
 }
 
+type ExecutionWsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+type ExecutionWsWrite = SplitSink<ExecutionWsStream, Message>;
+type ExecutionWsRead = SplitStream<ExecutionWsStream>;
+
 struct ExecutionNotifier {
-    ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    ws_stream: ExecutionWsStream,
     next_ping: Instant,
 }
 
@@ -230,6 +237,7 @@ const MAX_TASK_TAIL_LINES: usize = 4;
 const RENDER_TICK: Duration = Duration::from_millis(120);
 const WATCH_ROOT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const WATCH_DESCENDANT_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+const WEBSOCKET_CLOSE_TIMEOUT: Duration = Duration::from_millis(250);
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 #[derive(Debug, Clone)]
@@ -807,6 +815,10 @@ async fn watch_execution_output(client: &mut ApiClient, ctx: WatchExecutionConte
         tokio::time::sleep(WATCH_ROOT_REFRESH_INTERVAL).await;
     }
 
+    if let Some(mut notifier) = execution_notifier {
+        notifier.close().await;
+    }
+
     if let Some(root_watch) = root_watch {
         wait_for_stream_handles(root_watch.stream_handles).await;
     }
@@ -1118,34 +1130,43 @@ async fn connect_execution_notifier(
         .await
         .map_err(|_| anyhow::anyhow!("WebSocket connect timed out"))??;
 
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while let Some(msg) = ws_stream.next().await {
-            if let Ok(Message::Text(txt)) = msg {
-                if let Ok(ServerMsg::Welcome { client_id, .. }) =
-                    serde_json::from_str::<ServerMsg>(&txt)
-                {
-                    if verbose {
-                        eprintln!("  [watch:notifier] session id {}", client_id);
+    let subscribe_result: Result<()> = async {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(msg) = ws_stream.next().await {
+                if let Ok(Message::Text(txt)) = msg {
+                    if let Ok(ServerMsg::Welcome { client_id, .. }) =
+                        serde_json::from_str::<ServerMsg>(&txt)
+                    {
+                        if verbose {
+                            eprintln!("  [watch:notifier] session id {}", client_id);
+                        }
+                        return Ok(());
                     }
-                    return Ok(());
                 }
             }
+            anyhow::bail!("connection closed before welcome")
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for welcome message"))??;
+        let subscribe_msg = ClientMsg::Subscribe {
+            filter: "entity_type:execution".to_string(),
+        };
+        ws_stream
+            .send(Message::Text(serde_json::to_string(&subscribe_msg)?.into()))
+            .await?;
+
+        if verbose {
+            eprintln!("  [watch:notifier] subscribed to entity_type:execution");
         }
-        anyhow::bail!("connection closed before welcome")
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("timed out waiting for welcome message"))??;
 
-    let subscribe_msg = ClientMsg::Subscribe {
-        filter: "entity_type:execution".to_string(),
-    };
-    ws_stream
-        .send(Message::Text(serde_json::to_string(&subscribe_msg)?.into()))
-        .await?;
-
-    if verbose {
-        eprintln!("  [watch:notifier] subscribed to entity_type:execution");
+        Ok(())
     }
+    .await;
+
+    if subscribe_result.is_err() {
+        graceful_close_websocket(&mut ws_stream).await;
+    }
+    subscribe_result?;
 
     Ok(ExecutionNotifier {
         ws_stream,
@@ -1154,6 +1175,10 @@ async fn connect_execution_notifier(
 }
 
 impl ExecutionNotifier {
+    async fn close(&mut self) {
+        graceful_close_websocket(&mut self.ws_stream).await;
+    }
+
     async fn drain_execution_updates(
         &mut self,
         root_execution_id: i64,
@@ -1222,6 +1247,40 @@ impl ExecutionNotifier {
     }
 }
 
+async fn graceful_close_websocket(ws_stream: &mut ExecutionWsStream) {
+    let _ = tokio::time::timeout(WEBSOCKET_CLOSE_TIMEOUT, ws_stream.close(None)).await;
+    let _ = tokio::time::timeout(WEBSOCKET_CLOSE_TIMEOUT, async {
+        while let Some(message) = ws_stream.next().await {
+            match message {
+                Ok(Message::Close(_)) | Err(_) => break,
+                Ok(Message::Text(_))
+                | Ok(Message::Ping(_))
+                | Ok(Message::Pong(_))
+                | Ok(Message::Binary(_))
+                | Ok(Message::Frame(_)) => {}
+            }
+        }
+    })
+    .await;
+}
+
+async fn graceful_close_split_websocket(write: &mut ExecutionWsWrite, read: &mut ExecutionWsRead) {
+    let _ = tokio::time::timeout(WEBSOCKET_CLOSE_TIMEOUT, write.close()).await;
+    let _ = tokio::time::timeout(WEBSOCKET_CLOSE_TIMEOUT, async {
+        while let Some(message) = read.next().await {
+            match message {
+                Ok(Message::Close(_)) | Err(_) => break,
+                Ok(Message::Text(_))
+                | Ok(Message::Ping(_))
+                | Ok(Message::Pong(_))
+                | Ok(Message::Binary(_))
+                | Ok(Message::Frame(_)) => {}
+            }
+        }
+    })
+    .await;
+}
+
 enum ExecutionUpdate {
     Root(RestExecution),
     Descendant(ExecutionListItem),
@@ -1288,144 +1347,152 @@ async fn wait_via_websocket(
 
     let (mut write, mut read) = ws_stream.split();
 
-    // Wait for the welcome message before subscribing.
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while let Some(msg) = read.next().await {
-            if let Ok(Message::Text(txt)) = msg {
-                if let Ok(ServerMsg::Welcome { client_id, .. }) =
-                    serde_json::from_str::<ServerMsg>(&txt)
-                {
-                    if verbose {
-                        eprintln!("  [notifier] session id {}", client_id);
+    let wait_result: Result<ExecutionSummary> = async {
+        // Wait for the welcome message before subscribing.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(msg) = read.next().await {
+                if let Ok(Message::Text(txt)) = msg {
+                    if let Ok(ServerMsg::Welcome { client_id, .. }) =
+                        serde_json::from_str::<ServerMsg>(&txt)
+                    {
+                        if verbose {
+                            eprintln!("  [notifier] session id {}", client_id);
+                        }
+                        return Ok(());
                     }
-                    return Ok(());
+                }
+            }
+            anyhow::bail!("connection closed before welcome")
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for welcome message"))??;
+
+        // Subscribe to this specific execution.
+        let subscribe_msg = ClientMsg::Subscribe {
+            filter: format!("entity:execution:{}", execution_id),
+        };
+        let subscribe_json = serde_json::to_string(&subscribe_msg)?;
+        SinkExt::send(&mut write, Message::Text(subscribe_json.into())).await?;
+
+        if verbose {
+            eprintln!(
+                "  [notifier] subscribed to entity:execution:{}",
+                execution_id
+            );
+        }
+
+        // ── Race-condition guard ──────────────────────────────────────────────
+        // The execution may have already completed in the window between the
+        // initial POST and when the WS subscription became active.  Check once
+        // with the REST API *after* subscribing so there is no gap: either the
+        // notification arrives after this check (and we'll catch it in the loop
+        // below) or we catch the terminal state here.
+        {
+            let path = format!("/executions/{}", execution_id);
+            if let Ok(exec) = api_client.get::<RestExecution>(&path).await {
+                if is_terminal(&exec.status) {
+                    if verbose {
+                        eprintln!(
+                            "  [notifier] execution {} already terminal ('{}') — caught by post-subscribe check",
+                            execution_id, exec.status
+                        );
+                    }
+                    return Ok(exec.into());
                 }
             }
         }
-        anyhow::bail!("connection closed before welcome")
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("timed out waiting for welcome message"))??;
 
-    // Subscribe to this specific execution.
-    let subscribe_msg = ClientMsg::Subscribe {
-        filter: format!("entity:execution:{}", execution_id),
-    };
-    let subscribe_json = serde_json::to_string(&subscribe_msg)?;
-    SinkExt::send(&mut write, Message::Text(subscribe_json.into())).await?;
+        // Periodically ping to keep the connection alive and check the deadline.
+        let ping_interval = Duration::from_secs(15);
+        let mut next_ping = Instant::now() + ping_interval;
 
-    if verbose {
-        eprintln!(
-            "  [notifier] subscribed to entity:execution:{}",
-            execution_id
-        );
-    }
-
-    // ── Race-condition guard ──────────────────────────────────────────────
-    // The execution may have already completed in the window between the
-    // initial POST and when the WS subscription became active.  Check once
-    // with the REST API *after* subscribing so there is no gap: either the
-    // notification arrives after this check (and we'll catch it in the loop
-    // below) or we catch the terminal state here.
-    {
-        let path = format!("/executions/{}", execution_id);
-        if let Ok(exec) = api_client.get::<RestExecution>(&path).await {
-            if is_terminal(&exec.status) {
-                if verbose {
-                    eprintln!(
-                        "  [notifier] execution {} already terminal ('{}') — caught by post-subscribe check",
-                        execution_id, exec.status
-                    );
-                }
-                return Ok(exec.into());
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                anyhow::bail!("timed out waiting for execution {}", execution_id);
             }
-        }
-    }
 
-    // Periodically ping to keep the connection alive and check the deadline.
-    let ping_interval = Duration::from_secs(15);
-    let mut next_ping = Instant::now() + ping_interval;
+            // Wait up to the earlier of: next ping time or deadline.
+            let wait_for = remaining.min(next_ping.saturating_duration_since(Instant::now()));
 
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            anyhow::bail!("timed out waiting for execution {}", execution_id);
-        }
+            let msg_result = tokio::time::timeout(wait_for, read.next()).await;
 
-        // Wait up to the earlier of: next ping time or deadline.
-        let wait_for = remaining.min(next_ping.saturating_duration_since(Instant::now()));
+            match msg_result {
+                // Received a message within the window.
+                Ok(Some(Ok(Message::Text(txt)))) => {
+                    match serde_json::from_str::<ServerMsg>(&txt) {
+                        Ok(ServerMsg::Notification(n)) => {
+                            if n.entity_type == "execution" && n.entity_id == execution_id {
+                                if verbose {
+                                    eprintln!(
+                                        "  [notifier] {} for execution {} — status={:?}",
+                                        n.notification_type,
+                                        execution_id,
+                                        n.payload.get("status").and_then(|s| s.as_str()),
+                                    );
+                                }
 
-        let msg_result = tokio::time::timeout(wait_for, read.next()).await;
-
-        match msg_result {
-            // Received a message within the window.
-            Ok(Some(Ok(Message::Text(txt)))) => {
-                match serde_json::from_str::<ServerMsg>(&txt) {
-                    Ok(ServerMsg::Notification(n)) => {
-                        if n.entity_type == "execution" && n.entity_id == execution_id {
-                            if verbose {
-                                eprintln!(
-                                    "  [notifier] {} for execution {} — status={:?}",
-                                    n.notification_type,
-                                    execution_id,
-                                    n.payload.get("status").and_then(|s| s.as_str()),
-                                );
-                            }
-
-                            // Extract status from the notification payload.
-                            // The notifier broadcasts the full execution row in
-                            // `payload`, so we can read the status directly.
-                            if let Some(status) = n.payload.get("status").and_then(|s| s.as_str()) {
-                                if is_terminal(status) {
-                                    // Build a summary from the payload; fall
-                                    // back to a REST fetch for missing fields.
-                                    return build_summary_from_payload(execution_id, &n.payload);
+                                // Extract status from the notification payload.
+                                // The notifier broadcasts the full execution row in
+                                // `payload`, so we can read the status directly.
+                                if let Some(status) =
+                                    n.payload.get("status").and_then(|s| s.as_str())
+                                {
+                                    if is_terminal(status) {
+                                        // Build a summary from the payload; fall
+                                        // back to a REST fetch for missing fields.
+                                        return build_summary_from_payload(execution_id, &n.payload);
+                                    }
                                 }
                             }
+                            // Not our execution or not yet terminal — keep waiting.
                         }
-                        // Not our execution or not yet terminal — keep waiting.
-                    }
-                    Ok(ServerMsg::Error { message }) => {
-                        anyhow::bail!("notifier error: {}", message);
-                    }
-                    Ok(ServerMsg::Welcome { .. } | ServerMsg::Unknown) => {
-                        // Ignore unexpected / unrecognised messages.
-                    }
-                    Err(e) => {
-                        // Log parse failures at trace level — they can happen if the
-                        // server sends a message format we don't recognise yet.
-                        if verbose {
-                            eprintln!("  [notifier] ignoring unrecognised message: {}", e);
+                        Ok(ServerMsg::Error { message }) => {
+                            anyhow::bail!("notifier error: {}", message);
+                        }
+                        Ok(ServerMsg::Welcome { .. } | ServerMsg::Unknown) => {
+                            // Ignore unexpected / unrecognised messages.
+                        }
+                        Err(e) => {
+                            // Log parse failures at trace level — they can happen if the
+                            // server sends a message format we don't recognise yet.
+                            if verbose {
+                                eprintln!("  [notifier] ignoring unrecognised message: {}", e);
+                            }
                         }
                     }
                 }
-            }
-            // Connection closed cleanly.
-            Ok(Some(Ok(Message::Close(_)))) | Ok(None) => {
-                anyhow::bail!("notifier WebSocket closed unexpectedly");
-            }
-            // Ping/pong frames — ignore.
-            Ok(Some(Ok(
-                Message::Ping(_) | Message::Pong(_) | Message::Binary(_) | Message::Frame(_),
-            ))) => {}
-            // WebSocket transport error.
-            Ok(Some(Err(e))) => {
-                anyhow::bail!("WebSocket error: {}", e);
-            }
-            // Timeout waiting for a message — time to ping.
-            Err(_timeout) => {
-                let now = Instant::now();
-                if now >= next_ping {
-                    let _ = SinkExt::send(
-                        &mut write,
-                        Message::Text(serde_json::to_string(&ClientMsg::Ping)?.into()),
-                    )
-                    .await;
-                    next_ping = now + ping_interval;
+                // Connection closed cleanly.
+                Ok(Some(Ok(Message::Close(_)))) | Ok(None) => {
+                    anyhow::bail!("notifier WebSocket closed unexpectedly");
+                }
+                // Ping/pong frames — ignore.
+                Ok(Some(Ok(
+                    Message::Ping(_) | Message::Pong(_) | Message::Binary(_) | Message::Frame(_),
+                ))) => {}
+                // WebSocket transport error.
+                Ok(Some(Err(e))) => {
+                    anyhow::bail!("WebSocket error: {}", e);
+                }
+                // Timeout waiting for a message — time to ping.
+                Err(_timeout) => {
+                    let now = Instant::now();
+                    if now >= next_ping {
+                        let _ = SinkExt::send(
+                            &mut write,
+                            Message::Text(serde_json::to_string(&ClientMsg::Ping)?.into()),
+                        )
+                        .await;
+                        next_ping = now + ping_interval;
+                    }
                 }
             }
         }
     }
+    .await;
+
+    graceful_close_split_websocket(&mut write, &mut read).await;
+    wait_result
 }
 
 /// Build an [`ExecutionSummary`] from the notification payload.

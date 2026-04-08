@@ -47,6 +47,11 @@ const colorClasses = {
     active: "bg-orange-950/50 text-orange-100 shadow-lg shadow-orange-900/50",
     icon: "text-orange-400",
   },
+  yellow: {
+    inactive: "text-yellow-300 hover:text-yellow-100 hover:bg-yellow-950/30",
+    active: "bg-yellow-950/50 text-yellow-100 shadow-lg shadow-yellow-900/50",
+    icon: "text-yellow-400",
+  },
 };
 
 // Navigation sections with dividers and colors
@@ -64,12 +69,6 @@ const navSections = [
         label: "Actions",
         icon: navIcons.actions,
         color: "cyan",
-      },
-      {
-        to: "/runtimes",
-        label: "Runtimes",
-        icon: navIcons.runtimes,
-        color: "blue",
       },
       { to: "/rules", label: "Rules", icon: navIcons.rules, color: "blue" },
       {
@@ -107,6 +106,12 @@ const navSections = [
         icon: navIcons.events,
         color: "orange",
       },
+      {
+        to: "/artifacts",
+        label: "Artifacts",
+        icon: navIcons.artifacts,
+        color: "yellow",
+      },
     ],
   },
   {
@@ -115,12 +120,6 @@ const navSections = [
         to: "/keys",
         label: "Keys & Secrets",
         icon: navIcons.keys,
-        color: "gray",
-      },
-      {
-        to: "/artifacts",
-        label: "Artifacts",
-        icon: navIcons.artifacts,
         color: "gray",
       },
       {
@@ -133,6 +132,12 @@ const navSections = [
         to: "/packs",
         label: "Pack Management",
         icon: navIcons.packs,
+        color: "gray",
+      },
+      {
+        to: "/runtimes",
+        label: "Runtimes",
+        icon: navIcons.runtimes,
         color: "gray",
       },
     ],
