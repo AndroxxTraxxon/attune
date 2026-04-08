@@ -23,10 +23,9 @@ use jsonwebtoken::{
 };
 use openidconnect::{
     core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata, CoreUserInfoClaims},
-    reqwest::Client as OidcHttpClient,
-    AuthorizationCode, ClientId, ClientSecret, CsrfToken, LocalizedClaim, Nonce,
-    OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope,
-    TokenResponse as OidcTokenResponse,
+    AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpRequest, HttpResponse,
+    LocalizedClaim, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl,
+    Scope, TokenResponse as OidcTokenResponse,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
@@ -49,6 +48,16 @@ pub const OIDC_PKCE_COOKIE_NAME: &str = "attune_oidc_pkce_verifier";
 pub const OIDC_REDIRECT_COOKIE_NAME: &str = "attune_oidc_redirect_to";
 
 const LOGIN_CALLBACK_PATH: &str = "/login/callback";
+
+#[derive(Debug, thiserror::Error)]
+enum OidcHttpClientError {
+    #[error("failed to build OIDC HTTP client: {0}")]
+    Build(String),
+    #[error("failed to send OIDC HTTP request: {0}")]
+    Request(#[from] reqwest::Error),
+    #[error("failed to build OIDC HTTP response: {0}")]
+    Response(#[from] axum::http::Error),
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct OidcDiscoveryDocument {
@@ -120,12 +129,6 @@ pub async fn build_login_redirect(
 ) -> Result<OidcLoginRedirect, ApiError> {
     let oidc = oidc_config(state)?;
     let discovery = fetch_discovery_document(&oidc).await?;
-    let _http_client = OidcHttpClient::builder()
-        .redirect(openidconnect::reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|err| {
-            ApiError::InternalServerError(format!("Failed to build OIDC HTTP client: {err}"))
-        })?;
     let redirect_uri_str = oidc.redirect_uri.clone().unwrap_or_default();
     let redirect_uri = RedirectUrl::new(redirect_uri_str).map_err(|err| {
         ApiError::InternalServerError(format!("Invalid OIDC redirect URI: {err}"))
@@ -234,12 +237,6 @@ pub async fn handle_callback(
 
     let oidc = oidc_config(state)?;
     let discovery = fetch_discovery_document(&oidc).await?;
-    let http_client = OidcHttpClient::builder()
-        .redirect(openidconnect::reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|err| {
-            ApiError::InternalServerError(format!("Failed to build OIDC HTTP client: {err}"))
-        })?;
     let redirect_uri_str = oidc.redirect_uri.clone().unwrap_or_default();
     let redirect_uri = RedirectUrl::new(redirect_uri_str).map_err(|err| {
         ApiError::InternalServerError(format!("Invalid OIDC redirect URI: {err}"))
@@ -261,7 +258,7 @@ pub async fn handle_callback(
             ApiError::InternalServerError(format!("OIDC token request is misconfigured: {err}"))
         })?
         .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier))
-        .request_async(&http_client)
+        .request_async(&oidc_async_http_client)
         .await
         .map_err(|err| ApiError::Unauthorized(format!("OIDC token exchange failed: {err}")))?;
 
@@ -283,7 +280,10 @@ pub async fn handle_callback(
     };
 
     if let Ok(userinfo_request) = client.user_info(token_response.access_token().to_owned(), None) {
-        if let Ok(userinfo) = userinfo_request.request_async(&http_client).await {
+        if let Ok(userinfo) = userinfo_request
+            .request_async(&oidc_async_http_client)
+            .await
+        {
             merge_userinfo_claims(&mut oidc_claims, &userinfo);
         }
     }
@@ -482,6 +482,39 @@ fn oidc_config(state: &SharedState) -> Result<OidcConfig, ApiError> {
         .ok_or_else(|| {
             ApiError::NotImplemented("OIDC authentication is not configured".to_string())
         })
+}
+
+fn build_oidc_http_client() -> Result<reqwest::Client, ApiError> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|err| {
+            ApiError::InternalServerError(format!("Failed to build OIDC HTTP client: {err}"))
+        })
+}
+
+async fn oidc_async_http_client(request: HttpRequest) -> Result<HttpResponse, OidcHttpClientError> {
+    let client =
+        build_oidc_http_client().map_err(|err| OidcHttpClientError::Build(err.to_string()))?;
+    let (parts, body) = request.into_parts();
+    let mut req = client
+        .request(parts.method, parts.uri.to_string())
+        .body(body);
+    for (name, value) in &parts.headers {
+        req = req.header(name, value);
+    }
+
+    let response = req.send().await?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response.bytes().await?.to_vec();
+
+    let mut builder = axum::http::Response::builder().status(status);
+    for (name, value) in &headers {
+        builder = builder.header(name, value);
+    }
+
+    Ok(builder.body(body)?)
 }
 
 async fn fetch_discovery_document(oidc: &OidcConfig) -> Result<OidcDiscoveryDocument, ApiError> {

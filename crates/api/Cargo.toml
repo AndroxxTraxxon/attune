@@ -68,8 +68,8 @@ schemars = { workspace = true }
 jsonschema = { workspace = true }
 
 # HTTP client
-reqwest = { workspace = true }
-openidconnect = "4.0"
+reqwest = { workspace = true, features = ["stream"] }
+openidconnect = { version = "4.0", default-features = false }
 ldap3 = { version = "0.12", default-features = false, features = ["sync", "tls-rustls-ring"] }
 url = { workspace = true }
 
@@ -100,5 +100,4 @@ jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
 mockall = { workspace = true }
 tower = { workspace = true }
 tempfile = { workspace = true }
-reqwest-eventsource = { workspace = true }
-reqwest12 = { package = "reqwest", version = "0.12.28", features = ["stream", "rustls-tls"] }
+eventsource-stream = { workspace = true }

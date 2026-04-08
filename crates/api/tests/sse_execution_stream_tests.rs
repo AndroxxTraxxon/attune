@@ -17,11 +17,11 @@ use attune_common::{
     },
 };
 
+use eventsource_stream::{Event, EventStreamError, Eventsource};
 use futures::StreamExt;
-use reqwest12::Client as HttpClient;
-use reqwest_eventsource::{Event, EventSource};
 use serde_json::{json, Value};
 use sqlx::PgPool;
+use std::pin::Pin;
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -30,10 +30,21 @@ use helpers::TestContext;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-fn authenticated_event_source(url: &str, token: &str) -> Result<EventSource> {
-    Ok(EventSource::new(
-        HttpClient::new().get(url).bearer_auth(token),
-    )?)
+type SseStream = Pin<
+    Box<
+        dyn futures::Stream<Item = std::result::Result<Event, EventStreamError<reqwest::Error>>>
+            + Send,
+    >,
+>;
+
+async fn authenticated_event_source(url: &str, token: &str) -> Result<SseStream> {
+    let response = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(token)
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(Box::pin(response.bytes_stream().eventsource()))
 }
 
 /// Helper to set up test pack and action
@@ -116,7 +127,7 @@ async fn test_sse_stream_receives_execution_updates() -> Result<()> {
     );
 
     // Create SSE stream
-    let mut stream = authenticated_event_source(&sse_url, token)?;
+    let mut stream = authenticated_event_source(&sse_url, token).await?;
 
     // Spawn a task to update the execution status after a short delay
     let pool_clone = ctx.pool.clone();
@@ -158,38 +169,26 @@ async fn test_sse_stream_receives_execution_updates() -> Result<()> {
             Ok(Some(Ok(event))) => {
                 println!("Received SSE event: {:?}", event);
 
-                match event {
-                    Event::Open => {
-                        println!("SSE connection established");
-                    }
-                    Event::Message(msg) => {
-                        if let Ok(data) = serde_json::from_str::<Value>(&msg.data) {
-                            println!(
-                                "Parsed event data: {}",
-                                serde_json::to_string_pretty(&data)?
-                            );
+                if let Ok(data) = serde_json::from_str::<Value>(&event.data) {
+                    println!(
+                        "Parsed event data: {}",
+                        serde_json::to_string_pretty(&data)?
+                    );
 
-                            if let Some(entity_type) =
-                                data.get("entity_type").and_then(|v| v.as_str())
-                            {
-                                if entity_type == "execution" {
-                                    if let Some(event_data) = data.get("data") {
-                                        if let Some(status) =
-                                            event_data.get("status").and_then(|v| v.as_str())
-                                        {
-                                            println!(
-                                                "Received execution update with status: {}",
-                                                status
-                                            );
+                    if let Some(entity_type) = data.get("entity_type").and_then(|v| v.as_str()) {
+                        if entity_type == "execution" {
+                            if let Some(event_data) = data.get("data") {
+                                if let Some(status) =
+                                    event_data.get("status").and_then(|v| v.as_str())
+                                {
+                                    println!("Received execution update with status: {}", status);
 
-                                            if status == "running" {
-                                                received_running = true;
-                                                println!("✓ Received 'running' status");
-                                            } else if status == "succeeded" {
-                                                received_succeeded = true;
-                                                println!("✓ Received 'succeeded' status");
-                                            }
-                                        }
+                                    if status == "running" {
+                                        received_running = true;
+                                        println!("✓ Received 'running' status");
+                                    } else if status == "succeeded" {
+                                        received_succeeded = true;
+                                        println!("✓ Received 'succeeded' status");
                                     }
                                 }
                             }
@@ -255,7 +254,7 @@ async fn test_sse_stream_filters_by_execution_id() -> Result<()> {
         execution1.id
     );
 
-    let mut stream = authenticated_event_source(&sse_url, token)?;
+    let mut stream = authenticated_event_source(&sse_url, token).await?;
 
     // Update both executions
     let pool_clone = ctx.pool.clone();
@@ -292,26 +291,21 @@ async fn test_sse_stream_filters_by_execution_id() -> Result<()> {
 
     while attempts < max_attempts && !received_exec1_update {
         match timeout(Duration::from_millis(500), stream.next()).await {
-            Ok(Some(Ok(event))) => match event {
-                Event::Open => {}
-                Event::Message(msg) => {
-                    if let Ok(data) = serde_json::from_str::<Value>(&msg.data) {
-                        if let Some(entity_id) = data.get("entity_id").and_then(|v| v.as_i64()) {
-                            println!("Received update for execution: {}", entity_id);
+            Ok(Some(Ok(event))) => {
+                if let Ok(data) = serde_json::from_str::<Value>(&event.data) {
+                    if let Some(entity_id) = data.get("entity_id").and_then(|v| v.as_i64()) {
+                        println!("Received update for execution: {}", entity_id);
 
-                            if entity_id == execution1.id {
-                                received_exec1_update = true;
-                                println!("✓ Received update for execution1 (correct)");
-                            } else if entity_id == execution2.id {
-                                received_exec2_update = true;
-                                println!(
-                                    "✗ Received update for execution2 (should be filtered out)"
-                                );
-                            }
+                        if entity_id == execution1.id {
+                            received_exec1_update = true;
+                            println!("✓ Received update for execution1 (correct)");
+                        } else if entity_id == execution2.id {
+                            received_exec2_update = true;
+                            println!("✗ Received update for execution2 (should be filtered out)");
                         }
                     }
                 }
-            },
+            }
             Ok(Some(Err(_))) | Ok(None) => break,
             Err(_) => {
                 attempts += 1;
@@ -337,42 +331,10 @@ async fn test_sse_stream_filters_by_execution_id() -> Result<()> {
 #[tokio::test]
 #[ignore = "integration test — requires database"]
 async fn test_sse_stream_requires_authentication() -> Result<()> {
-    // Try to connect without token
     let sse_url = "http://localhost:8080/api/v1/executions/stream";
+    let response = reqwest::Client::new().get(sse_url).send().await?;
 
-    let mut stream = EventSource::get(sse_url);
-
-    // Should receive an error due to missing authentication
-    let mut received_error = false;
-    let mut attempts = 0;
-    let max_attempts = 5;
-
-    while attempts < max_attempts && !received_error {
-        match timeout(Duration::from_millis(500), stream.next()).await {
-            Ok(Some(Ok(_))) => {
-                // Should not receive successful events without auth
-                panic!("Received SSE event without authentication - this should not happen");
-            }
-            Ok(Some(Err(e))) => {
-                println!("Correctly received error without auth: {}", e);
-                received_error = true;
-            }
-            Ok(None) => {
-                println!("Stream ended (expected behavior for unauthorized)");
-                received_error = true;
-                break;
-            }
-            Err(_) => {
-                attempts += 1;
-                println!("Timeout waiting for response (attempt {})", attempts);
-            }
-        }
-    }
-
-    assert!(
-        received_error,
-        "Should have received error or stream closure due to missing authentication"
-    );
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
 
     println!("✓ Test passed: SSE stream requires authentication");
 
@@ -400,7 +362,7 @@ async fn test_sse_stream_all_executions() -> Result<()> {
     // Subscribe to ALL execution updates (no execution_id filter)
     let sse_url = "http://localhost:8080/api/v1/executions/stream";
 
-    let mut stream = authenticated_event_source(sse_url, token)?;
+    let mut stream = authenticated_event_source(sse_url, token).await?;
 
     // Update both executions
     let pool_clone = ctx.pool.clone();
@@ -436,17 +398,14 @@ async fn test_sse_stream_all_executions() -> Result<()> {
 
     while attempts < max_attempts && received_updates.len() < 2 {
         match timeout(Duration::from_millis(500), stream.next()).await {
-            Ok(Some(Ok(event))) => match event {
-                Event::Open => {}
-                Event::Message(msg) => {
-                    if let Ok(data) = serde_json::from_str::<Value>(&msg.data) {
-                        if let Some(entity_id) = data.get("entity_id").and_then(|v| v.as_i64()) {
-                            println!("Received update for execution: {}", entity_id);
-                            received_updates.insert(entity_id);
-                        }
+            Ok(Some(Ok(event))) => {
+                if let Ok(data) = serde_json::from_str::<Value>(&event.data) {
+                    if let Some(entity_id) = data.get("entity_id").and_then(|v| v.as_i64()) {
+                        println!("Received update for execution: {}", entity_id);
+                        received_updates.insert(entity_id);
                     }
                 }
-            },
+            }
             Ok(Some(Err(_))) | Ok(None) => break,
             Err(_) => {
                 attempts += 1;

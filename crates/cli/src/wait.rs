@@ -12,12 +12,12 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
+use eventsource_stream::Eventsource;
 use futures::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
-use reqwest12::header;
-use reqwest_eventsource::{Event as SseEvent, EventSource};
+use reqwest::header;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{self, IsTerminal, Write};
@@ -1699,11 +1699,13 @@ async fn stream_execution_log(task: StreamLogTask) {
         .query_pairs_mut()
         .append_pair("offset", &current_offset);
 
-    let request = reqwest12::Client::new()
+    let response = match reqwest::Client::new()
         .get(stream_url)
-        .header(header::AUTHORIZATION, format!("Bearer {}", token));
-    let mut event_source = match EventSource::new(request) {
-        Ok(source) => source,
+        .header(header::AUTHORIZATION, format!("Bearer {}", token))
+        .send()
+        .await
+    {
+        Ok(response) => response,
         Err(err) => {
             if debug {
                 eprintln!("  [watch] failed to open stream source: {}", err);
@@ -1711,12 +1713,21 @@ async fn stream_execution_log(task: StreamLogTask) {
             return;
         }
     };
+    if !response.status().is_success() {
+        if debug {
+            eprintln!(
+                "  [watch] failed to open stream source: HTTP {}",
+                response.status()
+            );
+        }
+        return;
+    }
+    let mut event_source = response.bytes_stream().eventsource();
     let mut carry = String::new();
 
     while let Some(event) = event_source.next().await {
         match event {
-            Ok(SseEvent::Open) => {}
-            Ok(SseEvent::Message(message)) => match message.event.as_str() {
+            Ok(message) => match message.event.as_str() {
                 "content" | "append" => {
                     if let Ok(server_offset) = message.id.parse::<u64>() {
                         offset.store(server_offset, Ordering::Relaxed);
@@ -1769,9 +1780,6 @@ async fn stream_execution_log(task: StreamLogTask) {
                         vec![line],
                     );
                 }
-                if is_benign_stream_end_error(&err) {
-                    break;
-                }
                 if debug {
                     eprintln!(
                         "  [watch] stream error for execution {}: {}",
@@ -1793,11 +1801,6 @@ async fn stream_execution_log(task: StreamLogTask) {
             vec![line],
         );
     }
-    event_source.close();
-}
-
-fn is_benign_stream_end_error(err: &reqwest_eventsource::Error) -> bool {
-    err.to_string().contains("Stream ended")
 }
 
 fn consume_stream_chunk(chunk: &str, carry: &mut String) -> Vec<String> {
@@ -2236,12 +2239,6 @@ mod tests {
             "build[2]"
         );
         assert_eq!(format_task_label(&None, "core.echo", 42), "core.echo#42");
-    }
-
-    #[test]
-    fn test_is_benign_stream_end_error_message() {
-        let err = reqwest_eventsource::Error::StreamEnded;
-        assert!(is_benign_stream_end_error(&err));
     }
 
     #[test]
