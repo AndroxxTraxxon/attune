@@ -20,7 +20,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg2
 import psycopg2.extras
@@ -313,16 +313,16 @@ class PackLoader:
         cursor.close()
         return trigger_ids
 
-    def upsert_runtimes(self) -> Dict[str, int]:
+    def upsert_runtimes(self) -> Tuple[Dict[str, int], int]:
         """Load runtime definitions from runtimes/*.yaml"""
         print("\n→ Loading runtimes...")
 
+        runtime_ids, pack_runtime_ids = self.load_runtime_lookup()
         runtimes_dir = self.pack_dir / "runtimes"
         if not runtimes_dir.exists():
             print("  No runtimes directory found")
-            return {}
+            return runtime_ids, 0
 
-        runtime_ids = {}
         cursor = self.conn.cursor()
 
         for yaml_file in sorted(runtimes_dir.glob("*.yaml")):
@@ -376,6 +376,7 @@ class PackLoader:
 
             runtime_id = cursor.fetchone()[0]
             runtime_ids[ref] = runtime_id
+            pack_runtime_ids.add(runtime_id)
             # Also index by lowercase name for easy lookup by runner_type
             runtime_ids[name.lower()] = runtime_id
             for alias in aliases:
@@ -385,7 +386,29 @@ class PackLoader:
             self.upsert_runtime_versions(cursor, runtime_id, ref, runtime_data)
 
         cursor.close()
-        return runtime_ids
+        return runtime_ids, len(pack_runtime_ids)
+
+    def load_runtime_lookup(self) -> Tuple[Dict[str, int], set[int]]:
+        """Load existing runtime refs, names, and aliases from the database."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id, ref, name, aliases, pack_ref FROM runtime")
+
+        runtime_ids: Dict[str, int] = {}
+        pack_runtime_ids = set()
+
+        for runtime_id, runtime_ref, name, aliases, pack_ref in cursor.fetchall():
+            runtime_ids[runtime_ref] = runtime_id
+            if isinstance(name, str) and name:
+                runtime_ids[name.lower()] = runtime_id
+            if aliases:
+                for alias in aliases:
+                    if isinstance(alias, str) and alias:
+                        runtime_ids[alias.lower()] = runtime_id
+            if pack_ref == self.pack_ref:
+                pack_runtime_ids.add(runtime_id)
+
+        cursor.close()
+        return runtime_ids, pack_runtime_ids
 
     def upsert_runtime_versions(
         self, cursor, runtime_id: int, runtime_ref: str, runtime_data: Dict[str, Any]
@@ -849,8 +872,9 @@ class PackLoader:
                 # Try looking up by the short name (e.g., "python" key in runtime_ids)
                 sensor_runtime_id = runtime_ids.get(runner_type)
             if not sensor_runtime_id:
-                print(
-                    f"  ⚠ No runtime found for runner_type '{runner_type}' (ref: {runtime_ref}), sensor will have no runtime"
+                raise ValueError(
+                    f"Sensor '{ref}' declares runner_type '{runner_type}' "
+                    f"but no matching runtime was found (expected ref: {runtime_ref})"
                 )
 
             # Determine entrypoint
@@ -939,7 +963,7 @@ class PackLoader:
             permission_set_ids = self.upsert_permission_sets()
 
             # Load runtimes (actions and sensors depend on them)
-            runtime_ids = self.upsert_runtimes()
+            runtime_ids, runtime_count = self.upsert_runtimes()
 
             # Load triggers
             trigger_ids = self.upsert_triggers()
@@ -958,7 +982,7 @@ class PackLoader:
             print("=" * 60)
             print(f"  Pack ID: {self.pack_id}")
             print(f"  Permission sets: {len(permission_set_ids)}")
-            print(f"  Runtimes: {len(set(runtime_ids.values()))}")
+            print(f"  Runtimes: {runtime_count}")
             print(f"  Triggers: {len(trigger_ids)}")
             print(f"  Actions: {len(action_ids)}")
             print(f"  Sensors: {len(sensor_ids)}")
