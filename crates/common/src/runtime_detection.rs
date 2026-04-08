@@ -26,10 +26,27 @@ use tracing::{debug, info, warn};
 /// The filter list comes from `ATTUNE_WORKER_RUNTIMES` (e.g., `["python", "shell"]`).
 /// A runtime matches if any of its declared aliases appear in the filter list.
 /// Comparison is case-insensitive.
+pub fn normalize_runtime_name(name: &str) -> String {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "node" | "nodejs" | "node.js" => "node".to_string(),
+        "python" | "python3" => "python".to_string(),
+        "shell" | "bash" | "sh" => "shell".to_string(),
+        "native" | "builtin" | "standalone" => "native".to_string(),
+        "ruby" | "rb" => "ruby".to_string(),
+        "go" | "golang" => "go".to_string(),
+        "java" | "jdk" | "openjdk" => "java".to_string(),
+        "perl" | "perl5" => "perl".to_string(),
+        "r" | "rscript" => "r".to_string(),
+        other => other.to_string(),
+    }
+}
+
 pub fn runtime_aliases_match_filter(aliases: &[String], filter: &[String]) -> bool {
     aliases.iter().any(|alias| {
-        let lower_alias = alias.to_ascii_lowercase();
-        filter.iter().any(|f| f.to_ascii_lowercase() == lower_alias)
+        let normalized_alias = normalize_runtime_name(alias);
+        filter
+            .iter()
+            .any(|f| normalize_runtime_name(f) == normalized_alias)
     })
 }
 
@@ -39,8 +56,10 @@ pub fn runtime_aliases_match_filter(aliases: &[String], filter: &[String]) -> bo
 /// (e.g., "python") matches a runtime's aliases (e.g., ["python", "python3"]).
 /// Comparison is case-insensitive.
 pub fn runtime_aliases_contain(aliases: &[String], name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    aliases.iter().any(|a| a.to_ascii_lowercase() == lower)
+    let normalized_name = normalize_runtime_name(name);
+    aliases
+        .iter()
+        .any(|a| normalize_runtime_name(a) == normalized_name)
 }
 
 /// Runtime detection service
@@ -319,6 +338,24 @@ mod tests {
 
         let filter_no_match = vec!["node".to_string(), "ruby".to_string()];
         assert!(!runtime_aliases_match_filter(&aliases, &filter_no_match));
+    }
+
+    #[test]
+    fn test_runtime_aliases_match_filter_normalizes_common_aliases() {
+        let aliases = vec!["node.js".to_string()];
+        let filter = vec!["node".to_string()];
+        assert!(runtime_aliases_match_filter(&aliases, &filter));
+
+        let aliases = vec!["python3".to_string()];
+        let filter = vec!["python".to_string()];
+        assert!(runtime_aliases_match_filter(&aliases, &filter));
+    }
+
+    #[test]
+    fn test_runtime_aliases_contain_normalizes_common_aliases() {
+        let aliases = vec!["nodejs".to_string()];
+        assert!(runtime_aliases_contain(&aliases, "node"));
+        assert!(runtime_aliases_contain(&aliases, "node.js"));
     }
 
     #[test]

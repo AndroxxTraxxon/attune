@@ -498,6 +498,7 @@ async fn handle_execute(
     let watch_task = Some(spawn_execution_output_watch(
         ApiClient::from_config(&config, api_url),
         execution.id,
+        notifier_url.clone(),
         interactive_wait,
         stream_live_logs,
         debug_wait,
@@ -510,13 +511,11 @@ async fn handle_execute(
         verbose: debug_wait,
     })
     .await?;
-    let suppress_final_stdout = watch_task
-        .as_ref()
-        .is_some_and(|task| task.delivered_output() && task.root_stdout_completed());
-
-    if let Some(task) = watch_task {
-        let _ = tokio::time::timeout(tokio::time::Duration::from_secs(2), task.handle).await;
-    }
+    let (delivered_output, root_stdout_completed) = match watch_task {
+        Some(task) => task.join().await,
+        None => (false, false),
+    };
+    let suppress_final_stdout = delivered_output && root_stdout_completed;
 
     match output_format {
         OutputFormat::Json | OutputFormat::Yaml => {

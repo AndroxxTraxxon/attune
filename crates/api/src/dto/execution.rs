@@ -146,7 +146,8 @@ pub struct ExecutionQueryParams {
     #[param(example = "succeeded")]
     pub status: Option<ExecutionStatus>,
 
-    /// Filter by action reference
+    /// Filter by action reference.
+    /// Supports exact refs and `<pack>.*` wildcards such as `core.*`.
     #[param(example = "slack.post_message")]
     pub action_ref: Option<String>,
 
@@ -154,11 +155,13 @@ pub struct ExecutionQueryParams {
     #[param(example = "core")]
     pub pack_name: Option<String>,
 
-    /// Filter by rule reference
+    /// Filter by rule reference.
+    /// Supports exact refs and `<pack>.*` wildcards such as `core.*`.
     #[param(example = "core.on_timer")]
     pub rule_ref: Option<String>,
 
-    /// Filter by trigger reference
+    /// Filter by trigger reference.
+    /// Supports exact refs and `<pack>.*` wildcards such as `core.*`.
     #[param(example = "core.timer")]
     pub trigger_ref: Option<String>,
 

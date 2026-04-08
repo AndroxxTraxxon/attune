@@ -620,7 +620,7 @@ impl<'a> PackComponentLoader<'a> {
                 execution_config,
                 distributions,
                 is_default,
-                available: true, // Assume available until verification runs
+                available: false, // Workers must verify the version before it becomes selectable
                 meta,
             };
 

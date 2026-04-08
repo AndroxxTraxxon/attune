@@ -23,6 +23,7 @@ use attune_common::models::runtime::{
     EnvironmentConfig, InlineExecutionStrategy, RuntimeExecutionConfig,
 };
 use std::collections::HashMap;
+use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use tokio::process::Command;
@@ -168,6 +169,16 @@ impl ProcessRuntime {
     #[cfg(test)]
     fn resolve_interpreter(&self, pack_dir: &Path, env_dir: Option<&Path>) -> PathBuf {
         self.config.resolve_interpreter_with_env(pack_dir, env_dir)
+    }
+
+    fn interpreter_is_available(interpreter: &Path) -> bool {
+        if interpreter.is_absolute() || interpreter.components().count() > 1 {
+            return interpreter.exists();
+        }
+
+        env::var_os("PATH")
+            .map(|paths| env::split_paths(&paths).any(|dir| dir.join(interpreter).exists()))
+            .unwrap_or(false)
     }
 
     /// Set up the runtime environment for a pack at an external location.
@@ -591,6 +602,125 @@ impl ProcessRuntime {
             effective_config.inline_execution.inject_shell_helpers,
         ))
     }
+
+    async fn ensure_runtime_environment(
+        &self,
+        action_ref: &str,
+        pack_dir: &Path,
+        env_dir: &Path,
+        effective_config: &RuntimeExecutionConfig,
+    ) {
+        if effective_config.environment.is_none() || !pack_dir.exists() {
+            return;
+        }
+
+        let env_lock = get_env_setup_lock(env_dir);
+        let _guard = env_lock.lock().await;
+
+        if !env_dir.exists() {
+            info!(
+                "Runtime environment for pack '{}' not found at {}. \
+                 Creating on first use (lazy setup).",
+                action_ref,
+                env_dir.display(),
+            );
+
+            let setup_runtime = ProcessRuntime::new(
+                self.runtime_name.clone(),
+                effective_config.clone(),
+                self.packs_base_dir.clone(),
+                self.runtime_envs_dir.clone(),
+            );
+            match setup_runtime
+                .setup_pack_environment(pack_dir, env_dir)
+                .await
+            {
+                Ok(()) => {
+                    info!(
+                        "Successfully created environment for pack '{}' at {} (lazy setup)",
+                        action_ref,
+                        env_dir.display(),
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to create environment for pack '{}' at {}: {}. \
+                         Proceeding with interpreter fallback logic.",
+                        action_ref,
+                        env_dir.display(),
+                        e,
+                    );
+                }
+            }
+        }
+
+        if env_dir.exists() {
+            if let Some(ref env_cfg) = effective_config.environment {
+                if let Some(ref interp_template) = env_cfg.interpreter_path {
+                    let mut vars = std::collections::HashMap::new();
+                    vars.insert("env_dir", env_dir.to_string_lossy().to_string());
+                    vars.insert("pack_dir", pack_dir.to_string_lossy().to_string());
+                    let resolved = RuntimeExecutionConfig::resolve_template(interp_template, &vars);
+                    let resolved_path = std::path::PathBuf::from(&resolved);
+
+                    let is_broken_symlink = !resolved_path.exists()
+                        && std::fs::symlink_metadata(&resolved_path)
+                            .map(|m| m.file_type().is_symlink())
+                            .unwrap_or(false);
+
+                    if is_broken_symlink {
+                        let target = std::fs::read_link(&resolved_path)
+                            .map(|t| t.display().to_string())
+                            .unwrap_or_else(|_| "<unreadable>".to_string());
+                        warn!(
+                            "Detected broken symlink at '{}' -> '{}' in venv for pack '{}'. \
+                             Removing broken environment and recreating...",
+                            resolved_path.display(),
+                            target,
+                            action_ref,
+                        );
+
+                        if let Err(e) = std::fs::remove_dir_all(env_dir) {
+                            warn!(
+                                "Failed to remove broken environment at {}: {}. \
+                                 Will continue to interpreter fallback logic.",
+                                env_dir.display(),
+                                e,
+                            );
+                        } else {
+                            let setup_runtime = ProcessRuntime::new(
+                                self.runtime_name.clone(),
+                                effective_config.clone(),
+                                self.packs_base_dir.clone(),
+                                self.runtime_envs_dir.clone(),
+                            );
+                            match setup_runtime
+                                .setup_pack_environment(pack_dir, env_dir)
+                                .await
+                            {
+                                Ok(()) => {
+                                    info!(
+                                        "Successfully recreated environment for pack '{}' at {}",
+                                        action_ref,
+                                        env_dir.display(),
+                                    );
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "Failed to recreate environment for pack '{}' at {}: {}. \
+                                         Will continue to interpreter fallback logic.",
+                                        action_ref,
+                                        env_dir.display(),
+                                        e,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -628,14 +758,6 @@ impl Runtime for ProcessRuntime {
     }
 
     async fn execute(&self, context: ExecutionContext) -> RuntimeResult<ExecutionResult> {
-        // Determine the effective execution config: use the version-specific
-        // override if the executor resolved a specific runtime version for this
-        // action, otherwise fall back to this ProcessRuntime's built-in config.
-        let effective_config: &RuntimeExecutionConfig = context
-            .runtime_config_override
-            .as_ref()
-            .unwrap_or(&self.config);
-
         if let Some(ref ver) = context.selected_runtime_version {
             info!(
                 "Executing action '{}' (execution_id: {}) with runtime '{}' version {}, \
@@ -663,152 +785,81 @@ impl Runtime for ProcessRuntime {
 
         let pack_ref = self.extract_pack_ref(&context.action_ref);
         let pack_dir = self.packs_base_dir.join(pack_ref);
+        let base_env_dir = self.env_dir_for_pack(pack_ref);
 
         // Compute external env_dir for this pack/runtime combination.
         // When a specific runtime version is selected, the env dir includes a
         // version suffix (e.g., "python-3.12") for per-version isolation.
         // Pattern: {runtime_envs_dir}/{pack_ref}/{runtime_name[-version]}
-        let env_dir = if let Some(ref suffix) = context.runtime_env_dir_suffix {
+        let mut env_dir = if let Some(ref suffix) = context.runtime_env_dir_suffix {
             self.runtime_envs_dir.join(pack_ref).join(suffix)
         } else {
-            self.env_dir_for_pack(pack_ref)
+            base_env_dir.clone()
         };
-        let env_dir_opt = if effective_config.environment.is_some() {
+
+        let mut effective_config = context
+            .runtime_config_override
+            .clone()
+            .unwrap_or_else(|| self.config.clone());
+        let mut selected_runtime_version = context.selected_runtime_version.clone();
+
+        self.ensure_runtime_environment(
+            &context.action_ref,
+            &pack_dir,
+            &env_dir,
+            &effective_config,
+        )
+        .await;
+
+        let mut env_dir_opt = if effective_config.environment.is_some() {
             Some(env_dir.as_path())
         } else {
             None
         };
+        let mut interpreter = effective_config.resolve_interpreter_with_env(&pack_dir, env_dir_opt);
 
-        // Lazy environment setup: if the environment directory doesn't exist but
-        // should (i.e., there's an environment config and the pack dir exists),
-        // create it on-demand. This is the primary code path for agent mode where
-        // proactive startup setup is skipped, but it also serves as a safety net
-        // for standard workers if the environment was somehow missed.
-        // Acquire a per-directory async lock to serialize environment setup.
-        // This prevents concurrent executions for the same pack from racing
-        // to create or repair the environment simultaneously.
-        if effective_config.environment.is_some() && pack_dir.exists() {
-            let env_lock = get_env_setup_lock(&env_dir);
-            let _guard = env_lock.lock().await;
+        if context.runtime_config_override.is_some()
+            && !Self::interpreter_is_available(&interpreter)
+        {
+            warn!(
+                "Resolved interpreter '{}' for action '{}' using runtime version '{}' is not available on this worker. \
+                 Falling back to base runtime interpreter '{}'.",
+                interpreter.display(),
+                context.action_ref,
+                context
+                    .selected_runtime_version
+                    .as_deref()
+                    .unwrap_or("unknown"),
+                self.config.interpreter.binary,
+            );
 
-            // --- Lazy environment creation (double-checked after lock) ---
-            if !env_dir.exists() {
-                info!(
-                    "Runtime environment for pack '{}' not found at {}. \
-                     Creating on first use (lazy setup).",
-                    context.action_ref,
-                    env_dir.display(),
-                );
+            effective_config = self.config.clone();
+            selected_runtime_version = None;
+            env_dir = base_env_dir;
 
-                let setup_runtime = ProcessRuntime::new(
-                    self.runtime_name.clone(),
-                    effective_config.clone(),
-                    self.packs_base_dir.clone(),
-                    self.runtime_envs_dir.clone(),
-                );
-                match setup_runtime
-                    .setup_pack_environment(&pack_dir, &env_dir)
-                    .await
-                {
-                    Ok(()) => {
-                        info!(
-                            "Successfully created environment for pack '{}' at {} (lazy setup)",
-                            context.action_ref,
-                            env_dir.display(),
-                        );
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to create environment for pack '{}' at {}: {}. \
-                             Proceeding with system interpreter as fallback.",
-                            context.action_ref,
-                            env_dir.display(),
-                            e,
-                        );
-                    }
-                }
-            }
+            self.ensure_runtime_environment(
+                &context.action_ref,
+                &pack_dir,
+                &env_dir,
+                &effective_config,
+            )
+            .await;
 
-            // --- Broken-symlink repair (also under the per-directory lock) ---
-            // If the environment directory exists but contains a broken interpreter
-            // (e.g. broken symlinks from a venv created in a different container),
-            // attempt to recreate it before resolving the interpreter.
-            if env_dir.exists() {
-                if let Some(ref env_cfg) = effective_config.environment {
-                    if let Some(ref interp_template) = env_cfg.interpreter_path {
-                        let mut vars = std::collections::HashMap::new();
-                        vars.insert("env_dir", env_dir.to_string_lossy().to_string());
-                        vars.insert("pack_dir", pack_dir.to_string_lossy().to_string());
-                        let resolved =
-                            RuntimeExecutionConfig::resolve_template(interp_template, &vars);
-                        let resolved_path = std::path::PathBuf::from(&resolved);
-
-                        // Check for a broken symlink: symlink_metadata succeeds for
-                        // the link itself even when its target is missing, while
-                        // exists() (which follows symlinks) returns false.
-                        let is_broken_symlink = !resolved_path.exists()
-                            && std::fs::symlink_metadata(&resolved_path)
-                                .map(|m| m.file_type().is_symlink())
-                                .unwrap_or(false);
-
-                        if is_broken_symlink {
-                            let target = std::fs::read_link(&resolved_path)
-                                .map(|t| t.display().to_string())
-                                .unwrap_or_else(|_| "<unreadable>".to_string());
-                            warn!(
-                                "Detected broken symlink at '{}' -> '{}' in venv for pack '{}'. \
-                                 Removing broken environment and recreating...",
-                                resolved_path.display(),
-                                target,
-                                context.action_ref,
-                            );
-
-                            // Remove the broken environment directory
-                            if let Err(e) = std::fs::remove_dir_all(&env_dir) {
-                                warn!(
-                                    "Failed to remove broken environment at {}: {}. \
-                                     Will proceed with system interpreter.",
-                                    env_dir.display(),
-                                    e,
-                                );
-                            } else {
-                                // Recreate the environment using a temporary ProcessRuntime
-                                // with the effective (possibly version-specific) config.
-                                let setup_runtime = ProcessRuntime::new(
-                                    self.runtime_name.clone(),
-                                    effective_config.clone(),
-                                    self.packs_base_dir.clone(),
-                                    self.runtime_envs_dir.clone(),
-                                );
-                                match setup_runtime
-                                    .setup_pack_environment(&pack_dir, &env_dir)
-                                    .await
-                                {
-                                    Ok(()) => {
-                                        info!(
-                                            "Successfully recreated environment for pack '{}' at {}",
-                                            context.action_ref,
-                                            env_dir.display(),
-                                        );
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            "Failed to recreate environment for pack '{}' at {}: {}. \
-                                             Will proceed with system interpreter.",
-                                            context.action_ref,
-                                            env_dir.display(),
-                                            e,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            env_dir_opt = if effective_config.environment.is_some() {
+                Some(env_dir.as_path())
+            } else {
+                None
+            };
+            interpreter = effective_config.resolve_interpreter_with_env(&pack_dir, env_dir_opt);
         }
 
-        let interpreter = effective_config.resolve_interpreter_with_env(&pack_dir, env_dir_opt);
+        if !Self::interpreter_is_available(&interpreter) {
+            return Err(RuntimeError::SetupError(format!(
+                "Interpreter '{}' is not available for action '{}' on this worker",
+                interpreter.display(),
+                context.action_ref,
+            )));
+        }
 
         info!(
             "Resolved interpreter: {} (env_dir: {}, env_exists: {}, pack_dir: {}, version: {})",
@@ -816,10 +867,7 @@ impl Runtime for ProcessRuntime {
             env_dir.display(),
             env_dir.exists(),
             pack_dir.display(),
-            context
-                .selected_runtime_version
-                .as_deref()
-                .unwrap_or("default"),
+            selected_runtime_version.as_deref().unwrap_or("default"),
         );
 
         // Prepare environment and parameters according to delivery method
@@ -895,7 +943,7 @@ impl Runtime for ProcessRuntime {
                             context.execution_id,
                             &merged_parameters,
                             code,
-                            effective_config,
+                            &effective_config,
                         )
                         .await?;
                     if consumes_parameters {
@@ -1385,6 +1433,88 @@ mod tests {
         let result = runtime.execute(context).await.unwrap();
         assert_eq!(result.exit_code, 0);
         assert!(result.stdout.contains("hello from python process runtime"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_falls_back_from_unavailable_version_override() {
+        let temp_dir = TempDir::new().unwrap();
+        let packs_dir = temp_dir.path().join("packs");
+        let pack_dir = packs_dir.join("testpack");
+        let actions_dir = pack_dir.join("actions");
+        std::fs::create_dir_all(&actions_dir).unwrap();
+
+        let script_path = actions_dir.join("hello.py");
+        std::fs::write(&script_path, "print('hello from base runtime fallback')").unwrap();
+
+        let base_config = RuntimeExecutionConfig {
+            interpreter: InterpreterConfig {
+                binary: "python3".to_string(),
+                args: vec![],
+                file_extension: Some(".py".to_string()),
+            },
+            inline_execution: InlineExecutionConfig::default(),
+            environment: None,
+            dependencies: None,
+            env_vars: HashMap::new(),
+        };
+
+        let override_config = RuntimeExecutionConfig {
+            interpreter: InterpreterConfig {
+                binary: "__missing_python3_13__".to_string(),
+                args: vec![],
+                file_extension: Some(".py".to_string()),
+            },
+            inline_execution: InlineExecutionConfig::default(),
+            environment: Some(EnvironmentConfig {
+                env_type: "virtualenv".to_string(),
+                dir_name: ".venv".to_string(),
+                create_command: vec![
+                    "__missing_python3_13__".to_string(),
+                    "-m".to_string(),
+                    "venv".to_string(),
+                    "{env_dir}".to_string(),
+                ],
+                interpreter_path: Some("{env_dir}/bin/__missing_python3_13__".to_string()),
+            }),
+            dependencies: None,
+            env_vars: HashMap::new(),
+        };
+
+        let runtime = ProcessRuntime::new(
+            "python".to_string(),
+            base_config,
+            packs_dir,
+            temp_dir.path().join("runtime_envs"),
+        );
+
+        let context = ExecutionContext {
+            execution_id: 22,
+            action_ref: "testpack.hello".to_string(),
+            parameters: HashMap::new(),
+            env: HashMap::new(),
+            secrets: HashMap::new(),
+            timeout: Some(10),
+            working_dir: None,
+            entry_point: "hello.py".to_string(),
+            code: None,
+            code_path: Some(script_path),
+            runtime_name: Some("python".to_string()),
+            runtime_config_override: Some(override_config),
+            runtime_env_dir_suffix: Some("python-3.13".to_string()),
+            selected_runtime_version: Some("3.13".to_string()),
+            max_stdout_bytes: 1024 * 1024,
+            max_stderr_bytes: 1024 * 1024,
+            stdout_log_path: None,
+            stderr_log_path: None,
+            parameter_delivery: ParameterDelivery::default(),
+            parameter_format: ParameterFormat::default(),
+            output_format: OutputFormat::default(),
+            cancel_token: None,
+        };
+
+        let result = runtime.execute(context).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("hello from base runtime fallback"));
     }
 
     #[tokio::test]

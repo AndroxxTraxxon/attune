@@ -469,9 +469,9 @@ class PackLoader:
             """
             INSERT INTO workflow_definition (
                 ref, pack, pack_ref, label, description, version,
-                param_schema, out_schema, definition, tags, enabled
+                param_schema, out_schema, definition, tags
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (ref) DO UPDATE SET
                 label = EXCLUDED.label,
                 description = EXCLUDED.description,
@@ -480,7 +480,6 @@ class PackLoader:
                 out_schema = EXCLUDED.out_schema,
                 definition = EXCLUDED.definition,
                 tags = EXCLUDED.tags,
-                enabled = EXCLUDED.enabled,
                 updated = NOW()
             RETURNING id
         """,
@@ -495,7 +494,6 @@ class PackLoader:
                 out_schema_json,
                 definition_json,
                 tags_list,
-                True,
             ),
         )
 

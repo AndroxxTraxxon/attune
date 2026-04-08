@@ -13,9 +13,10 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use futures::{SinkExt, StreamExt};
+use reqwest12::header;
 use reqwest_eventsource::{Event as SseEvent, EventSource};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{self, IsTerminal, Write};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -23,7 +24,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use terminal_size::{terminal_size, Width};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio::net::TcpStream;
+use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 use crate::client::ApiClient;
 
@@ -71,12 +73,12 @@ pub struct OutputWatchTask {
 }
 
 impl OutputWatchTask {
-    pub fn delivered_output(&self) -> bool {
-        self.delivered_output.load(Ordering::Relaxed)
-    }
-
-    pub fn root_stdout_completed(&self) -> bool {
-        self.root_stdout_completed.load(Ordering::Relaxed)
+    pub async fn join(self) -> (bool, bool) {
+        let _ = self.handle.await;
+        (
+            self.delivered_output.load(Ordering::Relaxed),
+            self.root_stdout_completed.load(Ordering::Relaxed),
+        )
     }
 }
 
@@ -143,6 +145,8 @@ struct ExecutionListItem {
     action_ref: String,
     status: String,
     #[serde(default)]
+    parent: Option<i64>,
+    #[serde(default)]
     started_at: Option<String>,
     updated: String,
     #[serde(default)]
@@ -154,6 +158,7 @@ struct ChildWatchState {
     label: String,
     status: String,
     announced_terminal: bool,
+    log_streaming_supported: Option<bool>,
     stream_handles: Vec<StreamWatchHandle>,
 }
 
@@ -188,8 +193,20 @@ struct StreamLogTask {
     config: StreamWatchConfig,
 }
 
+struct ExecutionNotifier {
+    ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    next_ping: Instant,
+}
+
+struct ExecutionNotifierUpdates {
+    root_execution: Option<RestExecution>,
+    descendants: Vec<ExecutionListItem>,
+}
+
 const MAX_TASK_TAIL_LINES: usize = 4;
 const RENDER_TICK: Duration = Duration::from_millis(120);
+const WATCH_ROOT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const WATCH_DESCENDANT_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 #[derive(Debug, Clone)]
@@ -540,6 +557,7 @@ pub async fn wait_for_execution(opts: WaitOptions<'_>) -> Result<ExecutionSummar
 pub fn spawn_execution_output_watch(
     mut client: ApiClient,
     execution_id: i64,
+    notifier_ws_url: Option<String>,
     show_progress: bool,
     stream_logs: bool,
     debug: bool,
@@ -552,6 +570,7 @@ pub fn spawn_execution_output_watch(
         if let Err(err) = watch_execution_output(
             &mut client,
             execution_id,
+            notifier_ws_url,
             show_progress,
             stream_logs,
             debug,
@@ -576,6 +595,7 @@ pub fn spawn_execution_output_watch(
 async fn watch_execution_output(
     client: &mut ApiClient,
     execution_id: i64,
+    notifier_ws_url: Option<String>,
     show_progress: bool,
     stream_logs: bool,
     debug: bool,
@@ -588,9 +608,40 @@ async fn watch_execution_output(
     let plain_progress = show_progress && !live_renderer.enabled();
     let mut root_watch: Option<RootWatchState> = None;
     let mut children: HashMap<i64, ChildWatchState> = HashMap::new();
+    let mut next_descendant_refresh = Instant::now();
+    let mut known_execution_ids = HashSet::from([execution_id]);
+    let mut execution = client
+        .get::<RestExecution>(&format!("/executions/{}", execution_id))
+        .await?;
+    let mut execution_notifier =
+        connect_execution_notifier(notifier_ws_url.as_deref(), &base_url, debug)
+            .await
+            .ok();
+
+    if let Ok(initial_children) = list_descendant_executions(client, execution_id).await {
+        for child in initial_children {
+            known_execution_ids.insert(child.id);
+            apply_child_execution_update(
+                client,
+                &mut children,
+                &base_url,
+                stream_logs,
+                debug,
+                &live_renderer,
+                plain_progress,
+                &delivered_output,
+                child,
+            )
+            .await;
+        }
+        next_descendant_refresh = Instant::now() + WATCH_DESCENDANT_REFRESH_INTERVAL;
+    }
 
     loop {
-        let execution: RestExecution = client.get(&format!("/executions/{}", execution_id)).await?;
+        if execution_notifier.is_none() {
+            execution = client.get(&format!("/executions/{}", execution_id)).await?;
+        }
+
         let root_started_at = execution
             .started_at
             .as_deref()
@@ -616,6 +667,7 @@ async fn watch_execution_output(
         }
 
         if stream_logs
+            && should_stream_root_logs(&execution)
             && root_watch
                 .as_ref()
                 .is_none_or(|state| streams_need_restart(&state.stream_handles))
@@ -659,124 +711,64 @@ async fn watch_execution_output(
             }
         }
 
-        let child_items = list_child_executions(client, execution_id)
-            .await
-            .unwrap_or_default();
-
-        for child in child_items {
-            let label = format_task_label(&child.workflow_task, &child.action_ref, child.id);
-            let task_name = child
-                .workflow_task
-                .as_ref()
-                .map(|task| task.task_name.clone())
-                .unwrap_or_else(|| label.clone());
-            let is_iterated = child
-                .workflow_task
-                .as_ref()
-                .and_then(|task| task.task_index)
-                .is_some();
-            let started_at = child.started_at.as_deref().and_then(parse_api_timestamp);
-            let finished_at = if is_terminal(&child.status) {
-                parse_api_timestamp(&child.updated)
-            } else {
-                None
-            };
-            let entry = children.entry(child.id).or_insert_with(|| {
-                if plain_progress {
-                    eprintln!("  [{}] started ({})", label, child.action_ref);
-                }
-                if live_renderer.enabled() {
-                    live_renderer.upsert_task(LiveTaskUpdate {
-                        id: child.id,
-                        label: label.clone(),
-                        task_name: task_name.clone(),
-                        is_root: false,
-                        is_iterated,
-                        action_ref: child.action_ref.clone(),
-                        status: child.status.clone(),
-                        started_at,
-                        finished_at,
-                    });
-                }
-                let stream_handles = if stream_logs && should_stream_logs(&child) {
-                    client
-                        .auth_token()
-                        .map(str::to_string)
-                        .map(|token| {
-                            spawn_execution_log_streams(StreamWatchConfig {
-                                base_url: base_url.clone(),
-                                token,
-                                execution_id: child.id,
-                                prefix: Some(label.clone()),
-                                debug,
-                                emit_output: !live_renderer.enabled(),
-                                task_id: Some(child.id),
-                                live_renderer: live_renderer
-                                    .enabled()
-                                    .then_some(live_renderer.clone()),
-                                delivered_output: delivered_output.clone(),
-                                root_stdout_completed: None,
-                            })
-                        })
-                        .unwrap_or_default()
-                } else {
-                    Vec::new()
-                };
-                ChildWatchState {
-                    label,
-                    status: child.status.clone(),
-                    announced_terminal: false,
-                    stream_handles,
-                }
-            });
-
-            if entry.status != child.status {
-                entry.status = child.status.clone();
-            }
-            if live_renderer.enabled() {
-                live_renderer.upsert_task(LiveTaskUpdate {
-                    id: child.id,
-                    label: entry.label.clone(),
-                    task_name: task_name.clone(),
-                    is_root: false,
-                    is_iterated,
-                    action_ref: child.action_ref.clone(),
-                    status: child.status.clone(),
-                    started_at,
-                    finished_at,
-                });
-            }
-
-            let child_is_terminal = is_terminal(&entry.status);
-            if stream_logs
-                && should_stream_logs(&child)
-                && !child_is_terminal
-                && streams_need_restart(&entry.stream_handles)
+        let mut used_notifier_update = false;
+        if let Some(notifier) = execution_notifier.as_mut() {
+            match notifier
+                .drain_execution_updates(execution_id, &mut known_execution_ids, debug)
+                .await
             {
-                if let Some(token) = client.auth_token().map(str::to_string) {
-                    ensure_streams_running(
-                        &mut entry.stream_handles,
-                        &StreamWatchConfig {
-                            base_url: base_url.clone(),
-                            token,
-                            execution_id: child.id,
-                            prefix: Some(entry.label.clone()),
+                Ok(notifier_updates) => {
+                    used_notifier_update = true;
+                    if let Some(root_update) = notifier_updates.root_execution {
+                        execution = root_update;
+                    }
+                    for child in notifier_updates.descendants {
+                        apply_child_execution_update(
+                            client,
+                            &mut children,
+                            &base_url,
+                            stream_logs,
                             debug,
-                            emit_output: !live_renderer.enabled(),
-                            task_id: Some(child.id),
-                            live_renderer: live_renderer.enabled().then_some(live_renderer.clone()),
-                            delivered_output: delivered_output.clone(),
-                            root_stdout_completed: None,
-                        },
-                    );
+                            &live_renderer,
+                            plain_progress,
+                            &delivered_output,
+                            child,
+                        )
+                        .await;
+                    }
+                }
+                Err(err) => {
+                    if debug {
+                        eprintln!("  [watch] execution notifier unavailable: {}", err);
+                    }
+                    execution_notifier = None;
+                    next_descendant_refresh = Instant::now();
                 }
             }
+        }
 
-            if !entry.announced_terminal && is_terminal(&child.status) {
-                entry.announced_terminal = true;
-                if plain_progress {
-                    eprintln!("  [{}] {}", entry.label, child.status);
-                }
+        if !used_notifier_update
+            && (Instant::now() >= next_descendant_refresh || is_terminal(&execution.status))
+        {
+            let child_items = list_descendant_executions(client, execution_id)
+                .await
+                .unwrap_or_default();
+            next_descendant_refresh = Instant::now() + WATCH_DESCENDANT_REFRESH_INTERVAL;
+
+            for child in child_items {
+                known_execution_ids.insert(child.id);
+                apply_child_execution_update(
+                    client,
+                    &mut children,
+                    &base_url,
+                    stream_logs,
+                    debug,
+                    &live_renderer,
+                    plain_progress,
+                    &delivered_output,
+                    child,
+                )
+                .await;
             }
         }
 
@@ -784,7 +776,7 @@ async fn watch_execution_output(
             break;
         }
 
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(WATCH_ROOT_REFRESH_INTERVAL).await;
     }
 
     if let Some(root_watch) = root_watch {
@@ -796,7 +788,7 @@ async fn watch_execution_output(
     }
 
     if live_renderer.enabled() {
-        if let Ok(final_children) = list_child_executions(client, execution_id).await {
+        if let Ok(final_children) = list_descendant_executions(client, execution_id).await {
             for child in final_children {
                 let label = format_task_label(&child.workflow_task, &child.action_ref, child.id);
                 let task_name = child
@@ -920,7 +912,7 @@ async fn wait_for_stream_handles(handles: Vec<StreamWatchHandle>) {
     }
 }
 
-async fn list_child_executions(
+async fn list_direct_child_executions(
     client: &mut ApiClient,
     execution_id: i64,
 ) -> Result<Vec<ExecutionListItem>> {
@@ -944,6 +936,300 @@ async fn list_child_executions(
     }
 
     Ok(all_children)
+}
+
+async fn list_descendant_executions(
+    client: &mut ApiClient,
+    execution_id: i64,
+) -> Result<Vec<ExecutionListItem>> {
+    let mut pending_parents = VecDeque::from([execution_id]);
+    let mut seen_ids = HashSet::new();
+    let mut descendants = Vec::new();
+
+    while let Some(parent_id) = pending_parents.pop_front() {
+        for child in list_direct_child_executions(client, parent_id).await? {
+            if seen_ids.insert(child.id) {
+                pending_parents.push_back(child.id);
+                descendants.push(child);
+            }
+        }
+    }
+
+    descendants.sort_by_key(|item| item.id);
+    Ok(descendants)
+}
+
+async fn apply_child_execution_update(
+    client: &mut ApiClient,
+    children: &mut HashMap<i64, ChildWatchState>,
+    base_url: &str,
+    stream_logs: bool,
+    debug: bool,
+    live_renderer: &LiveRenderer,
+    plain_progress: bool,
+    delivered_output: &Arc<AtomicBool>,
+    child: ExecutionListItem,
+) {
+    let label = format_task_label(&child.workflow_task, &child.action_ref, child.id);
+    let task_name = child
+        .workflow_task
+        .as_ref()
+        .map(|task| task.task_name.clone())
+        .unwrap_or_else(|| label.clone());
+    let is_iterated = child
+        .workflow_task
+        .as_ref()
+        .and_then(|task| task.task_index)
+        .is_some();
+    let started_at = child.started_at.as_deref().and_then(parse_api_timestamp);
+    let finished_at = if is_terminal(&child.status) {
+        parse_api_timestamp(&child.updated)
+    } else {
+        None
+    };
+    let (child_is_terminal, mut log_streaming_supported) = {
+        let entry = children.entry(child.id).or_insert_with(|| {
+            if plain_progress {
+                eprintln!("  [{}] started ({})", label, child.action_ref);
+            }
+            if live_renderer.enabled() {
+                live_renderer.upsert_task(LiveTaskUpdate {
+                    id: child.id,
+                    label: label.clone(),
+                    task_name: task_name.clone(),
+                    is_root: false,
+                    is_iterated,
+                    action_ref: child.action_ref.clone(),
+                    status: child.status.clone(),
+                    started_at,
+                    finished_at,
+                });
+            }
+            ChildWatchState {
+                label,
+                status: child.status.clone(),
+                announced_terminal: false,
+                log_streaming_supported: None,
+                stream_handles: Vec::new(),
+            }
+        });
+
+        if entry.status != child.status {
+            entry.status = child.status.clone();
+        }
+        if live_renderer.enabled() {
+            live_renderer.upsert_task(LiveTaskUpdate {
+                id: child.id,
+                label: entry.label.clone(),
+                task_name: task_name.clone(),
+                is_root: false,
+                is_iterated,
+                action_ref: child.action_ref.clone(),
+                status: child.status.clone(),
+                started_at,
+                finished_at,
+            });
+        }
+
+        (is_terminal(&entry.status), entry.log_streaming_supported)
+    };
+
+    if stream_logs
+        && !child_is_terminal
+        && should_stream_logs(&child)
+        && log_streaming_supported.is_none()
+    {
+        log_streaming_supported = Some(true);
+    }
+
+    let entry = children
+        .get_mut(&child.id)
+        .expect("child state should exist after insertion");
+    if entry.log_streaming_supported.is_none() {
+        entry.log_streaming_supported = log_streaming_supported;
+    }
+
+    if stream_logs
+        && !child_is_terminal
+        && entry.log_streaming_supported == Some(true)
+        && streams_need_restart(&entry.stream_handles)
+    {
+        if let Some(token) = client.auth_token().map(str::to_string) {
+            ensure_streams_running(
+                &mut entry.stream_handles,
+                &StreamWatchConfig {
+                    base_url: base_url.to_string(),
+                    token,
+                    execution_id: child.id,
+                    prefix: Some(entry.label.clone()),
+                    debug,
+                    emit_output: !live_renderer.enabled(),
+                    task_id: Some(child.id),
+                    live_renderer: live_renderer.enabled().then_some(live_renderer.clone()),
+                    delivered_output: delivered_output.clone(),
+                    root_stdout_completed: None,
+                },
+            );
+        }
+    }
+
+    if !entry.announced_terminal && is_terminal(&child.status) {
+        entry.announced_terminal = true;
+        if plain_progress {
+            eprintln!("  [{}] {}", entry.label, child.status);
+        }
+    }
+}
+
+async fn connect_execution_notifier(
+    explicit_ws_url: Option<&str>,
+    api_base_url: &str,
+    verbose: bool,
+) -> Result<ExecutionNotifier> {
+    let ws_base_url = explicit_ws_url
+        .map(ToOwned::to_owned)
+        .or_else(|| derive_notifier_url(api_base_url))
+        .ok_or_else(|| anyhow::anyhow!("notifier URL not configured"))?;
+    let ws_url = format!("{}/ws", ws_base_url.trim_end_matches('/'));
+
+    let (mut ws_stream, _) = tokio::time::timeout(Duration::from_secs(5), connect_async(&ws_url))
+        .await
+        .map_err(|_| anyhow::anyhow!("WebSocket connect timed out"))??;
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(msg) = ws_stream.next().await {
+            if let Ok(Message::Text(txt)) = msg {
+                if let Ok(ServerMsg::Welcome { client_id, .. }) =
+                    serde_json::from_str::<ServerMsg>(&txt)
+                {
+                    if verbose {
+                        eprintln!("  [watch:notifier] session id {}", client_id);
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        anyhow::bail!("connection closed before welcome")
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out waiting for welcome message"))??;
+
+    let subscribe_msg = ClientMsg::Subscribe {
+        filter: "entity_type:execution".to_string(),
+    };
+    ws_stream
+        .send(Message::Text(serde_json::to_string(&subscribe_msg)?.into()))
+        .await?;
+
+    if verbose {
+        eprintln!("  [watch:notifier] subscribed to entity_type:execution");
+    }
+
+    Ok(ExecutionNotifier {
+        ws_stream,
+        next_ping: Instant::now() + Duration::from_secs(15),
+    })
+}
+
+impl ExecutionNotifier {
+    async fn drain_execution_updates(
+        &mut self,
+        root_execution_id: i64,
+        known_execution_ids: &mut HashSet<i64>,
+        verbose: bool,
+    ) -> Result<ExecutionNotifierUpdates> {
+        let mut root_execution = None;
+        let mut descendants = Vec::new();
+
+        loop {
+            match tokio::time::timeout(Duration::from_millis(1), self.ws_stream.next()).await {
+                Err(_) => break,
+                Ok(Some(Ok(Message::Text(txt)))) => match serde_json::from_str::<ServerMsg>(&txt) {
+                    Ok(ServerMsg::Notification(notification)) => {
+                        match notification_to_execution_update(
+                            root_execution_id,
+                            known_execution_ids,
+                            notification,
+                        ) {
+                            Some(ExecutionUpdate::Root(execution)) => {
+                                root_execution = Some(execution);
+                            }
+                            Some(ExecutionUpdate::Descendant(execution)) => {
+                                known_execution_ids.insert(execution.id);
+                                descendants.push(execution);
+                            }
+                            None => {}
+                        }
+                    }
+                    Ok(ServerMsg::Error { message }) => {
+                        anyhow::bail!("notifier error: {}", message);
+                    }
+                    Ok(ServerMsg::Welcome { .. } | ServerMsg::Unknown) => {}
+                    Err(err) => {
+                        if verbose {
+                            eprintln!("  [watch:notifier] ignoring unrecognised message: {}", err);
+                        }
+                    }
+                },
+                Ok(Some(Ok(
+                    Message::Ping(_) | Message::Pong(_) | Message::Binary(_) | Message::Frame(_),
+                ))) => {}
+                Ok(Some(Ok(Message::Close(_)))) | Ok(None) => {
+                    anyhow::bail!("notifier WebSocket closed unexpectedly");
+                }
+                Ok(Some(Err(err))) => {
+                    anyhow::bail!("WebSocket error: {}", err);
+                }
+            }
+        }
+
+        let now = Instant::now();
+        if now >= self.next_ping {
+            self.ws_stream
+                .send(Message::Text(
+                    serde_json::to_string(&ClientMsg::Ping)?.into(),
+                ))
+                .await?;
+            self.next_ping = now + Duration::from_secs(15);
+        }
+
+        Ok(ExecutionNotifierUpdates {
+            root_execution,
+            descendants,
+        })
+    }
+}
+
+enum ExecutionUpdate {
+    Root(RestExecution),
+    Descendant(ExecutionListItem),
+}
+
+fn notification_to_execution_update(
+    root_execution_id: i64,
+    known_execution_ids: &HashSet<i64>,
+    notification: NotifierNotification,
+) -> Option<ExecutionUpdate> {
+    if notification.entity_type != "execution" {
+        return None;
+    }
+
+    if notification.entity_id == root_execution_id {
+        return serde_json::from_value(notification.payload)
+            .ok()
+            .map(ExecutionUpdate::Root);
+    }
+
+    let execution: ExecutionListItem = serde_json::from_value(notification.payload).ok()?;
+    let parent_id = execution.parent?;
+    if known_execution_ids.contains(&execution.id)
+        || parent_id == root_execution_id
+        || known_execution_ids.contains(&parent_id)
+    {
+        Some(ExecutionUpdate::Descendant(execution))
+    } else {
+        None
+    }
 }
 
 // ── WebSocket path ────────────────────────────────────────────────────────────
@@ -1322,10 +1608,20 @@ async fn stream_execution_log(task: StreamLogTask) {
     let current_offset = offset.load(Ordering::Relaxed).to_string();
     stream_url
         .query_pairs_mut()
-        .append_pair("token", &token)
         .append_pair("offset", &current_offset);
 
-    let mut event_source = EventSource::get(stream_url);
+    let request = reqwest12::Client::new()
+        .get(stream_url)
+        .header(header::AUTHORIZATION, format!("Bearer {}", token));
+    let mut event_source = match EventSource::new(request) {
+        Ok(source) => source,
+        Err(err) => {
+            if debug {
+                eprintln!("  [watch] failed to open stream source: {}", err);
+            }
+            return;
+        }
+    };
     let mut carry = String::new();
 
     while let Some(event) = event_source.next().await {
@@ -1683,6 +1979,10 @@ fn should_stream_logs(execution: &ExecutionListItem) -> bool {
     execution.started_at.is_some()
 }
 
+fn should_stream_root_logs(execution: &RestExecution) -> bool {
+    execution.started_at.is_some()
+}
+
 fn parse_api_timestamp(value: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .ok()
@@ -1878,6 +2178,85 @@ mod tests {
     fn test_truncate_to_width() {
         assert_eq!(truncate_to_width("abcdef", 4), "abc…");
         assert_eq!(truncate_to_width("abc", 4), "abc");
+    }
+
+    #[test]
+    fn test_notification_to_execution_update_accepts_known_descendant() {
+        let notification = NotifierNotification {
+            notification_type: "execution_status_changed".to_string(),
+            entity_type: "execution".to_string(),
+            entity_id: 12,
+            payload: serde_json::json!({
+                "id": 12,
+                "action_ref": "core.echo",
+                "status": "running",
+                "parent": 10,
+                "started_at": "2026-01-01T00:00:00Z",
+                "updated": "2026-01-01T00:00:01Z",
+                "workflow_task": {"task_name": "child"}
+            }),
+        };
+        let known_ids = HashSet::from([1_i64, 10_i64]);
+
+        let update = notification_to_execution_update(1, &known_ids, notification)
+            .expect("notification should be accepted");
+
+        match update {
+            ExecutionUpdate::Descendant(update) => {
+                assert_eq!(update.id, 12);
+                assert_eq!(update.parent, Some(10));
+            }
+            ExecutionUpdate::Root(_) => panic!("expected descendant update"),
+        }
+    }
+
+    #[test]
+    fn test_notification_to_execution_update_accepts_root_execution() {
+        let notification = NotifierNotification {
+            notification_type: "execution_status_changed".to_string(),
+            entity_type: "execution".to_string(),
+            entity_id: 1,
+            payload: serde_json::json!({
+                "id": 1,
+                "action_ref": "core.workflow",
+                "status": "running",
+                "created": "2026-01-01T00:00:00Z",
+                "started_at": "2026-01-01T00:00:00Z",
+                "updated": "2026-01-01T00:00:01Z"
+            }),
+        };
+        let known_ids = HashSet::from([1_i64, 10_i64]);
+
+        let update = notification_to_execution_update(1, &known_ids, notification)
+            .expect("root notification should be accepted");
+
+        match update {
+            ExecutionUpdate::Root(update) => {
+                assert_eq!(update.id, 1);
+                assert_eq!(update.status, "running");
+                assert!(update.started_at.is_some());
+            }
+            ExecutionUpdate::Descendant(_) => panic!("expected root update"),
+        }
+    }
+
+    #[test]
+    fn test_notification_to_execution_update_rejects_unrelated_execution() {
+        let notification = NotifierNotification {
+            notification_type: "execution_created".to_string(),
+            entity_type: "execution".to_string(),
+            entity_id: 99,
+            payload: serde_json::json!({
+                "id": 99,
+                "action_ref": "core.echo",
+                "status": "requested",
+                "parent": 77,
+                "updated": "2026-01-01T00:00:01Z"
+            }),
+        };
+        let known_ids = HashSet::from([1_i64, 10_i64]);
+
+        assert!(notification_to_execution_update(1, &known_ids, notification).is_none());
     }
 
     #[tokio::test]

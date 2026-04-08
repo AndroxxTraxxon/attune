@@ -55,7 +55,6 @@ interface ExecutionQueryParams {
   parent?: number;
   status?: string;
   actionRef?: string;
-  packName?: string;
   executor?: number;
   ruleRef?: string;
   triggerRef?: string;
@@ -91,6 +90,21 @@ function stripNotificationMeta(
   return cleaned;
 }
 
+function matchesRefFilter(
+  actualRef: string | null | undefined,
+  filterRef: string | undefined,
+): boolean {
+  if (!filterRef) return true;
+  if (!actualRef) return false;
+
+  if (filterRef.endsWith(".*")) {
+    const prefix = filterRef.slice(0, -2);
+    return prefix.length > 0 && actualRef.startsWith(prefix + ".");
+  }
+
+  return actualRef === filterRef;
+}
+
 /**
  * Check if an execution matches the given query parameters.
  * Only checks fields that are reliably present in WebSocket payloads.
@@ -122,26 +136,25 @@ function executionMatchesParams(
     return false;
   }
 
-  // Check action filter (always present)
-  if (params.actionRef && execution.action_ref !== params.actionRef) {
-    return false;
-  }
-
-  // Check pack filter (always present via action_ref)
-  if (
-    params.packName &&
-    !execution.action_ref?.startsWith(params.packName + ".")
-  ) {
+  // Check action filter. Supports exact refs and `<pack>.*` wildcards.
+  if (!matchesRefFilter(execution.action_ref, params.actionRef)) {
     return false;
   }
 
   // Note: executor is not part of ExecutionSummary so we cannot filter on it
   // from WebSocket payloads. Executor-filtered queries rely on API refetch.
 
-  // Note: rule_ref and trigger_ref are NOT checked here because they may not be
-  // present in WebSocket payloads (they come from enforcement data which is
-  // populated separately by the API). For these filters, we only update existing
-  // executions, never add new ones.
+  // Check rule filter. Execution notifications include rule_ref from the
+  // execution/enforcement trigger payload, so rule-filtered lists can be
+  // updated incrementally from the WebSocket stream.
+  if (!matchesRefFilter(execution.rule_ref, params.ruleRef)) {
+    return false;
+  }
+
+  // Check trigger filter for the same reason as rule_ref.
+  if (!matchesRefFilter(execution.trigger_ref, params.triggerRef)) {
+    return false;
+  }
 
   return true;
 }
@@ -153,7 +166,7 @@ function hasUnsupportedFilters(
   params: ExecutionQueryParams | undefined,
 ): boolean {
   if (!params) return false;
-  return !!(params.ruleRef || params.triggerRef || params.executor);
+  return !!params.executor;
 }
 
 /**

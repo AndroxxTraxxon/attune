@@ -35,7 +35,7 @@ use sqlx::Row;
 
 use crate::{
     auth::{
-        jwt::{validate_token, Claims, JwtConfig, TokenType},
+        jwt::{Claims, TokenType},
         middleware::{AuthenticatedUser, RequireAuth},
     },
     authz::{AuthorizationCheck, AuthorizationService},
@@ -866,34 +866,26 @@ async fn cancel_workflow_children_with_policy(
 /// This endpoint streams real-time updates for execution status changes.
 /// Optionally filter by execution_id to watch a specific execution.
 ///
-/// Note: Authentication is done via `token` query parameter since EventSource
-/// doesn't support custom headers.
 #[utoipa::path(
     get,
     path = "/api/v1/executions/stream",
     tag = "executions",
     params(
-        ("execution_id" = Option<i64>, Query, description = "Optional execution ID to filter updates"),
-        ("token" = String, Query, description = "JWT access token for authentication")
+        ("execution_id" = Option<i64>, Query, description = "Optional execution ID to filter updates")
     ),
     responses(
         (status = 200, description = "SSE stream of execution updates", content_type = "text/event-stream"),
-        (status = 401, description = "Unauthorized - invalid or missing token"),
+        (status = 401, description = "Unauthorized"),
     )
 )]
 pub async fn stream_execution_updates(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(params): Query<StreamExecutionParams>,
+    user: Result<RequireAuth, crate::auth::middleware::AuthError>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, ApiError> {
-    // Validate token from query parameter
-    use crate::auth::jwt::validate_token;
-
-    let token = params.token.as_ref().ok_or(ApiError::Unauthorized(
-        "Missing authentication token".to_string(),
-    ))?;
-
-    validate_token(token, &state.jwt_config)
-        .map_err(|_| ApiError::Unauthorized("Invalid authentication token".to_string()))?;
+    let authenticated_user = authenticate_execution_stream_user(&state, &headers, user)?;
+    validate_execution_updates_stream_user(&authenticated_user, params.execution_id)?;
     let rx = state.broadcast_tx.subscribe();
     let stream = BroadcastStream::new(rx);
 
@@ -935,7 +927,6 @@ pub async fn stream_execution_updates(
 
 #[derive(serde::Deserialize)]
 pub struct StreamExecutionLogParams {
-    pub token: Option<String>,
     pub offset: Option<u64>,
 }
 
@@ -998,7 +989,7 @@ enum ExecutionLogTailState {
     params(
         ("id" = i64, Path, description = "Execution ID"),
         ("stream" = String, Path, description = "Log stream name: stdout or stderr"),
-        ("token" = String, Query, description = "JWT access token for authentication"),
+        ("offset" = Option<u64>, Query, description = "Resume streaming from this byte offset"),
     ),
     responses(
         (status = 200, description = "SSE stream of execution log content", content_type = "text/event-stream"),
@@ -1013,8 +1004,7 @@ pub async fn stream_execution_log(
     Query(params): Query<StreamExecutionLogParams>,
     user: Result<RequireAuth, crate::auth::middleware::AuthError>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, ApiError> {
-    let authenticated_user =
-        authenticate_execution_log_stream_user(&state, &headers, user, params.token.as_deref())?;
+    let authenticated_user = authenticate_execution_stream_user(&state, &headers, user)?;
     validate_execution_log_stream_user(&authenticated_user, id)?;
 
     let execution = ExecutionRepository::find_by_id(&state.db, id)
@@ -1255,11 +1245,10 @@ async fn authorize_execution_log_stream(
         .await
 }
 
-fn authenticate_execution_log_stream_user(
+fn authenticate_execution_stream_user(
     state: &Arc<AppState>,
     headers: &HeaderMap,
     user: Result<RequireAuth, crate::auth::middleware::AuthError>,
-    query_token: Option<&str>,
 ) -> Result<AuthenticatedUser, ApiError> {
     match user {
         Ok(RequireAuth(user)) => Ok(user),
@@ -1268,22 +1257,11 @@ fn authenticate_execution_log_stream_user(
                 return Ok(user);
             }
 
-            let token = query_token.ok_or(ApiError::Unauthorized(
+            Err(ApiError::Unauthorized(
                 "Missing authentication token".to_string(),
-            ))?;
-            authenticate_execution_log_stream_query_token(token, &state.jwt_config)
+            ))
         }
     }
-}
-
-fn authenticate_execution_log_stream_query_token(
-    token: &str,
-    jwt_config: &JwtConfig,
-) -> Result<AuthenticatedUser, ApiError> {
-    let claims = validate_token(token, jwt_config)
-        .map_err(|_| ApiError::Unauthorized("Invalid authentication token".to_string()))?;
-
-    Ok(AuthenticatedUser { claims })
 }
 
 fn validate_execution_log_stream_user(
@@ -1325,10 +1303,32 @@ fn validate_execution_token_scope(claims: &Claims, execution_id: i64) -> Result<
     Ok(())
 }
 
+fn validate_execution_updates_stream_user(
+    user: &AuthenticatedUser,
+    execution_id: Option<i64>,
+) -> Result<(), ApiError> {
+    let claims = &user.claims;
+
+    match claims.token_type {
+        TokenType::Access => Ok(()),
+        TokenType::Execution => {
+            let execution_id = execution_id.ok_or_else(|| {
+                ApiError::Forbidden(
+                    "Execution tokens require an execution_id filter for update streams"
+                        .to_string(),
+                )
+            })?;
+            validate_execution_token_scope(claims, execution_id)
+        }
+        TokenType::Sensor | TokenType::Refresh => Err(ApiError::Unauthorized(
+            "Invalid authentication token".to_string(),
+        )),
+    }
+}
+
 #[derive(serde::Deserialize)]
 pub struct StreamExecutionParams {
     pub execution_id: Option<i64>,
-    pub token: Option<String>,
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -1359,6 +1359,7 @@ pub fn routes() -> Router<Arc<AppState>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::jwt::{validate_token, JwtConfig};
     use attune_common::auth::jwt::generate_execution_token;
 
     #[test]
@@ -1376,8 +1377,8 @@ mod tests {
         };
 
         let token = generate_execution_token(42, 123, "core.echo", &jwt_config, None).unwrap();
-
-        let user = authenticate_execution_log_stream_query_token(&token, &jwt_config).unwrap();
+        let claims = validate_token(&token, &jwt_config).unwrap();
+        let user = AuthenticatedUser { claims };
         let err = validate_execution_log_stream_user(&user, 456).unwrap_err();
         assert!(matches!(err, ApiError::Forbidden(_)));
     }

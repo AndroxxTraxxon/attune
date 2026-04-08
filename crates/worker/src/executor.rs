@@ -16,13 +16,17 @@
 use attune_common::auth::jwt::{generate_execution_token, JwtConfig};
 use attune_common::error::{Error, Result};
 use attune_common::models::runtime::RuntimeExecutionConfig;
-use attune_common::models::{runtime::Runtime as RuntimeModel, Action, Execution, ExecutionStatus};
+use attune_common::models::{
+    runtime::Runtime as RuntimeModel, Action, Execution, ExecutionStatus, Worker,
+};
 use attune_common::repositories::artifact::{ArtifactRepository, ArtifactVersionRepository};
 use attune_common::repositories::execution::{ExecutionRepository, UpdateExecutionInput};
+use attune_common::repositories::runtime::WorkerRepository;
 use attune_common::repositories::runtime::SELECT_COLUMNS as RUNTIME_SELECT_COLUMNS;
 use attune_common::repositories::runtime_version::RuntimeVersionRepository;
 use attune_common::repositories::{FindById, Update};
-use attune_common::version_matching::select_best_version;
+use attune_common::runtime_detection::normalize_runtime_name;
+use attune_common::version_matching::{matches_constraint, select_best_version};
 use std::path::PathBuf as StdPathBuf;
 
 use serde_json::Value as JsonValue;
@@ -454,8 +458,9 @@ impl ActionExecutor {
         // match. The selected version's execution_config overrides the parent
         // runtime's config so the ProcessRuntime uses a version-specific
         // interpreter binary, environment commands, etc.
-        let (runtime_config_override, runtime_env_dir_suffix, selected_runtime_version) =
-            self.resolve_runtime_version(&runtime_record, action).await;
+        let (runtime_config_override, runtime_env_dir_suffix, selected_runtime_version) = self
+            .resolve_runtime_version(&runtime_record, execution, action)
+            .await;
 
         // Determine the pack directory for this action
         let pack_dir = self.packs_base_dir.join(&action.pack_ref);
@@ -576,6 +581,7 @@ impl ActionExecutor {
     async fn resolve_runtime_version(
         &self,
         runtime_record: &Option<RuntimeModel>,
+        execution: &Execution,
         action: &Action,
     ) -> (
         Option<RuntimeExecutionConfig>,
@@ -615,8 +621,11 @@ impl ActionExecutor {
         };
 
         let constraint = action.runtime_version_constraint.as_deref();
+        let local_versions = self
+            .filter_versions_for_worker(runtime, execution.worker, versions, action)
+            .await;
 
-        match select_best_version(&versions, constraint) {
+        match select_best_version(&local_versions, constraint) {
             Some(selected) => {
                 let version_config = selected.parsed_execution_config();
                 let rt_name = runtime.name.to_lowercase();
@@ -642,9 +651,9 @@ impl ActionExecutor {
             None => {
                 if let Some(c) = constraint {
                     warn!(
-                        "No available runtime version matches constraint '{}' for action '{}' \
-                         (runtime: '{}'). Using parent runtime config as fallback.",
-                        c, action.r#ref, runtime.name,
+                        "No locally available runtime version matches constraint '{}' for action '{}' \
+                         on worker {:?} (runtime: '{}'). Using parent runtime config as fallback.",
+                        c, action.r#ref, execution.worker, runtime.name,
                     );
                 } else {
                     debug!(
@@ -656,6 +665,134 @@ impl ActionExecutor {
                 (None, None, None)
             }
         }
+    }
+
+    async fn filter_versions_for_worker(
+        &self,
+        runtime: &RuntimeModel,
+        worker_id: Option<i64>,
+        versions: Vec<attune_common::models::RuntimeVersion>,
+        action: &Action,
+    ) -> Vec<attune_common::models::RuntimeVersion> {
+        let Some(worker_id) = worker_id else {
+            warn!(
+                "Execution for action '{}' has no assigned worker while resolving runtime versions for '{}'; using base runtime fallback",
+                action.r#ref,
+                runtime.name,
+            );
+            return Vec::new();
+        };
+
+        let worker = match WorkerRepository::find_by_id(&self.pool, worker_id).await {
+            Ok(Some(worker)) => worker,
+            Ok(None) => {
+                warn!(
+                    "Assigned worker {} not found while resolving runtime versions for action '{}'; using base runtime fallback",
+                    worker_id,
+                    action.r#ref,
+                );
+                return Vec::new();
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to load worker {} while resolving runtime versions for action '{}': {}. Using base runtime fallback.",
+                    worker_id,
+                    action.r#ref,
+                    e,
+                );
+                return Vec::new();
+            }
+        };
+
+        let advertised_versions = Self::worker_runtime_versions_for_runtime(&worker, runtime);
+        if advertised_versions.is_empty() {
+            warn!(
+                "Worker {} does not advertise local runtime versions for '{}' while resolving action '{}'; using base runtime fallback",
+                worker.name,
+                runtime.name,
+                action.r#ref,
+            );
+            return Vec::new();
+        }
+
+        versions
+            .into_iter()
+            .filter(|version| Self::version_matches_worker(version, &advertised_versions))
+            .collect()
+    }
+
+    fn worker_runtime_versions_for_runtime(worker: &Worker, runtime: &RuntimeModel) -> Vec<String> {
+        let mut versions = Vec::new();
+        let candidate_runtime_names: Vec<String> = runtime
+            .aliases
+            .iter()
+            .map(|alias| normalize_runtime_name(alias))
+            .chain(std::iter::once(normalize_runtime_name(&runtime.name)))
+            .collect();
+
+        let Some(capabilities) = worker
+            .capabilities
+            .as_ref()
+            .and_then(|value| value.as_object())
+        else {
+            return versions;
+        };
+
+        if let Some(runtime_versions) = capabilities.get("runtime_versions") {
+            if let Some(runtime_versions_obj) = runtime_versions.as_object() {
+                for runtime_name in &candidate_runtime_names {
+                    if let Some(version_values) = runtime_versions_obj.get(runtime_name) {
+                        if let Some(version_array) = version_values.as_array() {
+                            versions.extend(
+                                version_array
+                                    .iter()
+                                    .filter_map(|value| value.as_str().map(ToOwned::to_owned)),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        if versions.is_empty() {
+            if let Some(detected_interpreters) = capabilities.get("detected_interpreters") {
+                if let Some(interpreters) = detected_interpreters.as_array() {
+                    for interpreter in interpreters {
+                        let Some(name) = interpreter.get("name").and_then(|value| value.as_str())
+                        else {
+                            continue;
+                        };
+
+                        if !candidate_runtime_names
+                            .iter()
+                            .any(|candidate| candidate == &normalize_runtime_name(name))
+                        {
+                            continue;
+                        }
+
+                        if let Some(version) =
+                            interpreter.get("version").and_then(|value| value.as_str())
+                        {
+                            versions.push(version.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        versions.sort();
+        versions.dedup();
+        versions
+    }
+
+    fn version_matches_worker(
+        version: &attune_common::models::RuntimeVersion,
+        advertised_versions: &[String],
+    ) -> bool {
+        advertised_versions.iter().any(|advertised_version| {
+            advertised_version == &version.version
+                || matches_constraint(advertised_version, &version.version).unwrap_or(false)
+        })
     }
 
     /// Execute the action using the runtime registry
@@ -1015,6 +1152,9 @@ impl ActionExecutor {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use chrono::Utc;
+
     #[test]
     fn test_parse_action_reference() {
         let action_ref = "mypack.myaction";
@@ -1029,5 +1169,121 @@ mod tests {
         let action_ref = "invalid";
         let parts: Vec<&str> = action_ref.split('.').collect();
         assert_eq!(parts.len(), 1);
+    }
+
+    #[test]
+    fn test_worker_runtime_versions_for_runtime_prefers_runtime_versions_capability() {
+        let worker = Worker {
+            id: 1,
+            name: "worker-1".to_string(),
+            worker_type: attune_common::models::WorkerType::Local,
+            worker_role: attune_common::models::WorkerRole::Action,
+            runtime: None,
+            host: None,
+            port: None,
+            status: Some(attune_common::models::WorkerStatus::Active),
+            capabilities: Some(serde_json::json!({
+                "runtime_versions": {
+                    "python": ["3.12.13"]
+                },
+                "detected_interpreters": [
+                    { "name": "python", "path": "/usr/bin/python3", "version": "3.12.12" }
+                ]
+            })),
+            meta: None,
+            last_heartbeat: None,
+            created: Utc::now(),
+            updated: Utc::now(),
+        };
+        let runtime = RuntimeModel {
+            id: 1,
+            r#ref: "core.python".to_string(),
+            pack: None,
+            pack_ref: Some("core".to_string()),
+            description: None,
+            name: "Python".to_string(),
+            aliases: vec!["python".to_string(), "python3".to_string()],
+            distributions: serde_json::json!({}),
+            installation: None,
+            installers: serde_json::json!({}),
+            execution_config: serde_json::json!({}),
+            auto_detected: false,
+            detection_config: serde_json::json!({}),
+            created: Utc::now(),
+            updated: Utc::now(),
+        };
+
+        assert_eq!(
+            ActionExecutor::worker_runtime_versions_for_runtime(&worker, &runtime),
+            vec!["3.12.13".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_version_matches_worker_accepts_patch_level_for_minor_runtime_version() {
+        let version = attune_common::models::RuntimeVersion {
+            id: 1,
+            runtime: 1,
+            runtime_ref: "core.python".to_string(),
+            version: "3.12".to_string(),
+            version_major: Some(3),
+            version_minor: Some(12),
+            version_patch: None,
+            execution_config: serde_json::json!({}),
+            distributions: serde_json::json!({}),
+            is_default: false,
+            available: true,
+            verified_at: None,
+            meta: serde_json::json!({}),
+            created: Utc::now(),
+            updated: Utc::now(),
+        };
+
+        assert!(ActionExecutor::version_matches_worker(
+            &version,
+            &["3.12.13".to_string()]
+        ));
+        assert!(!ActionExecutor::version_matches_worker(
+            &version,
+            &["3.13.0".to_string()]
+        ));
+    }
+
+    #[test]
+    fn test_worker_runtime_versions_for_runtime_returns_empty_without_capabilities() {
+        let worker = Worker {
+            id: 1,
+            name: "worker-1".to_string(),
+            worker_type: attune_common::models::WorkerType::Local,
+            worker_role: attune_common::models::WorkerRole::Action,
+            runtime: None,
+            host: None,
+            port: None,
+            status: Some(attune_common::models::WorkerStatus::Active),
+            capabilities: None,
+            meta: None,
+            last_heartbeat: None,
+            created: Utc::now(),
+            updated: Utc::now(),
+        };
+        let runtime = RuntimeModel {
+            id: 1,
+            r#ref: "core.python".to_string(),
+            pack: None,
+            pack_ref: Some("core".to_string()),
+            description: None,
+            name: "Python".to_string(),
+            aliases: vec!["python".to_string(), "python3".to_string()],
+            distributions: serde_json::json!({}),
+            installation: None,
+            installers: serde_json::json!({}),
+            execution_config: serde_json::json!({}),
+            auto_detected: false,
+            detection_config: serde_json::json!({}),
+            created: Utc::now(),
+            updated: Utc::now(),
+        };
+
+        assert!(ActionExecutor::worker_runtime_versions_for_runtime(&worker, &runtime).is_empty());
     }
 }

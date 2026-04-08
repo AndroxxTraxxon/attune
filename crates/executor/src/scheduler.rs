@@ -27,7 +27,8 @@ use attune_common::{
         },
         FindById, FindByRef, Update,
     },
-    runtime_detection::runtime_aliases_contain,
+    runtime_detection::{normalize_runtime_name, runtime_aliases_contain},
+    version_matching::matches_constraint,
     workflow::WorkflowDefinition,
 };
 use chrono::{DateTime, Utc};
@@ -132,6 +133,7 @@ const DEFAULT_HEARTBEAT_INTERVAL: u64 = 30;
 /// Workers are considered stale if heartbeat is older than HEARTBEAT_INTERVAL * HEARTBEAT_STALENESS_MULTIPLIER
 const HEARTBEAT_STALENESS_MULTIPLIER: u64 = 3;
 const SCHEDULING_RECLAIM_GRACE_SECONDS: i64 = 30;
+const RUNTIME_VERSIONS_CAPABILITY_KEY: &str = "runtime_versions";
 
 impl ExecutionScheduler {
     fn retryable_mq_error(error: &anyhow::Error) -> Option<MqError> {
@@ -2659,6 +2661,13 @@ impl ExecutionScheduler {
             workers
                 .into_iter()
                 .filter(|w| Self::worker_supports_runtime(w, runtime))
+                .filter(|w| {
+                    Self::worker_supports_runtime_constraint(
+                        w,
+                        runtime,
+                        action.runtime_version_constraint.as_deref(),
+                    )
+                })
                 .collect()
         } else {
             workers
@@ -2666,10 +2675,15 @@ impl ExecutionScheduler {
 
         if compatible_workers.is_empty() {
             let runtime_name = runtime.as_ref().map(|r| r.name.as_str()).unwrap_or("any");
+            let version_constraint = action
+                .runtime_version_constraint
+                .as_deref()
+                .unwrap_or("none");
             return Err(anyhow::anyhow!(
-                "No compatible workers found for action: {} (requires runtime: {})",
+                "No compatible workers found for action: {} (requires runtime: {}, version constraint: {})",
                 action.r#ref,
-                runtime_name
+                runtime_name,
+                version_constraint,
             ));
         }
 
@@ -2750,6 +2764,133 @@ impl ExecutionScheduler {
             worker.name, runtime.name, runtime_names
         );
         false
+    }
+
+    fn worker_supports_runtime_constraint(
+        worker: &attune_common::models::Worker,
+        runtime: &Runtime,
+        constraint: Option<&str>,
+    ) -> bool {
+        let Some(constraint) = constraint.filter(|constraint| !constraint.trim().is_empty()) else {
+            return true;
+        };
+
+        let Some(capabilities) = worker.capabilities.as_ref() else {
+            debug!(
+                "Worker {} has no capabilities; cannot satisfy runtime constraint '{}' for runtime '{}'",
+                worker.name,
+                constraint,
+                runtime.name,
+            );
+            return false;
+        };
+
+        let candidate_runtime_names: Vec<String> = Self::runtime_capability_names(runtime)
+            .into_iter()
+            .map(|name| normalize_runtime_name(&name))
+            .collect();
+
+        let advertised_versions =
+            Self::worker_runtime_versions(capabilities, &candidate_runtime_names);
+
+        if advertised_versions.is_empty() {
+            debug!(
+                "Worker {} does not advertise compatible runtime versions for runtime '{}' and constraint '{}'",
+                worker.name,
+                runtime.name,
+                constraint,
+            );
+            return false;
+        }
+
+        for version in advertised_versions {
+            match matches_constraint(&version, constraint) {
+                Ok(true) => {
+                    debug!(
+                        "Worker {} satisfies runtime constraint '{}' for runtime '{}' via version '{}'",
+                        worker.name,
+                        constraint,
+                        runtime.name,
+                        version,
+                    );
+                    return true;
+                }
+                Ok(false) => continue,
+                Err(e) => {
+                    warn!(
+                        "Invalid runtime version comparison for worker {} runtime '{}' version '{}' constraint '{}': {}",
+                        worker.name,
+                        runtime.name,
+                        version,
+                        constraint,
+                        e,
+                    );
+                }
+            }
+        }
+
+        debug!(
+            "Worker {} does not satisfy runtime constraint '{}' for runtime '{}'",
+            worker.name, constraint, runtime.name,
+        );
+        false
+    }
+
+    fn worker_runtime_versions(
+        capabilities: &JsonValue,
+        candidate_runtime_names: &[String],
+    ) -> Vec<String> {
+        let mut versions = Vec::new();
+
+        let Some(capabilities_obj) = capabilities.as_object() else {
+            return versions;
+        };
+
+        if let Some(runtime_versions) = capabilities_obj.get(RUNTIME_VERSIONS_CAPABILITY_KEY) {
+            if let Some(runtime_versions_obj) = runtime_versions.as_object() {
+                for runtime_name in candidate_runtime_names {
+                    if let Some(version_values) = runtime_versions_obj.get(runtime_name) {
+                        if let Some(version_array) = version_values.as_array() {
+                            versions.extend(
+                                version_array
+                                    .iter()
+                                    .filter_map(|value| value.as_str().map(ToOwned::to_owned)),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        if versions.is_empty() {
+            if let Some(detected_interpreters) = capabilities_obj.get("detected_interpreters") {
+                if let Some(interpreters) = detected_interpreters.as_array() {
+                    for interpreter in interpreters {
+                        let Some(name) = interpreter.get("name").and_then(|value| value.as_str())
+                        else {
+                            continue;
+                        };
+
+                        if !candidate_runtime_names
+                            .iter()
+                            .any(|candidate| candidate == &normalize_runtime_name(name))
+                        {
+                            continue;
+                        }
+
+                        if let Some(version) =
+                            interpreter.get("version").and_then(|value| value.as_str())
+                        {
+                            versions.push(version.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        versions.sort();
+        versions.dedup();
+        versions
     }
 
     fn runtime_capability_names(runtime: &Runtime) -> Vec<String> {
@@ -3338,6 +3479,124 @@ mod tests {
 
         assert!(ExecutionScheduler::worker_supports_runtime(
             &worker, &runtime
+        ));
+    }
+
+    #[test]
+    fn test_worker_supports_runtime_constraint_with_matching_version() {
+        let mut worker = create_test_worker("test-worker", 5);
+        worker.capabilities = Some(serde_json::json!({
+            "runtimes": ["python"],
+            "runtime_versions": {
+                "python": ["3.12", "3.11"]
+            }
+        }));
+
+        let runtime = Runtime {
+            id: 1,
+            r#ref: "core.python".to_string(),
+            pack: None,
+            pack_ref: Some("core".to_string()),
+            description: Some("Python runtime".to_string()),
+            name: "Python".to_string(),
+            aliases: vec!["python".to_string(), "python3".to_string()],
+            distributions: serde_json::json!({}),
+            installation: None,
+            installers: serde_json::json!({}),
+            execution_config: serde_json::json!({}),
+            auto_detected: false,
+            detection_config: serde_json::json!({}),
+            created: Utc::now(),
+            updated: Utc::now(),
+        };
+
+        assert!(ExecutionScheduler::worker_supports_runtime_constraint(
+            &worker,
+            &runtime,
+            Some(">=3.12"),
+        ));
+        assert!(!ExecutionScheduler::worker_supports_runtime_constraint(
+            &worker,
+            &runtime,
+            Some(">=3.13"),
+        ));
+    }
+
+    #[test]
+    fn test_worker_supports_runtime_constraint_uses_normalized_runtime_keys() {
+        let mut worker = create_test_worker("test-worker", 5);
+        worker.capabilities = Some(serde_json::json!({
+            "runtimes": ["node"],
+            "runtime_versions": {
+                "node": ["20"]
+            }
+        }));
+
+        let runtime = Runtime {
+            id: 1,
+            r#ref: "core.nodejs".to_string(),
+            pack: None,
+            pack_ref: Some("core".to_string()),
+            description: Some("Node.js runtime".to_string()),
+            name: "Node.js".to_string(),
+            aliases: vec![
+                "node".to_string(),
+                "nodejs".to_string(),
+                "node.js".to_string(),
+            ],
+            distributions: serde_json::json!({}),
+            installation: None,
+            installers: serde_json::json!({}),
+            execution_config: serde_json::json!({}),
+            auto_detected: false,
+            detection_config: serde_json::json!({}),
+            created: Utc::now(),
+            updated: Utc::now(),
+        };
+
+        assert!(ExecutionScheduler::worker_supports_runtime_constraint(
+            &worker,
+            &runtime,
+            Some(">=18"),
+        ));
+    }
+
+    #[test]
+    fn test_worker_supports_runtime_constraint_falls_back_to_detected_interpreters() {
+        let mut worker = create_test_worker("test-worker", 5);
+        worker.capabilities = Some(serde_json::json!({
+            "runtimes": ["python"],
+            "detected_interpreters": [
+                {
+                    "name": "python",
+                    "path": "/usr/local/bin/python3",
+                    "version": "3.12.13"
+                }
+            ]
+        }));
+
+        let runtime = Runtime {
+            id: 1,
+            r#ref: "core.python".to_string(),
+            pack: None,
+            pack_ref: Some("core".to_string()),
+            description: Some("Python runtime".to_string()),
+            name: "Python".to_string(),
+            aliases: vec!["python".to_string(), "python3".to_string()],
+            distributions: serde_json::json!({}),
+            installation: None,
+            installers: serde_json::json!({}),
+            execution_config: serde_json::json!({}),
+            auto_detected: false,
+            detection_config: serde_json::json!({}),
+            created: Utc::now(),
+            updated: Utc::now(),
+        };
+
+        assert!(ExecutionScheduler::worker_supports_runtime_constraint(
+            &worker,
+            &runtime,
+            Some(">=3.9"),
         ));
     }
 

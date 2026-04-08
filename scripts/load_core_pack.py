@@ -45,6 +45,25 @@ def generate_label(name: str) -> str:
     return " ".join(word.capitalize() for word in name.replace("_", " ").split())
 
 
+def extract_version_components(
+    version: str,
+) -> tuple[Optional[int], Optional[int], Optional[int]]:
+    """Extract major/minor/patch integers from a version string.
+
+    Accepts lenient semver-style inputs like ``3``, ``3.12``, ``3.12.1``,
+    and ignores any suffix after the numeric prefix.
+    """
+
+    match = re.match(r"^\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?", version)
+    if not match:
+        return None, None, None
+
+    major = int(match.group(1)) if match.group(1) is not None else None
+    minor = int(match.group(2)) if match.group(2) is not None else None
+    patch = int(match.group(3)) if match.group(3) is not None else None
+    return major, minor, patch
+
+
 class PackLoader:
     """Loads a pack into the database"""
 
@@ -363,8 +382,102 @@ class PackLoader:
                 runtime_ids[alias] = runtime_id
             print(f"  ✓ Runtime '{ref}' (ID: {runtime_id})")
 
+            self.upsert_runtime_versions(cursor, runtime_id, ref, runtime_data)
+
         cursor.close()
         return runtime_ids
+
+    def upsert_runtime_versions(
+        self, cursor, runtime_id: int, runtime_ref: str, runtime_data: Dict[str, Any]
+    ) -> int:
+        """Load version-specific runtime definitions from a runtime YAML."""
+        versions = runtime_data.get("versions")
+        if versions is None:
+            return 0
+
+        if not isinstance(versions, list):
+            print(
+                f"  ⚠ Runtime '{runtime_ref}' has non-array 'versions' field, skipping version load"
+            )
+            return 0
+
+        declared_versions: List[str] = []
+
+        for entry in versions:
+            if not isinstance(entry, dict):
+                print(
+                    f"  ⚠ Runtime '{runtime_ref}' has invalid version entry (expected object), skipping"
+                )
+                continue
+
+            version = entry.get("version")
+            if not isinstance(version, str) or not version.strip():
+                print(
+                    f"  ⚠ Runtime '{runtime_ref}' has a version entry without a valid 'version' field, skipping"
+                )
+                continue
+
+            version = version.strip()
+            declared_versions.append(version)
+            version_major, version_minor, version_patch = extract_version_components(version)
+            execution_config = json.dumps(entry.get("execution_config", {}))
+            distributions = json.dumps(entry.get("distributions", {}))
+            is_default = bool(entry.get("is_default", False))
+            meta = json.dumps(entry.get("meta", {}))
+
+            cursor.execute(
+                """
+                INSERT INTO runtime_version (
+                    runtime, runtime_ref, version,
+                    version_major, version_minor, version_patch,
+                    execution_config, distributions,
+                    is_default, available, meta
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (runtime, version) DO UPDATE SET
+                    runtime_ref = EXCLUDED.runtime_ref,
+                    version_major = EXCLUDED.version_major,
+                    version_minor = EXCLUDED.version_minor,
+                    version_patch = EXCLUDED.version_patch,
+                    execution_config = EXCLUDED.execution_config,
+                    distributions = EXCLUDED.distributions,
+                    is_default = EXCLUDED.is_default,
+                    meta = EXCLUDED.meta,
+                    updated = NOW()
+                RETURNING id
+            """,
+                (
+                    runtime_id,
+                    runtime_ref,
+                    version,
+                    version_major,
+                    version_minor,
+                    version_patch,
+                    execution_config,
+                    distributions,
+                    is_default,
+                    True,
+                    meta,
+                ),
+            )
+            version_id = cursor.fetchone()[0]
+            print(
+                f"    ✓ Runtime version '{runtime_ref}' {version} (ID: {version_id})"
+            )
+
+        if declared_versions:
+            cursor.execute(
+                """
+                DELETE FROM runtime_version
+                WHERE runtime = %s
+                  AND NOT (version = ANY(%s))
+            """,
+                (runtime_id, declared_versions),
+            )
+        else:
+            cursor.execute("DELETE FROM runtime_version WHERE runtime = %s", (runtime_id,))
+
+        return len(declared_versions)
 
     def resolve_action_runtime(
         self, action_data: Dict, runtime_ids: Dict[str, int]
@@ -469,9 +582,9 @@ class PackLoader:
             """
             INSERT INTO workflow_definition (
                 ref, pack, pack_ref, label, description, version,
-                param_schema, out_schema, definition, tags, enabled
+                param_schema, out_schema, definition, tags
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (ref) DO UPDATE SET
                 label = EXCLUDED.label,
                 description = EXCLUDED.description,
@@ -480,7 +593,6 @@ class PackLoader:
                 out_schema = EXCLUDED.out_schema,
                 definition = EXCLUDED.definition,
                 tags = EXCLUDED.tags,
-                enabled = EXCLUDED.enabled,
                 updated = NOW()
             RETURNING id
         """,
@@ -495,7 +607,6 @@ class PackLoader:
                 out_schema_json,
                 definition_json,
                 tags_list,
-                True,
             ),
         )
 
@@ -568,6 +679,8 @@ class PackLoader:
             else:
                 runtime_id = self.resolve_action_runtime(action_data, runtime_ids)
 
+            runtime_version_constraint = action_data.get("runtime_version")
+
             param_schema = json.dumps(action_data.get("parameters", {}))
             out_schema = json.dumps(action_data.get("output", {}))
 
@@ -603,14 +716,17 @@ class PackLoader:
                 """
                 INSERT INTO action (
                     ref, pack, pack_ref, label, description,
-                    entrypoint, runtime, param_schema, out_schema, is_adhoc,
+                    entrypoint, runtime, runtime_version_constraint,
+                    param_schema, out_schema, is_adhoc,
                     parameter_delivery, parameter_format, output_format
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (ref) DO UPDATE SET
                     label = EXCLUDED.label,
                     description = EXCLUDED.description,
                     entrypoint = EXCLUDED.entrypoint,
+                    runtime = EXCLUDED.runtime,
+                    runtime_version_constraint = EXCLUDED.runtime_version_constraint,
                     param_schema = EXCLUDED.param_schema,
                     out_schema = EXCLUDED.out_schema,
                     parameter_delivery = EXCLUDED.parameter_delivery,
@@ -627,6 +743,7 @@ class PackLoader:
                     description,
                     entrypoint,
                     runtime_id,
+                    runtime_version_constraint,
                     param_schema,
                     out_schema,
                     False,  # Pack-installed actions are not ad-hoc
@@ -746,15 +863,16 @@ class PackLoader:
                         break
 
             config = json.dumps(sensor_data.get("config", {}))
+            runtime_version_constraint = sensor_data.get("runtime_version")
 
             cursor.execute(
                 """
                 INSERT INTO sensor (
                     ref, pack, pack_ref, label, description,
                     entrypoint, runtime, runtime_ref, trigger, trigger_ref,
-                    enabled, config
+                    runtime_version_constraint, enabled, config
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (ref) DO UPDATE SET
                     label = EXCLUDED.label,
                     description = EXCLUDED.description,
@@ -763,6 +881,7 @@ class PackLoader:
                     runtime_ref = EXCLUDED.runtime_ref,
                     trigger = EXCLUDED.trigger,
                     trigger_ref = EXCLUDED.trigger_ref,
+                    runtime_version_constraint = EXCLUDED.runtime_version_constraint,
                     enabled = EXCLUDED.enabled,
                     config = EXCLUDED.config,
                     updated = NOW()
@@ -779,6 +898,7 @@ class PackLoader:
                     runtime_ref,
                     trigger_id,
                     trigger_ref,
+                    runtime_version_constraint,
                     enabled,
                     config,
                 ),

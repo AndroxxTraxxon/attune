@@ -101,3 +101,4 @@ mockall = { workspace = true }
 tower = { workspace = true }
 tempfile = { workspace = true }
 reqwest-eventsource = { workspace = true }
+reqwest12 = { package = "reqwest", version = "0.12.28", features = ["stream", "rustls-tls"] }

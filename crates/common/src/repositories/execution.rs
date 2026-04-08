@@ -9,6 +9,23 @@ use tokio::time::{sleep, Duration};
 
 use super::{Create, Delete, FindById, List, Repository, Update};
 
+fn escape_like_pattern_component(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+fn wildcard_ref_filter_pattern(filter: &str) -> Option<String> {
+    filter
+        .strip_suffix(".*")
+        .filter(|prefix| !prefix.is_empty())
+        .map(|prefix| {
+            let escaped_prefix = escape_like_pattern_component(prefix);
+            format!("{escaped_prefix}.%")
+        })
+}
+
 /// Filters for the [`ExecutionRepository::search`] query-builder method.
 ///
 /// Every field is optional. When set, the corresponding `WHERE` clause is
@@ -1084,6 +1101,26 @@ impl ExecutionRepository {
             }};
         }
 
+        macro_rules! push_like_condition {
+            ($cond_prefix:expr, $value:expr) => {{
+                let needs_where = conditions.is_empty();
+                conditions.push(String::new()); // just to track count
+                if needs_where {
+                    qb.push(" WHERE ");
+                    count_qb.push(" WHERE ");
+                } else {
+                    qb.push(" AND ");
+                    count_qb.push(" AND ");
+                }
+                qb.push($cond_prefix);
+                qb.push_bind($value.clone());
+                qb.push(r" ESCAPE '\'");
+                count_qb.push($cond_prefix);
+                count_qb.push_bind($value);
+                count_qb.push(r" ESCAPE '\'");
+            }};
+        }
+
         macro_rules! push_raw_condition {
             ($cond:expr) => {{
                 let needs_where = conditions.is_empty();
@@ -1102,11 +1139,15 @@ impl ExecutionRepository {
             push_condition!("e.status = ", *status);
         }
         if let Some(action_ref) = &filters.action_ref {
-            push_condition!("e.action_ref = ", action_ref.clone());
+            if let Some(pattern) = wildcard_ref_filter_pattern(action_ref) {
+                push_like_condition!("e.action_ref LIKE ", pattern);
+            } else {
+                push_condition!("e.action_ref = ", action_ref.clone());
+            }
         }
         if let Some(pack_name) = &filters.pack_name {
-            let pattern = format!("{pack_name}.%");
-            push_condition!("e.action_ref LIKE ", pattern);
+            let pattern = format!("{}.%", escape_like_pattern_component(pack_name));
+            push_like_condition!("e.action_ref LIKE ", pattern);
         }
         if let Some(enforcement_id) = filters.enforcement {
             push_condition!("e.enforcement = ", enforcement_id);
@@ -1121,10 +1162,18 @@ impl ExecutionRepository {
             push_condition!("e.executor = ", executor_id);
         }
         if let Some(rule_ref) = &filters.rule_ref {
-            push_condition!("enf.rule_ref = ", rule_ref.clone());
+            if let Some(pattern) = wildcard_ref_filter_pattern(rule_ref) {
+                push_like_condition!("enf.rule_ref LIKE ", pattern);
+            } else {
+                push_condition!("enf.rule_ref = ", rule_ref.clone());
+            }
         }
         if let Some(trigger_ref) = &filters.trigger_ref {
-            push_condition!("enf.trigger_ref = ", trigger_ref.clone());
+            if let Some(pattern) = wildcard_ref_filter_pattern(trigger_ref) {
+                push_like_condition!("enf.trigger_ref LIKE ", pattern);
+            } else {
+                push_condition!("enf.trigger_ref = ", trigger_ref.clone());
+            }
         }
         if let Some(search) = &filters.result_contains {
             let pattern = format!("%{}%", search.to_lowercase());

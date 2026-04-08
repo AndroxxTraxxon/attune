@@ -18,6 +18,7 @@ use attune_common::{
 };
 
 use futures::StreamExt;
+use reqwest12::Client as HttpClient;
 use reqwest_eventsource::{Event, EventSource};
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -28,6 +29,12 @@ mod helpers;
 use helpers::TestContext;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+fn authenticated_event_source(url: &str, token: &str) -> Result<EventSource> {
+    Ok(EventSource::new(
+        HttpClient::new().get(url).bearer_auth(token),
+    )?)
+}
 
 /// Helper to set up test pack and action
 async fn setup_test_pack_and_action(pool: &PgPool) -> Result<(Pack, Action)> {
@@ -104,12 +111,12 @@ async fn test_sse_stream_receives_execution_updates() -> Result<()> {
 
     // Build SSE URL with authentication
     let sse_url = format!(
-        "http://localhost:8080/api/v1/executions/stream?execution_id={}&token={}",
-        execution.id, token
+        "http://localhost:8080/api/v1/executions/stream?execution_id={}",
+        execution.id
     );
 
     // Create SSE stream
-    let mut stream = EventSource::get(&sse_url);
+    let mut stream = authenticated_event_source(&sse_url, token)?;
 
     // Spawn a task to update the execution status after a short delay
     let pool_clone = ctx.pool.clone();
@@ -244,11 +251,11 @@ async fn test_sse_stream_filters_by_execution_id() -> Result<()> {
 
     // Subscribe to updates for execution1 only
     let sse_url = format!(
-        "http://localhost:8080/api/v1/executions/stream?execution_id={}&token={}",
-        execution1.id, token
+        "http://localhost:8080/api/v1/executions/stream?execution_id={}",
+        execution1.id
     );
 
-    let mut stream = EventSource::get(&sse_url);
+    let mut stream = authenticated_event_source(&sse_url, token)?;
 
     // Update both executions
     let pool_clone = ctx.pool.clone();
@@ -391,12 +398,9 @@ async fn test_sse_stream_all_executions() -> Result<()> {
     );
 
     // Subscribe to ALL execution updates (no execution_id filter)
-    let sse_url = format!(
-        "http://localhost:8080/api/v1/executions/stream?token={}",
-        token
-    );
+    let sse_url = "http://localhost:8080/api/v1/executions/stream";
 
-    let mut stream = EventSource::get(&sse_url);
+    let mut stream = authenticated_event_source(sse_url, token)?;
 
     // Update both executions
     let pool_clone = ctx.pool.clone();

@@ -328,7 +328,6 @@ export default function ExecutionsPage() {
   const [page, setPage] = useState(1);
   const pageSize = 50;
   const [searchFilters, setSearchFilters] = useState({
-    pack: searchParams.get("pack_name") || "",
     rule: searchParams.get("rule_ref") || "",
     action: searchParams.get("action_ref") || "",
     trigger: searchParams.get("trigger_ref") || "",
@@ -365,7 +364,6 @@ export default function ExecutionsPage() {
     const params: {
       page: number;
       pageSize: number;
-      packName?: string;
       ruleRef?: string;
       actionRef?: string;
       triggerRef?: string;
@@ -373,7 +371,6 @@ export default function ExecutionsPage() {
       status?: ExecutionStatus;
       topLevelOnly?: boolean;
     } = { page, pageSize };
-    if (debouncedFilters.pack) params.packName = debouncedFilters.pack;
     if (debouncedFilters.rule) params.ruleRef = debouncedFilters.rule;
     if (debouncedFilters.action) params.actionRef = debouncedFilters.action;
     if (debouncedFilters.trigger) params.triggerRef = debouncedFilters.trigger;
@@ -419,21 +416,28 @@ export default function ExecutionsPage() {
     };
   }, [executions]);
 
+  const wildcardSuggestions = useMemo(() => {
+    const wildcards = new Set<string>();
+    for (const pack of [...baseSuggestions.packNames, ...loadedRefs.packs]) {
+      if (pack) wildcards.add(`${pack}.*`);
+    }
+    return [...wildcards].sort();
+  }, [baseSuggestions.packNames, loadedRefs.packs]);
+
   // Merge base entity suggestions + loaded data refs
-  const packSuggestions = useMergedSuggestions(
-    baseSuggestions.packNames,
-    loadedRefs.packs,
-  );
   const ruleSuggestions = useMergedSuggestions(
     baseSuggestions.ruleRefs,
+    wildcardSuggestions,
     loadedRefs.rules,
   );
   const actionSuggestions = useMergedSuggestions(
     baseSuggestions.actionRefs,
+    wildcardSuggestions,
     loadedRefs.actions,
   );
   const triggerSuggestions = useMergedSuggestions(
     baseSuggestions.triggerRefs,
+    wildcardSuggestions,
     loadedRefs.triggers,
   );
 
@@ -452,7 +456,6 @@ export default function ExecutionsPage() {
 
   const clearFilters = useCallback(() => {
     setSearchFilters({
-      pack: "",
       rule: "",
       action: "",
       trigger: "",
@@ -612,40 +615,27 @@ export default function ExecutionsPage() {
               </button>
             )}
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
             <AutocompleteInput
-              label="Pack"
-              value={searchFilters.pack}
-              onChange={(value) => handleFilterChange("pack", value)}
-              suggestions={packSuggestions}
-              placeholder="e.g., core"
+              label="Action"
+              value={searchFilters.action}
+              onChange={(value) => handleFilterChange("action", value)}
+              suggestions={actionSuggestions}
+              placeholder="e.g., core.echo or core.*"
             />
             <AutocompleteInput
               label="Rule"
               value={searchFilters.rule}
               onChange={(value) => handleFilterChange("rule", value)}
               suggestions={ruleSuggestions}
-              placeholder="e.g., core.on_timer"
-            />
-            <AutocompleteInput
-              label="Action"
-              value={searchFilters.action}
-              onChange={(value) => handleFilterChange("action", value)}
-              suggestions={actionSuggestions}
-              placeholder="e.g., core.echo"
+              placeholder="e.g., core.on_timer or core.*"
             />
             <AutocompleteInput
               label="Trigger"
               value={searchFilters.trigger}
               onChange={(value) => handleFilterChange("trigger", value)}
               suggestions={triggerSuggestions}
-              placeholder="e.g., core.timer"
-            />
-            <FilterInput
-              label="Executor ID"
-              value={searchFilters.executor}
-              onChange={(value) => handleFilterChange("executor", value)}
-              placeholder="e.g., 1"
+              placeholder="e.g., core.timer or core.*"
             />
             <div>
               <MultiSelect
@@ -656,6 +646,12 @@ export default function ExecutionsPage() {
                 placeholder="All Statuses"
               />
             </div>
+            <FilterInput
+              label="Executor ID"
+              value={searchFilters.executor}
+              onChange={(value) => handleFilterChange("executor", value)}
+              placeholder="e.g., 1"
+            />
           </div>
         </div>
 

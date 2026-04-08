@@ -10,16 +10,19 @@
 //! are genuinely present on this particular host/container.
 
 use attune_common::repositories::List;
+use serde_json::{json, Value as JsonValue};
 use sqlx::PgPool;
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 use attune_common::models::RuntimeVersion;
 use attune_common::repositories::runtime_version::RuntimeVersionRepository;
-use attune_common::runtime_detection::runtime_aliases_match_filter;
+use attune_common::runtime_detection::{normalize_runtime_name, runtime_aliases_match_filter};
+use attune_common::version_matching::parse_version;
 
-/// Result of verifying all runtime versions at startup.
+/// Result of verifying runtime versions on this worker.
 #[derive(Debug)]
 pub struct VersionVerificationResult {
     /// Total number of versions checked.
@@ -31,6 +34,8 @@ pub struct VersionVerificationResult {
     /// Errors encountered during verification (non-fatal).
     pub errors: Vec<String>,
 }
+
+pub const RUNTIME_VERSIONS_CAPABILITY_KEY: &str = "runtime_versions";
 
 /// A single verification command extracted from the `distributions` JSONB.
 #[derive(Debug)]
@@ -145,6 +150,108 @@ pub async fn verify_all_runtime_versions(
     );
 
     result
+}
+
+/// Build the worker capability payload describing which verified runtime
+/// versions are currently available on this worker.
+///
+/// The JSON shape is:
+/// `{ "<normalized-runtime-name>": ["<version>", ...] }`
+///
+/// Example:
+/// `{ "python": ["3.12", "3.11"], "node": ["20", "18"] }`
+pub fn build_runtime_versions_capability(
+    versions: &[RuntimeVersion],
+    runtime_filter: Option<&[String]>,
+) -> JsonValue {
+    let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
+
+    for version in versions.iter().filter(|version| version.available) {
+        let runtime_name = normalize_runtime_name(
+            version
+                .runtime_ref
+                .split('.')
+                .next_back()
+                .unwrap_or(&version.runtime_ref),
+        );
+
+        if let Some(filter) = runtime_filter {
+            if !runtime_aliases_match_filter(std::slice::from_ref(&runtime_name), filter) {
+                continue;
+            }
+        }
+
+        grouped
+            .entry(runtime_name)
+            .or_default()
+            .push(version.version.clone());
+    }
+
+    for versions in grouped.values_mut() {
+        versions.sort_by(|a, b| match (parse_version(a), parse_version(b)) {
+            (Ok(a_ver), Ok(b_ver)) => b_ver.cmp(&a_ver),
+            _ => b.cmp(a),
+        });
+        versions.dedup();
+    }
+
+    let mut entries: Vec<(String, Vec<String>)> = grouped.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    JsonValue::Object(
+        entries
+            .into_iter()
+            .map(|(runtime_name, versions)| (runtime_name, json!(versions)))
+            .collect(),
+    )
+}
+
+/// Query runtime versions from the database and build the worker capability
+/// payload from versions that verify locally on this worker.
+///
+/// This intentionally does **not** trust the shared `runtime_version.available`
+/// flag, because that flag is global across workers and may reflect a different
+/// host/container in heterogeneous deployments.
+pub async fn collect_runtime_versions_capability(
+    pool: &PgPool,
+    runtime_filter: Option<&[String]>,
+) -> JsonValue {
+    match RuntimeVersionRepository::list(pool).await {
+        Ok(versions) => {
+            let mut local_versions = Vec::new();
+
+            for version in versions {
+                let runtime_name = normalize_runtime_name(
+                    version
+                        .runtime_ref
+                        .split('.')
+                        .next_back()
+                        .unwrap_or(&version.runtime_ref),
+                );
+
+                if let Some(filter) = runtime_filter {
+                    if !runtime_aliases_match_filter(std::slice::from_ref(&runtime_name), filter) {
+                        continue;
+                    }
+                }
+
+                if verify_single_version(&version).await {
+                    let mut verified_version = version.clone();
+                    verified_version.available = true;
+                    local_versions.push(verified_version);
+                }
+            }
+
+            build_runtime_versions_capability(&local_versions, runtime_filter)
+        }
+        Err(e) => {
+            warn!(
+                "Failed to load runtime versions for worker capability refresh: {}",
+                e
+            );
+            JsonValue::Object(Default::default())
+        }
+    }
 }
 
 /// Verify a single runtime version by running its verification commands.
@@ -481,5 +588,64 @@ mod tests {
         };
         let result = run_verification_command(&cmd).await;
         assert!(result.is_err());
+    }
+
+    fn make_version(runtime_ref: &str, version: &str, available: bool) -> RuntimeVersion {
+        RuntimeVersion {
+            id: 1,
+            runtime: 1,
+            runtime_ref: runtime_ref.to_string(),
+            version: version.to_string(),
+            version_major: None,
+            version_minor: None,
+            version_patch: None,
+            execution_config: json!({}),
+            distributions: json!({}),
+            is_default: false,
+            available,
+            verified_at: None,
+            meta: json!({}),
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn test_build_runtime_versions_capability_groups_and_sorts_versions() {
+        let versions = vec![
+            make_version("core.python", "3.11", true),
+            make_version("core.python", "3.13", false),
+            make_version("core.python", "3.12", true),
+            make_version("core.nodejs", "18", true),
+            make_version("core.nodejs", "20", true),
+        ];
+
+        let capability = build_runtime_versions_capability(&versions, None);
+
+        assert_eq!(
+            capability,
+            json!({
+                "node": ["20", "18"],
+                "python": ["3.12", "3.11"]
+            })
+        );
+    }
+
+    #[test]
+    fn test_build_runtime_versions_capability_applies_runtime_filter() {
+        let versions = vec![
+            make_version("core.python", "3.12", true),
+            make_version("core.nodejs", "20", true),
+        ];
+
+        let capability =
+            build_runtime_versions_capability(&versions, Some(&["python3".to_string()]));
+
+        assert_eq!(
+            capability,
+            json!({
+                "python": ["3.12"]
+            })
+        );
     }
 }

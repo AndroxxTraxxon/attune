@@ -1258,3 +1258,448 @@ async fn test_update_if_status_only_updates_matching_row() {
     assert_eq!(updated.unwrap().status, ExecutionStatus::Scheduled);
     assert!(skipped.is_none());
 }
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_search_supports_pack_wildcards_for_action_rule_and_trigger_refs() {
+    use attune_common::{
+        models::enums::{EnforcementCondition, EnforcementStatus},
+        repositories::{
+            event::{CreateEnforcementInput, EnforcementRepository},
+            execution::ExecutionSearchFilters,
+            rule::{CreateRuleInput, RuleRepository},
+        },
+    };
+
+    let pool = create_test_pool().await.unwrap();
+
+    let pack_a = PackFixture::new_unique("search_pack_a")
+        .create(&pool)
+        .await
+        .unwrap();
+    let pack_b = PackFixture::new_unique("search_pack_b")
+        .create(&pool)
+        .await
+        .unwrap();
+
+    let action_a = ActionFixture::new_unique(pack_a.id, &pack_a.r#ref, "search_action")
+        .create(&pool)
+        .await
+        .unwrap();
+    let action_b = ActionFixture::new_unique(pack_b.id, &pack_b.r#ref, "search_action")
+        .create(&pool)
+        .await
+        .unwrap();
+
+    let trigger_a = TriggerFixture::new_unique(
+        Some(pack_a.id),
+        Some(pack_a.r#ref.clone()),
+        "search_trigger",
+    )
+    .create(&pool)
+    .await
+    .unwrap();
+    let trigger_b = TriggerFixture::new_unique(
+        Some(pack_b.id),
+        Some(pack_b.r#ref.clone()),
+        "search_trigger",
+    )
+    .create(&pool)
+    .await
+    .unwrap();
+
+    let rule_a = RuleRepository::create(
+        &pool,
+        CreateRuleInput {
+            r#ref: format!("{}.{}", pack_a.r#ref, unique_rule_name("search_rule")),
+            pack: pack_a.id,
+            pack_ref: pack_a.r#ref.clone(),
+            label: "Search Rule A".to_string(),
+            description: Some("Search rule A".to_string()),
+            action: action_a.id,
+            action_ref: action_a.r#ref.clone(),
+            trigger: trigger_a.id,
+            trigger_ref: trigger_a.r#ref.clone(),
+            conditions: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
+            enabled: true,
+            is_adhoc: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let rule_b = RuleRepository::create(
+        &pool,
+        CreateRuleInput {
+            r#ref: format!("{}.{}", pack_b.r#ref, unique_rule_name("search_rule")),
+            pack: pack_b.id,
+            pack_ref: pack_b.r#ref.clone(),
+            label: "Search Rule B".to_string(),
+            description: Some("Search rule B".to_string()),
+            action: action_b.id,
+            action_ref: action_b.r#ref.clone(),
+            trigger: trigger_b.id,
+            trigger_ref: trigger_b.r#ref.clone(),
+            conditions: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
+            enabled: true,
+            is_adhoc: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let enforcement_a = EnforcementRepository::create(
+        &pool,
+        CreateEnforcementInput {
+            rule: Some(rule_a.id),
+            rule_ref: rule_a.r#ref.clone(),
+            trigger_ref: trigger_a.r#ref.clone(),
+            config: None,
+            event: None,
+            status: EnforcementStatus::Created,
+            payload: json!({}),
+            condition: EnforcementCondition::All,
+            conditions: json!([]),
+        },
+    )
+    .await
+    .unwrap();
+
+    let enforcement_b = EnforcementRepository::create(
+        &pool,
+        CreateEnforcementInput {
+            rule: Some(rule_b.id),
+            rule_ref: rule_b.r#ref.clone(),
+            trigger_ref: trigger_b.r#ref.clone(),
+            config: None,
+            event: None,
+            status: EnforcementStatus::Created,
+            payload: json!({}),
+            condition: EnforcementCondition::All,
+            conditions: json!([]),
+        },
+    )
+    .await
+    .unwrap();
+
+    let execution_a = ExecutionRepository::create(
+        &pool,
+        CreateExecutionInput {
+            action: Some(action_a.id),
+            action_ref: action_a.r#ref.clone(),
+            config: None,
+            env_vars: None,
+            parent: None,
+            enforcement: Some(enforcement_a.id),
+            executor: None,
+            worker: None,
+            status: ExecutionStatus::Requested,
+            result: None,
+            workflow_task: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    ExecutionRepository::create(
+        &pool,
+        CreateExecutionInput {
+            action: Some(action_b.id),
+            action_ref: action_b.r#ref.clone(),
+            config: None,
+            env_vars: None,
+            parent: None,
+            enforcement: Some(enforcement_b.id),
+            executor: None,
+            worker: None,
+            status: ExecutionStatus::Requested,
+            result: None,
+            workflow_task: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let action_results = ExecutionRepository::search(
+        &pool,
+        &ExecutionSearchFilters {
+            action_ref: Some(format!("{}.*", pack_a.r#ref)),
+            limit: 50,
+            offset: 0,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(action_results.total, 1);
+    assert_eq!(action_results.rows[0].id, execution_a.id);
+
+    let rule_results = ExecutionRepository::search(
+        &pool,
+        &ExecutionSearchFilters {
+            rule_ref: Some(format!("{}.*", pack_a.r#ref)),
+            limit: 50,
+            offset: 0,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(rule_results.total, 1);
+    assert_eq!(
+        rule_results.rows[0].rule_ref.as_deref(),
+        Some(rule_a.r#ref.as_str())
+    );
+
+    let trigger_results = ExecutionRepository::search(
+        &pool,
+        &ExecutionSearchFilters {
+            trigger_ref: Some(format!("{}.*", pack_a.r#ref)),
+            limit: 50,
+            offset: 0,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(trigger_results.total, 1);
+    assert_eq!(
+        trigger_results.rows[0].trigger_ref.as_deref(),
+        Some(trigger_a.r#ref.as_str())
+    );
+}
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_search_escapes_literal_like_characters_in_ref_filters() {
+    use attune_common::{
+        models::enums::{EnforcementCondition, EnforcementStatus},
+        repositories::{
+            event::{CreateEnforcementInput, EnforcementRepository},
+            execution::ExecutionSearchFilters,
+            rule::{CreateRuleInput, RuleRepository},
+        },
+    };
+
+    let pool = create_test_pool().await.unwrap();
+    let suffix = unique_test_id();
+    let literal_pack_ref = format!("search%_pack_{suffix}");
+    let overlapping_pack_ref = format!("searchXpack_{suffix}");
+
+    let literal_pack = PackFixture::new(&literal_pack_ref)
+        .create(&pool)
+        .await
+        .unwrap();
+    let overlapping_pack = PackFixture::new(&overlapping_pack_ref)
+        .create(&pool)
+        .await
+        .unwrap();
+
+    let literal_action = ActionFixture::new(literal_pack.id, &literal_pack.r#ref, "action")
+        .create(&pool)
+        .await
+        .unwrap();
+    let overlapping_action =
+        ActionFixture::new(overlapping_pack.id, &overlapping_pack.r#ref, "action")
+            .create(&pool)
+            .await
+            .unwrap();
+
+    let literal_trigger = TriggerFixture::new(
+        Some(literal_pack.id),
+        Some(literal_pack.r#ref.clone()),
+        "trigger",
+    )
+    .create(&pool)
+    .await
+    .unwrap();
+    let overlapping_trigger = TriggerFixture::new(
+        Some(overlapping_pack.id),
+        Some(overlapping_pack.r#ref.clone()),
+        "trigger",
+    )
+    .create(&pool)
+    .await
+    .unwrap();
+
+    let literal_rule = RuleRepository::create(
+        &pool,
+        CreateRuleInput {
+            r#ref: format!("{}.rule_{}", literal_pack.r#ref, suffix),
+            pack: literal_pack.id,
+            pack_ref: literal_pack.r#ref.clone(),
+            label: "Literal Rule".to_string(),
+            description: Some("Rule with literal LIKE chars".to_string()),
+            action: literal_action.id,
+            action_ref: literal_action.r#ref.clone(),
+            trigger: literal_trigger.id,
+            trigger_ref: literal_trigger.r#ref.clone(),
+            conditions: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
+            enabled: true,
+            is_adhoc: false,
+        },
+    )
+    .await
+    .unwrap();
+    let overlapping_rule = RuleRepository::create(
+        &pool,
+        CreateRuleInput {
+            r#ref: format!("{}.rule_{}", overlapping_pack.r#ref, suffix),
+            pack: overlapping_pack.id,
+            pack_ref: overlapping_pack.r#ref.clone(),
+            label: "Overlap Rule".to_string(),
+            description: Some("Rule that should not match escaped filter".to_string()),
+            action: overlapping_action.id,
+            action_ref: overlapping_action.r#ref.clone(),
+            trigger: overlapping_trigger.id,
+            trigger_ref: overlapping_trigger.r#ref.clone(),
+            conditions: json!({}),
+            action_params: json!({}),
+            trigger_params: json!({}),
+            enabled: true,
+            is_adhoc: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let literal_enforcement = EnforcementRepository::create(
+        &pool,
+        CreateEnforcementInput {
+            rule: Some(literal_rule.id),
+            rule_ref: literal_rule.r#ref.clone(),
+            trigger_ref: literal_trigger.r#ref.clone(),
+            config: None,
+            event: None,
+            status: EnforcementStatus::Created,
+            payload: json!({}),
+            condition: EnforcementCondition::All,
+            conditions: json!([]),
+        },
+    )
+    .await
+    .unwrap();
+    let overlapping_enforcement = EnforcementRepository::create(
+        &pool,
+        CreateEnforcementInput {
+            rule: Some(overlapping_rule.id),
+            rule_ref: overlapping_rule.r#ref.clone(),
+            trigger_ref: overlapping_trigger.r#ref.clone(),
+            config: None,
+            event: None,
+            status: EnforcementStatus::Created,
+            payload: json!({}),
+            condition: EnforcementCondition::All,
+            conditions: json!([]),
+        },
+    )
+    .await
+    .unwrap();
+
+    let literal_execution = ExecutionRepository::create(
+        &pool,
+        CreateExecutionInput {
+            action: Some(literal_action.id),
+            action_ref: literal_action.r#ref.clone(),
+            config: None,
+            env_vars: None,
+            parent: None,
+            enforcement: Some(literal_enforcement.id),
+            executor: None,
+            worker: None,
+            status: ExecutionStatus::Requested,
+            result: None,
+            workflow_task: None,
+        },
+    )
+    .await
+    .unwrap();
+    ExecutionRepository::create(
+        &pool,
+        CreateExecutionInput {
+            action: Some(overlapping_action.id),
+            action_ref: overlapping_action.r#ref.clone(),
+            config: None,
+            env_vars: None,
+            parent: None,
+            enforcement: Some(overlapping_enforcement.id),
+            executor: None,
+            worker: None,
+            status: ExecutionStatus::Requested,
+            result: None,
+            workflow_task: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let wildcard_ref = format!("{}.*", literal_pack.r#ref);
+
+    let action_results = ExecutionRepository::search(
+        &pool,
+        &ExecutionSearchFilters {
+            action_ref: Some(wildcard_ref.clone()),
+            limit: 50,
+            offset: 0,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(action_results.total, 1);
+    assert_eq!(action_results.rows[0].id, literal_execution.id);
+
+    let pack_results = ExecutionRepository::search(
+        &pool,
+        &ExecutionSearchFilters {
+            pack_name: Some(literal_pack.r#ref.clone()),
+            limit: 50,
+            offset: 0,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(pack_results.total, 1);
+    assert_eq!(pack_results.rows[0].id, literal_execution.id);
+
+    let rule_results = ExecutionRepository::search(
+        &pool,
+        &ExecutionSearchFilters {
+            rule_ref: Some(wildcard_ref.clone()),
+            limit: 50,
+            offset: 0,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(rule_results.total, 1);
+    assert_eq!(
+        rule_results.rows[0].rule_ref.as_deref(),
+        Some(literal_rule.r#ref.as_str())
+    );
+
+    let trigger_results = ExecutionRepository::search(
+        &pool,
+        &ExecutionSearchFilters {
+            trigger_ref: Some(wildcard_ref),
+            limit: 50,
+            offset: 0,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(trigger_results.total, 1);
+    assert_eq!(
+        trigger_results.rows[0].trigger_ref.as_deref(),
+        Some(literal_trigger.r#ref.as_str())
+    );
+}

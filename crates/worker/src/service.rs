@@ -79,6 +79,42 @@ pub struct ExecutionScheduledPayload {
     pub worker_id: i64,
 }
 
+fn filter_runtime_names_for_worker(
+    runtime_names: &[String],
+    worker_filter: Option<&[String]>,
+) -> Vec<String> {
+    match worker_filter {
+        Some(worker_filter) => runtime_names
+            .iter()
+            .filter(|name| runtime_aliases_match_filter(&[(*name).clone()], worker_filter))
+            .cloned()
+            .collect(),
+        None => runtime_names.to_vec(),
+    }
+}
+
+async fn refresh_runtime_version_capabilities_for_registration(
+    db_pool: &PgPool,
+    runtime_filter: Option<&[String]>,
+    registration: &Arc<RwLock<WorkerRegistration>>,
+) {
+    let capability =
+        version_verify::collect_runtime_versions_capability(db_pool, runtime_filter).await;
+
+    let mut reg = registration.write().await;
+    reg.add_capability(
+        version_verify::RUNTIME_VERSIONS_CAPABILITY_KEY.to_string(),
+        capability,
+    );
+
+    if let Err(e) = reg.update_capabilities().await {
+        warn!(
+            "Failed to refresh worker runtime version capabilities: {}",
+            e
+        );
+    }
+}
+
 /// Worker service that manages execution lifecycle
 pub struct WorkerService {
     #[allow(dead_code)]
@@ -557,15 +593,27 @@ impl WorkerService {
                 result.total_checked, result.available, result.unavailable,
             );
         }
+
+        refresh_runtime_version_capabilities_for_registration(
+            &self.db_pool,
+            filter_slice,
+            &self.registration,
+        )
+        .await;
     }
 
     /// Scan all registered packs and create missing runtime environments.
     async fn scan_and_setup_environments(&self) {
+        let Some(worker_id) = self.worker_id else {
+            warn!("Skipping environment startup scan because worker is not registered yet");
+            return;
+        };
         let filter_refs: Option<Vec<String>> = self.runtime_filter.clone();
         let filter_slice: Option<&[String]> = filter_refs.as_deref();
 
         let result = env_setup::scan_and_setup_all_environments(
             &self.db_pool,
+            worker_id,
             filter_slice,
             &self.packs_base_dir,
             &self.runtime_envs_dir,
@@ -620,6 +668,7 @@ impl WorkerService {
         let runtime_filter = self.runtime_filter.clone();
         let packs_base_dir = self.packs_base_dir.clone();
         let runtime_envs_dir = self.runtime_envs_dir.clone();
+        let registration = self.registration.clone();
 
         let handle = tokio::spawn(async move {
             info!(
@@ -632,6 +681,7 @@ impl WorkerService {
                     let runtime_filter = runtime_filter.clone();
                     let packs_base_dir = packs_base_dir.clone();
                     let runtime_envs_dir = runtime_envs_dir.clone();
+                    let registration = registration.clone();
 
                     async move {
                         info!(
@@ -642,8 +692,38 @@ impl WorkerService {
                         let filter_slice: Option<Vec<String>> = runtime_filter;
                         let filter_ref: Option<&[String]> = filter_slice.as_deref();
 
+                        let filtered_runtime_names = filter_runtime_names_for_worker(
+                            &envelope.payload.runtime_names,
+                            filter_ref,
+                        );
+
+                        if !filtered_runtime_names.is_empty() {
+                            let verify_result = version_verify::verify_all_runtime_versions(
+                                &db_pool,
+                                Some(filtered_runtime_names.as_slice()),
+                            )
+                            .await;
+
+                            if !verify_result.errors.is_empty() {
+                                warn!(
+                                    "Pack '{}' runtime verification had {} error(s): {:?}",
+                                    envelope.payload.pack_ref,
+                                    verify_result.errors.len(),
+                                    verify_result.errors,
+                                );
+                            }
+
+                            refresh_runtime_version_capabilities_for_registration(
+                                &db_pool,
+                                filter_ref,
+                                &registration,
+                            )
+                            .await;
+                        }
+
                         let pack_result = env_setup::setup_environments_for_registered_pack(
                             &db_pool,
+                            worker_id,
                             &envelope.payload,
                             filter_ref,
                             &packs_base_dir,
@@ -1404,5 +1484,19 @@ mod tests {
         let status = ExecutionStatus::Cancelled;
         let status_str = format!("{:?}", status);
         assert_eq!(status_str, "Cancelled");
+    }
+
+    #[test]
+    fn test_runtime_name_filtering_respects_worker_capabilities() {
+        let worker_filter = vec!["python".to_string()];
+        let runtime_names = vec![
+            "python".to_string(),
+            "node".to_string(),
+            "python3".to_string(),
+        ];
+
+        let filtered = filter_runtime_names_for_worker(&runtime_names, Some(&worker_filter));
+
+        assert_eq!(filtered, vec!["python".to_string(), "python3".to_string()]);
     }
 }

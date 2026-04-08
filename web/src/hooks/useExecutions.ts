@@ -15,7 +15,6 @@ interface ExecutionsQueryParams {
   pageSize?: number;
   status?: ExecutionStatus;
   actionRef?: string;
-  packName?: string;
   ruleRef?: string;
   triggerRef?: string;
   executor?: number;
@@ -37,7 +36,6 @@ export function useExecutions(params?: ExecutionsQueryParams) {
   const hasFilters =
     params?.status ||
     params?.actionRef ||
-    params?.packName ||
     params?.ruleRef ||
     params?.triggerRef ||
     params?.executor ||
@@ -51,7 +49,6 @@ export function useExecutions(params?: ExecutionsQueryParams) {
         perPage: params?.pageSize,
         status: params?.status,
         actionRef: params?.actionRef,
-        packName: params?.packName,
         ruleRef: params?.ruleRef,
         triggerRef: params?.triggerRef,
         executor: params?.executor,

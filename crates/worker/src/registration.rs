@@ -6,7 +6,7 @@
 use attune_common::config::Config;
 use attune_common::error::{Error, Result};
 use attune_common::models::{Worker, WorkerRole, WorkerStatus, WorkerType};
-use attune_common::runtime_detection::RuntimeDetector;
+use attune_common::runtime_detection::{normalize_runtime_name, RuntimeDetector};
 use chrono::Utc;
 use serde_json::json;
 use sqlx::PgPool;
@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use tracing::{info, warn};
 
 use crate::runtime_detect::DetectedRuntime;
+use crate::version_verify::RUNTIME_VERSIONS_CAPABILITY_KEY;
 
 const ATTUNE_AGENT_MODE_ENV: &str = "ATTUNE_AGENT_MODE";
 const ATTUNE_AGENT_BINARY_NAME_ENV: &str = "ATTUNE_AGENT_BINARY_NAME";
@@ -172,9 +173,21 @@ impl WorkerRegistration {
     /// ]
     /// ```
     pub fn set_detected_runtimes(&mut self, runtimes: Vec<DetectedRuntime>) {
+        let mut runtime_versions: HashMap<String, Vec<String>> = HashMap::new();
         let interpreters: Vec<serde_json::Value> = runtimes
             .iter()
             .map(|rt| {
+                if let Some(version) = rt
+                    .version
+                    .as_ref()
+                    .filter(|version| !version.trim().is_empty())
+                {
+                    runtime_versions
+                        .entry(normalize_runtime_name(&rt.name))
+                        .or_default()
+                        .push(version.clone());
+                }
+
                 json!({
                     "name": rt.name,
                     "path": rt.path,
@@ -183,8 +196,17 @@ impl WorkerRegistration {
             })
             .collect();
 
+        for versions in runtime_versions.values_mut() {
+            versions.sort();
+            versions.dedup();
+        }
+
         self.capabilities
             .insert("detected_interpreters".to_string(), json!(interpreters));
+        self.capabilities.insert(
+            RUNTIME_VERSIONS_CAPABILITY_KEY.to_string(),
+            json!(runtime_versions),
+        );
 
         info!(
             "Stored {} detected interpreter(s) in capabilities",
@@ -505,6 +527,54 @@ mod tests {
 
         let json_value = json!(interpreters);
         assert_eq!(json_value.as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_set_detected_runtimes_populates_runtime_versions_capability() {
+        let pool = PgPool::connect_lazy("postgres://localhost/test").unwrap();
+        let config = Config {
+            service_name: "attune".to_string(),
+            environment: "test".to_string(),
+            database: attune_common::config::DatabaseConfig::default(),
+            redis: None,
+            message_queue: None,
+            server: attune_common::config::ServerConfig::default(),
+            log: attune_common::config::LogConfig::default(),
+            security: attune_common::config::SecurityConfig::default(),
+            worker: None,
+            sensor: None,
+            packs_base_dir: "/tmp/packs".to_string(),
+            runtime_envs_dir: "/tmp/runtime_envs".to_string(),
+            artifacts_dir: "/tmp/artifacts".to_string(),
+            notifier: None,
+            pack_registry: attune_common::config::PackRegistryConfig::default(),
+            executor: None,
+            agent: None,
+        };
+        let mut registration = WorkerRegistration::new(pool, &config);
+
+        registration.set_detected_runtimes(vec![
+            DetectedRuntime {
+                name: "python".to_string(),
+                path: "/usr/bin/python3".to_string(),
+                version: Some("3.12.13".to_string()),
+            },
+            DetectedRuntime {
+                name: "nodejs".to_string(),
+                path: "/usr/bin/node".to_string(),
+                version: Some("20.19.0".to_string()),
+            },
+        ]);
+
+        assert_eq!(
+            registration
+                .capabilities
+                .get(RUNTIME_VERSIONS_CAPABILITY_KEY),
+            Some(&json!({
+                "node": ["20.19.0"],
+                "python": ["3.12.13"]
+            }))
+        );
     }
 
     #[test]
