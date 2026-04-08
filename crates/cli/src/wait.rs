@@ -203,6 +203,29 @@ struct ExecutionNotifierUpdates {
     descendants: Vec<ExecutionListItem>,
 }
 
+struct WatchExecutionContext {
+    execution_id: i64,
+    notifier_ws_url: Option<String>,
+    stream_logs: bool,
+    debug: bool,
+    base_url: String,
+    live_renderer: LiveRenderer,
+    plain_progress: bool,
+    delivered_output: Arc<AtomicBool>,
+    root_stdout_completed: Arc<AtomicBool>,
+}
+
+struct ChildUpdateContext<'a> {
+    client: &'a mut ApiClient,
+    children: &'a mut HashMap<i64, ChildWatchState>,
+    stream_logs: bool,
+    debug: bool,
+    live_renderer: &'a LiveRenderer,
+    plain_progress: bool,
+    base_url: &'a str,
+    delivered_output: &'a Arc<AtomicBool>,
+}
+
 const MAX_TASK_TAIL_LINES: usize = 4;
 const RENDER_TICK: Duration = Duration::from_millis(120);
 const WATCH_ROOT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -564,21 +587,21 @@ pub fn spawn_execution_output_watch(
 ) -> OutputWatchTask {
     let delivered_output = Arc::new(AtomicBool::new(false));
     let root_stdout_completed = Arc::new(AtomicBool::new(false));
-    let delivered_output_for_task = delivered_output.clone();
-    let root_stdout_completed_for_task = root_stdout_completed.clone();
+    let live_renderer = LiveRenderer::new(show_progress);
+    let plain_progress = show_progress && !live_renderer.enabled();
+    let watch_ctx = WatchExecutionContext {
+        execution_id,
+        notifier_ws_url,
+        stream_logs,
+        debug,
+        base_url: client.base_url().to_string(),
+        live_renderer,
+        plain_progress,
+        delivered_output: delivered_output.clone(),
+        root_stdout_completed: root_stdout_completed.clone(),
+    };
     let handle = tokio::spawn(async move {
-        if let Err(err) = watch_execution_output(
-            &mut client,
-            execution_id,
-            notifier_ws_url,
-            show_progress,
-            stream_logs,
-            debug,
-            delivered_output_for_task,
-            root_stdout_completed_for_task,
-        )
-        .await
-        {
+        if let Err(err) = watch_execution_output(&mut client, watch_ctx).await {
             if debug {
                 eprintln!("  [watch] {}", err);
             }
@@ -592,20 +615,19 @@ pub fn spawn_execution_output_watch(
     }
 }
 
-async fn watch_execution_output(
-    client: &mut ApiClient,
-    execution_id: i64,
-    notifier_ws_url: Option<String>,
-    show_progress: bool,
-    stream_logs: bool,
-    debug: bool,
-    delivered_output: Arc<AtomicBool>,
-    root_stdout_completed: Arc<AtomicBool>,
-) -> Result<()> {
-    let base_url = client.base_url().to_string();
-    let live_renderer = LiveRenderer::new(show_progress);
+async fn watch_execution_output(client: &mut ApiClient, ctx: WatchExecutionContext) -> Result<()> {
+    let WatchExecutionContext {
+        execution_id,
+        notifier_ws_url,
+        stream_logs,
+        debug,
+        base_url,
+        live_renderer,
+        plain_progress,
+        delivered_output,
+        root_stdout_completed,
+    } = ctx;
     let render_handle = live_renderer.spawn();
-    let plain_progress = show_progress && !live_renderer.enabled();
     let mut root_watch: Option<RootWatchState> = None;
     let mut children: HashMap<i64, ChildWatchState> = HashMap::new();
     let mut next_descendant_refresh = Instant::now();
@@ -622,14 +644,16 @@ async fn watch_execution_output(
         for child in initial_children {
             known_execution_ids.insert(child.id);
             apply_child_execution_update(
-                client,
-                &mut children,
-                &base_url,
-                stream_logs,
-                debug,
-                &live_renderer,
-                plain_progress,
-                &delivered_output,
+                ChildUpdateContext {
+                    client,
+                    children: &mut children,
+                    stream_logs,
+                    debug,
+                    live_renderer: &live_renderer,
+                    plain_progress,
+                    base_url: &base_url,
+                    delivered_output: &delivered_output,
+                },
                 child,
             )
             .await;
@@ -724,14 +748,16 @@ async fn watch_execution_output(
                     }
                     for child in notifier_updates.descendants {
                         apply_child_execution_update(
-                            client,
-                            &mut children,
-                            &base_url,
-                            stream_logs,
-                            debug,
-                            &live_renderer,
-                            plain_progress,
-                            &delivered_output,
+                            ChildUpdateContext {
+                                client,
+                                children: &mut children,
+                                stream_logs,
+                                debug,
+                                live_renderer: &live_renderer,
+                                plain_progress,
+                                base_url: &base_url,
+                                delivered_output: &delivered_output,
+                            },
                             child,
                         )
                         .await;
@@ -758,14 +784,16 @@ async fn watch_execution_output(
             for child in child_items {
                 known_execution_ids.insert(child.id);
                 apply_child_execution_update(
-                    client,
-                    &mut children,
-                    &base_url,
-                    stream_logs,
-                    debug,
-                    &live_renderer,
-                    plain_progress,
-                    &delivered_output,
+                    ChildUpdateContext {
+                        client,
+                        children: &mut children,
+                        stream_logs,
+                        debug,
+                        live_renderer: &live_renderer,
+                        plain_progress,
+                        base_url: &base_url,
+                        delivered_output: &delivered_output,
+                    },
                     child,
                 )
                 .await;
@@ -959,17 +987,7 @@ async fn list_descendant_executions(
     Ok(descendants)
 }
 
-async fn apply_child_execution_update(
-    client: &mut ApiClient,
-    children: &mut HashMap<i64, ChildWatchState>,
-    base_url: &str,
-    stream_logs: bool,
-    debug: bool,
-    live_renderer: &LiveRenderer,
-    plain_progress: bool,
-    delivered_output: &Arc<AtomicBool>,
-    child: ExecutionListItem,
-) {
+async fn apply_child_execution_update(ctx: ChildUpdateContext<'_>, child: ExecutionListItem) {
     let label = format_task_label(&child.workflow_task, &child.action_ref, child.id);
     let task_name = child
         .workflow_task
@@ -988,12 +1006,12 @@ async fn apply_child_execution_update(
         None
     };
     let (child_is_terminal, mut log_streaming_supported) = {
-        let entry = children.entry(child.id).or_insert_with(|| {
-            if plain_progress {
+        let entry = ctx.children.entry(child.id).or_insert_with(|| {
+            if ctx.plain_progress {
                 eprintln!("  [{}] started ({})", label, child.action_ref);
             }
-            if live_renderer.enabled() {
-                live_renderer.upsert_task(LiveTaskUpdate {
+            if ctx.live_renderer.enabled() {
+                ctx.live_renderer.upsert_task(LiveTaskUpdate {
                     id: child.id,
                     label: label.clone(),
                     task_name: task_name.clone(),
@@ -1017,8 +1035,8 @@ async fn apply_child_execution_update(
         if entry.status != child.status {
             entry.status = child.status.clone();
         }
-        if live_renderer.enabled() {
-            live_renderer.upsert_task(LiveTaskUpdate {
+        if ctx.live_renderer.enabled() {
+            ctx.live_renderer.upsert_task(LiveTaskUpdate {
                 id: child.id,
                 label: entry.label.clone(),
                 task_name: task_name.clone(),
@@ -1034,7 +1052,7 @@ async fn apply_child_execution_update(
         (is_terminal(&entry.status), entry.log_streaming_supported)
     };
 
-    if stream_logs
+    if ctx.stream_logs
         && !child_is_terminal
         && should_stream_logs(&child)
         && log_streaming_supported.is_none()
@@ -1042,31 +1060,35 @@ async fn apply_child_execution_update(
         log_streaming_supported = Some(true);
     }
 
-    let entry = children
+    let entry = ctx
+        .children
         .get_mut(&child.id)
         .expect("child state should exist after insertion");
     if entry.log_streaming_supported.is_none() {
         entry.log_streaming_supported = log_streaming_supported;
     }
 
-    if stream_logs
+    if ctx.stream_logs
         && !child_is_terminal
         && entry.log_streaming_supported == Some(true)
         && streams_need_restart(&entry.stream_handles)
     {
-        if let Some(token) = client.auth_token().map(str::to_string) {
+        if let Some(token) = ctx.client.auth_token().map(str::to_string) {
             ensure_streams_running(
                 &mut entry.stream_handles,
                 &StreamWatchConfig {
-                    base_url: base_url.to_string(),
+                    base_url: ctx.base_url.to_string(),
                     token,
                     execution_id: child.id,
                     prefix: Some(entry.label.clone()),
-                    debug,
-                    emit_output: !live_renderer.enabled(),
+                    debug: ctx.debug,
+                    emit_output: !ctx.live_renderer.enabled(),
                     task_id: Some(child.id),
-                    live_renderer: live_renderer.enabled().then_some(live_renderer.clone()),
-                    delivered_output: delivered_output.clone(),
+                    live_renderer: ctx
+                        .live_renderer
+                        .enabled()
+                        .then_some(ctx.live_renderer.clone()),
+                    delivered_output: ctx.delivered_output.clone(),
                     root_stdout_completed: None,
                 },
             );
@@ -1075,7 +1097,7 @@ async fn apply_child_execution_update(
 
     if !entry.announced_terminal && is_terminal(&child.status) {
         entry.announced_terminal = true;
-        if plain_progress {
+        if ctx.plain_progress {
             eprintln!("  [{}] {}", entry.label, child.status);
         }
     }
