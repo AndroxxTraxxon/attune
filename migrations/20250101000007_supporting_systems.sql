@@ -286,8 +286,19 @@ CREATE TABLE IF NOT EXISTS pack_environment (
     pack_ref TEXT NOT NULL,
     runtime BIGINT NOT NULL REFERENCES runtime(id) ON DELETE CASCADE,
     runtime_ref TEXT NOT NULL,
+    runtime_version BIGINT REFERENCES runtime_version(id) ON DELETE CASCADE,
+    runtime_version_text TEXT,
+    env_key TEXT GENERATED ALWAYS AS (
+        CASE
+            WHEN runtime_version IS NULL THEN format('base:%s:%s', pack, runtime)
+            ELSE format('version:%s:%s:%s', pack, runtime, runtime_version)
+        END
+    ) STORED,
     env_path TEXT NOT NULL,
     status pack_environment_status_enum NOT NULL DEFAULT 'pending',
+    manifest_checksum TEXT,
+    claimed_by_worker BIGINT REFERENCES worker(id) ON DELETE SET NULL,
+    claim_expires_at TIMESTAMPTZ,
     installed_at TIMESTAMPTZ,
     last_verified TIMESTAMPTZ,
     install_log TEXT,
@@ -295,16 +306,19 @@ CREATE TABLE IF NOT EXISTS pack_environment (
     metadata JSONB DEFAULT '{}'::jsonb,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(pack, runtime)
+    UNIQUE(env_key)
 );
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_pack_environment_pack ON pack_environment(pack);
 CREATE INDEX IF NOT EXISTS idx_pack_environment_runtime ON pack_environment(runtime);
+CREATE INDEX IF NOT EXISTS idx_pack_environment_runtime_version ON pack_environment(runtime_version);
 CREATE INDEX IF NOT EXISTS idx_pack_environment_status ON pack_environment(status);
 CREATE INDEX IF NOT EXISTS idx_pack_environment_pack_ref ON pack_environment(pack_ref);
 CREATE INDEX IF NOT EXISTS idx_pack_environment_runtime_ref ON pack_environment(runtime_ref);
 CREATE INDEX IF NOT EXISTS idx_pack_environment_pack_runtime ON pack_environment(pack, runtime);
+CREATE INDEX IF NOT EXISTS idx_pack_environment_claim_expires_at ON pack_environment(claim_expires_at);
+CREATE INDEX IF NOT EXISTS idx_pack_environment_claimed_by_worker ON pack_environment(claimed_by_worker);
 
 -- Trigger for updated timestamp
 CREATE TRIGGER update_pack_environment_updated
@@ -318,8 +332,14 @@ COMMENT ON COLUMN pack_environment.pack IS 'Pack that owns this environment';
 COMMENT ON COLUMN pack_environment.pack_ref IS 'Pack reference for quick lookup';
 COMMENT ON COLUMN pack_environment.runtime IS 'Runtime used for this environment';
 COMMENT ON COLUMN pack_environment.runtime_ref IS 'Runtime reference for quick lookup';
+COMMENT ON COLUMN pack_environment.runtime_version IS 'Optional runtime_version row for version-specific environments; NULL for the base runtime environment';
+COMMENT ON COLUMN pack_environment.runtime_version_text IS 'Display/runtime version string for version-specific environments';
+COMMENT ON COLUMN pack_environment.env_key IS 'Generated unique coordination key for the shared environment target';
 COMMENT ON COLUMN pack_environment.env_path IS 'Filesystem path to the environment directory (e.g., /opt/attune/packenvs/mypack/python)';
 COMMENT ON COLUMN pack_environment.status IS 'Current installation status';
+COMMENT ON COLUMN pack_environment.manifest_checksum IS 'Checksum of the dependency manifest used to produce the installed environment';
+COMMENT ON COLUMN pack_environment.claimed_by_worker IS 'Worker currently holding the install lease for this environment target';
+COMMENT ON COLUMN pack_environment.claim_expires_at IS 'Lease expiry for the current install claim; expired claims may be reclaimed by another worker';
 COMMENT ON COLUMN pack_environment.installed_at IS 'When the environment was successfully installed';
 COMMENT ON COLUMN pack_environment.last_verified IS 'Last time the environment was verified as working';
 COMMENT ON COLUMN pack_environment.install_log IS 'Installation output logs';
