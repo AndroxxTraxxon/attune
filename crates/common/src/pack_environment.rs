@@ -94,6 +94,17 @@ pub struct CoordinatedPackEnvironment {
     pub metadata: JsonValue,
 }
 
+#[derive(Debug, Clone)]
+pub struct UpsertCoordinatedEnvironmentInput<'a> {
+    pub pack_id: i64,
+    pub pack_ref: &'a str,
+    pub runtime_id: i64,
+    pub runtime_ref: &'a str,
+    pub runtime_version: Option<&'a RuntimeVersion>,
+    pub env_path: &'a Path,
+    pub manifest_checksum: Option<&'a str>,
+}
+
 /// Installer action definition
 #[derive(Debug, Clone)]
 pub struct InstallerAction {
@@ -837,17 +848,13 @@ impl PackEnvironmentManager {
 
     pub async fn upsert_coordinated_environment(
         &self,
-        pack_id: i64,
-        pack_ref: &str,
-        runtime_id: i64,
-        runtime_ref: &str,
-        runtime_version: Option<&RuntimeVersion>,
-        env_path: &Path,
-        manifest_checksum: Option<&str>,
+        input: UpsertCoordinatedEnvironmentInput<'_>,
     ) -> Result<CoordinatedPackEnvironment> {
-        let env_path_str = env_path.to_string_lossy().to_string();
-        let runtime_version_id = runtime_version.map(|version| version.id);
-        let runtime_version_text = runtime_version.map(|version| version.version.as_str());
+        let env_path_str = input.env_path.to_string_lossy().to_string();
+        let runtime_version_id = input.runtime_version.map(|version| version.id);
+        let runtime_version_text = input
+            .runtime_version
+            .map(|version| version.version.as_str());
 
         let row = sqlx::query(
             r#"
@@ -913,14 +920,14 @@ impl PackEnvironmentManager {
                       metadata
             "#,
         )
-        .bind(pack_id)
-        .bind(pack_ref)
-        .bind(runtime_id)
-        .bind(runtime_ref)
+        .bind(input.pack_id)
+        .bind(input.pack_ref)
+        .bind(input.runtime_id)
+        .bind(input.runtime_ref)
         .bind(runtime_version_id)
         .bind(runtime_version_text)
         .bind(&env_path_str)
-        .bind(manifest_checksum)
+        .bind(input.manifest_checksum)
         .fetch_one(&self.pool)
         .await?;
 

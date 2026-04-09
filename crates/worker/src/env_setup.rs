@@ -33,7 +33,9 @@ use uuid::Uuid;
 
 use attune_common::models::{Runtime, RuntimeVersion, Worker};
 use attune_common::mq::PackRegisteredPayload;
-use attune_common::pack_environment::{PackEnvironmentManager, PackEnvironmentStatus};
+use attune_common::pack_environment::{
+    PackEnvironmentManager, PackEnvironmentStatus, UpsertCoordinatedEnvironmentInput,
+};
 use attune_common::repositories::action::ActionRepository;
 use attune_common::repositories::pack::PackRepository;
 use attune_common::repositories::runtime::RuntimeRepository;
@@ -642,15 +644,15 @@ async fn coordinate_environment_setup(
     pack_dir: &Path,
 ) -> std::result::Result<CoordinateSetupOutcome, String> {
     let coordinated = env_manager
-        .upsert_coordinated_environment(
+        .upsert_coordinated_environment(UpsertCoordinatedEnvironmentInput {
             pack_id,
             pack_ref,
             runtime_id,
             runtime_ref,
             runtime_version,
-            env_dir,
+            env_path: env_dir,
             manifest_checksum,
-        )
+        })
         .await
         .map_err(|e| e.to_string())?;
 

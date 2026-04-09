@@ -1,7 +1,9 @@
 //! Integration tests for coordinated pack environment claims.
 
 use attune_common::models::enums::{WorkerStatus, WorkerType};
-use attune_common::pack_environment::{PackEnvironmentManager, PackEnvironmentStatus};
+use attune_common::pack_environment::{
+    PackEnvironmentManager, PackEnvironmentStatus, UpsertCoordinatedEnvironmentInput,
+};
 use attune_common::repositories::runtime::{
     CreateRuntimeInput, CreateWorkerInput, RuntimeRepository, WorkerRepository,
 };
@@ -141,15 +143,15 @@ async fn coordinated_environment_claims_single_owner_and_retrys_after_failure() 
     let env_path = temp_dir.path().join("runtime_envs").join("python-3.12");
 
     let target = manager
-        .upsert_coordinated_environment(
-            pack.id,
-            &pack.r#ref,
-            runtime.id,
-            &runtime.r#ref,
-            Some(&runtime_version),
-            &env_path,
-            Some("checksum-a"),
-        )
+        .upsert_coordinated_environment(UpsertCoordinatedEnvironmentInput {
+            pack_id: pack.id,
+            pack_ref: &pack.r#ref,
+            runtime_id: runtime.id,
+            runtime_ref: &runtime.r#ref,
+            runtime_version: Some(&runtime_version),
+            env_path: &env_path,
+            manifest_checksum: Some("checksum-a"),
+        })
         .await
         .expect("Failed to create coordinated environment");
 
@@ -194,15 +196,15 @@ async fn coordinated_environment_becomes_outdated_when_manifest_checksum_changes
     let env_path = temp_dir.path().join("runtime_envs").join("python-3.12");
 
     let target = manager
-        .upsert_coordinated_environment(
-            pack.id,
-            &pack.r#ref,
-            runtime.id,
-            &runtime.r#ref,
-            Some(&runtime_version),
-            &env_path,
-            Some("checksum-a"),
-        )
+        .upsert_coordinated_environment(UpsertCoordinatedEnvironmentInput {
+            pack_id: pack.id,
+            pack_ref: &pack.r#ref,
+            runtime_id: runtime.id,
+            runtime_ref: &runtime.r#ref,
+            runtime_version: Some(&runtime_version),
+            env_path: &env_path,
+            manifest_checksum: Some("checksum-a"),
+        })
         .await
         .expect("Failed to create coordinated environment");
 
@@ -218,15 +220,15 @@ async fn coordinated_environment_becomes_outdated_when_manifest_checksum_changes
         .expect("Failed to mark coordinated environment ready"));
 
     let updated = manager
-        .upsert_coordinated_environment(
-            pack.id,
-            &pack.r#ref,
-            runtime.id,
-            &runtime.r#ref,
-            Some(&runtime_version),
-            &env_path,
-            Some("checksum-b"),
-        )
+        .upsert_coordinated_environment(UpsertCoordinatedEnvironmentInput {
+            pack_id: pack.id,
+            pack_ref: &pack.r#ref,
+            runtime_id: runtime.id,
+            runtime_ref: &runtime.r#ref,
+            runtime_version: Some(&runtime_version),
+            env_path: &env_path,
+            manifest_checksum: Some("checksum-b"),
+        })
         .await
         .expect("Failed to update coordinated environment");
 
