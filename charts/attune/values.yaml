@@ -103,14 +103,6 @@ images:
     repository: attune-executor
     tag: ""
     pullPolicy: IfNotPresent
-  worker:
-    repository: attune-worker
-    tag: ""
-    pullPolicy: IfNotPresent
-  sensor:
-    repository: nikolaik/python-nodejs
-    tag: python3.12-nodejs22-slim
-    pullPolicy: IfNotPresent
   notifier:
     repository: attune-notifier
     tag: ""
@@ -148,30 +140,18 @@ jobs:
     resources: {}
 
 api:
-  replicaCount: 1
+  replicaCount: 2
   service:
     type: ClusterIP
     port: 8080
   resources: {}
 
 executor:
-  replicaCount: 1
-  resources: {}
-
-worker:
-  replicaCount: 1
-  runtimes: shell,python,node,native
-  name: worker-full-01
-  resources: {}
-
-sensor:
-  replicaCount: 1
-  runtimes: shell,python,node,native
-  logLevel: debug
+  replicaCount: 2
   resources: {}
 
 notifier:
-  replicaCount: 1
+  replicaCount: 2
   service:
     type: ClusterIP
     port: 8081
@@ -198,15 +178,15 @@ web:
             pathType: Prefix
     tls: []
 
-# Agent-based workers
-# These deploy the universal worker agent into any container image.
-# The agent auto-detects available runtimes (python, ruby, node, etc.)
-# and registers with the Attune platform.
+# Agent-based runtime pools
+# These deploy the universal worker and sensor agents into operator-selected
+# runtime images instead of baking dedicated Attune worker binaries into each image.
 #
-# Each entry creates a separate Deployment with an init container that
-# copies the statically-linked agent binary into the worker container.
+# Each entry creates a separate Deployment with an `init-agent` init container
+# that copies the statically-linked agent binaries into an EmptyDir volume.
+# The main container then executes the mounted binary from /opt/attune/agent.
 #
-# Supported fields per worker:
+# Supported fields per pool entry:
 #   name             (required) - Unique name for this worker (used in resource names)
 #   image            (required) - Container image with your desired runtime(s)
 #   replicas         (optional) - Number of pod replicas (default: 1)
@@ -220,34 +200,45 @@ web:
 #   tolerations      (optional) - Tolerations list for pod scheduling
 #   stopGracePeriod  (optional) - Termination grace period in seconds (default: 45)
 #
-# Examples:
-#   agentWorkers:
-#     - name: ruby
-#       image: ruby:3.3
-#       replicas: 2
-#       runtimes: []  # auto-detect
-#       resources: {}
+# Default action workers mirror the Docker Compose agent deployment model.
+actionWorkers:
+  - name: full
+    image: nikolaik/python-nodejs:python3.12-nodejs22-slim
+    replicas: 1
+    runtimes: [shell, python, node, native]
+    resources: {}
+
+# Default sensor workers include at least one Python+Node.js runtime image.
+sensorWorkers:
+  - name: default
+    image: nikolaik/python-nodejs:python3.12-nodejs22-slim
+    replicas: 1
+    runtimes: [shell, python, node, native]
+    logLevel: debug
+    resources: {}
+
+# Example values for heterogeneous runtime pools:
 #
-#     - name: python-gpu
-#       image: nvidia/cuda:12.3.1-runtime-ubuntu22.04
-#       replicas: 1
-#       runtimes: [python, shell]
-#       runtimeClassName: nvidia
-#       nodeSelector:
-#         gpu: "true"
-#       tolerations:
-#         - key: nvidia.com/gpu
-#           operator: Exists
-#           effect: NoSchedule
-#       resources:
-#         limits:
-#           nvidia.com/gpu: 1
+# actionWorkers:
+#   - name: python312
+#     image: python:3.12-slim
+#     replicas: 1
+#     runtimes: [python, shell]
+#   - name: python314
+#     image: python:3.14-rc-slim
+#     replicas: 1
+#     runtimes: [python, shell]
+#   - name: nodejs
+#     image: node:22-slim
+#     replicas: 1
+#     runtimes: [node, shell]
 #
-#     - name: custom
-#       image: my-org/my-custom-image:latest
-#       replicas: 1
-#       runtimes: []
-#       env:
-#         - name: MY_CUSTOM_VAR
-#           value: my-value
-agentWorkers: []
+# sensorWorkers:
+#   - name: java
+#     image: eclipse-temurin:21-jre
+#     replicas: 1
+#     runtimes: [java, shell]
+#   - name: js-python
+#     image: nikolaik/python-nodejs:python3.12-nodejs22-slim
+#     replicas: 1
+#     runtimes: [python, node, shell, native]

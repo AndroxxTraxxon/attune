@@ -1,23 +1,26 @@
-{{- range .Values.agentWorkers }}
+{{- range .Values.actionWorkers }}
+{{- $poolName := .name | lower | replace "_" "-" -}}
+{{- $component := printf "action-worker-%s" $poolName | trunc 63 | trimSuffix "-" -}}
+{{- $resourceName := printf "%s-%s" (include "attune.fullname" $) $component | trunc 63 | trimSuffix "-" -}}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "attune.fullname" $ }}-agent-worker-{{ .name }}
+  name: {{ $resourceName }}
   labels:
     {{- include "attune.labels" $ | nindent 4 }}
-    app.kubernetes.io/component: agent-worker-{{ .name }}
+    app.kubernetes.io/component: {{ $component }}
 spec:
   replicas: {{ .replicas | default 1 }}
   selector:
     matchLabels:
       {{- include "attune.selectorLabels" $ | nindent 6 }}
-      app.kubernetes.io/component: agent-worker-{{ .name }}
+      app.kubernetes.io/component: {{ $component }}
   template:
     metadata:
       labels:
         {{- include "attune.selectorLabels" $ | nindent 8 }}
-        app.kubernetes.io/component: agent-worker-{{ .name }}
+        app.kubernetes.io/component: {{ $component }}
     spec:
       {{- if $.Values.global.imagePullSecrets }}
       imagePullSecrets:
@@ -40,10 +43,15 @@ spec:
       terminationGracePeriodSeconds: 45
       {{- end }}
       initContainers:
-        - name: agent-loader
+        - name: init-agent
           image: {{ include "attune.image" (dict "root" $ "image" $.Values.images.agent) }}
           imagePullPolicy: {{ $.Values.images.agent.pullPolicy }}
-          command: ["cp", "/usr/local/bin/attune-agent", "/opt/attune/agent/attune-agent"]
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              cp /usr/local/bin/attune-agent /opt/attune/agent/attune-agent
+              cp /usr/local/bin/attune-sensor-agent /opt/attune/agent/attune-sensor-agent
+              chmod +x /opt/attune/agent/attune-agent /opt/attune/agent/attune-sensor-agent
           volumeMounts:
             - name: agent-bin
               mountPath: /opt/attune/agent
@@ -73,10 +81,8 @@ spec:
               mountPath: /opt/attune/packs
       containers:
         - name: worker
-          image: {{ .image }}
-          {{- if .imagePullPolicy }}
-          imagePullPolicy: {{ .imagePullPolicy }}
-          {{- end }}
+          image: {{ .image | quote }}
+          imagePullPolicy: {{ .imagePullPolicy | default "IfNotPresent" }}
           command: ["/opt/attune/agent/attune-agent"]
           envFrom:
             - secretRef:
@@ -95,7 +101,7 @@ spec:
             - name: ATTUNE_API_URL
               value: http://{{ include "attune.apiServiceName" $ }}:{{ $.Values.api.service.port }}
             - name: RUST_LOG
-              value: {{ .logLevel | default "info" }}
+              value: {{ .logLevel | default "info" | quote }}
             {{- if .runtimes }}
             - name: ATTUNE_WORKER_RUNTIMES
               value: {{ join "," .runtimes | quote }}
@@ -134,4 +140,138 @@ spec:
         - name: artifacts
           persistentVolumeClaim:
             claimName: {{ include "attune.fullname" $ }}-artifacts
+{{- end }}
+{{- range .Values.sensorWorkers }}
+{{- $poolName := .name | lower | replace "_" "-" -}}
+{{- $component := printf "sensor-worker-%s" $poolName | trunc 63 | trimSuffix "-" -}}
+{{- $resourceName := printf "%s-%s" (include "attune.fullname" $) $component | trunc 63 | trimSuffix "-" -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $resourceName }}
+  labels:
+    {{- include "attune.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  replicas: {{ .replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "attune.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $component }}
+  template:
+    metadata:
+      labels:
+        {{- include "attune.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: {{ $component }}
+    spec:
+      {{- if $.Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml $.Values.global.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      {{- if .runtimeClassName }}
+      runtimeClassName: {{ .runtimeClassName }}
+      {{- end }}
+      {{- if .nodeSelector }}
+      nodeSelector:
+        {{- toYaml .nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if .tolerations }}
+      tolerations:
+        {{- toYaml .tolerations | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .stopGracePeriod | default 45 }}
+      initContainers:
+        - name: init-agent
+          image: {{ include "attune.image" (dict "root" $ "image" $.Values.images.agent) }}
+          imagePullPolicy: {{ $.Values.images.agent.pullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              cp /usr/local/bin/attune-agent /opt/attune/agent/attune-agent
+              cp /usr/local/bin/attune-sensor-agent /opt/attune/agent/attune-sensor-agent
+              chmod +x /opt/attune/agent/attune-agent /opt/attune/agent/attune-sensor-agent
+          volumeMounts:
+            - name: agent-bin
+              mountPath: /opt/attune/agent
+        - name: wait-for-schema
+          image: postgres:16-alpine
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              until PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT to_regclass('${DB_SCHEMA}.identity')" | grep -q identity; do
+                echo "waiting for schema";
+                sleep 2;
+              done
+          envFrom:
+            - secretRef:
+                name: {{ include "attune.secretName" $ }}
+        - name: wait-for-packs
+          image: busybox:1.36
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              until [ -f /opt/attune/packs/core/pack.yaml ]; do
+                echo "waiting for packs";
+                sleep 2;
+              done
+          volumeMounts:
+            - name: packs
+              mountPath: /opt/attune/packs
+      containers:
+        - name: sensor
+          image: {{ .image | quote }}
+          imagePullPolicy: {{ .imagePullPolicy | default "IfNotPresent" }}
+          command: ["/opt/attune/agent/attune-sensor-agent"]
+          envFrom:
+            - secretRef:
+                name: {{ include "attune.secretName" $ }}
+          env:
+            - name: ATTUNE_CONFIG
+              value: /opt/attune/config.yaml
+            - name: ATTUNE__DATABASE__SCHEMA
+              value: {{ $.Values.database.schema | quote }}
+            - name: ATTUNE__WORKER__WORKER_TYPE
+              value: container
+            - name: ATTUNE_API_URL
+              value: http://{{ include "attune.apiServiceName" $ }}:{{ $.Values.api.service.port }}
+            - name: ATTUNE_MQ_URL
+              value: {{ include "attune.rabbitmqUrl" $ | quote }}
+            - name: ATTUNE_PACKS_BASE_DIR
+              value: /opt/attune/packs
+            - name: RUST_LOG
+              value: {{ .logLevel | default "info" | quote }}
+            {{- if .runtimes }}
+            - name: ATTUNE_SENSOR_RUNTIMES
+              value: {{ join "," .runtimes | quote }}
+            {{- end }}
+            {{- if .env }}
+            {{- toYaml .env | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml (.resources | default dict) | nindent 12 }}
+          volumeMounts:
+            - name: agent-bin
+              mountPath: /opt/attune/agent
+              readOnly: true
+            - name: config
+              mountPath: /opt/attune/config.yaml
+              subPath: config.yaml
+            - name: packs
+              mountPath: /opt/attune/packs
+              readOnly: true
+            - name: runtime-envs
+              mountPath: /opt/attune/runtime_envs
+      volumes:
+        - name: agent-bin
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: {{ include "attune.fullname" $ }}-config
+        - name: packs
+          persistentVolumeClaim:
+            claimName: {{ include "attune.fullname" $ }}-packs
+        - name: runtime-envs
+          persistentVolumeClaim:
+            claimName: {{ include "attune.fullname" $ }}-runtime-envs
 {{- end }}

@@ -30,6 +30,7 @@ use openidconnect::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use sha2::{Digest, Sha256};
+use std::sync::LazyLock;
 use url::{form_urlencoded::byte_serialize, Url};
 
 use crate::{
@@ -51,10 +52,10 @@ const LOGIN_CALLBACK_PATH: &str = "/login/callback";
 
 #[derive(Debug, thiserror::Error)]
 enum OidcHttpClientError {
-    #[error("failed to build OIDC HTTP client: {0}")]
-    Build(String),
     #[error("failed to send OIDC HTTP request: {0}")]
     Request(#[from] reqwest::Error),
+    #[error("OIDC provider returned HTTP {status}: {body}")]
+    HttpStatus { status: StatusCode, body: String },
     #[error("failed to build OIDC HTTP response: {0}")]
     Response(#[from] axum::http::Error),
 }
@@ -484,20 +485,20 @@ fn oidc_config(state: &SharedState) -> Result<OidcConfig, ApiError> {
         })
 }
 
-fn build_oidc_http_client() -> Result<reqwest::Client, ApiError> {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|err| {
-            ApiError::InternalServerError(format!("Failed to build OIDC HTTP client: {err}"))
-        })
+fn oidc_http_client() -> &'static reqwest::Client {
+    static OIDC_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("OIDC HTTP client should build")
+    });
+
+    &OIDC_HTTP_CLIENT
 }
 
 async fn oidc_async_http_client(request: HttpRequest) -> Result<HttpResponse, OidcHttpClientError> {
-    let client =
-        build_oidc_http_client().map_err(|err| OidcHttpClientError::Build(err.to_string()))?;
     let (parts, body) = request.into_parts();
-    let mut req = client
+    let mut req = oidc_http_client()
         .request(parts.method, parts.uri.to_string())
         .body(body);
     for (name, value) in &parts.headers {
@@ -506,6 +507,10 @@ async fn oidc_async_http_client(request: HttpRequest) -> Result<HttpResponse, Oi
 
     let response = req.send().await?;
     let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(OidcHttpClientError::HttpStatus { status, body });
+    }
     let headers = response.headers().clone();
     let body = response.bytes().await?.to_vec();
 

@@ -1,4 +1,4 @@
-name: Publish Images
+name: Publish Images and Helm Chart
 
 on:
   workflow_dispatch:
@@ -21,6 +21,7 @@ on:
           - notifier
           - agent
           - docker-dist
+          - helm-chart
           - web
         default: all
   push:
@@ -34,7 +35,6 @@ env:
   REGISTRY_HOST: ${{ vars.CLUSTER_GITEA_HOST }}
   REGISTRY_NAMESPACE: ${{ vars.CONTAINER_REGISTRY_NAMESPACE }}
   REGISTRY_PLAIN_HTTP: ${{ vars.CONTAINER_REGISTRY_INSECURE }}
-  REPOSITORY_NAME: attune
   ARTIFACT_REPOSITORY: attune/build-artifacts
   GNU_GLIBC_VERSION: "2.28"
   CARGO_TERM_COLOR: always
@@ -56,6 +56,7 @@ jobs:
       gitea_base_url: ${{ steps.meta.outputs.gitea_base_url }}
       image_tag: ${{ steps.meta.outputs.image_tag }}
       image_tags: ${{ steps.meta.outputs.image_tags }}
+      chart_version: ${{ steps.meta.outputs.chart_version }}
       artifact_ref_base: ${{ steps.meta.outputs.artifact_ref_base }}
     steps:
       - name: Resolve tags and registry paths
@@ -113,9 +114,11 @@ jobs:
           if [ "$ref_type" = "tag" ] && printf '%s' "$ref_name" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.].*)?$'; then
             version="${ref_name#v}"
             image_tags="${version},latest,sha-${short_sha}"
+            chart_version="${version}"
           else
             version="sha-${short_sha}"
             image_tags="edge,sha-${short_sha}"
+            chart_version="0.0.0-edge.${{ github.run_number }}.${{ github.run_attempt }}"
           fi
 
           artifact_ref_base="${registry}/${namespace}/${ARTIFACT_REPOSITORY}"
@@ -124,11 +127,12 @@ jobs:
             echo "registry=$registry"
             echo "namespace=$namespace"
             echo "registry_plain_http=$registry_plain_http"
-            echo "gitea_base_url=$gitea_base_url"
-            echo "image_tag=$version"
-            echo "image_tags=$image_tags"
-            echo "artifact_ref_base=$artifact_ref_base"
-          } >> "$GITHUB_OUTPUT"
+             echo "gitea_base_url=$gitea_base_url"
+             echo "image_tag=$version"
+             echo "image_tags=$image_tags"
+             echo "chart_version=$chart_version"
+             echo "artifact_ref_base=$artifact_ref_base"
+           } >> "$GITHUB_OUTPUT"
 
   build-rust-bundles:
     name: Build Rust Bundles (${{ matrix.arch }})
@@ -349,40 +353,6 @@ jobs:
             --artifact-type application/vnd.attune.rust-binaries.v1 \
             "${artifact_file}:application/vnd.attune.rust-binaries.layer.v1.tar+gzip"
 
-      - name: Link binary bundle package to repository
-        shell: bash
-        env:
-          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          api_base="${{ needs.metadata.outputs.gitea_base_url }}/api/v1"
-          package_name="${ARTIFACT_REPOSITORY}-${{ matrix.arch }}"
-          encoded_package_name="$(PACKAGE_NAME="${package_name}" python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["PACKAGE_NAME"], safe=""))')"
-          link_url="${api_base}/packages/${{ needs.metadata.outputs.namespace }}/container/${encoded_package_name}/-/link/${REPOSITORY_NAME}"
-
-          echo "Linking binary bundle package"
-          echo "  api_base: ${api_base}"
-          echo "  package_name: ${package_name}"
-          echo "  link_url: ${link_url}"
-
-          status_code="$(curl -sS -o /tmp/package-link-response.txt -w '%{http_code}' -X POST \
-            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
-            "${link_url}")"
-
-          case "${status_code}" in
-            200|201|204|409)
-              ;;
-            400|404)
-              echo "Package link unsupported for package '${package_name}' on this Gitea endpoint; continuing"
-              cat /tmp/package-link-response.txt
-              ;;
-            *)
-              cat /tmp/package-link-response.txt
-              exit 1
-              ;;
-          esac
-
   publish-docker-dist:
     name: Publish Docker Dist Bundle
     runs-on: build-amd64
@@ -564,6 +534,69 @@ jobs:
             *)
               echo "Failed to upload release asset ${asset_name}"
               cat "${upload_response_file}"
+              exit 1
+              ;;
+          esac
+
+  publish-helm-chart:
+    name: Publish Helm Chart
+    runs-on: build-amd64
+    needs: metadata
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.target_image == 'all' ||
+      inputs.target_image == 'helm-chart'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Package Helm chart
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/helm
+          helm package charts/attune \
+            --version "${{ needs.metadata.outputs.chart_version }}" \
+            --app-version "${{ needs.metadata.outputs.image_tag }}" \
+            --destination dist/helm
+
+      - name: Publish Helm chart package
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${REGISTRY_USERNAME:-}" ] || [ -z "${REGISTRY_PASSWORD:-}" ]; then
+            echo "CONTAINER_REGISTRY_USERNAME and CONTAINER_REGISTRY_PASSWORD are required to publish the Helm chart"
+            exit 1
+          fi
+
+          package_file="dist/helm/attune-${{ needs.metadata.outputs.chart_version }}.tgz"
+          upload_url="${{ needs.metadata.outputs.gitea_base_url }}/api/packages/${{ needs.metadata.outputs.namespace }}/helm/api/charts"
+
+          echo "Publishing Helm chart"
+          echo "  chart_version: ${{ needs.metadata.outputs.chart_version }}"
+          echo "  app_version: ${{ needs.metadata.outputs.image_tag }}"
+          echo "  upload_url: ${upload_url}"
+          echo "  package_file: ${package_file}"
+
+          status_code="$(curl -sS -o /tmp/helm-chart-upload-response.txt -w '%{http_code}' \
+            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
+            -X POST \
+            --upload-file "${package_file}" \
+            "${upload_url}")"
+
+          case "${status_code}" in
+            201|409)
+              ;;
+            *)
+              echo "Failed to publish Helm chart"
+              cat /tmp/helm-chart-upload-response.txt
               exit 1
               ;;
           esac
@@ -815,34 +848,6 @@ jobs:
 
           run_with_retries 3 5 "${build_cmd[@]}"
 
-      - name: Link container package to repository
-        shell: bash
-        env:
-          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          api_base="${{ needs.metadata.outputs.gitea_base_url }}/api/v1"
-          package_name="${{ matrix.image.repository }}"
-          encoded_package_name="$(PACKAGE_NAME="${package_name}" python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["PACKAGE_NAME"], safe=""))')"
-
-          status_code="$(curl -sS -o /tmp/package-link-response.txt -w '%{http_code}' -X POST \
-            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
-            "${api_base}/packages/${{ needs.metadata.outputs.namespace }}/container/${encoded_package_name}/-/link/${REPOSITORY_NAME}")"
-
-          case "${status_code}" in
-            200|201|204|409)
-              ;;
-            400|404)
-              echo "Package link unsupported for package '${package_name}' on this Gitea endpoint; continuing"
-              cat /tmp/package-link-response.txt
-              ;;
-            *)
-              cat /tmp/package-link-response.txt
-              exit 1
-              ;;
-          esac
-
   publish-web-images:
     name: Publish web (${{ matrix.arch }})
     runs-on: ${{ matrix.runner_label }}
@@ -964,34 +969,6 @@ jobs:
           echo "  plain_http: ${{ needs.metadata.outputs.registry_plain_http }}"
 
           run_with_retries 3 5 "${build_cmd[@]}"
-
-      - name: Link web container package to repository
-        shell: bash
-        env:
-          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          api_base="${{ needs.metadata.outputs.gitea_base_url }}/api/v1"
-          package_name="attune/web"
-          encoded_package_name="$(PACKAGE_NAME="${package_name}" python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["PACKAGE_NAME"], safe=""))')"
-
-          status_code="$(curl -sS -o /tmp/package-link-response.txt -w '%{http_code}' -X POST \
-            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
-            "${api_base}/packages/${{ needs.metadata.outputs.namespace }}/container/${encoded_package_name}/-/link/${REPOSITORY_NAME}")"
-
-          case "${status_code}" in
-            200|201|204|409)
-              ;;
-            400|404)
-              echo "Package link unsupported for package '${package_name}' on this Gitea endpoint; continuing"
-              cat /tmp/package-link-response.txt
-              ;;
-            *)
-              cat /tmp/package-link-response.txt
-              exit 1
-              ;;
-          esac
 
   publish-manifests:
     name: Publish manifest ${{ matrix.repository }}
