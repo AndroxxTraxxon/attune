@@ -26,10 +26,14 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use sqlx::PgPool;
+use tokio::sync::oneshot;
+use tokio::time::{sleep, Duration, MissedTickBehavior};
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 use attune_common::models::{Runtime, RuntimeVersion, Worker};
 use attune_common::mq::PackRegisteredPayload;
+use attune_common::pack_environment::{PackEnvironmentManager, PackEnvironmentStatus};
 use attune_common::repositories::action::ActionRepository;
 use attune_common::repositories::pack::PackRepository;
 use attune_common::repositories::runtime::RuntimeRepository;
@@ -67,6 +71,12 @@ pub struct StartupScanResult {
     pub environments_skipped: usize,
     pub errors: Vec<String>,
 }
+
+const INSTALL_CLAIM_LEASE_SECONDS: i64 = 300;
+const INSTALL_CLAIM_RENEW_SECONDS: u64 = 60;
+const INSTALL_CLAIM_ATTEMPTS: usize = 3;
+const INSTALL_JITTER_MIN_MS: u64 = 100;
+const INSTALL_JITTER_SPAN_MS: u64 = 400;
 
 /// Scan all registered packs and create missing runtime environments.
 ///
@@ -327,6 +337,8 @@ async fn setup_environments_for_pack(
 
     let runtime_requirements = collect_runtime_requirements(&actions);
     let seen_runtime_ids: HashSet<i64> = runtime_requirements.keys().copied().collect();
+    let env_manager =
+        PackEnvironmentManager::with_base_path(db_pool.clone(), runtime_envs_dir.to_path_buf());
 
     if seen_runtime_ids.is_empty() {
         debug!("Pack '{}' has no actions with runtimes, skipping", pack_ref);
@@ -343,8 +355,11 @@ async fn setup_environments_for_pack(
                         // Can't insert into the borrowed map, so just use it inline
                         let rt_name = r.name.to_lowercase();
                         process_runtime_for_pack(
+                            &env_manager,
+                            worker,
                             &r,
                             &rt_name,
+                            pack_id,
                             pack_ref,
                             runtime_filter,
                             &pack_dir,
@@ -360,8 +375,10 @@ async fn setup_environments_for_pack(
                                 .unwrap_or_default();
                         setup_version_environments_from_list(
                             &versions,
+                            &env_manager,
                             &r,
                             &rt_name,
+                            pack_id,
                             pack_ref,
                             worker,
                             runtime_requirements.get(&runtime_id),
@@ -387,8 +404,11 @@ async fn setup_environments_for_pack(
 
         let rt_name = rt.name.to_lowercase();
         process_runtime_for_pack(
+            &env_manager,
+            worker,
             rt,
             &rt_name,
+            pack_id,
             pack_ref,
             runtime_filter,
             &pack_dir,
@@ -402,8 +422,10 @@ async fn setup_environments_for_pack(
         if let Some(versions) = version_map.get(&runtime_id) {
             setup_version_environments_from_list(
                 versions,
+                &env_manager,
                 rt,
                 &rt_name,
+                pack_id,
                 pack_ref,
                 worker,
                 runtime_requirements.get(&runtime_id),
@@ -429,8 +451,11 @@ async fn setup_environments_for_pack(
 /// Process a single runtime for a pack: check filters, check if env exists, create if needed.
 #[allow(clippy::too_many_arguments)]
 async fn process_runtime_for_pack(
+    env_manager: &PackEnvironmentManager,
+    worker: Option<&Worker>,
     rt: &attune_common::models::Runtime,
     rt_name: &str,
+    pack_id: i64,
     pack_ref: &str,
     runtime_filter: Option<&[String]>,
     pack_dir: &Path,
@@ -438,17 +463,6 @@ async fn process_runtime_for_pack(
     runtime_envs_dir: &Path,
     pack_result: &mut PackEnvSetupResult,
 ) {
-    // Apply worker runtime filter (alias-aware matching via declared aliases)
-    if let Some(filter) = runtime_filter {
-        if !runtime_aliases_match_filter(&rt.aliases, filter) {
-            debug!(
-                "Runtime '{}' not in worker filter (aliases: {:?}), skipping for pack '{}'",
-                rt_name, rt.aliases, pack_ref,
-            );
-            return;
-        }
-    }
-
     let exec_config = rt.parsed_execution_config();
 
     // Check if this runtime actually needs an environment
@@ -462,6 +476,10 @@ async fn process_runtime_for_pack(
     }
 
     let env_dir = runtime_envs_dir.join(pack_ref).join(rt_name);
+    let manifest_checksum = dependency_manifest_checksum(&exec_config, pack_dir).await;
+    let runtime_supported = runtime_filter
+        .map(|filter| runtime_aliases_match_filter(&rt.aliases, filter))
+        .unwrap_or(true);
 
     // Create a temporary ProcessRuntime to perform the setup
     let process_runtime = ProcessRuntime::new(
@@ -471,14 +489,28 @@ async fn process_runtime_for_pack(
         runtime_envs_dir.to_path_buf(),
     );
 
-    match process_runtime
-        .setup_pack_environment(pack_dir, &env_dir)
-        .await
+    match coordinate_environment_setup(
+        env_manager,
+        worker,
+        &process_runtime,
+        pack_id,
+        pack_ref,
+        rt.id,
+        &rt.r#ref,
+        None,
+        rt_name,
+        &env_dir,
+        manifest_checksum.as_deref(),
+        runtime_supported,
+        pack_dir,
+    )
+    .await
     {
-        Ok(()) => {
-            // setup_pack_environment is idempotent — it logs whether it created
-            // the env or found it already existing.
+        Ok(CoordinateSetupOutcome::Installed) => {
             pack_result.environments_created.push(rt_name.to_string());
+        }
+        Ok(CoordinateSetupOutcome::Skipped) => {
+            pack_result.environments_skipped.push(rt_name.to_string());
         }
         Err(e) => {
             let msg = format!(
@@ -491,18 +523,14 @@ async fn process_runtime_for_pack(
     }
 }
 
-/// Set up per-version environments for a runtime, given a list of available versions.
-///
-/// For each available version, creates an environment at:
-///   `{runtime_envs_dir}/{pack_ref}/{runtime_name}-{version}`
-///
-/// This uses the version's own `execution_config` (which may specify a different
-/// interpreter binary, environment create command, etc.).
+/// Set up per-version environments for a runtime, given a list of registered versions.
 #[allow(clippy::too_many_arguments)]
 async fn setup_version_environments_from_list(
     versions: &[RuntimeVersion],
+    env_manager: &PackEnvironmentManager,
     runtime: &Runtime,
     rt_name: &str,
+    pack_id: i64,
     pack_ref: &str,
     worker: Option<&Worker>,
     requirements: Option<&RuntimeRequirementProfile>,
@@ -511,15 +539,22 @@ async fn setup_version_environments_from_list(
     runtime_envs_dir: &Path,
     pack_result: &mut PackEnvSetupResult,
 ) {
-    let versions = filter_versions_for_worker(versions, runtime, worker, requirements);
-    if versions.is_empty() {
+    let qualifying_versions: Vec<RuntimeVersion> = versions
+        .iter()
+        .filter(|version| version_qualifies_for_pack(version, requirements))
+        .cloned()
+        .collect();
+    if qualifying_versions.is_empty() {
         return;
     }
 
-    for version in &versions {
+    let advertised_versions = worker
+        .map(|worker| worker_runtime_versions_for_runtime(worker, runtime))
+        .unwrap_or_default();
+
+    for version in &qualifying_versions {
         let version_exec_config = version.parsed_execution_config();
 
-        // Skip versions with no environment config and no dependencies
         if version_exec_config.environment.is_none()
             && !version_exec_config.has_dependencies(pack_dir)
         {
@@ -532,6 +567,9 @@ async fn setup_version_environments_from_list(
 
         let version_env_suffix = format!("{}-{}", rt_name, version.version);
         let version_env_dir = runtime_envs_dir.join(pack_ref).join(&version_env_suffix);
+        let manifest_checksum = dependency_manifest_checksum(&version_exec_config, pack_dir).await;
+        let worker_can_claim = !advertised_versions.is_empty()
+            && version_matches_worker(version, &advertised_versions);
 
         let version_runtime = ProcessRuntime::new(
             rt_name.to_string(),
@@ -540,16 +578,34 @@ async fn setup_version_environments_from_list(
             runtime_envs_dir.to_path_buf(),
         );
 
-        match version_runtime
-            .setup_pack_environment(pack_dir, &version_env_dir)
-            .await
+        match coordinate_environment_setup(
+            env_manager,
+            worker,
+            &version_runtime,
+            pack_id,
+            pack_ref,
+            runtime.id,
+            &runtime.r#ref,
+            Some(version),
+            &version_env_suffix,
+            &version_env_dir,
+            manifest_checksum.as_deref(),
+            worker_can_claim,
+            pack_dir,
+        )
+        .await
         {
-            Ok(()) => {
+            Ok(CoordinateSetupOutcome::Installed) => {
                 info!(
                     "Version environment '{}' ready for pack '{}'",
                     version_env_suffix, pack_ref,
                 );
                 pack_result.environments_created.push(version_env_suffix);
+            }
+            Ok(CoordinateSetupOutcome::Skipped) => {
+                pack_result
+                    .environments_skipped
+                    .push(version_env_suffix.to_string());
             }
             Err(e) => {
                 let msg = format!(
@@ -561,6 +617,274 @@ async fn setup_version_environments_from_list(
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CoordinateSetupOutcome {
+    Installed,
+    Skipped,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn coordinate_environment_setup(
+    env_manager: &PackEnvironmentManager,
+    worker: Option<&Worker>,
+    process_runtime: &ProcessRuntime,
+    pack_id: i64,
+    pack_ref: &str,
+    runtime_id: i64,
+    runtime_ref: &str,
+    runtime_version: Option<&RuntimeVersion>,
+    target_name: &str,
+    env_dir: &Path,
+    manifest_checksum: Option<&str>,
+    worker_can_claim: bool,
+    pack_dir: &Path,
+) -> std::result::Result<CoordinateSetupOutcome, String> {
+    let coordinated = env_manager
+        .upsert_coordinated_environment(
+            pack_id,
+            pack_ref,
+            runtime_id,
+            runtime_ref,
+            runtime_version,
+            env_dir,
+            manifest_checksum,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let target_label = coordinated_target_label(target_name, runtime_version);
+    if target_is_ready(
+        &coordinated,
+        manifest_checksum,
+        process_runtime,
+        pack_dir,
+        env_dir,
+    ) {
+        return Ok(CoordinateSetupOutcome::Skipped);
+    }
+
+    if !worker_can_claim {
+        debug!(
+            "Worker cannot claim coordinated environment '{}' for pack '{}'",
+            target_label, pack_ref
+        );
+        return Ok(CoordinateSetupOutcome::Skipped);
+    }
+
+    let Some(worker) = worker else {
+        return Ok(CoordinateSetupOutcome::Skipped);
+    };
+
+    for attempt in 0..INSTALL_CLAIM_ATTEMPTS {
+        wait_for_claim_jitter(&target_label, attempt).await;
+
+        if let Some(record) = env_manager
+            .get_coordinated_environment(&coordinated.env_key)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            if target_is_ready(
+                &record,
+                manifest_checksum,
+                process_runtime,
+                pack_dir,
+                env_dir,
+            ) {
+                return Ok(CoordinateSetupOutcome::Skipped);
+            }
+
+            if target_needs_reinstall(process_runtime, pack_dir, env_dir)
+                && record.status == PackEnvironmentStatus::Ready
+            {
+                env_manager
+                    .mark_coordinated_environment_outdated(&record.env_key)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
+        let Some(claimed) = env_manager
+            .claim_coordinated_environment(
+                &coordinated.env_key,
+                worker.id,
+                INSTALL_CLAIM_LEASE_SECONDS,
+            )
+            .await
+            .map_err(|e| e.to_string())?
+        else {
+            continue;
+        };
+
+        let renewer = spawn_claim_renewer(
+            env_manager.clone(),
+            claimed.env_key.clone(),
+            worker.id,
+            target_label.clone(),
+        );
+
+        let install_result = process_runtime
+            .setup_pack_environment(pack_dir, env_dir)
+            .await;
+        let _ = renewer.send(());
+
+        match install_result {
+            Ok(()) => {
+                env_manager
+                    .mark_coordinated_environment_ready(
+                        &claimed.env_key,
+                        worker.id,
+                        manifest_checksum,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                return Ok(CoordinateSetupOutcome::Installed);
+            }
+            Err(e) => {
+                let error_message = e.to_string();
+                env_manager
+                    .mark_coordinated_environment_failed(
+                        &claimed.env_key,
+                        worker.id,
+                        &error_message,
+                    )
+                    .await
+                    .map_err(|mark_err| mark_err.to_string())?;
+
+                if attempt + 1 == INSTALL_CLAIM_ATTEMPTS {
+                    return Err(format!(
+                        "Failed to set up coordinated environment '{}' for pack '{}': {}",
+                        target_label, pack_ref, error_message
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(CoordinateSetupOutcome::Skipped)
+}
+
+fn target_is_ready(
+    record: &attune_common::pack_environment::CoordinatedPackEnvironment,
+    manifest_checksum: Option<&str>,
+    process_runtime: &ProcessRuntime,
+    pack_dir: &Path,
+    env_dir: &Path,
+) -> bool {
+    record.status == PackEnvironmentStatus::Ready
+        && record.manifest_checksum.as_deref() == manifest_checksum
+        && !target_needs_reinstall(process_runtime, pack_dir, env_dir)
+}
+
+fn target_needs_reinstall(
+    process_runtime: &ProcessRuntime,
+    pack_dir: &Path,
+    env_dir: &Path,
+) -> bool {
+    let config = process_runtime.config();
+    if config.environment.is_none() {
+        return false;
+    }
+
+    if !env_dir.exists() {
+        return true;
+    }
+
+    if let Some(env_cfg) = &config.environment {
+        if let Some(interpreter_template) = &env_cfg.interpreter_path {
+            let mut vars = HashMap::new();
+            vars.insert("env_dir", env_dir.to_string_lossy().to_string());
+            vars.insert("pack_dir", pack_dir.to_string_lossy().to_string());
+            let resolved = attune_common::models::runtime::RuntimeExecutionConfig::resolve_template(
+                interpreter_template,
+                &vars,
+            );
+            if !std::path::Path::new(&resolved).exists() {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+async fn dependency_manifest_checksum(
+    exec_config: &attune_common::models::runtime::RuntimeExecutionConfig,
+    pack_dir: &Path,
+) -> Option<String> {
+    use sha2::{Digest, Sha256};
+
+    let manifest_file = exec_config.dependencies.as_ref()?.manifest_file.as_str();
+    let manifest_path = pack_dir.join(manifest_file);
+    let data = tokio::fs::read(manifest_path).await.ok()?;
+    Some(format!("{:x}", Sha256::digest(&data)))
+}
+
+fn coordinated_target_label(target_name: &str, runtime_version: Option<&RuntimeVersion>) -> String {
+    runtime_version
+        .map(|version| format!("{target_name} ({})", version.version))
+        .unwrap_or_else(|| target_name.to_string())
+}
+
+async fn wait_for_claim_jitter(target_label: &str, attempt: usize) {
+    let delay_ms = jitter_delay_ms();
+    debug!(
+        "Waiting {}ms before claim attempt {} for coordinated environment '{}'",
+        delay_ms,
+        attempt + 1,
+        target_label,
+    );
+    sleep(Duration::from_millis(delay_ms)).await;
+}
+
+fn jitter_delay_ms() -> u64 {
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&Uuid::new_v4().into_bytes()[..8]);
+    INSTALL_JITTER_MIN_MS + (u64::from_le_bytes(bytes) % INSTALL_JITTER_SPAN_MS)
+}
+
+fn spawn_claim_renewer(
+    env_manager: PackEnvironmentManager,
+    env_key: String,
+    worker_id: i64,
+    target_label: String,
+) -> oneshot::Sender<()> {
+    let (tx, mut rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(INSTALL_CLAIM_RENEW_SECONDS));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        interval.tick().await;
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    match env_manager
+                        .renew_coordinated_environment_claim(&env_key, worker_id, INSTALL_CLAIM_LEASE_SECONDS)
+                        .await
+                    {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            debug!(
+                                "Claim renewer for '{}' stopped because the install claim is no longer owned",
+                                target_label
+                            );
+                            break;
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to renew coordinated install claim for '{}': {}",
+                                target_label, e
+                            );
+                        }
+                    }
+                }
+                _ = &mut rx => break,
+            }
+        }
+    });
+
+    tx
 }
 
 async fn load_worker_for_env_setup(db_pool: &PgPool, worker_id: i64) -> Option<Worker> {
@@ -583,6 +907,7 @@ async fn load_worker_for_env_setup(db_pool: &PgPool, worker_id: i64) -> Option<W
     }
 }
 
+#[cfg(test)]
 fn filter_versions_for_worker(
     versions: &[RuntimeVersion],
     runtime: &Runtime,
@@ -798,6 +1123,15 @@ mod tests {
         assert_eq!(result.packs_scanned, 0);
         assert_eq!(result.environments_created, 0);
         assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn test_jitter_delay_ms_in_expected_range() {
+        for _ in 0..32 {
+            let delay = jitter_delay_ms();
+            assert!(delay >= INSTALL_JITTER_MIN_MS);
+            assert!(delay < INSTALL_JITTER_MIN_MS + INSTALL_JITTER_SPAN_MS);
+        }
     }
 
     #[test]

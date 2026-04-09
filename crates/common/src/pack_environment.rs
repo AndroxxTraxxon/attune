@@ -8,13 +8,13 @@
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::models::Runtime;
+use crate::models::{Runtime, RuntimeVersion};
 use crate::repositories::action::ActionRepository;
 use crate::repositories::runtime::{self, RuntimeRepository};
 use crate::repositories::FindById as _;
 use regex::Regex;
 use serde_json::Value as JsonValue;
-use sqlx::{PgPool, Row};
+use sqlx::{postgres::PgRow, PgPool, Row};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -71,6 +71,29 @@ pub struct PackEnvironment {
     pub metadata: JsonValue,
 }
 
+/// Version-aware coordination record for a shared pack runtime environment.
+#[derive(Debug, Clone)]
+pub struct CoordinatedPackEnvironment {
+    pub id: i64,
+    pub pack: i64,
+    pub pack_ref: String,
+    pub runtime: i64,
+    pub runtime_ref: String,
+    pub runtime_version: Option<i64>,
+    pub runtime_version_text: Option<String>,
+    pub env_key: String,
+    pub env_path: String,
+    pub status: PackEnvironmentStatus,
+    pub manifest_checksum: Option<String>,
+    pub claimed_by_worker: Option<i64>,
+    pub claim_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub installed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_verified: Option<chrono::DateTime<chrono::Utc>>,
+    pub install_log: Option<String>,
+    pub install_error: Option<String>,
+    pub metadata: JsonValue,
+}
+
 /// Installer action definition
 #[derive(Debug, Clone)]
 pub struct InstallerAction {
@@ -86,6 +109,7 @@ pub struct InstallerAction {
 }
 
 /// Pack environment manager
+#[derive(Clone)]
 pub struct PackEnvironmentManager {
     pool: PgPool,
     #[allow(dead_code)] // Used for future path operations
@@ -103,6 +127,54 @@ impl PackEnvironmentManager {
     /// Create a new pack environment manager with custom base path
     pub fn with_base_path(pool: PgPool, base_path: PathBuf) -> Self {
         Self { pool, base_path }
+    }
+
+    fn pack_environment_from_row(row: &PgRow) -> Result<PackEnvironment> {
+        let status_str: String = row.try_get("status")?;
+        let status = PackEnvironmentStatus::parse_status(&status_str)
+            .unwrap_or(PackEnvironmentStatus::Failed);
+
+        Ok(PackEnvironment {
+            id: row.try_get("id")?,
+            pack: row.try_get("pack")?,
+            pack_ref: row.try_get("pack_ref")?,
+            runtime: row.try_get("runtime")?,
+            runtime_ref: row.try_get("runtime_ref")?,
+            env_path: row.try_get("env_path")?,
+            status,
+            installed_at: row.try_get("installed_at")?,
+            last_verified: row.try_get("last_verified")?,
+            install_log: row.try_get("install_log")?,
+            install_error: row.try_get("install_error")?,
+            metadata: row.try_get("metadata")?,
+        })
+    }
+
+    fn coordinated_environment_from_row(row: &PgRow) -> Result<CoordinatedPackEnvironment> {
+        let status_str: String = row.try_get("status")?;
+        let status = PackEnvironmentStatus::parse_status(&status_str)
+            .unwrap_or(PackEnvironmentStatus::Failed);
+
+        Ok(CoordinatedPackEnvironment {
+            id: row.try_get("id")?,
+            pack: row.try_get("pack")?,
+            pack_ref: row.try_get("pack_ref")?,
+            runtime: row.try_get("runtime")?,
+            runtime_ref: row.try_get("runtime_ref")?,
+            runtime_version: row.try_get("runtime_version")?,
+            runtime_version_text: row.try_get("runtime_version_text")?,
+            env_key: row.try_get("env_key")?,
+            env_path: row.try_get("env_path")?,
+            status,
+            manifest_checksum: row.try_get("manifest_checksum")?,
+            claimed_by_worker: row.try_get("claimed_by_worker")?,
+            claim_expires_at: row.try_get("claim_expires_at")?,
+            installed_at: row.try_get("installed_at")?,
+            last_verified: row.try_get("last_verified")?,
+            install_log: row.try_get("install_log")?,
+            install_error: row.try_get("install_error")?,
+            metadata: row.try_get("metadata")?,
+        })
     }
 
     /// Create or update a pack environment
@@ -182,7 +254,7 @@ impl PackEnvironmentManager {
             SELECT id, pack, pack_ref, runtime, runtime_ref, env_path, status,
                    installed_at, last_verified, install_log, install_error, metadata
             FROM pack_environment
-            WHERE pack = $1 AND runtime = $2
+            WHERE pack = $1 AND runtime = $2 AND runtime_version IS NULL
             "#,
         )
         .bind(pack_id)
@@ -191,24 +263,7 @@ impl PackEnvironmentManager {
         .await?;
 
         if let Some(row) = row {
-            let status_str: String = row.try_get("status")?;
-            let status = PackEnvironmentStatus::parse_status(&status_str)
-                .unwrap_or(PackEnvironmentStatus::Failed);
-
-            Ok(Some(PackEnvironment {
-                id: row.try_get("id")?,
-                pack: row.try_get("pack")?,
-                pack_ref: row.try_get("pack_ref")?,
-                runtime: row.try_get("runtime")?,
-                runtime_ref: row.try_get("runtime_ref")?,
-                env_path: row.try_get("env_path")?,
-                status,
-                installed_at: row.try_get("installed_at")?,
-                last_verified: row.try_get("last_verified")?,
-                install_log: row.try_get("install_log")?,
-                install_error: row.try_get("install_error")?,
-                metadata: row.try_get("metadata")?,
-            }))
+            Ok(Some(Self::pack_environment_from_row(&row)?))
         } else {
             Ok(None)
         }
@@ -331,6 +386,7 @@ impl PackEnvironmentManager {
                    installed_at, last_verified, install_log, install_error, metadata
             FROM pack_environment
             WHERE pack = $1
+            AND runtime_version IS NULL
             ORDER BY runtime_ref
             "#,
         )
@@ -340,24 +396,7 @@ impl PackEnvironmentManager {
 
         let mut environments = Vec::new();
         for row in rows {
-            let status_str: String = row.try_get("status")?;
-            let status = PackEnvironmentStatus::parse_status(&status_str)
-                .unwrap_or(PackEnvironmentStatus::Failed);
-
-            environments.push(PackEnvironment {
-                id: row.try_get("id")?,
-                pack: row.try_get("pack")?,
-                pack_ref: row.try_get("pack_ref")?,
-                runtime: row.try_get("runtime")?,
-                runtime_ref: row.try_get("runtime_ref")?,
-                env_path: row.try_get("env_path")?,
-                status,
-                installed_at: row.try_get("installed_at")?,
-                last_verified: row.try_get("last_verified")?,
-                install_log: row.try_get("install_log")?,
-                install_error: row.try_get("install_error")?,
-                metadata: row.try_get("metadata")?,
-            });
+            environments.push(Self::pack_environment_from_row(&row)?);
         }
 
         Ok(environments)
@@ -424,9 +463,12 @@ impl PackEnvironmentManager {
 
         let row = sqlx::query(
             r#"
-            INSERT INTO pack_environment (pack, pack_ref, runtime, runtime_ref, env_path, status)
-            VALUES ($1, $2, $3, $4, $5, 'pending')
-            ON CONFLICT (pack, runtime)
+            INSERT INTO pack_environment (
+                pack, pack_ref, runtime, runtime_ref, runtime_version, runtime_version_text,
+                env_path, status
+            )
+            VALUES ($1, $2, $3, $4, NULL, NULL, $5, 'pending')
+            ON CONFLICT (env_key)
             DO UPDATE SET
                 env_path = EXCLUDED.env_path,
                 status = 'pending',
@@ -445,24 +487,7 @@ impl PackEnvironmentManager {
         .fetch_one(&self.pool)
         .await?;
 
-        let status_str: String = row.try_get("status")?;
-        let status = PackEnvironmentStatus::parse_status(&status_str)
-            .unwrap_or(PackEnvironmentStatus::Pending);
-
-        Ok(PackEnvironment {
-            id: row.try_get("id")?,
-            pack: row.try_get("pack")?,
-            pack_ref: row.try_get("pack_ref")?,
-            runtime: row.try_get("runtime")?,
-            runtime_ref: row.try_get("runtime_ref")?,
-            env_path: row.try_get("env_path")?,
-            status,
-            installed_at: row.try_get("installed_at")?,
-            last_verified: row.try_get("last_verified")?,
-            install_log: row.try_get("install_log")?,
-            install_error: row.try_get("install_error")?,
-            metadata: row.try_get("metadata")?,
-        })
+        Self::pack_environment_from_row(&row)
     }
 
     async fn create_no_op_environment(
@@ -474,9 +499,12 @@ impl PackEnvironmentManager {
     ) -> Result<PackEnvironment> {
         let row = sqlx::query(
             r#"
-            INSERT INTO pack_environment (pack, pack_ref, runtime, runtime_ref, env_path, status, installed_at)
-            VALUES ($1, $2, $3, $4, '', 'ready', NOW())
-            ON CONFLICT (pack, runtime)
+            INSERT INTO pack_environment (
+                pack, pack_ref, runtime, runtime_ref, runtime_version, runtime_version_text,
+                env_path, status, installed_at
+            )
+            VALUES ($1, $2, $3, $4, NULL, NULL, '', 'ready', NOW())
+            ON CONFLICT (env_key)
             DO UPDATE SET status = 'ready', installed_at = NOW(), updated = NOW()
             RETURNING id, pack, pack_ref, runtime, runtime_ref, env_path, status,
                       installed_at, last_verified, install_log, install_error, metadata
@@ -489,24 +517,7 @@ impl PackEnvironmentManager {
         .fetch_one(&self.pool)
         .await?;
 
-        let status_str: String = row.try_get("status")?;
-        let status = PackEnvironmentStatus::parse_status(&status_str)
-            .unwrap_or(PackEnvironmentStatus::Ready);
-
-        Ok(PackEnvironment {
-            id: row.try_get("id")?,
-            pack: row.try_get("pack")?,
-            pack_ref: row.try_get("pack_ref")?,
-            runtime: row.try_get("runtime")?,
-            runtime_ref: row.try_get("runtime_ref")?,
-            env_path: row.try_get("env_path")?,
-            status,
-            installed_at: row.try_get("installed_at")?,
-            last_verified: row.try_get("last_verified")?,
-            install_log: row.try_get("install_log")?,
-            install_error: row.try_get("install_error")?,
-            metadata: row.try_get("metadata")?,
-        })
+        Self::pack_environment_from_row(&row)
     }
 
     async fn install_environment(
@@ -822,6 +833,255 @@ impl PackEnvironmentManager {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn upsert_coordinated_environment(
+        &self,
+        pack_id: i64,
+        pack_ref: &str,
+        runtime_id: i64,
+        runtime_ref: &str,
+        runtime_version: Option<&RuntimeVersion>,
+        env_path: &Path,
+        manifest_checksum: Option<&str>,
+    ) -> Result<CoordinatedPackEnvironment> {
+        let env_path_str = env_path.to_string_lossy().to_string();
+        let runtime_version_id = runtime_version.map(|version| version.id);
+        let runtime_version_text = runtime_version.map(|version| version.version.as_str());
+
+        let row = sqlx::query(
+            r#"
+            INSERT INTO pack_environment (
+                pack, pack_ref, runtime, runtime_ref, runtime_version, runtime_version_text,
+                env_path, status, manifest_checksum
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8)
+            ON CONFLICT (env_key)
+            DO UPDATE SET
+                pack_ref = EXCLUDED.pack_ref,
+                runtime_ref = EXCLUDED.runtime_ref,
+                runtime_version = EXCLUDED.runtime_version,
+                runtime_version_text = EXCLUDED.runtime_version_text,
+                env_path = EXCLUDED.env_path,
+                manifest_checksum = EXCLUDED.manifest_checksum,
+                status = CASE
+                    WHEN pack_environment.env_path IS DISTINCT FROM EXCLUDED.env_path
+                        OR pack_environment.manifest_checksum IS DISTINCT FROM EXCLUDED.manifest_checksum
+                    THEN CASE
+                        WHEN pack_environment.status = 'installing'
+                            AND pack_environment.claim_expires_at IS NOT NULL
+                            AND pack_environment.claim_expires_at > NOW()
+                        THEN pack_environment.status
+                        ELSE 'outdated'::pack_environment_status_enum
+                    END
+                    ELSE pack_environment.status
+                END,
+                install_error = CASE
+                    WHEN pack_environment.env_path IS DISTINCT FROM EXCLUDED.env_path
+                        OR pack_environment.manifest_checksum IS DISTINCT FROM EXCLUDED.manifest_checksum
+                    THEN NULL
+                    ELSE pack_environment.install_error
+                END,
+                claimed_by_worker = CASE
+                    WHEN pack_environment.env_path IS DISTINCT FROM EXCLUDED.env_path
+                        OR pack_environment.manifest_checksum IS DISTINCT FROM EXCLUDED.manifest_checksum
+                    THEN CASE
+                        WHEN pack_environment.status = 'installing'
+                            AND pack_environment.claim_expires_at IS NOT NULL
+                            AND pack_environment.claim_expires_at > NOW()
+                        THEN pack_environment.claimed_by_worker
+                        ELSE NULL
+                    END
+                    ELSE pack_environment.claimed_by_worker
+                END,
+                claim_expires_at = CASE
+                    WHEN pack_environment.env_path IS DISTINCT FROM EXCLUDED.env_path
+                        OR pack_environment.manifest_checksum IS DISTINCT FROM EXCLUDED.manifest_checksum
+                    THEN CASE
+                        WHEN pack_environment.status = 'installing'
+                            AND pack_environment.claim_expires_at IS NOT NULL
+                            AND pack_environment.claim_expires_at > NOW()
+                        THEN pack_environment.claim_expires_at
+                        ELSE NULL
+                    END
+                    ELSE pack_environment.claim_expires_at
+                END,
+                updated = NOW()
+            RETURNING id, pack, pack_ref, runtime, runtime_ref, runtime_version, runtime_version_text,
+                      env_key, env_path, status, manifest_checksum, claimed_by_worker,
+                      claim_expires_at, installed_at, last_verified, install_log, install_error,
+                      metadata
+            "#,
+        )
+        .bind(pack_id)
+        .bind(pack_ref)
+        .bind(runtime_id)
+        .bind(runtime_ref)
+        .bind(runtime_version_id)
+        .bind(runtime_version_text)
+        .bind(&env_path_str)
+        .bind(manifest_checksum)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Self::coordinated_environment_from_row(&row)
+    }
+
+    pub async fn get_coordinated_environment(
+        &self,
+        env_key: &str,
+    ) -> Result<Option<CoordinatedPackEnvironment>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, pack, pack_ref, runtime, runtime_ref, runtime_version, runtime_version_text,
+                   env_key, env_path, status, manifest_checksum, claimed_by_worker,
+                   claim_expires_at, installed_at, last_verified, install_log, install_error,
+                   metadata
+            FROM pack_environment
+            WHERE env_key = $1
+            "#,
+        )
+        .bind(env_key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|row| Self::coordinated_environment_from_row(&row))
+            .transpose()
+    }
+
+    pub async fn claim_coordinated_environment(
+        &self,
+        env_key: &str,
+        worker_id: i64,
+        lease_seconds: i64,
+    ) -> Result<Option<CoordinatedPackEnvironment>> {
+        let row = sqlx::query(
+            r#"
+            UPDATE pack_environment
+            SET status = 'installing',
+                claimed_by_worker = $2,
+                claim_expires_at = NOW() + ($3 * INTERVAL '1 second'),
+                install_error = NULL,
+                updated = NOW()
+            WHERE env_key = $1
+              AND (
+                  status IN ('pending', 'failed', 'outdated')
+                  OR (status = 'installing' AND (claim_expires_at IS NULL OR claim_expires_at <= NOW()))
+              )
+            RETURNING id, pack, pack_ref, runtime, runtime_ref, runtime_version, runtime_version_text,
+                      env_key, env_path, status, manifest_checksum, claimed_by_worker,
+                      claim_expires_at, installed_at, last_verified, install_log, install_error,
+                      metadata
+            "#,
+        )
+        .bind(env_key)
+        .bind(worker_id)
+        .bind(lease_seconds)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|row| Self::coordinated_environment_from_row(&row))
+            .transpose()
+    }
+
+    pub async fn renew_coordinated_environment_claim(
+        &self,
+        env_key: &str,
+        worker_id: i64,
+        lease_seconds: i64,
+    ) -> Result<bool> {
+        let updated = sqlx::query(
+            r#"
+            UPDATE pack_environment
+            SET claim_expires_at = NOW() + ($3 * INTERVAL '1 second'),
+                updated = NOW()
+            WHERE env_key = $1
+              AND claimed_by_worker = $2
+              AND status = 'installing'
+            "#,
+        )
+        .bind(env_key)
+        .bind(worker_id)
+        .bind(lease_seconds)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(updated.rows_affected() > 0)
+    }
+
+    pub async fn mark_coordinated_environment_ready(
+        &self,
+        env_key: &str,
+        worker_id: i64,
+        manifest_checksum: Option<&str>,
+    ) -> Result<bool> {
+        let updated = sqlx::query(
+            r#"
+            UPDATE pack_environment
+            SET status = 'ready',
+                manifest_checksum = $3,
+                installed_at = NOW(),
+                last_verified = NOW(),
+                claimed_by_worker = NULL,
+                claim_expires_at = NULL,
+                install_error = NULL,
+                updated = NOW()
+            WHERE env_key = $1
+              AND claimed_by_worker = $2
+            "#,
+        )
+        .bind(env_key)
+        .bind(worker_id)
+        .bind(manifest_checksum)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(updated.rows_affected() > 0)
+    }
+
+    pub async fn mark_coordinated_environment_failed(
+        &self,
+        env_key: &str,
+        worker_id: i64,
+        error_message: &str,
+    ) -> Result<bool> {
+        let updated = sqlx::query(
+            r#"
+            UPDATE pack_environment
+            SET status = 'failed',
+                install_error = $3,
+                claimed_by_worker = NULL,
+                claim_expires_at = NULL,
+                updated = NOW()
+            WHERE env_key = $1
+              AND claimed_by_worker = $2
+            "#,
+        )
+        .bind(env_key)
+        .bind(worker_id)
+        .bind(error_message)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(updated.rows_affected() > 0)
+    }
+
+    pub async fn mark_coordinated_environment_outdated(&self, env_key: &str) -> Result<bool> {
+        let updated = sqlx::query(
+            r#"
+            UPDATE pack_environment
+            SET status = 'outdated',
+                claimed_by_worker = NULL,
+                claim_expires_at = NULL,
+                updated = NOW()
+            WHERE env_key = $1
+            "#,
+        )
+        .bind(env_key)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(updated.rows_affected() > 0)
     }
 }
 
