@@ -118,7 +118,7 @@ jobs:
           else
             version="sha-${short_sha}"
             image_tags="edge,sha-${short_sha}"
-            chart_version="0.0.0-edge.${{ github.run_number }}.${{ github.run_attempt }}"
+            chart_version="0.0.0-edge.${{ github.run_number }}"
           fi
 
           artifact_ref_base="${registry}/${namespace}/${ARTIFACT_REPOSITORY}"
