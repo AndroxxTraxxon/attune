@@ -17,9 +17,63 @@ env:
   RUNNER_TOOL_CACHE: /toolcache
 
 jobs:
+  changes:
+    name: Detect Changed Paths
+    runs-on: build-amd64
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changes
+        id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          rust="false"
+          web="false"
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.sha }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+            if [ "$base" = "0000000000000000000000000000000000000000" ]; then
+              rust="true"; web="true"
+              { echo "rust=$rust"; echo "web=$web"; } >> "$GITHUB_OUTPUT"
+              echo "Changed path flags: rust=$rust web=$web (first push)"
+              exit 0
+            fi
+          else
+            rust="true"; web="true"
+            { echo "rust=$rust"; echo "web=$web"; } >> "$GITHUB_OUTPUT"
+            echo "Changed path flags: rust=$rust web=$web (unknown event, enabling all)"
+            exit 0
+          fi
+
+          while IFS= read -r f; do
+            if printf '%s' "$f" | grep -qE '^(crates/|Cargo\.toml$|Cargo\.lock$)' \
+               || printf '%s' "$f" | grep -qE '\.rs$'; then
+              rust="true"
+            fi
+            if printf '%s' "$f" | grep -qE '^web/'; then
+              web="true"
+            fi
+          done < <(git diff --name-only "$base" "$head")
+
+          { echo "rust=$rust"; echo "web=$web"; } >> "$GITHUB_OUTPUT"
+          echo "Changed path flags: rust=$rust web=$web"
+
   rust-fmt:
     name: Rustfmt
     runs-on: build-amd64
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,6 +100,8 @@ jobs:
   rust-clippy:
     name: Clippy
     runs-on: build-amd64
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -92,6 +148,8 @@ jobs:
   rust-test:
     name: Tests
     runs-on: build-amd64
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -136,6 +194,8 @@ jobs:
   rust-audit:
     name: Cargo Audit & Deny
     runs-on: build-amd64
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -189,6 +249,8 @@ jobs:
   web-blocking:
     name: Web Blocking Checks
     runs-on: build-amd64
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     defaults:
       run:
         working-directory: web
@@ -251,6 +313,8 @@ jobs:
   web-advisory:
     name: Web Advisory Checks
     runs-on: build-amd64
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     continue-on-error: true
     defaults:
       run:

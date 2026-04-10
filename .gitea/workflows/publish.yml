@@ -134,14 +134,88 @@ jobs:
              echo "artifact_ref_base=$artifact_ref_base"
            } >> "$GITHUB_OUTPUT"
 
+  changes:
+    name: Detect Changed Paths
+    runs-on: build-amd64
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      helm: ${{ steps.filter.outputs.helm }}
+      web: ${{ steps.filter.outputs.web }}
+      docker_dist: ${{ steps.filter.outputs.docker_dist }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changes
+        id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          rust="false"
+          helm="false"
+          web="false"
+          docker_dist="false"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            target="${{ inputs.target_image }}"
+            case "$target" in
+              all)
+                rust="true"; helm="true"; web="true"; docker_dist="true" ;;
+              api|executor|notifier|agent)
+                rust="true" ;;
+              helm-chart)
+                helm="true" ;;
+              web)
+                web="true" ;;
+              docker-dist)
+                docker_dist="true" ;;
+            esac
+          else
+            before="${{ github.event.before }}"
+            after="${{ github.sha }}"
+
+            if [ "$before" = "0000000000000000000000000000000000000000" ]; then
+              rust="true"; helm="true"; web="true"; docker_dist="true"
+            else
+              while IFS= read -r f; do
+                if printf '%s' "$f" | grep -qE '^(crates/|Cargo\.toml$|Cargo\.lock$|docker/Dockerfile\.(runtime|agent|agent-package)$)'; then
+                  rust="true"
+                fi
+                if printf '%s' "$f" | grep -qE '^charts/'; then
+                  helm="true"
+                fi
+                if printf '%s' "$f" | grep -qE '^(web/|docker/Dockerfile\.web$)'; then
+                  web="true"
+                fi
+                if printf '%s' "$f" | grep -qE '^docker/distributable/'; then
+                  docker_dist="true"
+                fi
+              done < <(git diff --name-only "$before" "$after")
+            fi
+          fi
+
+          {
+            echo "rust=$rust"
+            echo "helm=$helm"
+            echo "web=$web"
+            echo "docker_dist=$docker_dist"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Changed path flags: rust=$rust helm=$helm web=$web docker_dist=$docker_dist"
+
   build-rust-bundles:
     name: Build Rust Bundles (${{ matrix.arch }})
     runs-on: ${{ matrix.runner_label }}
-    needs: metadata
+    needs:
+      - metadata
+      - changes
     if: |
-      github.event_name != 'workflow_dispatch' ||
+      needs.changes.outputs.rust == 'true' &&
+      (github.event_name != 'workflow_dispatch' ||
       inputs.target_arch == 'all' ||
-      inputs.target_arch == matrix.arch
+      inputs.target_arch == matrix.arch)
     strategy:
       fail-fast: false
       matrix:
@@ -356,11 +430,10 @@ jobs:
   publish-docker-dist:
     name: Publish Docker Dist Bundle
     runs-on: build-amd64
-    needs: metadata
-    if: |
-      github.event_name != 'workflow_dispatch' ||
-      inputs.target_image == 'all' ||
-      inputs.target_image == 'docker-dist'
+    needs:
+      - metadata
+      - changes
+    if: needs.changes.outputs.docker_dist == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -541,20 +614,24 @@ jobs:
   publish-helm-chart:
     name: Publish Helm Chart
     runs-on: build-amd64
-    needs: metadata
+    needs:
+      - metadata
+      - changes
     timeout-minutes: 10
-    if: |
-      github.event_name != 'workflow_dispatch' ||
-      inputs.target_image == 'all' ||
-      inputs.target_image == 'helm-chart'
+    if: needs.changes.outputs.helm == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: 'v4.1.4'
+      - name: Install Helm
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/helm.tar.gz \
+            https://get.helm.sh/helm-v4.1.4-linux-amd64.tar.gz
+          tar -xzf /tmp/helm.tar.gz -C /tmp
+          sudo mv /tmp/linux-amd64/helm /usr/local/bin/helm
+          helm version
 
       - name: Package Helm chart
         shell: bash
@@ -609,14 +686,13 @@ jobs:
     runs-on: ${{ matrix.runner_label }}
     needs:
       - metadata
+      - changes
       - build-rust-bundles
     if: |
+      needs.changes.outputs.rust == 'true' &&
       (github.event_name != 'workflow_dispatch' ||
       inputs.target_arch == 'all' ||
-      inputs.target_arch == matrix.arch) &&
-      (github.event_name != 'workflow_dispatch' ||
-      inputs.target_image == 'all' ||
-      inputs.target_image == matrix.image.name)
+      inputs.target_arch == matrix.arch)
     strategy:
       fail-fast: false
       matrix:
@@ -854,14 +930,14 @@ jobs:
   publish-web-images:
     name: Publish web (${{ matrix.arch }})
     runs-on: ${{ matrix.runner_label }}
-    needs: metadata
+    needs:
+      - metadata
+      - changes
     if: |
+      needs.changes.outputs.web == 'true' &&
       (github.event_name != 'workflow_dispatch' ||
       inputs.target_arch == 'all' ||
-      inputs.target_arch == matrix.arch) &&
-      (github.event_name != 'workflow_dispatch' ||
-      inputs.target_image == 'all' ||
-      inputs.target_image == 'web')
+      inputs.target_arch == matrix.arch)
     strategy:
       fail-fast: false
       matrix:
@@ -978,11 +1054,16 @@ jobs:
     runs-on: build-amd64
     needs:
       - metadata
+      - changes
       - publish-rust-images
       - publish-web-images
     if: |
-      github.event_name != 'workflow_dispatch' ||
-      (inputs.target_arch == 'all' && inputs.target_image == 'all')
+      !cancelled() &&
+      needs.publish-rust-images.result != 'failure' &&
+      needs.publish-web-images.result != 'failure' &&
+      (needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true') &&
+      (github.event_name != 'workflow_dispatch' ||
+      (inputs.target_arch == 'all' && inputs.target_image == 'all'))
     strategy:
       fail-fast: false
       matrix:
