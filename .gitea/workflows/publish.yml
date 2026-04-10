@@ -542,6 +542,7 @@ jobs:
     name: Publish Helm Chart
     runs-on: build-amd64
     needs: metadata
+    timeout-minutes: 10
     if: |
       github.event_name != 'workflow_dispatch' ||
       inputs.target_image == 'all' ||
@@ -552,6 +553,8 @@ jobs:
 
       - name: Setup Helm
         uses: azure/setup-helm@v4
+        with:
+          version: 'v4.1.4'
 
       - name: Package Helm chart
         shell: bash
