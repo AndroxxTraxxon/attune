@@ -623,14 +623,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Cache Helm binary
+        id: cache-helm
+        uses: actions/cache@v4
+        with:
+          path: /toolcache/helm/4.1.4
+          key: helm-v4.1.4-linux-amd64
+
       - name: Install Helm
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL -o /tmp/helm.tar.gz \
-            https://get.helm.sh/helm-v4.1.4-linux-amd64.tar.gz
-          tar -xzf /tmp/helm.tar.gz -C /tmp
-          sudo mv /tmp/linux-amd64/helm /usr/local/bin/helm
+          helm_bin="/toolcache/helm/4.1.4/helm"
+
+          if [ ! -x "$helm_bin" ]; then
+            echo "Cache miss — downloading Helm v4.1.4"
+            mkdir -p /toolcache/helm/4.1.4
+            curl -fsSL -o /tmp/helm.tar.gz \
+              https://get.helm.sh/helm-v4.1.4-linux-amd64.tar.gz
+            tar -xzf /tmp/helm.tar.gz -C /tmp
+            mv /tmp/linux-amd64/helm "$helm_bin"
+            chmod +x "$helm_bin"
+          else
+            echo "Cache hit — using cached Helm v4.1.4"
+          fi
+
+          sudo ln -sf "$helm_bin" /usr/local/bin/helm
           helm version
 
       - name: Package Helm chart
