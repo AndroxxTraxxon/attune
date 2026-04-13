@@ -239,6 +239,7 @@ pub async fn list_events(
         trigger_ref: query.trigger_ref.clone(),
         source: query.source,
         rule_ref: query.rule_ref.clone(),
+        include_total: query.include_total == Some(true),
         limit: query.limit(),
         offset: query.offset(),
     };
@@ -253,7 +254,11 @@ pub async fn list_events(
         page_size: query.per_page,
     };
 
-    let response = PaginatedResponse::new(paginated_events, &pagination_params, result.total);
+    let response = if let Some(total) = result.total {
+        PaginatedResponse::new(paginated_events, &pagination_params, total)
+    } else {
+        PaginatedResponse::without_totals(paginated_events, &pagination_params, result.has_next)
+    };
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -314,6 +319,7 @@ pub async fn list_enforcements(
         event: query.event,
         trigger_ref: query.trigger_ref.clone(),
         rule_ref: query.rule_ref.clone(),
+        include_total: query.include_total == Some(true),
         limit: query.limit(),
         offset: query.offset(),
     };
@@ -331,7 +337,15 @@ pub async fn list_enforcements(
         page_size: query.per_page,
     };
 
-    let response = PaginatedResponse::new(paginated_enforcements, &pagination_params, result.total);
+    let response = if let Some(total) = result.total {
+        PaginatedResponse::new(paginated_enforcements, &pagination_params, total)
+    } else {
+        PaginatedResponse::without_totals(
+            paginated_enforcements,
+            &pagination_params,
+            result.has_next,
+        )
+    };
 
     Ok((StatusCode::OK, Json(response)))
 }

@@ -461,3 +461,152 @@ async fn test_execution_get_invalid_id() {
         .failure()
         .stderr(predicate::str::contains("invalid"));
 }
+
+#[tokio::test]
+async fn test_execution_list_with_rule_trigger_and_top_level_filters() {
+    let fixture = TestFixture::new().await;
+    fixture.write_authenticated_config("valid_token", "refresh_token");
+
+    use serde_json::json;
+    use wiremock::{
+        matchers::{method, path, query_param},
+        Mock, ResponseTemplate,
+    };
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/executions"))
+        .and(query_param("rule_ref", "core.on_timer"))
+        .and(query_param("trigger_ref", "core.timer"))
+        .and(query_param("top_level_only", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [
+                {
+                    "id": 1,
+                    "action_ref": "core.echo",
+                    "status": "running",
+                    "parent": null,
+                    "enforcement": 12,
+                    "rule_ref": "core.on_timer",
+                    "trigger_ref": "core.timer",
+                    "result": {"output": "tick"},
+                    "created": "2024-01-01T00:00:00Z",
+                    "updated": "2024-01-01T00:00:00Z"
+                }
+            ]
+        })))
+        .mount(&fixture.mock_server)
+        .await;
+
+    let mut cmd = Command::cargo_bin("attune").unwrap();
+    cmd.env("XDG_CONFIG_HOME", fixture.config_dir_path())
+        .env("HOME", fixture.config_dir_path())
+        .arg("--api-url")
+        .arg(fixture.server_url())
+        .arg("execution")
+        .arg("list")
+        .arg("--rule")
+        .arg("core.on_timer")
+        .arg("--trigger")
+        .arg("core.timer")
+        .arg("--top-level-only");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("core.on_timer"))
+        .stdout(predicate::str::contains("core.timer"));
+}
+
+#[tokio::test]
+async fn test_execution_watch_streams_updates() {
+    let fixture = TestFixture::new().await;
+    fixture.write_authenticated_config("valid_token", "refresh_token");
+
+    use serde_json::json;
+    use wiremock::{
+        matchers::{method, path, query_param},
+        Mock, ResponseTemplate,
+    };
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/executions"))
+        .and(query_param("status", "running"))
+        .and(query_param("top_level_only", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": []
+        })))
+        .mount(&fixture.mock_server)
+        .await;
+
+    let body = concat!(
+        "data: {\"entity_id\":3,\"payload\":{\"id\":3,\"action_ref\":\"core.echo\",\"status\":\"running\",\"parent\":null,\"rule_ref\":\"core.on_timer\",\"trigger_ref\":\"core.timer\",\"created\":\"2024-01-01T00:00:01Z\",\"updated\":\"2024-01-01T00:00:02Z\"}}\n\n"
+    );
+    Mock::given(method("GET"))
+        .and(path("/api/v1/executions/stream"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body),
+        )
+        .mount(&fixture.mock_server)
+        .await;
+
+    let mut cmd = Command::cargo_bin("attune").unwrap();
+    cmd.env("XDG_CONFIG_HOME", fixture.config_dir_path())
+        .env("HOME", fixture.config_dir_path())
+        .arg("--api-url")
+        .arg(fixture.server_url())
+        .arg("execution")
+        .arg("watch")
+        .arg("--status")
+        .arg("running")
+        .arg("--top-level-only");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Watching executions"))
+        .stdout(predicate::str::contains("core.echo"))
+        .stdout(predicate::str::contains("running"));
+}
+
+#[tokio::test]
+async fn test_execution_watch_existing_execution_by_id() {
+    let fixture = TestFixture::new().await;
+    fixture.write_authenticated_config("valid_token", "refresh_token");
+
+    use serde_json::json;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, ResponseTemplate,
+    };
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/executions/123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {
+                "id": 123,
+                "action_ref": "core.echo",
+                "status": "completed",
+                "result": {"output": "done"},
+                "created": "2024-01-01T00:00:00Z",
+                "updated": "2024-01-01T00:00:01Z"
+            }
+        })))
+        .mount(&fixture.mock_server)
+        .await;
+
+    let mut cmd = Command::cargo_bin("attune").unwrap();
+    cmd.env("XDG_CONFIG_HOME", fixture.config_dir_path())
+        .env("HOME", fixture.config_dir_path())
+        .arg("--api-url")
+        .arg(fixture.server_url())
+        .arg("execution")
+        .arg("watch")
+        .arg("123")
+        .arg("--timeout")
+        .arg("5");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Execution 123 completed"))
+        .stdout(predicate::str::contains("completed"));
+}

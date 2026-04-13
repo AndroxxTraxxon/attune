@@ -64,6 +64,13 @@ pub struct SensorManager {
     inner: Arc<SensorManagerInner>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SensorActivityMetrics {
+    pub monitored_sensors: u64,
+    pub running_sensors: u64,
+    pub active_rules: u64,
+}
+
 struct SensorManagerInner {
     db: PgPool,
     sensors: Arc<RwLock<HashMap<Id, SensorInstance>>>,
@@ -842,6 +849,40 @@ impl SensorManager {
     /// Get total count of sensors
     pub async fn total_count(&self) -> usize {
         self.inner.sensors.read().await.len()
+    }
+
+    /// Get sensor activity metrics suitable for worker heartbeat/capability reporting.
+    pub async fn activity_metrics(&self) -> Result<SensorActivityMetrics> {
+        let running_sensor_ids: Vec<Id> = self.inner.sensors.read().await.keys().copied().collect();
+        let running_sensors = self.active_count().await as u64;
+
+        if running_sensor_ids.is_empty() {
+            return Ok(SensorActivityMetrics {
+                monitored_sensors: 0,
+                running_sensors,
+                active_rules: 0,
+            });
+        }
+
+        let active_rules = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(DISTINCT rule.id)
+            FROM rule
+            JOIN sensor ON sensor.trigger = rule.trigger
+            WHERE sensor.id = ANY($1)
+              AND sensor.enabled = TRUE
+              AND rule.enabled = TRUE
+            "#,
+        )
+        .bind(&running_sensor_ids)
+        .fetch_one(&self.inner.db)
+        .await?;
+
+        Ok(SensorActivityMetrics {
+            monitored_sensors: running_sensor_ids.len() as u64,
+            running_sensors,
+            active_rules: active_rules.max(0) as u64,
+        })
     }
 }
 

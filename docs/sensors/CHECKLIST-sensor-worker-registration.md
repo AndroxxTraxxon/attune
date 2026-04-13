@@ -167,7 +167,7 @@ cargo test --package attune-sensor -- --ignored
 ## Verification Checklist
 
 ### Database Schema
-- [ ] `worker_role_enum` type exists with values: action, sensor, hybrid
+- [ ] `worker_role_enum` type exists with values: action, sensor
 - [ ] `worker` table has `worker_role` column (NOT NULL)
 - [ ] Indexes created: `idx_worker_role`, `idx_worker_role_status`
 - [ ] Existing workers have `worker_role = 'action'`

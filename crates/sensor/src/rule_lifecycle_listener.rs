@@ -13,6 +13,7 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
+use tokio::time::{timeout, Duration};
 use tracing::{error, info, warn};
 
 use crate::sensor_manager::SensorManager;
@@ -22,7 +23,7 @@ pub struct RuleLifecycleListener {
     db: PgPool,
     connection: Connection,
     sensor_manager: Arc<SensorManager>,
-    consumer: Arc<RwLock<Option<Consumer>>>,
+    consumer: Arc<RwLock<Option<Arc<Consumer>>>>,
     task_handle: RwLock<Option<JoinHandle<()>>>,
 }
 
@@ -52,7 +53,7 @@ impl RuleLifecycleListener {
         };
 
         // Create consumer
-        let consumer = Consumer::new(&self.connection, consumer_config).await?;
+        let consumer = Arc::new(Consumer::new(&self.connection, consumer_config).await?);
 
         // Bind queue to exchange with routing keys
         let exchange = "attune.events";
@@ -92,44 +93,39 @@ impl RuleLifecycleListener {
         }
 
         // Store consumer reference (for cleanup on drop)
-        *self.consumer.write().await = Some(consumer);
+        *self.consumer.write().await = Some(consumer.clone());
 
         // Clone references for the spawned task
         let db = self.db.clone();
         let sensor_manager = self.sensor_manager.clone();
-        let consumer_ref = self.consumer.clone();
+        let consumer = consumer.clone();
 
-        // Start consuming messages in a background task.
-        // Take the consumer out of the Arc<RwLock> so we don't hold the read lock
-        // for the entire duration of consume_with_handler (which would deadlock stop()).
+        // Start consuming messages in a background task while retaining a shared consumer
+        // handle so shutdown can cancel the consumer cooperatively before closing the
+        // shared RabbitMQ connection.
         let handle = tokio::spawn(async move {
-            let consumer = consumer_ref.write().await.take();
-            if let Some(consumer) = consumer {
-                let result = consumer
-                    .consume_with_handler::<JsonValue, _, _>(move |envelope| {
-                        let db = db.clone();
-                        let sensor_manager = sensor_manager.clone();
+            let result = consumer
+                .consume_with_handler::<JsonValue, _, _>(move |envelope| {
+                    let db = db.clone();
+                    let sensor_manager = sensor_manager.clone();
 
-                        async move {
-                            if let Err(e) =
-                                Self::handle_message(&db, &sensor_manager, envelope).await
-                            {
-                                error!("Failed to handle rule lifecycle message: {}", e);
-                                return Err(attune_common::mq::MqError::Other(format!(
-                                    "Handler error: {}",
-                                    e
-                                )));
-                            }
-                            Ok(())
+                    async move {
+                        if let Err(e) = Self::handle_message(&db, &sensor_manager, envelope).await {
+                            error!("Failed to handle rule lifecycle message: {}", e);
+                            return Err(attune_common::mq::MqError::Other(format!(
+                                "Handler error: {}",
+                                e
+                            )));
                         }
-                    })
-                    .await;
+                        Ok(())
+                    }
+                })
+                .await;
 
-                if let Err(e) = result {
-                    error!("Rule lifecycle listener stopped with error: {}", e);
-                } else {
-                    info!("Rule lifecycle listener stopped");
-                }
+            if let Err(e) = result {
+                error!("Rule lifecycle listener stopped with error: {}", e);
+            } else {
+                info!("Rule lifecycle listener stopped");
             }
         });
 
@@ -144,17 +140,27 @@ impl RuleLifecycleListener {
     pub async fn stop(&self) -> Result<()> {
         info!("Stopping rule lifecycle listener");
 
-        // Abort the consumer task first — this ends the consume_with_handler loop
-        // and drops the Consumer (and its channel) inside the task.
-        if let Some(handle) = self.task_handle.write().await.take() {
-            handle.abort();
-            let _ = handle.await; // wait for abort to complete
+        if let Some(consumer) = self.consumer.read().await.as_ref().cloned() {
+            if let Err(e) = consumer.stop().await {
+                warn!("Failed to stop rule lifecycle consumer cleanly: {}", e);
+            }
         }
 
-        // Clean up any consumer that wasn't taken by the task (e.g. if task never started)
-        if let Some(consumer) = self.consumer.write().await.take() {
-            drop(consumer);
+        if let Some(handle) = self.task_handle.write().await.take() {
+            let mut handle = handle;
+            match timeout(Duration::from_secs(5), &mut handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) if e.is_cancelled() => {}
+                Ok(Err(e)) => warn!("Rule lifecycle listener task ended unexpectedly: {}", e),
+                Err(_) => {
+                    warn!("Rule lifecycle listener did not stop in time; aborting task");
+                    handle.abort();
+                    let _ = handle.await;
+                }
+            }
         }
+
+        self.consumer.write().await.take();
 
         info!("Rule lifecycle listener stopped");
 

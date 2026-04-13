@@ -1,8 +1,14 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { ChevronLeft, ChevronRight, User, LogOut } from "lucide-react";
 import { navIcons } from "./navIcons";
+
+type UserMenuPosition = {
+  top: number;
+  left: number;
+};
 
 // Color mappings for navigation items — defined outside component for stable reference
 const colorClasses = {
@@ -136,7 +142,7 @@ const navSections = [
       },
       {
         to: "/runtimes",
-        label: "Runtimes",
+        label: "Runtimes & Workers",
         icon: navIcons.runtimes,
         color: "gray",
       },
@@ -188,17 +194,51 @@ function NavLink({
 export default function MainLayout() {
   const { user, logout } = useAuth();
   const location = useLocation();
+  const userMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(() => {
     // Initialize from localStorage
     const saved = localStorage.getItem("sidebar-collapsed");
     return saved === "true";
   });
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [userMenuPosition, setUserMenuPosition] = useState<UserMenuPosition>({
+    top: 0,
+    left: 0,
+  });
 
   // Persist collapsed state to localStorage and close user menu when expanding
   useEffect(() => {
     localStorage.setItem("sidebar-collapsed", isCollapsed.toString());
   }, [isCollapsed]);
+
+  useEffect(() => {
+    if (!showUserMenu || !isCollapsed) {
+      return;
+    }
+
+    const updateUserMenuPosition = () => {
+      const button = userMenuButtonRef.current;
+      if (!button) {
+        return;
+      }
+
+      const rect = button.getBoundingClientRect();
+      setUserMenuPosition({
+        top: rect.top - 8,
+        left: rect.left,
+      });
+    };
+
+    updateUserMenuPosition();
+
+    window.addEventListener("resize", updateUserMenuPosition);
+    window.addEventListener("scroll", updateUserMenuPosition, true);
+
+    return () => {
+      window.removeEventListener("resize", updateUserMenuPosition);
+      window.removeEventListener("scroll", updateUserMenuPosition, true);
+    };
+  }, [showUserMenu, isCollapsed]);
 
   const handleToggleCollapse = () => {
     setIsCollapsed((prev) => {
@@ -304,6 +344,7 @@ export default function MainLayout() {
                   onClick={() => isCollapsed && setShowUserMenu(!showUserMenu)}
                   className={`flex-shrink-0 ${isCollapsed ? "cursor-pointer" : "cursor-default"}`}
                   title={user?.login}
+                  ref={userMenuButtonRef}
                 >
                   <User className="w-5 h-5 text-gray-400" />
                 </button>
@@ -330,26 +371,36 @@ export default function MainLayout() {
 
             {/* User Menu Popup (collapsed mode only) */}
             {isCollapsed && showUserMenu && (
-              <>
-                <div
-                  className="fixed inset-0 z-10"
-                  onClick={() => setShowUserMenu(false)}
-                />
-                <div className="absolute bottom-full left-0 mb-2 w-48 bg-gray-800 border border-gray-700 rounded-md shadow-lg z-20">
-                  <div className="px-4 py-3 border-b border-gray-700">
-                    <p className="text-sm font-medium text-white">
-                      {user?.login}
-                    </p>
-                  </div>
-                  <button
-                    onClick={handleLogout}
-                    className="w-full flex items-center gap-2 px-4 py-2 text-left text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+              createPortal(
+                <>
+                  <div
+                    className="fixed inset-0 z-[80]"
+                    onClick={() => setShowUserMenu(false)}
+                  />
+                  <div
+                    className="fixed z-[90] w-48 rounded-md border border-gray-700 bg-gray-800 shadow-lg"
+                    style={{
+                      top: userMenuPosition.top,
+                      left: userMenuPosition.left,
+                      transform: "translateY(-100%)",
+                    }}
                   >
-                    <LogOut className="w-4 h-4" />
-                    <span>Logout</span>
-                  </button>
-                </div>
-              </>
+                    <div className="px-4 py-3 border-b border-gray-700">
+                      <p className="text-sm font-medium text-white">
+                        {user?.login}
+                      </p>
+                    </div>
+                    <button
+                      onClick={handleLogout}
+                      className="w-full flex items-center gap-2 px-4 py-2 text-left text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      <span>Logout</span>
+                    </button>
+                  </div>
+                </>,
+                document.body,
+              )
             )}
           </div>
         </div>

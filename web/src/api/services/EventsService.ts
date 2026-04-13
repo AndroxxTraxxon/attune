@@ -19,6 +19,7 @@ export class EventsService {
         triggerRef,
         ruleRef,
         source,
+        includeTotal,
         page,
         perPage,
     }: {
@@ -39,6 +40,10 @@ export class EventsService {
          */
         source?: (null | i64),
         /**
+         * If true, include exact total counts in pagination metadata.
+         */
+        includeTotal?: boolean | null,
+        /**
          * Page number (1-indexed)
          */
         page?: number,
@@ -55,6 +60,7 @@ export class EventsService {
                 'trigger_ref': triggerRef,
                 'rule_ref': ruleRef,
                 'source': source,
+                'include_total': includeTotal,
                 'page': page,
                 'per_page': perPage,
             },

@@ -21,6 +21,18 @@ use super::{
     ExchangeType,
 };
 
+pub(crate) fn is_expected_shutdown_error_message(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("invalid connection state: closing")
+        || normalized.contains("invalid connection state: closed")
+        || normalized.contains("invalid channel state: closing")
+        || normalized.contains("invalid channel state: closed")
+}
+
+pub(crate) fn is_expected_shutdown_error(error: &lapin::Error) -> bool {
+    is_expected_shutdown_error_message(&error.to_string())
+}
+
 /// RabbitMQ connection wrapper with reconnection support
 #[derive(Clone)]
 pub struct Connection {
@@ -161,10 +173,24 @@ impl Connection {
     pub async fn close(&self) -> MqResult<()> {
         let mut conn_guard = self.connection.write().await;
         if let Some(conn) = conn_guard.take() {
-            conn.close(200, "Normal shutdown".into())
-                .await
-                .map_err(|e| MqError::Connection(format!("Failed to close connection: {}", e)))?;
-            info!("Connection closed");
+            let status = conn.status();
+            if status.closing() || status.closed() {
+                info!("Connection already closing or closed");
+                return Ok(());
+            }
+
+            match conn.close(200, "Normal shutdown".into()).await {
+                Ok(()) => info!("Connection closed"),
+                Err(e) if is_expected_shutdown_error(&e) => {
+                    info!("Connection was already shutting down");
+                }
+                Err(e) => {
+                    return Err(MqError::Connection(format!(
+                        "Failed to close connection: {}",
+                        e
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -633,6 +659,31 @@ impl Connection {
             }
             self.declare_queue(config).await
         }
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::is_expected_shutdown_error_message;
+
+    #[test]
+    fn detects_expected_shutdown_connection_state_errors() {
+        assert!(is_expected_shutdown_error_message(
+            "invalid connection state: Closing (connection.close)"
+        ));
+        assert!(is_expected_shutdown_error_message(
+            "invalid channel state: Closing (channel.close)"
+        ));
+        assert!(is_expected_shutdown_error_message(
+            "invalid connection state: Closed (connection.close)"
+        ));
+    }
+
+    #[test]
+    fn ignores_non_shutdown_errors() {
+        assert!(!is_expected_shutdown_error_message(
+            "protocol error: access refused"
+        ));
     }
 }
 

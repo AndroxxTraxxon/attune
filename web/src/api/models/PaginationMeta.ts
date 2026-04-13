@@ -15,12 +15,19 @@ export type PaginationMeta = {
      */
     page_size: number;
     /**
-     * Total number of items
+     * Total number of items, when an exact count was requested.
      */
-    total_items: number;
+    total_items?: number | null;
     /**
-     * Total number of pages
+     * Total number of pages, when an exact count was requested.
      */
-    total_pages: number;
+    total_pages?: number | null;
+    /**
+     * Whether a previous page exists.
+     */
+    has_previous: boolean;
+    /**
+     * Whether a next page exists.
+     */
+    has_next: boolean;
 };
-

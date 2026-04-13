@@ -187,6 +187,12 @@ pub struct ExecutionQueryParams {
     #[param(example = false)]
     pub top_level_only: Option<bool>,
 
+    /// If true, include exact total counts in pagination metadata.
+    /// Defaults to false for the main executions list to avoid expensive count queries.
+    #[serde(default)]
+    #[param(example = false)]
+    pub include_total: Option<bool>,
+
     /// Page number (for pagination)
     #[serde(default = "default_page")]
     #[param(example = 1, minimum = 1)]
@@ -319,6 +325,7 @@ mod tests {
             enforcement: None,
             parent: None,
             top_level_only: None,
+            include_total: None,
             pack_name: None,
             rule_ref: None,
             trigger_ref: None,
@@ -338,6 +345,7 @@ mod tests {
             enforcement: None,
             parent: None,
             top_level_only: None,
+            include_total: None,
             pack_name: None,
             rule_ref: None,
             trigger_ref: None,

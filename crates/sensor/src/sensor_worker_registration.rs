@@ -91,6 +91,9 @@ impl SensorWorkerRegistration {
             .and_then(|s| s.max_concurrent_sensors)
             .unwrap_or(10);
         capabilities.insert("max_concurrent_sensors".to_string(), json!(max_concurrent));
+        capabilities.insert("sensor_processes_monitored".to_string(), json!(0));
+        capabilities.insert("sensor_processes_running".to_string(), json!(0));
+        capabilities.insert("active_rules".to_string(), json!(0));
 
         // Add sensor worker version metadata
         capabilities.insert(

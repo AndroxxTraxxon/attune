@@ -147,6 +147,11 @@ pub struct EventQueryParams {
     #[param(example = 1)]
     pub source: Option<Id>,
 
+    /// If true, include exact total counts in pagination metadata.
+    #[serde(default)]
+    #[param(example = false)]
+    pub include_total: Option<bool>,
+
     /// Page number (1-indexed)
     #[serde(default = "default_page")]
     #[param(example = 1, minimum = 1)]
@@ -322,6 +327,11 @@ pub struct EnforcementQueryParams {
     /// Filter by rule reference
     #[param(example = "core.on_webhook")]
     pub rule_ref: Option<String>,
+
+    /// If true, include exact total counts in pagination metadata.
+    #[serde(default)]
+    #[param(example = false)]
+    pub include_total: Option<bool>,
 
     /// Page number (1-indexed)
     #[serde(default = "default_page")]

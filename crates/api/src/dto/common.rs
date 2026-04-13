@@ -67,17 +67,27 @@ pub struct PaginationMeta {
     #[schema(example = 50)]
     pub page_size: u32,
 
-    /// Total number of items
-    #[schema(example = 150)]
-    pub total_items: u64,
+    /// Total number of items, when an exact count was requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 150, nullable = true)]
+    pub total_items: Option<u64>,
 
-    /// Total number of pages
-    #[schema(example = 3)]
-    pub total_pages: u32,
+    /// Total number of pages, when an exact count was requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 3, nullable = true)]
+    pub total_pages: Option<u32>,
+
+    /// Whether a previous page exists.
+    #[schema(example = false)]
+    pub has_previous: bool,
+
+    /// Whether a next page exists.
+    #[schema(example = true)]
+    pub has_next: bool,
 }
 
 impl PaginationMeta {
-    /// Create pagination metadata
+    /// Create pagination metadata with exact totals.
     pub fn new(page: u32, page_size: u32, total_items: u64) -> Self {
         let total_pages = if page_size > 0 {
             ((total_items as f64) / (page_size as f64)).ceil() as u32
@@ -88,8 +98,22 @@ impl PaginationMeta {
         Self {
             page,
             page_size,
-            total_items,
-            total_pages,
+            total_items: Some(total_items),
+            total_pages: Some(total_pages),
+            has_previous: page > 1,
+            has_next: page < total_pages,
+        }
+    }
+
+    /// Create pagination metadata without exact totals.
+    pub fn without_totals(page: u32, page_size: u32, has_next: bool) -> Self {
+        Self {
+            page,
+            page_size,
+            total_items: None,
+            total_pages: None,
+            has_previous: page > 1,
+            has_next,
         }
     }
 }
@@ -100,6 +124,14 @@ impl<T> PaginatedResponse<T> {
         Self {
             data,
             pagination: PaginationMeta::new(params.page, params.page_size, total_items),
+        }
+    }
+
+    /// Create a paginated response without exact total counts.
+    pub fn without_totals(data: Vec<T>, params: &PaginationParams, has_next: bool) -> Self {
+        Self {
+            data,
+            pagination: PaginationMeta::without_totals(params.page, params.page_size, has_next),
         }
     }
 }
@@ -201,11 +233,26 @@ mod tests {
         let meta = PaginationMeta::new(1, 10, 45);
         assert_eq!(meta.page, 1);
         assert_eq!(meta.page_size, 10);
-        assert_eq!(meta.total_items, 45);
-        assert_eq!(meta.total_pages, 5);
+        assert_eq!(meta.total_items, Some(45));
+        assert_eq!(meta.total_pages, Some(5));
+        assert!(!meta.has_previous);
+        assert!(meta.has_next);
 
         let meta = PaginationMeta::new(2, 20, 100);
-        assert_eq!(meta.total_pages, 5);
+        assert_eq!(meta.total_pages, Some(5));
+        assert!(meta.has_previous);
+        assert!(meta.has_next);
+    }
+
+    #[test]
+    fn test_pagination_meta_without_totals() {
+        let meta = PaginationMeta::without_totals(3, 50, true);
+        assert_eq!(meta.page, 3);
+        assert_eq!(meta.page_size, 50);
+        assert_eq!(meta.total_items, None);
+        assert_eq!(meta.total_pages, None);
+        assert!(meta.has_previous);
+        assert!(meta.has_next);
     }
 
     #[test]
@@ -215,7 +262,19 @@ mod tests {
         let response = PaginatedResponse::new(data.clone(), &params, 100);
 
         assert_eq!(response.data, data);
-        assert_eq!(response.pagination.total_items, 100);
+        assert_eq!(response.pagination.total_items, Some(100));
         assert_eq!(response.pagination.page, 1);
+    }
+
+    #[test]
+    fn test_paginated_response_without_totals() {
+        let data = vec![1, 2, 3];
+        let params = PaginationParams::default();
+        let response = PaginatedResponse::without_totals(data.clone(), &params, false);
+
+        assert_eq!(response.data, data);
+        assert_eq!(response.pagination.total_items, None);
+        assert_eq!(response.pagination.total_pages, None);
+        assert!(!response.pagination.has_next);
     }
 }

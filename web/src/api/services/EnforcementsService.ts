@@ -21,6 +21,7 @@ export class EnforcementsService {
         status,
         triggerRef,
         ruleRef,
+        includeTotal,
         page,
         perPage,
     }: {
@@ -45,6 +46,10 @@ export class EnforcementsService {
          */
         ruleRef?: string | null,
         /**
+         * If true, include exact total counts in pagination metadata.
+         */
+        includeTotal?: boolean | null,
+        /**
          * Page number (1-indexed)
          */
         page?: number,
@@ -62,6 +67,7 @@ export class EnforcementsService {
                 'status': status,
                 'trigger_ref': triggerRef,
                 'rule_ref': ruleRef,
+                'include_total': includeTotal,
                 'page': page,
                 'per_page': perPage,
             },

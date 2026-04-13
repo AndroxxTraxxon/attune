@@ -15,7 +15,7 @@ Successfully implemented runtime capability reporting for sensor workers. Sensor
 
 ### 1. Database Schema Extension
 
-- Added `worker_role_enum` type with values: `action`, `sensor`, `hybrid`
+- Added `worker_role_enum` type with values: `action`, `sensor`
 - Extended `worker` table with `worker_role` column
 - Created indexes for efficient role-based queries
 - Migration: `20260131000001_add_worker_role.sql`
@@ -61,7 +61,7 @@ sensor:
 -- Verified worker_role enum exists
 SELECT enumlabel FROM pg_enum 
 WHERE enumtypid = 'worker_role_enum'::regtype;
--- Result: action, sensor, hybrid
+-- Result: action, sensor
 
 -- Verified worker table has worker_role column
 \d worker
@@ -214,7 +214,7 @@ export ATTUNE__SENSOR__WORKER_NAME="sensor-custom"
 - Single table for both action and sensor workers
 - Discriminated by `worker_role` enum
 - Shared heartbeat and status tracking
-- Foundation for hybrid workers (future)
+- Clear separation between action and sensor workers
 
 ### Runtime Capability Awareness
 - Prevents scheduling sensors on incompatible workers

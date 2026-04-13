@@ -115,9 +115,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
 
 # ---------------------------------------------------------------------------
 # Build layer
-# Copy real source code and compile only the pack binaries with musl
+# Copy only the source needed for the timer sensor pack binary with musl
 # ---------------------------------------------------------------------------
-COPY migrations/ ./migrations/
 COPY crates/common/ ./crates/common/
 COPY crates/core-timer-sensor/ ./crates/core-timer-sensor/
 

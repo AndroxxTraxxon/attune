@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useKeys, useDeleteKey } from "@/hooks/useKeys";
 import { OwnerType } from "@/api";
 import { Key, Plus, Trash2, Edit, Eye, EyeOff, Search } from "lucide-react";
+import Pagination from "@/components/executions/Pagination";
 import KeyCreateModal from "./KeyCreateModal";
 import KeyEditModal from "./KeyEditModal";
 
@@ -23,7 +24,6 @@ export default function KeysPage() {
 
   const keys = data?.data || [];
   const total = data?.pagination?.total_items || 0;
-  const totalPages = total ? Math.ceil(total / pageSize) : 0;
 
   // Client-side filtering by search term (ref or name)
   const filteredKeys = searchTerm
@@ -80,7 +80,7 @@ export default function KeysPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="p-6 pb-28">
       <div className="mb-6">
         <div className="flex items-center justify-between">
           <div>
@@ -237,28 +237,19 @@ export default function KeysPage() {
               </table>
             </div>
 
-            {totalPages > 1 && (
-              <div className="bg-gray-50 px-6 py-4 flex items-center justify-between border-t border-gray-200">
-                <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-sm text-gray-700">Page <span className="font-medium">{page}</span> of <span className="font-medium">{totalPages}</span></p>
-                  </div>
-                  <div>
-                    <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
-                      <button onClick={() => setPage(page - 1)} disabled={page === 1} className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
-                        Previous
-                      </button>
-                      <button onClick={() => setPage(page + 1)} disabled={page === totalPages} className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
-                        Next
-                      </button>
-                    </nav>
-                  </div>
-                </div>
-              </div>
-            )}
           </>
         )}
       </div>
+
+      <Pagination
+        page={page}
+        setPage={setPage}
+        pageSize={pageSize}
+        itemCount={filteredKeys.length}
+        total={total}
+        itemLabel="keys"
+        floating
+      />
 
       {showCreateModal && <KeyCreateModal onClose={() => setShowCreateModal(false)} />}
       {editingKey && <KeyEditModal keyRef={editingKey} onClose={() => setEditingKey(null)} />}

@@ -31,14 +31,13 @@ COMMENT ON TYPE worker_type_enum IS 'Type of worker deployment';
 DO $$ BEGIN
     CREATE TYPE worker_role_enum AS ENUM (
         'action',
-        'sensor',
-        'hybrid'
+        'sensor'
     );
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
-COMMENT ON TYPE worker_role_enum IS 'Role of worker (action executor, sensor, or both)';
+COMMENT ON TYPE worker_role_enum IS 'Role of worker (action executor or sensor)';
 
 
 -- WorkerStatus enum

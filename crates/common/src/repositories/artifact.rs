@@ -576,6 +576,59 @@ pub struct CreateArtifactVersionInput {
     pub created_by: Option<String>,
 }
 
+/// Returns true for artifact types that should use file-backed storage on disk.
+pub fn is_file_backed_type(artifact_type: ArtifactType) -> bool {
+    matches!(
+        artifact_type,
+        ArtifactType::FileBinary
+            | ArtifactType::FileText
+            | ArtifactType::FileDataTable
+            | ArtifactType::FileImage
+    )
+}
+
+/// Convert an artifact ref to a directory path by replacing dots with path separators.
+/// e.g., "mypack.build_log" -> "mypack/build_log"
+pub fn ref_to_dir_path(artifact_ref: &str) -> String {
+    artifact_ref.replace('.', "/")
+}
+
+/// Compute the relative file path for a file-backed artifact version.
+///
+/// Pattern: `{ref_slug}/v{version}.{ext}`
+/// e.g., `mypack/build_log/v1.txt`
+pub fn compute_file_path(artifact_ref: &str, version: i32, content_type: &str) -> String {
+    let ref_path = ref_to_dir_path(artifact_ref);
+    let ext = extension_from_content_type(content_type);
+    format!("{}/v{}.{}", ref_path, version, ext)
+}
+
+/// Return a sensible default content type for a given artifact type.
+pub fn default_content_type_for_artifact(artifact_type: ArtifactType) -> String {
+    match artifact_type {
+        ArtifactType::FileText => "text/plain".to_string(),
+        ArtifactType::FileDataTable => "text/csv".to_string(),
+        ArtifactType::FileImage => "image/png".to_string(),
+        ArtifactType::FileBinary => "application/octet-stream".to_string(),
+        _ => "application/octet-stream".to_string(),
+    }
+}
+
+fn extension_from_content_type(ct: &str) -> &str {
+    match ct.split(';').next().unwrap_or("").trim() {
+        "text/plain" => "txt",
+        "text/csv" => "csv",
+        "application/json" => "json",
+        "application/yaml" | "text/yaml" => "yaml",
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "application/pdf" => "pdf",
+        _ => "bin",
+    }
+}
+
 impl ArtifactVersionRepository {
     fn select_columns_with_alias(alias: &str) -> String {
         format!(
@@ -756,6 +809,52 @@ impl ArtifactVersionRepository {
             .map_err(Into::into)
     }
 
+    /// Update the `file_path` of a file-backed version after allocation.
+    pub async fn update_file_path<'e, E>(
+        executor: E,
+        version_id: i64,
+        file_path: &str,
+    ) -> Result<bool>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = sqlx::query("UPDATE artifact_version SET file_path = $1 WHERE id = $2")
+            .bind(file_path)
+            .bind(version_id)
+            .execute(executor)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Create a file-backed version and populate its computed relative file path.
+    pub async fn create_file_backed<'e, E>(
+        executor: E,
+        artifact_id: i64,
+        artifact_ref: &str,
+        content_type: String,
+        meta: Option<serde_json::Value>,
+        created_by: Option<String>,
+    ) -> Result<ArtifactVersion>
+    where
+        E: Executor<'e, Database = Postgres> + Copy + 'e,
+    {
+        let input = CreateArtifactVersionInput {
+            artifact: artifact_id,
+            content_type: Some(content_type.clone()),
+            content: None,
+            content_json: None,
+            file_path: None,
+            meta,
+            created_by,
+        };
+
+        let mut version = Self::create(executor, input).await?;
+        let file_path = compute_file_path(artifact_ref, version.version, &content_type);
+        Self::update_file_path(executor, version.id, &file_path).await?;
+        version.file_path = Some(file_path);
+        Ok(version)
+    }
+
     /// Delete a specific version by ID
     pub async fn delete<'e, E>(executor: E, id: i64) -> Result<bool>
     where
@@ -855,7 +954,11 @@ impl ArtifactVersionRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::ArtifactVersionRepository;
+    use super::{
+        compute_file_path, default_content_type_for_artifact, is_file_backed_type, ref_to_dir_path,
+        ArtifactVersionRepository,
+    };
+    use crate::models::enums::ArtifactType;
 
     #[test]
     fn aliased_select_columns_keep_null_content_expression_unqualified() {
@@ -865,5 +968,62 @@ mod tests {
         assert!(columns.contains("av.file_path"));
         assert!(columns.contains("NULL::bytea AS content"));
         assert!(!columns.contains("av.NULL::bytea AS content"));
+    }
+
+    #[test]
+    fn test_compute_file_path() {
+        assert_eq!(
+            compute_file_path("mypack.build_log", 1, "text/plain"),
+            "mypack/build_log/v1.txt"
+        );
+        assert_eq!(
+            compute_file_path("mypack.build_log", 3, "application/json"),
+            "mypack/build_log/v3.json"
+        );
+        assert_eq!(
+            compute_file_path("core.test.results", 2, "text/csv"),
+            "core/test/results/v2.csv"
+        );
+        assert_eq!(
+            compute_file_path("simple", 1, "application/octet-stream"),
+            "simple/v1.bin"
+        );
+    }
+
+    #[test]
+    fn test_ref_to_dir_path() {
+        assert_eq!(ref_to_dir_path("mypack.build_log"), "mypack/build_log");
+        assert_eq!(ref_to_dir_path("simple"), "simple");
+        assert_eq!(ref_to_dir_path("a.b.c.d"), "a/b/c/d");
+    }
+
+    #[test]
+    fn test_is_file_backed_type() {
+        assert!(is_file_backed_type(ArtifactType::FileBinary));
+        assert!(is_file_backed_type(ArtifactType::FileText));
+        assert!(is_file_backed_type(ArtifactType::FileDataTable));
+        assert!(is_file_backed_type(ArtifactType::FileImage));
+        assert!(!is_file_backed_type(ArtifactType::Progress));
+        assert!(!is_file_backed_type(ArtifactType::Url));
+    }
+
+    #[test]
+    fn test_default_content_type_for_artifact() {
+        assert_eq!(
+            default_content_type_for_artifact(ArtifactType::FileText),
+            "text/plain"
+        );
+        assert_eq!(
+            default_content_type_for_artifact(ArtifactType::FileDataTable),
+            "text/csv"
+        );
+        assert_eq!(
+            default_content_type_for_artifact(ArtifactType::FileImage),
+            "image/png"
+        );
+        assert_eq!(
+            default_content_type_for_artifact(ArtifactType::FileBinary),
+            "application/octet-stream"
+        );
     }
 }

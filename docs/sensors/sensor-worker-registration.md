@@ -28,7 +28,7 @@ CREATE TABLE worker (
     id BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     worker_type worker_type_enum NOT NULL,     -- 'local', 'remote', 'container'
-    worker_role worker_role_enum NOT NULL,     -- 'action', 'sensor', 'hybrid'
+    worker_role worker_role_enum NOT NULL,     -- 'action', 'sensor'
     runtime BIGINT REFERENCES runtime(id),
     host TEXT,
     port INTEGER,
@@ -43,12 +43,11 @@ CREATE TABLE worker (
 
 **Worker Role Enum:**
 ```sql
-CREATE TYPE worker_role_enum AS ENUM ('action', 'sensor', 'hybrid');
+CREATE TYPE worker_role_enum AS ENUM ('action', 'sensor');
 ```
 
 - `action`: Executes actions only
 - `sensor`: Monitors triggers and executes sensors only
-- `hybrid`: Can execute both actions and sensors (future use)
 
 ### Capabilities Structure
 
@@ -328,7 +327,7 @@ let workers = sqlx::query_as!(
     Worker,
     r#"
     SELECT * FROM worker
-    WHERE worker_role IN ('sensor', 'hybrid')
+    WHERE worker_role = 'sensor'
       AND status = 'active'
       AND capabilities->'runtimes' ? $1
     ORDER BY last_heartbeat DESC

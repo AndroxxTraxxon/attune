@@ -26,6 +26,10 @@ fn wildcard_ref_filter_pattern(filter: &str) -> Option<String> {
         })
 }
 
+fn needs_enforcement_join(filters: &ExecutionSearchFilters) -> bool {
+    filters.rule_ref.is_some() || filters.trigger_ref.is_some()
+}
+
 /// Filters for the [`ExecutionRepository::search`] query-builder method.
 ///
 /// Every field is optional. When set, the corresponding `WHERE` clause is
@@ -33,7 +37,7 @@ fn wildcard_ref_filter_pattern(filter: &str) -> Option<String> {
 ///
 /// Filters that involve the `enforcement` table (`rule_ref`, `trigger_ref`)
 /// cause a `LEFT JOIN enforcement` to be added automatically.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ExecutionSearchFilters {
     pub status: Option<ExecutionStatus>,
     pub action_ref: Option<String>,
@@ -45,18 +49,51 @@ pub struct ExecutionSearchFilters {
     pub enforcement: Option<Id>,
     pub parent: Option<Id>,
     pub top_level_only: bool,
+    pub include_total: bool,
     pub limit: u32,
     pub offset: u32,
 }
 
+impl Default for ExecutionSearchFilters {
+    fn default() -> Self {
+        Self {
+            status: None,
+            action_ref: None,
+            pack_name: None,
+            rule_ref: None,
+            trigger_ref: None,
+            executor: None,
+            result_contains: None,
+            enforcement: None,
+            parent: None,
+            top_level_only: false,
+            include_total: true,
+            limit: 0,
+            offset: 0,
+        }
+    }
+}
+
 /// Result of [`ExecutionRepository::search`].
 ///
-/// Includes the matching rows *and* the total count (before LIMIT/OFFSET)
-/// so the caller can build pagination metadata without a second round-trip.
+/// Includes the matching rows and pagination metadata derived from the query
+/// strategy. Exact totals are only populated when explicitly requested.
 #[derive(Debug)]
 pub struct ExecutionSearchResult {
     pub rows: Vec<ExecutionWithRefs>,
-    pub total: u64,
+    pub total: Option<u64>,
+    pub has_next: bool,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct WorkerExecutionLoad {
+    pub worker_id: Id,
+    pub requested: i64,
+    pub scheduling: i64,
+    pub scheduled: i64,
+    pub running: i64,
+    pub canceling: i64,
+    pub total_active: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -954,6 +991,39 @@ impl Delete for ExecutionRepository {
 }
 
 impl ExecutionRepository {
+    /// Return a current execution load snapshot for the given worker IDs.
+    pub async fn current_load_by_worker_ids(
+        pool: &PgPool,
+        worker_ids: &[Id],
+    ) -> Result<Vec<WorkerExecutionLoad>> {
+        if worker_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        sqlx::query_as::<_, WorkerExecutionLoad>(
+            r#"
+            SELECT
+                worker AS worker_id,
+                COUNT(*) FILTER (WHERE status = 'requested')::BIGINT AS requested,
+                COUNT(*) FILTER (WHERE status = 'scheduling')::BIGINT AS scheduling,
+                COUNT(*) FILTER (WHERE status = 'scheduled')::BIGINT AS scheduled,
+                COUNT(*) FILTER (WHERE status = 'running')::BIGINT AS running,
+                COUNT(*) FILTER (WHERE status = 'canceling')::BIGINT AS canceling,
+                COUNT(*) FILTER (
+                    WHERE status IN ('requested', 'scheduling', 'scheduled', 'running', 'canceling')
+                )::BIGINT AS total_active
+            FROM execution
+            WHERE worker = ANY($1)
+              AND status IN ('requested', 'scheduling', 'scheduled', 'running', 'canceling')
+            GROUP BY worker
+            "#,
+        )
+        .bind(worker_ids)
+        .fetch_all(pool)
+        .await
+        .map_err(Into::into)
+    }
+
     pub async fn find_by_status<'e, E>(
         executor: E,
         status: ExecutionStatus,
@@ -1041,7 +1111,8 @@ impl ExecutionRepository {
     /// are present (or always, to populate those columns on the result),
     /// and proper LIMIT/OFFSET so pagination is server-side.
     ///
-    /// Returns both the matching page of rows and the total count.
+    /// Returns the matching page, plus either exact totals or an inferred
+    /// `has_next` flag depending on the query mode.
     pub async fn search<'e, E>(
         db: E,
         filters: &ExecutionSearchFilters,
@@ -1049,8 +1120,6 @@ impl ExecutionRepository {
     where
         E: Executor<'e, Database = Postgres> + Copy + 'e,
     {
-        // We always LEFT JOIN enforcement so we can return rule_ref/trigger_ref
-        // on every row without a second round-trip.
         let prefixed_select = SELECT_COLUMNS
             .split(", ")
             .map(|col| format!("e.{col}"))
@@ -1060,7 +1129,13 @@ impl ExecutionRepository {
         let select_clause =
             format!("{prefixed_select}, enf.rule_ref AS rule_ref, enf.trigger_ref AS trigger_ref");
 
-        let from_clause = "FROM execution e LEFT JOIN enforcement enf ON e.enforcement = enf.id";
+        let data_from_clause =
+            "FROM execution e LEFT JOIN enforcement enf ON e.enforcement = enf.id";
+        let count_from_clause = if needs_enforcement_join(filters) {
+            "FROM execution e LEFT JOIN enforcement enf ON e.enforcement = enf.id"
+        } else {
+            "FROM execution e"
+        };
 
         // ── Build WHERE clauses ──────────────────────────────────────────
         let mut conditions: Vec<String> = Vec::new();
@@ -1077,9 +1152,9 @@ impl ExecutionRepository {
 
         // ── Use QueryBuilder for the data query ──────────────────────────
         let mut qb: QueryBuilder<'_, Postgres> =
-            QueryBuilder::new(format!("SELECT {select_clause} {from_clause}"));
+            QueryBuilder::new(format!("SELECT {select_clause} {data_from_clause}"));
         let mut count_qb: QueryBuilder<'_, Postgres> =
-            QueryBuilder::new(format!("SELECT COUNT(*) AS total {from_clause}"));
+            QueryBuilder::new(format!("SELECT COUNT(*) AS total {count_from_clause}"));
 
         // Helper: append the same condition to both builders.
         // We need a tiny state machine since push_bind moves the value.
@@ -1180,19 +1255,62 @@ impl ExecutionRepository {
             push_condition!("LOWER(e.result::text) LIKE ", pattern);
         }
 
-        // ── COUNT query ──────────────────────────────────────────────────
-        let total: i64 = count_qb.build_query_scalar().fetch_one(db).await?;
-        let total = total.max(0) as u64;
+        let total = if filters.include_total {
+            let total: i64 = count_qb.build_query_scalar().fetch_one(db).await?;
+            Some(total.max(0) as u64)
+        } else {
+            None
+        };
 
         // ── Data query with ORDER BY + pagination ────────────────────────
         qb.push(" ORDER BY e.created DESC");
         qb.push(" LIMIT ");
-        qb.push_bind(filters.limit as i64);
+        let query_limit = if filters.include_total {
+            filters.limit
+        } else {
+            filters.limit.saturating_add(1)
+        };
+        qb.push_bind(query_limit as i64);
         qb.push(" OFFSET ");
         qb.push_bind(filters.offset as i64);
 
-        let rows: Vec<ExecutionWithRefs> = qb.build_query_as().fetch_all(db).await?;
+        let mut rows: Vec<ExecutionWithRefs> = qb.build_query_as().fetch_all(db).await?;
+        let has_next = if let Some(total) = total {
+            filters.offset as u64 + (rows.len() as u64) < total
+        } else if rows.len() > filters.limit as usize {
+            rows.truncate(filters.limit as usize);
+            true
+        } else {
+            false
+        };
 
-        Ok(ExecutionSearchResult { rows, total })
+        Ok(ExecutionSearchResult {
+            rows,
+            total,
+            has_next,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{needs_enforcement_join, ExecutionSearchFilters};
+
+    #[test]
+    fn enforcement_join_only_needed_for_rule_or_trigger_filters() {
+        assert!(!needs_enforcement_join(&ExecutionSearchFilters::default()));
+        assert!(needs_enforcement_join(&ExecutionSearchFilters {
+            rule_ref: Some("core.rule".to_string()),
+            ..Default::default()
+        }));
+        assert!(needs_enforcement_join(&ExecutionSearchFilters {
+            trigger_ref: Some("core.trigger".to_string()),
+            ..Default::default()
+        }));
+        assert!(!needs_enforcement_join(&ExecutionSearchFilters {
+            enforcement: Some(42),
+            top_level_only: true,
+            ..Default::default()
+        }));
     }
 }

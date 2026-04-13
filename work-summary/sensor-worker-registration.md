@@ -32,7 +32,6 @@ Instead of creating a separate `sensor_worker` table, we extended the existing `
 
 - **Single source of truth** for all workers (action and sensor)
 - **Shared registration/heartbeat logic** 
-- **Future flexibility** for hybrid workers that can execute both actions and sensors
 - **Simpler database schema** and querying
 
 ---
@@ -43,7 +42,7 @@ Instead of creating a separate `sensor_worker` table, we extended the existing `
 
 **File:** `attune/migrations/20260131000001_add_worker_role.sql`
 
-- Created `worker_role_enum` type with values: `action`, `sensor`, `hybrid`
+- Created `worker_role_enum` type with values: `action`, `sensor`
 - Added `worker_role` column to `worker` table (NOT NULL, default 'action')
 - Created indexes for efficient role-based queries:
   - `idx_worker_role` on `worker_role`
@@ -426,7 +425,7 @@ export ATTUNE__SENSOR__WORKER_NAME="sensor-custom"
 Add note about unified worker table:
 ```markdown
 - **Worker Table**: Used for both action workers and sensor workers
-  - `worker_role` enum discriminates: 'action', 'sensor', 'hybrid'
+  - `worker_role` enum discriminates: 'action', 'sensor'
   - Action workers: Execute actions via attune-worker service
   - Sensor workers: Monitor triggers via attune-sensor service
   - Capabilities JSONB field includes runtime availability

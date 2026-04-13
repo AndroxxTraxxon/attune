@@ -24,6 +24,7 @@ export class ExecutionsService {
         enforcement,
         parent,
         topLevelOnly,
+        includeTotal,
         page,
         perPage,
     }: {
@@ -69,6 +70,10 @@ export class ExecutionsService {
          */
         topLevelOnly?: boolean | null,
         /**
+         * If true, include exact total counts in pagination metadata.
+         */
+        includeTotal?: boolean | null,
+        /**
          * Page number (for pagination)
          */
         page?: number,
@@ -91,6 +96,7 @@ export class ExecutionsService {
                 'enforcement': enforcement,
                 'parent': parent,
                 'top_level_only': topLevelOnly,
+                'include_total': includeTotal,
                 'page': page,
                 'per_page': perPage,
             },

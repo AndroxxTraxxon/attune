@@ -15,7 +15,6 @@ import {
 } from "lucide-react";
 import { useChildExecutions } from "@/hooks/useExecutions";
 import type { ExecutionSummary } from "@/api";
-import Pagination from "./Pagination";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -486,10 +485,6 @@ interface WorkflowExecutionTreeProps {
   error: Error | null;
   hasActiveFilters: boolean;
   clearFilters: () => void;
-  page: number;
-  setPage: (page: number) => void;
-  pageSize: number;
-  total: number;
   workflowActionRefs: Set<string>;
   selectedExecutionId: number | null;
   onSelectExecution: (id: number) => void;
@@ -508,10 +503,6 @@ const WorkflowExecutionTree = memo(function WorkflowExecutionTree({
   error,
   hasActiveFilters,
   clearFilters,
-  page,
-  setPage,
-  pageSize,
-  total,
   workflowActionRefs,
   selectedExecutionId,
   onSelectExecution,
@@ -608,13 +599,6 @@ const WorkflowExecutionTree = memo(function WorkflowExecutionTree({
           </tbody>
         </table>
       </div>
-
-      <Pagination
-        page={page}
-        setPage={setPage}
-        pageSize={pageSize}
-        total={total}
-      />
     </div>
   );
 });

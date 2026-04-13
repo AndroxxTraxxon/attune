@@ -19,6 +19,7 @@ interface ExecutionsQueryParams {
   triggerRef?: string;
   executor?: number;
   topLevelOnly?: boolean;
+  includeTotal?: boolean;
 }
 
 function isExecutionActive(status: string | undefined): boolean {
@@ -53,6 +54,7 @@ export function useExecutions(params?: ExecutionsQueryParams) {
         triggerRef: params?.triggerRef,
         executor: params?.executor,
         topLevelOnly: params?.topLevelOnly,
+        includeTotal: params?.includeTotal,
       });
       return response;
     },
@@ -156,18 +158,20 @@ export function useChildExecutions(parentId: number | undefined) {
       // Fetch page 1 with max page size (API caps at 100)
       const first = await ExecutionsService.listExecutions({
         parent: parentId,
+        includeTotal: true,
         perPage: 100,
         page: 1,
       });
 
-      const { total_pages } = first.pagination;
-      if (total_pages <= 1) return first;
+      const totalPages = first.pagination.total_pages ?? 1;
+      if (totalPages <= 1) return first;
 
       // Fetch remaining pages in parallel
       const remaining = await Promise.all(
-        Array.from({ length: total_pages - 1 }, (_, i) =>
+        Array.from({ length: totalPages - 1 }, (_, i) =>
           ExecutionsService.listExecutions({
             parent: parentId,
+            includeTotal: true,
             perPage: 100,
             page: i + 2,
           }),
@@ -180,6 +184,8 @@ export function useChildExecutions(parentId: number | undefined) {
       }
       first.pagination.total_pages = 1;
       first.pagination.page_size = first.data.length;
+      first.pagination.has_next = false;
+      first.pagination.has_previous = false;
       return first;
     },
     enabled: !!parentId,

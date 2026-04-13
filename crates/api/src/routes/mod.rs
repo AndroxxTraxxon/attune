@@ -17,6 +17,7 @@ pub mod rules;
 pub mod runtimes;
 pub mod triggers;
 pub mod webhooks;
+pub mod workers;
 pub mod workflows;
 
 pub use actions::routes as action_routes;
@@ -36,4 +37,5 @@ pub use rules::routes as rule_routes;
 pub use runtimes::routes as runtime_routes;
 pub use triggers::routes as trigger_routes;
 pub use webhooks::routes as webhook_routes;
+pub use workers::routes as worker_routes;
 pub use workflows::routes as workflow_routes;

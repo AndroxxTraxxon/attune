@@ -23,21 +23,37 @@ use super::{Create, Delete, FindById, List, Repository, Update};
 ///
 /// All fields are optional. When set, the corresponding WHERE clause is added.
 /// Pagination is always applied.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct EventSearchFilters {
     pub trigger: Option<Id>,
     pub trigger_ref: Option<String>,
     pub source: Option<Id>,
     pub rule_ref: Option<String>,
+    pub include_total: bool,
     pub limit: u32,
     pub offset: u32,
+}
+
+impl Default for EventSearchFilters {
+    fn default() -> Self {
+        Self {
+            trigger: None,
+            trigger_ref: None,
+            source: None,
+            rule_ref: None,
+            include_total: true,
+            limit: 0,
+            offset: 0,
+        }
+    }
 }
 
 /// Result of [`EventRepository::search`].
 #[derive(Debug)]
 pub struct EventSearchResult {
     pub rows: Vec<Event>,
-    pub total: u64,
+    pub total: Option<u64>,
+    pub has_next: bool,
 }
 
 // ============================================================================
@@ -47,22 +63,39 @@ pub struct EventSearchResult {
 /// Filters for [`EnforcementRepository::search`].
 ///
 /// All fields are optional and combinable. Pagination is always applied.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct EnforcementSearchFilters {
     pub rule: Option<Id>,
     pub event: Option<Id>,
     pub status: Option<EnforcementStatus>,
     pub trigger_ref: Option<String>,
     pub rule_ref: Option<String>,
+    pub include_total: bool,
     pub limit: u32,
     pub offset: u32,
+}
+
+impl Default for EnforcementSearchFilters {
+    fn default() -> Self {
+        Self {
+            rule: None,
+            event: None,
+            status: None,
+            trigger_ref: None,
+            rule_ref: None,
+            include_total: true,
+            limit: 0,
+            offset: 0,
+        }
+    }
 }
 
 /// Result of [`EnforcementRepository::search`].
 #[derive(Debug)]
 pub struct EnforcementSearchResult {
     pub rows: Vec<Enforcement>,
-    pub total: u64,
+    pub total: Option<u64>,
+    pub has_next: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -283,20 +316,40 @@ impl EventRepository {
         // Suppress unused-assignment warning from the macro's last expansion.
         let _ = has_where;
 
-        // Count
-        let total: i64 = count_qb.build_query_scalar().fetch_one(db).await?;
-        let total = total.max(0) as u64;
+        let total = if filters.include_total {
+            let total: i64 = count_qb.build_query_scalar().fetch_one(db).await?;
+            Some(total.max(0) as u64)
+        } else {
+            None
+        };
 
         // Data query
         qb.push(" ORDER BY created DESC");
         qb.push(" LIMIT ");
-        qb.push_bind(filters.limit as i64);
+        let query_limit = if filters.include_total {
+            filters.limit
+        } else {
+            filters.limit.saturating_add(1)
+        };
+        qb.push_bind(query_limit as i64);
         qb.push(" OFFSET ");
         qb.push_bind(filters.offset as i64);
 
-        let rows: Vec<Event> = qb.build_query_as().fetch_all(db).await?;
+        let mut rows: Vec<Event> = qb.build_query_as().fetch_all(db).await?;
+        let has_next = if let Some(total) = total {
+            filters.offset as u64 + (rows.len() as u64) < total
+        } else if rows.len() > filters.limit as usize {
+            rows.truncate(filters.limit as usize);
+            true
+        } else {
+            false
+        };
 
-        Ok(EventSearchResult { rows, total })
+        Ok(EventSearchResult {
+            rows,
+            total,
+            has_next,
+        })
     }
 }
 
@@ -784,19 +837,39 @@ impl EnforcementRepository {
         // Suppress unused-assignment warning from the macro's last expansion.
         let _ = has_where;
 
-        // Count
-        let total: i64 = count_qb.build_query_scalar().fetch_one(db).await?;
-        let total = total.max(0) as u64;
+        let total = if filters.include_total {
+            let total: i64 = count_qb.build_query_scalar().fetch_one(db).await?;
+            Some(total.max(0) as u64)
+        } else {
+            None
+        };
 
         // Data query
         qb.push(" ORDER BY created DESC");
         qb.push(" LIMIT ");
-        qb.push_bind(filters.limit as i64);
+        let query_limit = if filters.include_total {
+            filters.limit
+        } else {
+            filters.limit.saturating_add(1)
+        };
+        qb.push_bind(query_limit as i64);
         qb.push(" OFFSET ");
         qb.push_bind(filters.offset as i64);
 
-        let rows: Vec<Enforcement> = qb.build_query_as().fetch_all(db).await?;
+        let mut rows: Vec<Enforcement> = qb.build_query_as().fetch_all(db).await?;
+        let has_next = if let Some(total) = total {
+            filters.offset as u64 + (rows.len() as u64) < total
+        } else if rows.len() > filters.limit as usize {
+            rows.truncate(filters.limit as usize);
+            true
+        } else {
+            false
+        };
 
-        Ok(EnforcementSearchResult { rows, total })
+        Ok(EnforcementSearchResult {
+            rows,
+            total,
+            has_next,
+        })
     }
 }

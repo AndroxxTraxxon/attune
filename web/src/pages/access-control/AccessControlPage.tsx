@@ -20,6 +20,7 @@ import {
   useFreezeIdentity,
   useUnfreezeIdentity,
 } from "@/hooks/usePermissions";
+import Pagination from "@/components/executions/Pagination";
 
 // The backend IdentitySummary includes `frozen` and `roles` but the generated client type doesn't declare them
 interface IdentityRow {
@@ -224,8 +225,6 @@ function IdentitiesTab() {
 
   const identities: IdentityRow[] = (data?.data as IdentityRow[]) || [];
   const total = data?.pagination?.total_items || 0;
-  const totalPages = total ? Math.ceil(total / pageSize) : 0;
-
   const filteredIdentities = searchTerm
     ? identities.filter((i) => {
         const q = searchTerm.toLowerCase();
@@ -261,7 +260,7 @@ function IdentitiesTab() {
   };
 
   return (
-    <>
+    <div className="pb-28">
       <div className="mb-6">
         <div className="flex items-center justify-between">
           <div>
@@ -440,38 +439,24 @@ function IdentitiesTab() {
               </table>
             </div>
 
-            {totalPages > 1 && (
-              <div className="bg-gray-50 px-6 py-4 flex items-center justify-between border-t border-gray-200">
-                <p className="text-sm text-gray-700">
-                  Page <span className="font-medium">{page}</span> of{" "}
-                  <span className="font-medium">{totalPages}</span>
-                </p>
-                <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
-                  <button
-                    onClick={() => setPage(page - 1)}
-                    disabled={page === 1}
-                    className="relative inline-flex items-center px-3 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Previous
-                  </button>
-                  <button
-                    onClick={() => setPage(page + 1)}
-                    disabled={page === totalPages}
-                    className="relative inline-flex items-center px-3 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Next
-                  </button>
-                </nav>
-              </div>
-            )}
           </>
         )}
       </div>
 
+      <Pagination
+        page={page}
+        setPage={setPage}
+        pageSize={pageSize}
+        itemCount={filteredIdentities.length}
+        total={total}
+        itemLabel="identities"
+        floating
+      />
+
       {showCreateModal && (
         <CreateIdentityModal onClose={() => setShowCreateModal(false)} />
       )}
-    </>
+    </div>
   );
 }
 

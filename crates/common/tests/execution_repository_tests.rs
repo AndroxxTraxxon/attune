@@ -1435,7 +1435,7 @@ async fn test_search_supports_pack_wildcards_for_action_rule_and_trigger_refs() 
     )
     .await
     .unwrap();
-    assert_eq!(action_results.total, 1);
+    assert_eq!(action_results.total, Some(1));
     assert_eq!(action_results.rows[0].id, execution_a.id);
 
     let rule_results = ExecutionRepository::search(
@@ -1449,7 +1449,7 @@ async fn test_search_supports_pack_wildcards_for_action_rule_and_trigger_refs() 
     )
     .await
     .unwrap();
-    assert_eq!(rule_results.total, 1);
+    assert_eq!(rule_results.total, Some(1));
     assert_eq!(
         rule_results.rows[0].rule_ref.as_deref(),
         Some(rule_a.r#ref.as_str())
@@ -1466,7 +1466,7 @@ async fn test_search_supports_pack_wildcards_for_action_rule_and_trigger_refs() 
     )
     .await
     .unwrap();
-    assert_eq!(trigger_results.total, 1);
+    assert_eq!(trigger_results.total, Some(1));
     assert_eq!(
         trigger_results.rows[0].trigger_ref.as_deref(),
         Some(trigger_a.r#ref.as_str())
@@ -1652,7 +1652,7 @@ async fn test_search_escapes_literal_like_characters_in_ref_filters() {
     )
     .await
     .unwrap();
-    assert_eq!(action_results.total, 1);
+    assert_eq!(action_results.total, Some(1));
     assert_eq!(action_results.rows[0].id, literal_execution.id);
 
     let pack_results = ExecutionRepository::search(
@@ -1666,7 +1666,7 @@ async fn test_search_escapes_literal_like_characters_in_ref_filters() {
     )
     .await
     .unwrap();
-    assert_eq!(pack_results.total, 1);
+    assert_eq!(pack_results.total, Some(1));
     assert_eq!(pack_results.rows[0].id, literal_execution.id);
 
     let rule_results = ExecutionRepository::search(
@@ -1680,7 +1680,7 @@ async fn test_search_escapes_literal_like_characters_in_ref_filters() {
     )
     .await
     .unwrap();
-    assert_eq!(rule_results.total, 1);
+    assert_eq!(rule_results.total, Some(1));
     assert_eq!(
         rule_results.rows[0].rule_ref.as_deref(),
         Some(literal_rule.r#ref.as_str())
@@ -1697,7 +1697,7 @@ async fn test_search_escapes_literal_like_characters_in_ref_filters() {
     )
     .await
     .unwrap();
-    assert_eq!(trigger_results.total, 1);
+    assert_eq!(trigger_results.total, Some(1));
     assert_eq!(
         trigger_results.rows[0].trigger_ref.as_deref(),
         Some(literal_trigger.r#ref.as_str())

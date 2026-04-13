@@ -10,13 +10,16 @@
 
 use futures::StreamExt;
 use lapin::{
-    options::{BasicAckOptions, BasicConsumeOptions, BasicNackOptions, BasicQosOptions},
+    options::{
+        BasicAckOptions, BasicCancelOptions, BasicConsumeOptions, BasicNackOptions, BasicQosOptions,
+    },
     types::FieldTable,
     Channel, Consumer as LapinConsumer,
 };
 use tracing::{debug, error, info, warn};
 
 use super::{
+    connection::is_expected_shutdown_error,
     error::{MqError, MqResult},
     messages::MessageEnvelope,
     Connection,
@@ -200,6 +203,62 @@ impl Consumer {
     /// Get the queue name
     pub fn queue(&self) -> &str {
         &self.config.queue
+    }
+
+    /// Stop consuming and close the underlying channel.
+    pub async fn stop(&self) -> MqResult<()> {
+        info!("Stopping consumer for queue '{}'", self.config.queue);
+
+        let status = self.channel.status();
+        if status.connected() {
+            match self
+                .channel
+                .basic_cancel(
+                    self.config.tag.as_str().into(),
+                    BasicCancelOptions::default(),
+                )
+                .await
+            {
+                Ok(()) => debug!(
+                    "Consumer '{}' cancelled for queue '{}'",
+                    self.config.tag, self.config.queue
+                ),
+                Err(e) if is_expected_shutdown_error(&e) => {
+                    debug!(
+                        "Consumer '{}' was already shutting down for queue '{}'",
+                        self.config.tag, self.config.queue
+                    );
+                }
+                Err(e) => {
+                    return Err(MqError::Consume(format!(
+                        "Failed to cancel consumer '{}' on queue '{}': {}",
+                        self.config.tag, self.config.queue, e
+                    )));
+                }
+            }
+        }
+
+        let status = self.channel.status();
+        if status.connected() {
+            match self.channel.close(200, "Normal shutdown".into()).await {
+                Ok(()) => debug!("Consumer channel closed for queue '{}'", self.config.queue),
+                Err(e) if is_expected_shutdown_error(&e) => {
+                    debug!(
+                        "Consumer channel for queue '{}' was already shutting down",
+                        self.config.queue
+                    );
+                }
+                Err(e) => {
+                    return Err(MqError::Channel(format!(
+                        "Failed to close consumer channel for queue '{}': {}",
+                        self.config.queue, e
+                    )));
+                }
+            }
+        }
+
+        info!("Consumer stopped for queue '{}'", self.config.queue);
+        Ok(())
     }
 }
 

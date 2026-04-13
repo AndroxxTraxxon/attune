@@ -370,6 +370,48 @@ impl CliConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+    use tempfile::TempDir;
+
+    static CONFIG_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    struct TestConfigHomeGuard {
+        _env_lock: MutexGuard<'static, ()>,
+        _temp_dir: TempDir,
+        previous_xdg_config_home: Option<String>,
+    }
+
+    impl TestConfigHomeGuard {
+        fn new() -> Self {
+            let env_lock = CONFIG_ENV_LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .expect("Failed to lock config test environment");
+            let temp_dir = TempDir::new().expect("Failed to create temp config dir");
+            let previous_xdg_config_home = env::var("XDG_CONFIG_HOME").ok();
+            unsafe {
+                env::set_var("XDG_CONFIG_HOME", temp_dir.path());
+            }
+
+            Self {
+                _env_lock: env_lock,
+                _temp_dir: temp_dir,
+                previous_xdg_config_home,
+            }
+        }
+    }
+
+    impl Drop for TestConfigHomeGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.previous_xdg_config_home {
+                    Some(value) => env::set_var("XDG_CONFIG_HOME", value),
+                    None => env::remove_var("XDG_CONFIG_HOME"),
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_default_config() {
@@ -432,6 +474,7 @@ mod tests {
 
     #[test]
     fn test_profile_management() {
+        let _guard = TestConfigHomeGuard::new();
         let mut config = CliConfig::default();
 
         // Add a new profile
@@ -461,6 +504,7 @@ mod tests {
 
     #[test]
     fn test_cannot_remove_default_profile() {
+        let _guard = TestConfigHomeGuard::new();
         let mut config = CliConfig::default();
         let result = config.remove_profile("default");
         assert!(result.is_err());
@@ -468,6 +512,7 @@ mod tests {
 
     #[test]
     fn test_cannot_remove_active_profile() {
+        let _guard = TestConfigHomeGuard::new();
         let mut config = CliConfig::default();
 
         let test_profile = Profile {
@@ -488,6 +533,7 @@ mod tests {
 
     #[test]
     fn test_get_set_value() {
+        let _guard = TestConfigHomeGuard::new();
         let mut config = CliConfig::default();
 
         assert_eq!(
@@ -509,6 +555,7 @@ mod tests {
 
     #[test]
     fn test_set_value_validates_format() {
+        let _guard = TestConfigHomeGuard::new();
         let mut config = CliConfig::default();
 
         // Valid values
@@ -523,6 +570,7 @@ mod tests {
 
     #[test]
     fn test_backward_compat_aliases() {
+        let _guard = TestConfigHomeGuard::new();
         let mut config = CliConfig::default();
 
         // Old key names should still work for get/set

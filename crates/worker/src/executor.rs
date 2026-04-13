@@ -17,14 +17,19 @@ use attune_common::auth::jwt::{generate_execution_token, JwtConfig};
 use attune_common::error::{Error, Result};
 use attune_common::models::runtime::RuntimeExecutionConfig;
 use attune_common::models::{
-    runtime::Runtime as RuntimeModel, Action, Execution, ExecutionStatus, Worker,
+    enums::{ArtifactType, ArtifactVisibility, OwnerType, RetentionPolicyType},
+    runtime::Runtime as RuntimeModel,
+    Action, Execution, ExecutionStatus, Worker,
 };
-use attune_common::repositories::artifact::{ArtifactRepository, ArtifactVersionRepository};
+use attune_common::repositories::artifact::{
+    default_content_type_for_artifact, ArtifactRepository, ArtifactVersionRepository,
+    CreateArtifactInput, UpdateArtifactInput,
+};
 use attune_common::repositories::execution::{ExecutionRepository, UpdateExecutionInput};
 use attune_common::repositories::runtime::WorkerRepository;
 use attune_common::repositories::runtime::SELECT_COLUMNS as RUNTIME_SELECT_COLUMNS;
 use attune_common::repositories::runtime_version::RuntimeVersionRepository;
-use attune_common::repositories::{FindById, Update};
+use attune_common::repositories::{Create, FindById, FindByRef, Patch, Update};
 use attune_common::runtime_detection::normalize_runtime_name;
 use attune_common::version_matching::{matches_constraint, select_best_version};
 use std::path::PathBuf as StdPathBuf;
@@ -64,6 +69,33 @@ fn normalize_api_url(raw_url: &str) -> String {
     raw_url
         .replace("://0.0.0.0", "://127.0.0.1")
         .replace("://[::]", "://127.0.0.1")
+}
+
+#[derive(Clone, Copy)]
+enum ExecutionLogArtifactStream {
+    Stdout,
+    Stderr,
+}
+
+impl ExecutionLogArtifactStream {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+
+    fn file_name(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout.log",
+            Self::Stderr => "stderr.log",
+        }
+    }
+}
+
+struct ExecutionLogArtifacts {
+    stdout_full_path: PathBuf,
+    stderr_full_path: PathBuf,
 }
 
 impl ActionExecutor {
@@ -531,6 +563,7 @@ impl ActionExecutor {
         } else {
             None
         };
+        let log_artifacts = self.allocate_execution_log_artifacts(execution).await?;
 
         let context = ExecutionContext {
             execution_id: execution.id,
@@ -549,16 +582,8 @@ impl ActionExecutor {
             selected_runtime_version,
             max_stdout_bytes: self.max_stdout_bytes,
             max_stderr_bytes: self.max_stderr_bytes,
-            stdout_log_path: Some(
-                self.artifact_manager
-                    .get_execution_dir(execution.id)
-                    .join("stdout.log"),
-            ),
-            stderr_log_path: Some(
-                self.artifact_manager
-                    .get_execution_dir(execution.id)
-                    .join("stderr.log"),
-            ),
+            stdout_log_path: Some(log_artifacts.stdout_full_path),
+            stderr_log_path: Some(log_artifacts.stderr_full_path),
             parameter_delivery: action.parameter_delivery,
             parameter_format: action.parameter_format,
             output_format: action.output_format,
@@ -820,11 +845,6 @@ impl ActionExecutor {
     ) -> Result<()> {
         debug!("Storing artifacts for execution: {}", execution_id);
 
-        // Store logs
-        self.artifact_manager
-            .store_logs(execution_id, &result.stdout, &result.stderr)
-            .await?;
-
         // Store result if available
         if let Some(result_data) = &result.result {
             self.artifact_manager
@@ -833,6 +853,124 @@ impl ActionExecutor {
         }
 
         Ok(())
+    }
+
+    fn execution_log_artifact_ref(execution_id: i64, stream: ExecutionLogArtifactStream) -> String {
+        format!("execution.{}.{}", execution_id, stream.as_str())
+    }
+
+    async fn allocate_execution_log_artifacts(
+        &self,
+        execution: &Execution,
+    ) -> Result<ExecutionLogArtifacts> {
+        let stdout_full_path = self
+            .allocate_execution_log_artifact(execution, ExecutionLogArtifactStream::Stdout)
+            .await?;
+        let stderr_full_path = self
+            .allocate_execution_log_artifact(execution, ExecutionLogArtifactStream::Stderr)
+            .await?;
+
+        Ok(ExecutionLogArtifacts {
+            stdout_full_path,
+            stderr_full_path,
+        })
+    }
+
+    async fn allocate_execution_log_artifact(
+        &self,
+        execution: &Execution,
+        stream: ExecutionLogArtifactStream,
+    ) -> Result<PathBuf> {
+        let artifact_ref = Self::execution_log_artifact_ref(execution.id, stream);
+        let content_type = default_content_type_for_artifact(ArtifactType::FileText);
+
+        let artifact = match ArtifactRepository::find_by_ref(&self.pool, &artifact_ref).await? {
+            Some(existing) => {
+                if existing.execution != Some(execution.id) {
+                    ArtifactRepository::update(
+                        &self.pool,
+                        existing.id,
+                        UpdateArtifactInput {
+                            execution: Some(Patch::Set(execution.id)),
+                            ..Default::default()
+                        },
+                    )
+                    .await?
+                } else {
+                    existing
+                }
+            }
+            None => {
+                ArtifactRepository::create(
+                    &self.pool,
+                    CreateArtifactInput {
+                        r#ref: artifact_ref.clone(),
+                        scope: OwnerType::Action,
+                        owner: execution.action_ref.clone(),
+                        r#type: ArtifactType::FileText,
+                        visibility: ArtifactVisibility::Private,
+                        retention_policy: RetentionPolicyType::Versions,
+                        retention_limit: 1,
+                        name: Some(stream.file_name().to_string()),
+                        description: Some(format!(
+                            "Captured {} for execution {}",
+                            stream.as_str(),
+                            execution.id
+                        )),
+                        content_type: Some(content_type.clone()),
+                        execution: Some(execution.id),
+                        data: None,
+                    },
+                )
+                .await?
+            }
+        };
+
+        let version = ArtifactVersionRepository::create_file_backed(
+            &self.pool,
+            artifact.id,
+            &artifact.r#ref,
+            content_type,
+            Some(serde_json::json!({ "stream": stream.as_str() })),
+            Some("worker".to_string()),
+        )
+        .await?;
+
+        let file_path = version.file_path.ok_or_else(|| {
+            Error::Internal(format!(
+                "Allocated file-backed log version {} is missing file_path",
+                version.id
+            ))
+        })?;
+        let full_path = self.artifacts_dir.join(&file_path);
+        if let Some(parent) = full_path.parent() {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                Error::Internal(format!(
+                    "Failed to create log artifact directory '{}': {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
+
+        Ok(full_path)
+    }
+
+    async fn latest_execution_log_path(
+        &self,
+        execution_id: i64,
+        stream: ExecutionLogArtifactStream,
+    ) -> Result<Option<PathBuf>> {
+        let artifact_ref = Self::execution_log_artifact_ref(execution_id, stream);
+        let Some(artifact) = ArtifactRepository::find_by_ref(&self.pool, &artifact_ref).await?
+        else {
+            return Ok(None);
+        };
+        let Some(version) = ArtifactVersionRepository::find_latest(&self.pool, artifact.id).await?
+        else {
+            return Ok(None);
+        };
+        Ok(version.file_path.map(|path| self.artifacts_dir.join(path)))
     }
 
     /// Finalize file-backed artifacts after execution completes.
@@ -936,7 +1074,6 @@ impl ActionExecutor {
         );
 
         // Build comprehensive result with execution metadata
-        let exec_dir = self.artifact_manager.get_execution_dir(execution_id);
         let mut result_data = serde_json::json!({
             "exit_code": result.exit_code,
             "duration_ms": result.duration_ms,
@@ -950,8 +1087,12 @@ impl ActionExecutor {
 
         // Include stderr log path only if stderr is non-empty and non-whitespace
         if !result.stderr.trim().is_empty() {
-            let stderr_path = exec_dir.join("stderr.log");
-            result_data["stderr_log"] = serde_json::json!(stderr_path.to_string_lossy());
+            if let Some(stderr_path) = self
+                .latest_execution_log_path(execution_id, ExecutionLogArtifactStream::Stderr)
+                .await?
+            {
+                result_data["stderr_log"] = serde_json::json!(stderr_path.to_string_lossy());
+            }
         }
 
         // Include parsed result if available
@@ -990,7 +1131,6 @@ impl ActionExecutor {
             );
         }
 
-        let exec_dir = self.artifact_manager.get_execution_dir(execution_id);
         let mut result_data = serde_json::json!({
             "succeeded": false,
         });
@@ -1011,8 +1151,12 @@ impl ActionExecutor {
 
             // Include stderr log path only if stderr is non-empty and non-whitespace
             if !exec_result.stderr.trim().is_empty() {
-                let stderr_path = exec_dir.join("stderr.log");
-                result_data["stderr_log"] = serde_json::json!(stderr_path.to_string_lossy());
+                if let Some(stderr_path) = self
+                    .latest_execution_log_path(execution_id, ExecutionLogArtifactStream::Stderr)
+                    .await?
+                {
+                    result_data["stderr_log"] = serde_json::json!(stderr_path.to_string_lossy());
+                }
             }
 
             // Add truncation warnings if applicable
@@ -1038,9 +1182,11 @@ impl ActionExecutor {
             );
 
             // Check if stderr log exists and is non-empty from artifact storage
-            let stderr_path = exec_dir.join("stderr.log");
-            if stderr_path.exists() {
-                // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Log paths are fixed artifact filenames inside the execution-scoped directory.
+            if let Some(stderr_path) = self
+                .latest_execution_log_path(execution_id, ExecutionLogArtifactStream::Stderr)
+                .await?
+            {
+                // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Log paths resolve from file-backed artifact metadata rooted under the configured artifact directory.
                 if let Ok(contents) = tokio::fs::read_to_string(&stderr_path).await {
                     if !contents.trim().is_empty() {
                         result_data["stderr_log"] =
@@ -1050,9 +1196,11 @@ impl ActionExecutor {
             }
 
             // Check if stdout log exists from artifact storage
-            let stdout_path = exec_dir.join("stdout.log");
-            if stdout_path.exists() {
-                // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Log paths are fixed artifact filenames inside the execution-scoped directory.
+            if let Some(stdout_path) = self
+                .latest_execution_log_path(execution_id, ExecutionLogArtifactStream::Stdout)
+                .await?
+            {
+                // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Log paths resolve from file-backed artifact metadata rooted under the configured artifact directory.
                 if let Ok(contents) = tokio::fs::read_to_string(&stdout_path).await {
                     if !contents.is_empty() {
                         result_data["stdout"] = serde_json::json!(contents);
@@ -1077,7 +1225,6 @@ impl ActionExecutor {
         execution_id: i64,
         result: &ExecutionResult,
     ) -> Result<()> {
-        let exec_dir = self.artifact_manager.get_execution_dir(execution_id);
         let mut result_data = serde_json::json!({
             "succeeded": false,
             "cancelled": true,
@@ -1091,8 +1238,12 @@ impl ActionExecutor {
         }
 
         if !result.stderr.trim().is_empty() {
-            let stderr_path = exec_dir.join("stderr.log");
-            result_data["stderr_log"] = serde_json::json!(stderr_path.to_string_lossy());
+            if let Some(stderr_path) = self
+                .latest_execution_log_path(execution_id, ExecutionLogArtifactStream::Stderr)
+                .await?
+            {
+                result_data["stderr_log"] = serde_json::json!(stderr_path.to_string_lossy());
+            }
         }
 
         if result.stdout_truncated {
@@ -1169,6 +1320,18 @@ mod tests {
         let action_ref = "invalid";
         let parts: Vec<&str> = action_ref.split('.').collect();
         assert_eq!(parts.len(), 1);
+    }
+
+    #[test]
+    fn test_execution_log_artifact_ref() {
+        assert_eq!(
+            ActionExecutor::execution_log_artifact_ref(42, ExecutionLogArtifactStream::Stdout),
+            "execution.42.stdout"
+        );
+        assert_eq!(
+            ActionExecutor::execution_log_artifact_ref(42, ExecutionLogArtifactStream::Stderr),
+            "execution.42.stderr"
+        );
     }
 
     #[test]

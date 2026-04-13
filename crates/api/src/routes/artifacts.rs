@@ -33,6 +33,7 @@ use attune_common::models::enums::{
 };
 use attune_common::repositories::{
     artifact::{
+        default_content_type_for_artifact, is_file_backed_type, ref_to_dir_path,
         ArtifactRepository, ArtifactSearchFilters, ArtifactVersionRepository, CreateArtifactInput,
         CreateArtifactVersionInput, UpdateArtifactInput,
     },
@@ -704,25 +705,21 @@ pub async fn create_version_file(
         .content_type
         .unwrap_or_else(|| default_content_type_for_artifact(artifact.r#type));
 
-    // We need the version number to compute the file path. The DB function
-    // `next_artifact_version()` is called inside the INSERT, so we create the
-    // row first with file_path = NULL, then compute the path from the returned
-    // version number and update the row. This avoids a race condition where two
-    // concurrent requests could compute the same version number.
-    let input = CreateArtifactVersionInput {
-        artifact: id,
-        content_type: Some(content_type.clone()),
-        content: None,
-        content_json: None,
-        file_path: None, // Will be set in the update below
-        meta: request.meta,
-        created_by: request.created_by,
-    };
-
-    let version = ArtifactVersionRepository::create(&state.db, input).await?;
-
-    // Compute the file path from the artifact ref and version number
-    let file_path = compute_file_path(&artifact.r#ref, version.version, &content_type);
+    let version = ArtifactVersionRepository::create_file_backed(
+        &state.db,
+        id,
+        &artifact.r#ref,
+        content_type.clone(),
+        request.meta,
+        request.created_by,
+    )
+    .await?;
+    let file_path = version.file_path.clone().ok_or_else(|| {
+        ApiError::InternalServerError(format!(
+            "Allocated file-backed version {} is missing file_path",
+            version.id
+        ))
+    })?;
 
     // Create the parent directory on disk
     let artifacts_dir = &state.config.artifacts_dir;
@@ -737,22 +734,7 @@ pub async fn create_version_file(
         })?;
     }
 
-    // Update the version row with the computed file_path
-    sqlx::query("UPDATE artifact_version SET file_path = $1 WHERE id = $2")
-        .bind(&file_path)
-        .bind(version.id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| {
-            ApiError::InternalServerError(format!(
-                "Failed to set file_path on version {}: {}",
-                version.id, e,
-            ))
-        })?;
-
-    // Return the version with file_path populated
-    let mut response = ArtifactVersionResponse::from(version);
-    response.file_path = Some(file_path);
+    let response = ArtifactVersionResponse::from(version);
 
     Ok((
         StatusCode::CREATED,
@@ -1472,21 +1454,21 @@ pub async fn allocate_file_version_by_ref(
         .content_type
         .unwrap_or_else(|| default_content_type_for_artifact(artifact.r#type));
 
-    // Create version row (file_path computed after we know the version number)
-    let input = CreateArtifactVersionInput {
-        artifact: artifact.id,
-        content_type: Some(content_type.clone()),
-        content: None,
-        content_json: None,
-        file_path: None,
-        meta: request.meta,
-        created_by: request.created_by,
-    };
-
-    let version = ArtifactVersionRepository::create(&state.db, input).await?;
-
-    // Compute the file path from the artifact ref and version number
-    let file_path = compute_file_path(&artifact.r#ref, version.version, &content_type);
+    let version = ArtifactVersionRepository::create_file_backed(
+        &state.db,
+        artifact.id,
+        &artifact.r#ref,
+        content_type.clone(),
+        request.meta,
+        request.created_by,
+    )
+    .await?;
+    let file_path = version.file_path.clone().ok_or_else(|| {
+        ApiError::InternalServerError(format!(
+            "Allocated file-backed version {} is missing file_path",
+            version.id
+        ))
+    })?;
 
     // Create the parent directory on disk
     let artifacts_dir = &state.config.artifacts_dir;
@@ -1501,22 +1483,7 @@ pub async fn allocate_file_version_by_ref(
         })?;
     }
 
-    // Update the version row with the computed file_path
-    sqlx::query("UPDATE artifact_version SET file_path = $1 WHERE id = $2")
-        .bind(&file_path)
-        .bind(version.id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| {
-            ApiError::InternalServerError(format!(
-                "Failed to set file_path on version {}: {}",
-                version.id, e,
-            ))
-        })?;
-
-    // Return the version with file_path populated
-    let mut response = ArtifactVersionResponse::from(version);
-    response.file_path = Some(file_path);
+    let response = ArtifactVersionResponse::from(version);
 
     Ok((
         StatusCode::CREATED,
@@ -1628,44 +1595,6 @@ fn artifact_authorization_context(
     ctx.owner_ref = Some(artifact.owner.clone());
     ctx.visibility = Some(artifact.visibility);
     ctx
-}
-
-/// Returns true for artifact types that should use file-backed storage on disk.
-fn is_file_backed_type(artifact_type: ArtifactType) -> bool {
-    matches!(
-        artifact_type,
-        ArtifactType::FileBinary
-            | ArtifactType::FileText
-            | ArtifactType::FileDataTable
-            | ArtifactType::FileImage
-    )
-}
-
-/// Convert an artifact ref to a directory path by replacing dots with path separators.
-/// e.g., "mypack.build_log" -> "mypack/build_log"
-fn ref_to_dir_path(artifact_ref: &str) -> String {
-    artifact_ref.replace('.', "/")
-}
-
-/// Compute the relative file path for a file-backed artifact version.
-///
-/// Pattern: `{ref_slug}/v{version}.{ext}`
-/// e.g., `mypack/build_log/v1.txt`
-pub fn compute_file_path(artifact_ref: &str, version: i32, content_type: &str) -> String {
-    let ref_path = ref_to_dir_path(artifact_ref);
-    let ext = extension_from_content_type(content_type);
-    format!("{}/v{}.{}", ref_path, version, ext)
-}
-
-/// Return a sensible default content type for a given artifact type.
-fn default_content_type_for_artifact(artifact_type: ArtifactType) -> String {
-    match artifact_type {
-        ArtifactType::FileText => "text/plain".to_string(),
-        ArtifactType::FileDataTable => "text/csv".to_string(),
-        ArtifactType::FileImage => "image/png".to_string(),
-        ArtifactType::FileBinary => "application/octet-stream".to_string(),
-        _ => "application/octet-stream".to_string(),
-    }
 }
 
 /// Serve a file-backed artifact version from disk.
@@ -2362,62 +2291,5 @@ mod tests {
         assert_eq!(extension_from_content_type("application/json"), "json");
         assert_eq!(extension_from_content_type("image/png"), "png");
         assert_eq!(extension_from_content_type("unknown/type"), "bin");
-    }
-
-    #[test]
-    fn test_compute_file_path() {
-        assert_eq!(
-            compute_file_path("mypack.build_log", 1, "text/plain"),
-            "mypack/build_log/v1.txt"
-        );
-        assert_eq!(
-            compute_file_path("mypack.build_log", 3, "application/json"),
-            "mypack/build_log/v3.json"
-        );
-        assert_eq!(
-            compute_file_path("core.test.results", 2, "text/csv"),
-            "core/test/results/v2.csv"
-        );
-        assert_eq!(
-            compute_file_path("simple", 1, "application/octet-stream"),
-            "simple/v1.bin"
-        );
-    }
-
-    #[test]
-    fn test_ref_to_dir_path() {
-        assert_eq!(ref_to_dir_path("mypack.build_log"), "mypack/build_log");
-        assert_eq!(ref_to_dir_path("simple"), "simple");
-        assert_eq!(ref_to_dir_path("a.b.c.d"), "a/b/c/d");
-    }
-
-    #[test]
-    fn test_is_file_backed_type() {
-        assert!(is_file_backed_type(ArtifactType::FileBinary));
-        assert!(is_file_backed_type(ArtifactType::FileText));
-        assert!(is_file_backed_type(ArtifactType::FileDataTable));
-        assert!(is_file_backed_type(ArtifactType::FileImage));
-        assert!(!is_file_backed_type(ArtifactType::Progress));
-        assert!(!is_file_backed_type(ArtifactType::Url));
-    }
-
-    #[test]
-    fn test_default_content_type_for_artifact() {
-        assert_eq!(
-            default_content_type_for_artifact(ArtifactType::FileText),
-            "text/plain"
-        );
-        assert_eq!(
-            default_content_type_for_artifact(ArtifactType::FileDataTable),
-            "text/csv"
-        );
-        assert_eq!(
-            default_content_type_for_artifact(ArtifactType::FileImage),
-            "image/png"
-        );
-        assert_eq!(
-            default_content_type_for_artifact(ArtifactType::FileBinary),
-            "application/octet-stream"
-        );
     }
 }

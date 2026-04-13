@@ -43,8 +43,11 @@ interface EnforcementListCache {
   data: EnforcementSummary[];
   pagination?: {
     total_items?: number;
+    total_pages?: number;
     page?: number;
     page_size?: number;
+    has_previous?: boolean;
+    has_next?: boolean;
   };
 }
 
@@ -201,14 +204,34 @@ export function useEnforcementStream(
           }
         }
 
+        const totalItemsDelta = existingIndex >= 0 ? 0 : 1;
+        const page = old.pagination?.page ?? 1;
+        const pageSize = old.pagination?.page_size ?? 50;
+        const hasExactTotal = old.pagination?.total_items != null;
+        let nextPagination = old.pagination ? { ...old.pagination } : undefined;
+
+        if (nextPagination) {
+          nextPagination.has_previous = page > 1;
+
+          if (hasExactTotal) {
+            const newTotal = Math.max(
+              0,
+              (old.pagination?.total_items ?? 0) + totalItemsDelta,
+            );
+            nextPagination.total_items = newTotal;
+            nextPagination.total_pages =
+              pageSize > 0 ? Math.ceil(newTotal / pageSize) : 0;
+            nextPagination.has_next = page * pageSize < newTotal;
+          } else if (totalItemsDelta > 0 && old.data.length >= pageSize) {
+            nextPagination.has_next = true;
+          }
+        }
+
         // Update the query with the new data
         queryClient.setQueryData(queryKey, {
           ...old,
           data: updatedData,
-          pagination: {
-            ...old.pagination,
-            total_items: (old.pagination?.total_items || 0) + 1,
-          },
+          pagination: nextPagination,
         });
       });
 

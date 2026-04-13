@@ -35,7 +35,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sqlx::{PgConnection, PgPool};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -96,6 +96,45 @@ fn apply_param_defaults(params: JsonValue, param_schema: &Option<JsonValue>) -> 
     JsonValue::Object(obj)
 }
 
+fn reconcile_authoritative_non_item_task_statuses<I>(
+    completed_tasks: &mut Vec<String>,
+    failed_tasks: &mut Vec<String>,
+    child_tasks: I,
+) where
+    I: IntoIterator<Item = (String, Option<i32>, ExecutionStatus)>,
+{
+    let mut authoritative_completed = HashSet::new();
+    let mut authoritative_failed = HashSet::new();
+
+    for (task_name, task_index, status) in child_tasks {
+        if task_index.is_some() {
+            continue;
+        }
+
+        match status {
+            ExecutionStatus::Completed => {
+                authoritative_completed.insert(task_name);
+            }
+            ExecutionStatus::Failed | ExecutionStatus::Timeout => {
+                authoritative_failed.insert(task_name);
+            }
+            _ => {}
+        }
+    }
+
+    for task_name in authoritative_completed {
+        if !completed_tasks.contains(&task_name) && !failed_tasks.contains(&task_name) {
+            completed_tasks.push(task_name);
+        }
+    }
+
+    for task_name in authoritative_failed {
+        if !failed_tasks.contains(&task_name) && !completed_tasks.contains(&task_name) {
+            failed_tasks.push(task_name);
+        }
+    }
+}
+
 /// Payload for execution scheduled messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ExecutionScheduledPayload {
@@ -136,6 +175,25 @@ const SCHEDULING_RECLAIM_GRACE_SECONDS: i64 = 30;
 const RUNTIME_VERSIONS_CAPABILITY_KEY: &str = "runtime_versions";
 
 impl ExecutionScheduler {
+    fn workflow_delay_context(execution: &Execution) -> Option<String> {
+        execution.workflow_task.as_ref().map(|workflow_task| {
+            let triggered_by = workflow_task
+                .triggered_by
+                .as_deref()
+                .map(|task| format!(", triggered by '{}'", task))
+                .unwrap_or_default();
+
+            format!(
+                "workflow task '{}' (execution {}, workflow_execution {}, action '{}'{})",
+                workflow_task.task_name,
+                execution.id,
+                workflow_task.workflow_execution,
+                execution.action_ref,
+                triggered_by
+            )
+        })
+    }
+
     fn retryable_mq_error(error: &anyhow::Error) -> Option<MqError> {
         let mq_error = error.downcast_ref::<MqError>()?;
         Some(match mq_error {
@@ -390,6 +448,12 @@ impl ExecutionScheduler {
                         execution_id
                     );
                 }
+                if let Some(context) = Self::workflow_delay_context(&execution) {
+                    warn!(
+                        "Delayed {}: worker selection deferred because the execution was queued by scheduling policy",
+                        context
+                    );
+                }
                 info!(
                     "Execution {} queued by policy for action {}; deferring worker selection",
                     execution_id, action.id
@@ -480,6 +544,12 @@ impl ExecutionScheduler {
                         execution_id
                     );
                 }
+                if let Some(context) = Self::workflow_delay_context(&execution) {
+                    warn!(
+                        "Delayed {}: transient worker-selection failure left the task waiting to be retried: {}",
+                        context, err
+                    );
+                }
                 return Err(err);
             }
         };
@@ -536,6 +606,12 @@ impl ExecutionScheduler {
                     execution_id, revert_err
                 );
             }
+            if let Some(context) = Self::workflow_delay_context(&execution) {
+                warn!(
+                    "Delayed {}: failed to publish the execution to a worker queue, the task will remain pending until retried: {}",
+                    context, err
+                );
+            }
             return Err(err);
         }
 
@@ -571,11 +647,19 @@ impl ExecutionScheduler {
         };
 
         match execution.status {
-            ExecutionStatus::Requested => Err(MqError::Timeout(format!(
-                "Execution {} changed while claiming; retry later",
-                execution_id
-            ))
-            .into()),
+            ExecutionStatus::Requested => {
+                if let Some(context) = Self::workflow_delay_context(&execution) {
+                    warn!(
+                        "Delayed {}: the scheduler could not immediately acquire the execution claim; retrying later",
+                        context
+                    );
+                }
+                Err(MqError::Timeout(format!(
+                    "Execution {} changed while claiming; retry later",
+                    execution_id
+                ))
+                .into())
+            }
             ExecutionStatus::Scheduling => {
                 if let Some(execution) = ExecutionRepository::reclaim_stale_scheduling(
                     pool,
@@ -600,6 +684,12 @@ impl ExecutionScheduler {
                     .await;
                 }
 
+                if let Some(context) = Self::workflow_delay_context(&execution) {
+                    warn!(
+                        "Delayed {}: the execution is still being scheduled elsewhere, so this attempt will retry later",
+                        context
+                    );
+                }
                 Err(MqError::Timeout(format!(
                     "Execution {} is still being scheduled; retry later",
                     execution_id
@@ -2158,14 +2248,6 @@ impl ExecutionScheduler {
             }
         }
 
-        // -----------------------------------------------------------------
-        // Rebuild the WorkflowContext from persisted state + completed task
-        // results so that successor task inputs can be rendered.
-        // -----------------------------------------------------------------
-        let workflow_params = extract_workflow_params(&parent_execution.config);
-        let workflow_params = apply_param_defaults(workflow_params, &workflow_def.param_schema);
-
-        // Collect results from all completed children of this workflow
         let child_executions =
             ExecutionRepository::find_by_parent(&mut *conn, parent_execution.id).await?;
         let mut task_results_map: HashMap<String, JsonValue> = HashMap::new();
@@ -2184,6 +2266,24 @@ impl ExecutionScheduler {
                 }
             }
         }
+
+        reconcile_authoritative_non_item_task_statuses(
+            &mut completed_tasks,
+            &mut failed_tasks,
+            child_executions.iter().filter_map(|child| {
+                child.workflow_task.as_ref().and_then(|wt| {
+                    (wt.workflow_execution == workflow_execution_id)
+                        .then(|| (wt.task_name.clone(), wt.task_index, child.status))
+                })
+            }),
+        );
+
+        // -----------------------------------------------------------------
+        // Rebuild the WorkflowContext from persisted state + completed task
+        // results so that successor task inputs can be rendered.
+        // -----------------------------------------------------------------
+        let workflow_params = extract_workflow_params(&parent_execution.config);
+        let workflow_params = apply_param_defaults(workflow_params, &workflow_def.param_schema);
 
         let mut wf_ctx = WorkflowContext::rebuild(
             workflow_params,
@@ -3710,6 +3810,132 @@ mod tests {
             params,
             serde_json::json!({"parameters": {"n": 5}, "context": {"rule": "test"}})
         );
+    }
+
+    #[test]
+    fn test_workflow_delay_context_formats_workflow_child() {
+        let execution = attune_common::models::Execution {
+            id: 42,
+            action: Some(7),
+            action_ref: "python_example.simulate_work".to_string(),
+            config: None,
+            env_vars: None,
+            parent: Some(5),
+            enforcement: None,
+            executor: None,
+            worker: None,
+            status: ExecutionStatus::Requested,
+            result: None,
+            started_at: None,
+            workflow_task: Some(attune_common::models::execution::WorkflowTaskMetadata {
+                workflow_execution: 9,
+                task_name: "merge_results".to_string(),
+                triggered_by: Some("run_linter".to_string()),
+                task_index: None,
+                task_batch: None,
+                retry_count: 0,
+                max_retries: 0,
+                next_retry_at: None,
+                timeout_seconds: None,
+                timed_out: false,
+                duration_ms: None,
+                started_at: None,
+                completed_at: None,
+            }),
+            created: Utc::now(),
+            updated: Utc::now(),
+        };
+
+        let context = ExecutionScheduler::workflow_delay_context(&execution).unwrap();
+        assert!(context.contains("merge_results"));
+        assert!(context.contains("execution 42"));
+        assert!(context.contains("workflow_execution 9"));
+        assert!(context.contains("python_example.simulate_work"));
+        assert!(context.contains("triggered by 'run_linter'"));
+    }
+
+    #[test]
+    fn test_workflow_delay_context_ignores_non_workflow_execution() {
+        let execution = attune_common::models::Execution {
+            id: 42,
+            action: Some(7),
+            action_ref: "core.echo".to_string(),
+            config: None,
+            env_vars: None,
+            parent: None,
+            enforcement: None,
+            executor: None,
+            worker: None,
+            status: ExecutionStatus::Requested,
+            result: None,
+            started_at: None,
+            workflow_task: None,
+            created: Utc::now(),
+            updated: Utc::now(),
+        };
+
+        assert!(ExecutionScheduler::workflow_delay_context(&execution).is_none());
+    }
+
+    #[test]
+    fn test_reconcile_authoritative_non_item_task_statuses_backfills_join_predecessors() {
+        let mut completed_tasks = vec!["security_scan".to_string()];
+        let mut failed_tasks = Vec::new();
+
+        reconcile_authoritative_non_item_task_statuses(
+            &mut completed_tasks,
+            &mut failed_tasks,
+            vec![
+                (
+                    "build_artifacts".to_string(),
+                    None,
+                    ExecutionStatus::Completed,
+                ),
+                ("run_linter".to_string(), None, ExecutionStatus::Completed),
+                (
+                    "security_scan".to_string(),
+                    None,
+                    ExecutionStatus::Completed,
+                ),
+                // with_items children must not make the parent task look done
+                (
+                    "process_items".to_string(),
+                    Some(0),
+                    ExecutionStatus::Completed,
+                ),
+            ],
+        );
+
+        assert!(completed_tasks.contains(&"build_artifacts".to_string()));
+        assert!(completed_tasks.contains(&"run_linter".to_string()));
+        assert!(completed_tasks.contains(&"security_scan".to_string()));
+        assert!(!completed_tasks.contains(&"process_items".to_string()));
+        assert!(failed_tasks.is_empty());
+    }
+
+    #[test]
+    fn test_reconcile_authoritative_non_item_task_statuses_backfills_failures() {
+        let mut completed_tasks = Vec::new();
+        let mut failed_tasks = Vec::new();
+
+        reconcile_authoritative_non_item_task_statuses(
+            &mut completed_tasks,
+            &mut failed_tasks,
+            vec![
+                ("build_artifacts".to_string(), None, ExecutionStatus::Failed),
+                ("security_scan".to_string(), None, ExecutionStatus::Timeout),
+                (
+                    "process_items".to_string(),
+                    Some(1),
+                    ExecutionStatus::Failed,
+                ),
+            ],
+        );
+
+        assert!(failed_tasks.contains(&"build_artifacts".to_string()));
+        assert!(failed_tasks.contains(&"security_scan".to_string()));
+        assert!(!failed_tasks.contains(&"process_items".to_string()));
+        assert!(completed_tasks.is_empty());
     }
 
     #[test]

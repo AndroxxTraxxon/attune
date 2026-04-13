@@ -1,4 +1,4 @@
-# Multi-stage Dockerfile for Attune Rust services (api, executor, sensor, notifier)
+# Multi-stage Dockerfile for Attune Rust services (api, executor, notifier)
 #
 # Simple and robust: build the entire workspace, then copy the target binary.
 # No dummy sources, no selective crate copying, no fragile hacks.
@@ -6,7 +6,6 @@
 # Usage:
 #   DOCKER_BUILDKIT=1 docker build --build-arg SERVICE=api -f docker/Dockerfile.optimized -t attune-api .
 #   DOCKER_BUILDKIT=1 docker build --build-arg SERVICE=executor -f docker/Dockerfile.optimized -t attune-executor .
-#   DOCKER_BUILDKIT=1 docker build --build-arg SERVICE=sensor -f docker/Dockerfile.optimized -t attune-sensor .
 #   DOCKER_BUILDKIT=1 docker build --build-arg SERVICE=notifier -f docker/Dockerfile.optimized -t attune-notifier .
 #
 # Note: Packs are NOT copied into the image — they are mounted as volumes at runtime.
@@ -15,7 +14,7 @@ ARG RUST_VERSION=1.92
 ARG DEBIAN_VERSION=bookworm
 
 # ============================================================================
-# Stage 1: Builder - Compile the entire workspace
+# Stage 1: Builder - Compile the shared service binaries
 # ============================================================================
 FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
 
@@ -61,23 +60,33 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
     cargo fetch
 
-# Now copy the real source code and migrations
-COPY migrations/ ./migrations/
-COPY crates/ ./crates/
+# Now copy only the source needed to build the service binaries.
+# The other workspace members keep their stub sources from the fetch layer so
+# Cargo can still resolve the workspace without invalidating this layer when an
+# unrelated crate changes.
+COPY crates/common/ ./crates/common/
+COPY crates/api/ ./crates/api/
+COPY crates/executor/ ./crates/executor/
+COPY crates/notifier/ ./crates/notifier/
 
-# Build the entire workspace in release mode.
-# All binaries are compiled together, sharing dependency compilation.
+# Build only the Rust service binaries used by docker-compose.
+# Compiling this fixed trio keeps the layer shared across api/executor/notifier
+# builds without paying to compile worker, sensor, agent, timer, or CLI binaries.
 # target cache uses sharing=locked so concurrent service builds serialize
 # writes to the shared compilation cache instead of corrupting it.
 #
 # IMPORTANT: ARG SERVICE is declared AFTER this RUN so that changing the
 # SERVICE value does not invalidate the cached build layer. The first
-# service to build compiles the full workspace; subsequent services get
+# service to build compiles the shared service binaries; subsequent services get
 # a cache hit here and skip straight to the cp below.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
     --mount=type=cache,target=/build/target,sharing=locked \
-    cargo build --release --workspace --bins -j 4
+    cargo build --release \
+    --bin attune-api \
+    --bin attune-executor \
+    --bin attune-notifier \
+    -j 4
 
 # Extract the requested service binary from the target cache.
 # This is the only layer that varies per SERVICE value.

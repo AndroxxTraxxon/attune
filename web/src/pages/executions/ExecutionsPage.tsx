@@ -13,6 +13,7 @@ import {
 } from "@/hooks/useFilterSuggestions";
 import WorkflowExecutionTree from "@/components/executions/WorkflowExecutionTree";
 import ExecutionPreviewPanel from "@/components/executions/ExecutionPreviewPanel";
+import Pagination from "@/components/executions/Pagination";
 
 type ViewMode = "all" | "workflow";
 
@@ -90,10 +91,6 @@ const ExecutionsResultsTable = memo(
     error,
     hasActiveFilters,
     clearFilters,
-    page,
-    setPage,
-    pageSize,
-    total,
     selectedExecutionId,
     onSelectExecution,
   }: {
@@ -103,15 +100,9 @@ const ExecutionsResultsTable = memo(
     error: Error | null;
     hasActiveFilters: boolean;
     clearFilters: () => void;
-    page: number;
-    setPage: (page: number) => void;
-    pageSize: number;
-    total: number;
     selectedExecutionId: number | null;
     onSelectExecution: (id: number) => void;
   }) => {
-    const totalPages = Math.ceil(total / pageSize);
-
     // Initial load (no cached data yet)
     if (isLoading && executions.length === 0) {
       return (
@@ -251,60 +242,6 @@ const ExecutionsResultsTable = memo(
           </table>
         </div>
 
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="bg-gray-50 px-6 py-4 flex items-center justify-between border-t border-gray-200">
-            <div className="flex-1 flex justify-between sm:hidden">
-              <button
-                onClick={() => setPage(page - 1)}
-                disabled={page === 1}
-                className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <button
-                onClick={() => setPage(page + 1)}
-                disabled={page === totalPages}
-                className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
-            </div>
-            <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm text-gray-700">
-                  Showing{" "}
-                  <span className="font-medium">
-                    {(page - 1) * pageSize + 1}
-                  </span>{" "}
-                  to{" "}
-                  <span className="font-medium">
-                    {Math.min(page * pageSize, total)}
-                  </span>{" "}
-                  of <span className="font-medium">{total}</span> executions
-                </p>
-              </div>
-              <div>
-                <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
-                  <button
-                    onClick={() => setPage(page - 1)}
-                    disabled={page === 1}
-                    className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Previous
-                  </button>
-                  <button
-                    onClick={() => setPage(page + 1)}
-                    disabled={page === totalPages}
-                    className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Next
-                  </button>
-                </nav>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     );
   },
@@ -364,13 +301,14 @@ export default function ExecutionsPage() {
     const params: {
       page: number;
       pageSize: number;
+      includeTotal?: boolean;
       ruleRef?: string;
       actionRef?: string;
       triggerRef?: string;
       executor?: number;
       status?: ExecutionStatus;
       topLevelOnly?: boolean;
-    } = { page, pageSize };
+    } = { page, pageSize, includeTotal: true };
     if (debouncedFilters.rule) params.ruleRef = debouncedFilters.rule;
     if (debouncedFilters.action) params.actionRef = debouncedFilters.action;
     if (debouncedFilters.trigger) params.triggerRef = debouncedFilters.trigger;
@@ -389,7 +327,9 @@ export default function ExecutionsPage() {
   const { isConnected } = useExecutionStream({ enabled: true });
 
   const executions = useMemo(() => data?.data || [], [data]);
-  const total = data?.pagination?.total_items || 0;
+  const total = data?.pagination?.total_items ?? undefined;
+  const hasNext = data?.pagination?.has_next ?? false;
+  const hasPrevious = data?.pagination?.has_previous ?? page > 1;
 
   // Derive refs from currently-loaded execution data (no setState needed)
   const loadedRefs = useMemo(() => {
@@ -553,7 +493,7 @@ export default function ExecutionsPage() {
     <div className="flex h-full">
       {/* Main content area */}
       <div
-        className={`flex-1 min-w-0 overflow-y-auto p-6 ${selectedExecutionId ? "mr-0" : ""}`}
+        className={`flex-1 min-w-0 overflow-y-auto p-6 pb-28 ${selectedExecutionId ? "mr-0" : ""}`}
       >
         {/* Header - always visible */}
         <div className="flex items-center justify-between mb-6">
@@ -664,10 +604,6 @@ export default function ExecutionsPage() {
             error={error as Error | null}
             hasActiveFilters={hasActiveFilters}
             clearFilters={clearFilters}
-            page={page}
-            setPage={setPage}
-            pageSize={pageSize}
-            total={total}
             selectedExecutionId={selectedExecutionId}
             onSelectExecution={handleSelectExecution}
           />
@@ -679,10 +615,6 @@ export default function ExecutionsPage() {
             error={error as Error | null}
             hasActiveFilters={hasActiveFilters}
             clearFilters={clearFilters}
-            page={page}
-            setPage={setPage}
-            pageSize={pageSize}
-            total={total}
             workflowActionRefs={baseSuggestions.workflowActionRefs}
             selectedExecutionId={selectedExecutionId}
             onSelectExecution={handleSelectExecution}
@@ -699,6 +631,19 @@ export default function ExecutionsPage() {
           />
         </div>
       )}
+
+      <Pagination
+        page={page}
+        setPage={setPage}
+        pageSize={pageSize}
+        itemCount={filteredExecutions.length}
+        total={total}
+        hasNext={hasNext}
+        hasPrevious={hasPrevious}
+        itemLabel="executions"
+        floating
+        floatingOffsetPx={selectedExecutionId ? 200 : 0}
+      />
     </div>
   );
 }

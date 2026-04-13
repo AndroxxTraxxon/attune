@@ -13,6 +13,7 @@ import {
   useMergedSuggestions,
 } from "@/hooks/useFilterSuggestions";
 import type { EventSummary } from "@/api";
+import Pagination from "@/components/executions/Pagination";
 
 const formatDate = (dateString: string) => {
   return new Date(dateString).toLocaleString();
@@ -39,10 +40,6 @@ const EventsResultsTable = memo(
     error,
     hasActiveFilters,
     clearFilters,
-    page,
-    setPage,
-    pageSize,
-    total,
   }: {
     events: EventSummary[];
     isLoading: boolean;
@@ -50,13 +47,7 @@ const EventsResultsTable = memo(
     error: Error | null;
     hasActiveFilters: boolean;
     clearFilters: () => void;
-    page: number;
-    setPage: (page: number) => void;
-    pageSize: number;
-    total: number;
   }) => {
-    const totalPages = total ? Math.ceil(total / pageSize) : 0;
-
     // Initial load (no cached data yet)
     if (isLoading && events.length === 0) {
       return (
@@ -222,54 +213,6 @@ const EventsResultsTable = memo(
             </table>
           </div>
         </div>
-
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="bg-gray-50 px-6 py-4 flex items-center justify-between border-t border-gray-200">
-            <div className="flex-1 flex justify-between sm:hidden">
-              <button
-                onClick={() => setPage(page - 1)}
-                disabled={page === 1}
-                className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <button
-                onClick={() => setPage(page + 1)}
-                disabled={page === totalPages}
-                className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
-            </div>
-            <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm text-gray-700">
-                  Page <span className="font-medium">{page}</span> of{" "}
-                  <span className="font-medium">{totalPages}</span>
-                </p>
-              </div>
-              <div>
-                <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
-                  <button
-                    onClick={() => setPage(page - 1)}
-                    disabled={page === 1}
-                    className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Previous
-                  </button>
-                  <button
-                    onClick={() => setPage(page + 1)}
-                    disabled={page === totalPages}
-                    className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Next
-                  </button>
-                </nav>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     );
   },
@@ -370,7 +313,14 @@ export default function EventsPage() {
             oldData:
               | {
                   data: EventSummary[];
-                  pagination?: { total_items?: number };
+                  pagination?: {
+                    total_items?: number;
+                    total_pages?: number;
+                    page?: number;
+                    page_size?: number;
+                    has_previous?: boolean;
+                    has_next?: boolean;
+                  };
                 }
               | undefined,
           ) => {
@@ -390,25 +340,50 @@ export default function EventsPage() {
               return oldData;
             }
 
+            const hasExactTotal = oldData.pagination?.total_items != null;
+            const currentPage = oldData.pagination?.page ?? page;
+            const currentPageSize = oldData.pagination?.page_size ?? pageSize;
+            const nextPagination = oldData.pagination
+              ? { ...oldData.pagination }
+              : undefined;
+
+            if (nextPagination) {
+              nextPagination.has_previous = currentPage > 1;
+            }
+
             // Add new event to the beginning of the list if on first page
             if (page === 1) {
+              if (nextPagination) {
+                if (hasExactTotal) {
+                  const newTotal = (oldData.pagination?.total_items ?? 0) + 1;
+                  nextPagination.total_items = newTotal;
+                  nextPagination.total_pages =
+                    currentPageSize > 0
+                      ? Math.ceil(newTotal / currentPageSize)
+                      : 0;
+                  nextPagination.has_next = currentPage * currentPageSize < newTotal;
+                } else if (oldData.data.length >= currentPageSize) {
+                  nextPagination.has_next = true;
+                }
+              }
               return {
                 ...oldData,
                 data: [newEvent, ...oldData.data].slice(0, pageSize),
-                pagination: {
-                  ...oldData.pagination,
-                  total_items: (oldData.pagination?.total_items || 0) + 1,
-                },
+                pagination: nextPagination,
               };
             }
 
-            // For other pages, just update the total count
+            if (nextPagination && hasExactTotal) {
+              const newTotal = (oldData.pagination?.total_items ?? 0) + 1;
+              nextPagination.total_items = newTotal;
+              nextPagination.total_pages =
+                currentPageSize > 0 ? Math.ceil(newTotal / currentPageSize) : 0;
+              nextPagination.has_next = currentPage * currentPageSize < newTotal;
+            }
+
             return {
               ...oldData,
-              pagination: {
-                ...oldData.pagination,
-                total_items: (oldData.pagination?.total_items || 0) + 1,
-              },
+              pagination: nextPagination,
             };
           },
         );
@@ -425,7 +400,9 @@ export default function EventsPage() {
   const { data, isLoading, isFetching, error } = useEvents(queryParams);
 
   const events = useMemo(() => data?.data || [], [data]);
-  const total = data?.pagination?.total_items || 0;
+  const total = data?.pagination?.total_items ?? undefined;
+  const hasNext = data?.pagination?.has_next ?? false;
+  const hasPrevious = data?.pagination?.has_previous ?? page > 1;
 
   // Derive refs from currently-loaded event data (no setState needed)
   const loadedRefs = useMemo(() => {
@@ -468,7 +445,7 @@ export default function EventsPage() {
   const hasActiveFilters = Object.values(searchFilters).some((v) => v !== "");
 
   return (
-    <div className="p-6">
+    <div className="p-6 pb-28">
       {/* Header - always visible */}
       <div className="mb-6">
         <div className="flex items-center justify-between">
@@ -525,8 +502,12 @@ export default function EventsPage() {
         </div>
         {data && (
           <div className="mt-3 text-sm text-gray-600">
-            Showing {events.length} of {total} events
-            {hasActiveFilters && " (filtered)"}
+            {typeof total === "number"
+              ? `Showing ${events.length} of ${total} events`
+              : hasNext
+                ? `Showing ${events.length} events, more available`
+                : `Showing ${events.length} events`}
+            {hasActiveFilters ? " (filtered)" : ""}
           </div>
         )}
       </div>
@@ -539,10 +520,18 @@ export default function EventsPage() {
         error={error as Error | null}
         hasActiveFilters={hasActiveFilters}
         clearFilters={clearFilters}
+      />
+
+      <Pagination
         page={page}
         setPage={setPage}
         pageSize={pageSize}
+        itemCount={events.length}
         total={total}
+        hasNext={hasNext}
+        hasPrevious={hasPrevious}
+        itemLabel="events"
+        floating
       />
     </div>
   );

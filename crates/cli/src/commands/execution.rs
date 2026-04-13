@@ -1,34 +1,99 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Subcommand;
+use eventsource_stream::Eventsource;
+use futures::StreamExt;
+use reqwest::header::{self, ACCEPT};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::io::{self, Write};
+use std::time::Duration;
 
 use crate::client::ApiClient;
 use crate::config::CliConfig;
 use crate::output::{self, OutputFormat};
+use crate::wait::{extract_stdout, spawn_execution_output_watch, wait_for_execution, WaitOptions};
 
 #[derive(Subcommand)]
 pub enum ExecutionCommands {
-    /// List all executions
+    /// List executions
     List {
         /// Filter by pack name
         #[arg(long)]
         pack: Option<String>,
 
-        /// Filter by action name
+        /// Filter by action reference
         #[arg(short, long)]
         action: Option<String>,
 
-        /// Filter by status
+        /// Filter by rule reference
+        #[arg(long)]
+        rule: Option<String>,
+
+        /// Filter by trigger reference
+        #[arg(long)]
+        trigger: Option<String>,
+
+        /// Filter by status (repeat for multiple values)
         #[arg(short, long)]
-        status: Option<String>,
+        status: Vec<String>,
 
         /// Search in execution result (case-insensitive)
         #[arg(short, long)]
         result: Option<String>,
 
+        /// Show only top-level executions
+        #[arg(long)]
+        top_level_only: bool,
+
         /// Limit number of results
         #[arg(short, long, default_value = "50")]
         limit: i32,
+    },
+    /// Watch executions live
+    Watch {
+        /// Execution ID to observe instead of watching the list
+        execution_id: Option<i64>,
+
+        /// Filter by pack name
+        #[arg(long)]
+        pack: Option<String>,
+
+        /// Filter by action reference
+        #[arg(short, long)]
+        action: Option<String>,
+
+        /// Filter by rule reference
+        #[arg(long)]
+        rule: Option<String>,
+
+        /// Filter by trigger reference
+        #[arg(long)]
+        trigger: Option<String>,
+
+        /// Filter by status (repeat for multiple values)
+        #[arg(short, long)]
+        status: Vec<String>,
+
+        /// Search in execution result (case-insensitive)
+        #[arg(short, long)]
+        result: Option<String>,
+
+        /// Show only top-level executions
+        #[arg(long)]
+        top_level_only: bool,
+
+        /// Limit number of results shown
+        #[arg(short, long, default_value = "50")]
+        limit: i32,
+
+        /// Timeout in seconds when observing (default: 300)
+        #[arg(long, default_value = "300")]
+        timeout: u64,
+
+        /// Notifier WebSocket base URL (e.g. ws://localhost:8081).
+        /// Derived from --api-url automatically when not set.
+        #[arg(long)]
+        notifier_url: Option<String>,
     },
     /// Show details of a specific execution
     Show {
@@ -70,8 +135,8 @@ pub enum ResultFormat {
     Yaml,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Execution {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ExecutionSummaryRow {
     id: i64,
     action_ref: String,
     status: String,
@@ -80,13 +145,17 @@ struct Execution {
     #[serde(default)]
     enforcement: Option<i64>,
     #[serde(default)]
+    rule_ref: Option<String>,
+    #[serde(default)]
+    trigger_ref: Option<String>,
+    #[serde(default)]
     result: Option<serde_json::Value>,
     created: String,
     #[serde(default)]
     updated: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ExecutionDetail {
     id: i64,
     #[serde(default)]
@@ -120,6 +189,72 @@ struct LogEntry {
     message: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct ExecutionStreamNotification {
+    entity_id: i64,
+    payload: ExecutionStreamPayload,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExecutionStreamPayload {
+    #[serde(default)]
+    id: Option<i64>,
+    #[serde(default)]
+    action_ref: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    parent: Option<i64>,
+    #[serde(default)]
+    enforcement: Option<i64>,
+    #[serde(default)]
+    rule_ref: Option<String>,
+    #[serde(default)]
+    trigger_ref: Option<String>,
+    #[serde(default)]
+    result: Option<serde_json::Value>,
+    #[serde(default)]
+    created: Option<String>,
+    #[serde(default)]
+    updated: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ExecutionListFilters {
+    pack: Option<String>,
+    action: Option<String>,
+    rule: Option<String>,
+    trigger: Option<String>,
+    statuses: Vec<String>,
+    result: Option<String>,
+    top_level_only: bool,
+    limit: usize,
+}
+
+impl ExecutionListFilters {
+    fn from_args(
+        pack: Option<String>,
+        action: Option<String>,
+        rule: Option<String>,
+        trigger: Option<String>,
+        status: Vec<String>,
+        result: Option<String>,
+        top_level_only: bool,
+        limit: i32,
+    ) -> Self {
+        Self {
+            pack,
+            action,
+            rule,
+            trigger,
+            statuses: normalize_statuses(status),
+            result: result.map(|value| value.to_lowercase()),
+            top_level_only,
+            limit: limit.max(1) as usize,
+        }
+    }
+}
+
 pub async fn handle_execution_command(
     profile: &Option<String>,
     command: ExecutionCommands,
@@ -130,21 +265,71 @@ pub async fn handle_execution_command(
         ExecutionCommands::List {
             pack,
             action,
+            rule,
+            trigger,
             status,
             result,
+            top_level_only,
             limit,
         } => {
-            handle_list(
-                profile,
+            let filters = ExecutionListFilters::from_args(
                 pack,
                 action,
+                rule,
+                trigger,
                 status,
                 result,
+                top_level_only,
                 limit,
-                api_url,
-                output_format,
-            )
-            .await
+            );
+            handle_list(profile, filters, api_url, output_format).await
+        }
+        ExecutionCommands::Watch {
+            execution_id,
+            pack,
+            action,
+            rule,
+            trigger,
+            status,
+            result,
+            top_level_only,
+            limit,
+            timeout,
+            notifier_url,
+        } => {
+            if let Some(execution_id) = execution_id {
+                ensure_watch_execution_mode_has_no_list_filters(
+                    &pack,
+                    &action,
+                    &rule,
+                    &trigger,
+                    &status,
+                    &result,
+                    top_level_only,
+                    limit,
+                )?;
+                handle_watch_execution(
+                    profile,
+                    execution_id,
+                    timeout,
+                    notifier_url,
+                    api_url,
+                    output_format,
+                )
+                .await
+            } else {
+                let filters = ExecutionListFilters::from_args(
+                    pack,
+                    action,
+                    rule,
+                    trigger,
+                    status,
+                    result,
+                    top_level_only,
+                    limit,
+                );
+                handle_watch_list(profile, filters, api_url, output_format).await
+            }
         }
         ExecutionCommands::Show { execution_id } => {
             handle_show(profile, execution_id, api_url, output_format).await
@@ -163,67 +348,185 @@ pub async fn handle_execution_command(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn handle_list(
     profile: &Option<String>,
-    pack: Option<String>,
-    action: Option<String>,
-    status: Option<String>,
-    result: Option<String>,
-    limit: i32,
+    filters: ExecutionListFilters,
     api_url: &Option<String>,
     output_format: OutputFormat,
 ) -> Result<()> {
     let config = CliConfig::load_with_profile(profile.as_deref())?;
     let mut client = ApiClient::from_config(&config, api_url);
-
-    let mut query_params = vec![format!("per_page={}", limit)];
-    if let Some(pack_name) = pack {
-        query_params.push(format!("pack_name={}", pack_name));
-    }
-    if let Some(action_name) = action {
-        query_params.push(format!("action_ref={}", action_name));
-    }
-    if let Some(status_filter) = status {
-        query_params.push(format!("status={}", status_filter));
-    }
-    if let Some(result_search) = result {
-        query_params.push(format!(
-            "result_contains={}",
-            urlencoding::encode(&result_search)
-        ));
-    }
-
-    let path = format!("/executions?{}", query_params.join("&"));
-    let executions: Vec<Execution> = client.get(&path).await?;
+    let executions = fetch_matching_executions(&mut client, &filters).await?;
 
     match output_format {
         OutputFormat::Json | OutputFormat::Yaml => {
             output::print_output(&executions, output_format)?;
         }
         OutputFormat::Table => {
-            if executions.is_empty() {
-                output::print_info("No executions found");
-            } else {
-                let mut table = output::create_table();
-                output::add_header(
-                    &mut table,
-                    vec!["ID", "Action", "Status", "Started", "Duration"],
-                );
+            print_execution_rows(&executions);
+        }
+    }
 
-                for execution in executions {
-                    table.add_row(vec![
-                        execution.id.to_string(),
-                        execution.action_ref.clone(),
-                        output::format_status(&execution.status),
-                        output::format_timestamp(&execution.created),
-                        "-".to_string(),
-                    ]);
+    Ok(())
+}
+
+async fn handle_watch_list(
+    profile: &Option<String>,
+    filters: ExecutionListFilters,
+    api_url: &Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    if output_format != OutputFormat::Table {
+        anyhow::bail!("execution watch currently supports table output only");
+    }
+
+    let config = CliConfig::load_with_profile(profile.as_deref())?;
+    let base_url = config.effective_api_url(api_url);
+    let auth_token = config.auth_token()?;
+    let mut client = ApiClient::from_config(&config, api_url);
+
+    let initial = fetch_matching_executions(&mut client, &filters).await?;
+    render_watch_table(&initial, &filters)?;
+
+    match open_execution_stream(&base_url, auth_token.as_deref()).await {
+        Ok(mut event_source) => {
+            let mut executions: HashMap<i64, ExecutionSummaryRow> = initial
+                .into_iter()
+                .map(|execution| (execution.id, execution))
+                .collect();
+
+            loop {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        println!();
+                        break;
+                    }
+                    message = event_source.next() => {
+                        match message {
+                            Some(Ok(event)) => {
+                                if event.data.is_empty() {
+                                    continue;
+                                }
+
+                                let notification: ExecutionStreamNotification = serde_json::from_str(&event.data)
+                                    .context("Failed to parse execution stream notification")?;
+                                if let Some(updated) = merge_execution_stream_payload(
+                                    executions.get(&notification.entity_id),
+                                    notification,
+                                ) {
+                                    if matches_execution_filters(&updated, &filters) {
+                                        executions.insert(updated.id, updated);
+                                    } else {
+                                        executions.remove(&updated.id);
+                                    }
+                                    let rows = limit_execution_rows(executions.values().cloned().collect(), filters.limit);
+                                    render_watch_table(&rows, &filters)?;
+                                }
+                            }
+                            Some(Err(err)) => {
+                                output::print_warning(&format!("Execution stream disconnected: {}", err));
+                                break;
+                            }
+                            None => break,
+                        }
+                    }
                 }
-
-                println!("{}", table);
             }
         }
+        Err(err) => {
+            output::print_warning(&format!(
+                "Live stream unavailable ({}); falling back to polling every 2s",
+                err
+            ));
+            loop {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        println!();
+                        break;
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(2)) => {
+                        match fetch_matching_executions(&mut client, &filters).await {
+                            Ok(rows) => {
+                                render_watch_table(&rows, &filters)?;
+                            }
+                            Err(err) => {
+                                output::print_warning(&format!("Execution watch refresh failed: {}", err));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_watch_execution(
+    profile: &Option<String>,
+    execution_id: i64,
+    timeout: u64,
+    notifier_url: Option<String>,
+    api_url: &Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let config = CliConfig::load_with_profile(profile.as_deref())?;
+    let mut client = ApiClient::from_config(&config, api_url);
+
+    if output_format == OutputFormat::Table {
+        output::print_info(&format!("Observing execution {}...", execution_id));
+    }
+
+    let interactive_wait = true;
+    let stream_live_logs = true;
+    let debug_wait = false;
+    let watch_task = Some(spawn_execution_output_watch(
+        ApiClient::from_config(&config, api_url),
+        execution_id,
+        notifier_url.clone(),
+        interactive_wait,
+        stream_live_logs,
+        debug_wait,
+    ));
+    let summary = wait_for_execution(WaitOptions {
+        execution_id,
+        timeout_secs: timeout,
+        api_client: &mut client,
+        notifier_ws_url: notifier_url,
+        verbose: debug_wait,
+    })
+    .await?;
+    let (delivered_output, root_stdout_completed) = match watch_task {
+        Some(task) => task.join().await,
+        None => (false, false),
+    };
+    let suppress_final_stdout = delivered_output && root_stdout_completed;
+
+    render_watched_execution_summary(summary, output_format, suppress_final_stdout)
+}
+
+fn ensure_watch_execution_mode_has_no_list_filters(
+    pack: &Option<String>,
+    action: &Option<String>,
+    rule: &Option<String>,
+    trigger: &Option<String>,
+    status: &[String],
+    result: &Option<String>,
+    top_level_only: bool,
+    limit: i32,
+) -> Result<()> {
+    if pack.is_some()
+        || action.is_some()
+        || rule.is_some()
+        || trigger.is_some()
+        || !status.is_empty()
+        || result.is_some()
+        || top_level_only
+        || limit != 50
+    {
+        anyhow::bail!(
+            "execution watch <id> observes a single execution and does not accept list-watch filters"
+        );
     }
 
     Ok(())
@@ -309,12 +612,10 @@ async fn handle_logs(
     let path = format!("/executions/{}/logs", execution_id);
 
     if follow {
-        // Polling implementation for following logs
         let mut last_count = 0;
         loop {
             let logs: ExecutionLogs = client.get(&path).await?;
 
-            // Print new logs only
             for log in logs.logs.iter().skip(last_count) {
                 match output_format {
                     OutputFormat::Json => {
@@ -336,12 +637,13 @@ async fn handle_logs(
 
             last_count = logs.logs.len();
 
-            // Check if execution is complete
             let exec_path = format!("/executions/{}", execution_id);
             let execution: ExecutionDetail = client.get(&exec_path).await?;
             let status_lower = execution.status.to_lowercase();
-            if status_lower == "succeeded" || status_lower == "failed" || status_lower == "canceled"
-            {
+            if matches!(
+                status_lower.as_str(),
+                "succeeded" | "failed" | "canceled" | "cancelled"
+            ) {
                 break;
             }
 
@@ -386,9 +688,7 @@ async fn handle_result(
     let path = format!("/executions/{}", execution_id);
     let execution: ExecutionDetail = client.get(&path).await?;
 
-    // Check if execution has a result
     if let Some(result) = execution.result {
-        // Output raw result in requested format
         match format {
             ResultFormat::Json => {
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -414,7 +714,6 @@ async fn handle_cancel(
     let config = CliConfig::load_with_profile(profile.as_deref())?;
     let mut client = ApiClient::from_config(&config, api_url);
 
-    // Confirm cancellation unless --yes is provided
     if !yes && matches!(output_format, OutputFormat::Table) {
         let confirm = dialoguer::Confirm::new()
             .with_prompt(format!(
@@ -443,4 +742,475 @@ async fn handle_cancel(
     }
 
     Ok(())
+}
+
+async fn fetch_matching_executions(
+    client: &mut ApiClient,
+    filters: &ExecutionListFilters,
+) -> Result<Vec<ExecutionSummaryRow>> {
+    let query = build_execution_query(filters);
+    let path = if query.is_empty() {
+        "/executions".to_string()
+    } else {
+        format!("/executions?{}", query)
+    };
+    let response: Vec<ExecutionSummaryRow> = client.get_paginated(&path).await?;
+    Ok(limit_execution_rows(
+        response
+            .into_iter()
+            .filter(|execution| matches_execution_filters(execution, filters))
+            .collect(),
+        filters.limit,
+    ))
+}
+
+fn build_execution_query(filters: &ExecutionListFilters) -> String {
+    let mut query_params = vec![format!("per_page={}", filters.limit)];
+
+    if let Some(pack_name) = &filters.pack {
+        query_params.push(format!("pack_name={}", urlencoding::encode(pack_name)));
+    }
+    if let Some(action_ref) = &filters.action {
+        query_params.push(format!("action_ref={}", urlencoding::encode(action_ref)));
+    }
+    if let Some(rule_ref) = &filters.rule {
+        query_params.push(format!("rule_ref={}", urlencoding::encode(rule_ref)));
+    }
+    if let Some(trigger_ref) = &filters.trigger {
+        query_params.push(format!("trigger_ref={}", urlencoding::encode(trigger_ref)));
+    }
+    if filters.statuses.len() == 1 {
+        query_params.push(format!(
+            "status={}",
+            urlencoding::encode(&filters.statuses[0])
+        ));
+    }
+    if let Some(result_search) = &filters.result {
+        query_params.push(format!(
+            "result_contains={}",
+            urlencoding::encode(result_search)
+        ));
+    }
+    if filters.top_level_only {
+        query_params.push("top_level_only=true".to_string());
+    }
+
+    query_params.join("&")
+}
+
+fn matches_execution_filters(
+    execution: &ExecutionSummaryRow,
+    filters: &ExecutionListFilters,
+) -> bool {
+    if filters.top_level_only && execution.parent.is_some() {
+        return false;
+    }
+
+    if let Some(pack) = &filters.pack {
+        let expected_prefix = format!("{pack}.");
+        if !execution.action_ref.starts_with(&expected_prefix) {
+            return false;
+        }
+    }
+
+    if !matches_ref_filter(Some(&execution.action_ref), filters.action.as_deref()) {
+        return false;
+    }
+    if !matches_ref_filter(execution.rule_ref.as_deref(), filters.rule.as_deref()) {
+        return false;
+    }
+    if !matches_ref_filter(execution.trigger_ref.as_deref(), filters.trigger.as_deref()) {
+        return false;
+    }
+
+    if !filters.statuses.is_empty()
+        && !filters
+            .statuses
+            .iter()
+            .any(|status| status.eq_ignore_ascii_case(&execution.status))
+    {
+        return false;
+    }
+
+    if let Some(result_search) = &filters.result {
+        let result_text = execution
+            .result
+            .as_ref()
+            .map(|value| value.to_string().to_lowercase())
+            .unwrap_or_default();
+        if !result_text.contains(result_search) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn matches_ref_filter(actual: Option<&str>, filter: Option<&str>) -> bool {
+    let Some(filter) = filter else {
+        return true;
+    };
+    let Some(actual) = actual else {
+        return false;
+    };
+
+    if let Some(prefix) = filter.strip_suffix(".*") {
+        return !prefix.is_empty() && actual.starts_with(&format!("{prefix}."));
+    }
+
+    actual == filter
+}
+
+fn limit_execution_rows(
+    mut rows: Vec<ExecutionSummaryRow>,
+    limit: usize,
+) -> Vec<ExecutionSummaryRow> {
+    rows.sort_by(|left, right| {
+        right
+            .created
+            .cmp(&left.created)
+            .then_with(|| right.id.cmp(&left.id))
+    });
+    rows.truncate(limit);
+    rows
+}
+
+fn merge_execution_stream_payload(
+    existing: Option<&ExecutionSummaryRow>,
+    notification: ExecutionStreamNotification,
+) -> Option<ExecutionSummaryRow> {
+    let mut merged = existing.cloned().unwrap_or(ExecutionSummaryRow {
+        id: notification.entity_id,
+        action_ref: String::new(),
+        status: String::new(),
+        parent: None,
+        enforcement: None,
+        rule_ref: None,
+        trigger_ref: None,
+        result: None,
+        created: String::new(),
+        updated: None,
+    });
+
+    let payload = notification.payload;
+    merged.id = payload.id.unwrap_or(notification.entity_id);
+    if let Some(action_ref) = payload.action_ref {
+        merged.action_ref = action_ref;
+    }
+    if let Some(status) = payload.status {
+        merged.status = status;
+    }
+    if let Some(parent) = payload.parent {
+        merged.parent = Some(parent);
+    }
+    if let Some(enforcement) = payload.enforcement {
+        merged.enforcement = Some(enforcement);
+    }
+    if let Some(rule_ref) = payload.rule_ref {
+        merged.rule_ref = Some(rule_ref);
+    }
+    if let Some(trigger_ref) = payload.trigger_ref {
+        merged.trigger_ref = Some(trigger_ref);
+    }
+    if let Some(result) = payload.result {
+        merged.result = Some(result);
+    }
+    if let Some(created) = payload.created {
+        merged.created = created;
+    }
+    if let Some(updated) = payload.updated {
+        merged.updated = Some(updated);
+    }
+
+    if merged.action_ref.is_empty() || merged.status.is_empty() || merged.created.is_empty() {
+        return None;
+    }
+
+    Some(merged)
+}
+
+async fn open_execution_stream(
+    base_url: &str,
+    auth_token: Option<&str>,
+) -> Result<
+    impl futures::Stream<
+        Item = Result<
+            eventsource_stream::Event,
+            eventsource_stream::EventStreamError<reqwest::Error>,
+        >,
+    >,
+> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(300))
+        .build()
+        .context("Failed to build execution stream HTTP client")?;
+
+    let mut request = client
+        .get(format!(
+            "{}/api/v1/executions/stream",
+            base_url.trim_end_matches('/')
+        ))
+        .header(ACCEPT, "text/event-stream");
+    if let Some(token) = auth_token {
+        request = request.header(header::AUTHORIZATION, format!("Bearer {}", token));
+    }
+
+    let response = request
+        .send()
+        .await
+        .context("Failed to open execution stream")?;
+    if !response.status().is_success() {
+        anyhow::bail!("HTTP {}", response.status());
+    }
+
+    Ok(response.bytes_stream().eventsource())
+}
+
+fn render_watch_table(rows: &[ExecutionSummaryRow], filters: &ExecutionListFilters) -> Result<()> {
+    print!("\x1B[2J\x1B[H");
+    io::stdout().flush()?;
+
+    println!("Watching executions");
+    println!("Press Ctrl+C to stop");
+    println!("Filters: {}", format_filter_summary(filters));
+    println!();
+
+    print_execution_rows(rows);
+    io::stdout().flush()?;
+    Ok(())
+}
+
+fn format_filter_summary(filters: &ExecutionListFilters) -> String {
+    let mut parts = Vec::new();
+    if let Some(pack) = &filters.pack {
+        parts.push(format!("pack={pack}"));
+    }
+    if let Some(action) = &filters.action {
+        parts.push(format!("action={action}"));
+    }
+    if let Some(rule) = &filters.rule {
+        parts.push(format!("rule={rule}"));
+    }
+    if let Some(trigger) = &filters.trigger {
+        parts.push(format!("trigger={trigger}"));
+    }
+    if !filters.statuses.is_empty() {
+        parts.push(format!("status={}", filters.statuses.join(",")));
+    }
+    if let Some(result) = &filters.result {
+        parts.push(format!("result~={result}"));
+    }
+    parts.push(format!(
+        "scope={}",
+        if filters.top_level_only {
+            "top-level"
+        } else {
+            "all"
+        }
+    ));
+    parts.push(format!("limit={}", filters.limit));
+
+    if parts.is_empty() {
+        "none".to_string()
+    } else {
+        parts.join(" ")
+    }
+}
+
+fn print_execution_rows(rows: &[ExecutionSummaryRow]) {
+    if rows.is_empty() {
+        output::print_info("No executions found");
+        return;
+    }
+
+    let mut table = output::create_table();
+    output::add_header(
+        &mut table,
+        vec!["ID", "Action", "Rule", "Trigger", "Status", "Created"],
+    );
+
+    for execution in rows {
+        table.add_row(vec![
+            execution.id.to_string(),
+            execution.action_ref.clone(),
+            execution
+                .rule_ref
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+            execution
+                .trigger_ref
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+            output::format_status(&execution.status),
+            output::format_timestamp(&execution.created),
+        ]);
+    }
+
+    println!("{}", table);
+}
+
+fn render_watched_execution_summary(
+    summary: crate::wait::ExecutionSummary,
+    output_format: OutputFormat,
+    suppress_final_stdout: bool,
+) -> Result<()> {
+    match output_format {
+        OutputFormat::Json | OutputFormat::Yaml => {
+            output::print_output(&summary, output_format)?;
+        }
+        OutputFormat::Table => {
+            output::print_success(&format!("Execution {} completed", summary.id));
+            output::print_section("Execution Details");
+            output::print_key_value_table(vec![
+                ("Execution ID", summary.id.to_string()),
+                ("Action", summary.action_ref.clone()),
+                ("Status", output::format_status(&summary.status)),
+                ("Created", output::format_timestamp(&summary.created)),
+                ("Updated", output::format_timestamp(&summary.updated)),
+            ]);
+
+            let stdout = extract_stdout(&summary.result);
+            if !suppress_final_stdout {
+                if let Some(stdout) = &stdout {
+                    output::print_section("Stdout");
+                    println!("{}", stdout);
+                }
+            }
+
+            if let Some(mut result) = summary.result {
+                if stdout.is_some() {
+                    if let Some(obj) = result.as_object_mut() {
+                        obj.remove("stdout");
+                    }
+                }
+                if !result.is_null() {
+                    output::print_section("Result");
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn normalize_statuses(statuses: Vec<String>) -> Vec<String> {
+    statuses
+        .into_iter()
+        .map(|status| status.trim().to_lowercase())
+        .filter(|status| !status.is_empty())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_execution_query_includes_new_filters() {
+        let filters = ExecutionListFilters::from_args(
+            Some("core".to_string()),
+            Some("core.echo".to_string()),
+            Some("core.rule".to_string()),
+            Some("core.trigger".to_string()),
+            vec!["running".to_string()],
+            Some("boom".to_string()),
+            true,
+            25,
+        );
+
+        let query = build_execution_query(&filters);
+
+        assert!(query.contains("per_page=25"));
+        assert!(query.contains("pack_name=core"));
+        assert!(query.contains("action_ref=core.echo"));
+        assert!(query.contains("rule_ref=core.rule"));
+        assert!(query.contains("trigger_ref=core.trigger"));
+        assert!(query.contains("status=running"));
+        assert!(query.contains("result_contains=boom"));
+        assert!(query.contains("top_level_only=true"));
+    }
+
+    #[test]
+    fn build_execution_query_omits_status_when_multiple_selected() {
+        let filters = ExecutionListFilters::from_args(
+            None,
+            None,
+            None,
+            None,
+            vec!["running".to_string(), "failed".to_string()],
+            None,
+            false,
+            50,
+        );
+
+        let query = build_execution_query(&filters);
+
+        assert!(!query.contains("status="));
+    }
+
+    #[test]
+    fn matches_execution_filters_supports_wildcards_and_top_level() {
+        let execution = ExecutionSummaryRow {
+            id: 42,
+            action_ref: "core.echo".to_string(),
+            status: "running".to_string(),
+            parent: None,
+            enforcement: None,
+            rule_ref: Some("core.on_timer".to_string()),
+            trigger_ref: Some("core.timer".to_string()),
+            result: Some(serde_json::json!({"message": "hello"})),
+            created: "2024-01-01T00:00:00Z".to_string(),
+            updated: Some("2024-01-01T00:00:00Z".to_string()),
+        };
+
+        let filters = ExecutionListFilters::from_args(
+            None,
+            Some("core.*".to_string()),
+            Some("core.*".to_string()),
+            Some("core.timer".to_string()),
+            vec!["running".to_string(), "scheduled".to_string()],
+            Some("hello".to_string()),
+            true,
+            50,
+        );
+
+        assert!(matches_execution_filters(&execution, &filters));
+    }
+
+    #[test]
+    fn merge_execution_stream_payload_updates_existing_row() {
+        let existing = ExecutionSummaryRow {
+            id: 7,
+            action_ref: "core.echo".to_string(),
+            status: "running".to_string(),
+            parent: None,
+            enforcement: None,
+            rule_ref: Some("core.rule".to_string()),
+            trigger_ref: Some("core.trigger".to_string()),
+            result: None,
+            created: "2024-01-01T00:00:00Z".to_string(),
+            updated: Some("2024-01-01T00:00:00Z".to_string()),
+        };
+        let notification = ExecutionStreamNotification {
+            entity_id: 7,
+            payload: ExecutionStreamPayload {
+                id: None,
+                action_ref: None,
+                status: Some("completed".to_string()),
+                parent: None,
+                enforcement: None,
+                rule_ref: None,
+                trigger_ref: None,
+                result: Some(serde_json::json!({"ok": true})),
+                created: None,
+                updated: Some("2024-01-01T00:01:00Z".to_string()),
+            },
+        };
+
+        let merged = merge_execution_stream_payload(Some(&existing), notification).unwrap();
+        assert_eq!(merged.status, "completed");
+        assert_eq!(merged.result, Some(serde_json::json!({"ok": true})));
+        assert_eq!(merged.action_ref, "core.echo");
+    }
 }

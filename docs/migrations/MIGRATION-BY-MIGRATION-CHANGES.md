@@ -104,7 +104,7 @@ CREATE TABLE execution (
 
 First, ensure `worker_role_enum` is created in `20250101000001_initial_setup.sql`:
 ```sql
-CREATE TYPE worker_role_enum AS ENUM ('action', 'sensor', 'hybrid');
+CREATE TYPE worker_role_enum AS ENUM ('action', 'sensor');
 ```
 
 Then in worker table:

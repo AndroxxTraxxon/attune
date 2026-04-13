@@ -243,7 +243,6 @@ pub mod enums {
     pub enum WorkerRole {
         Action,
         Sensor,
-        Hybrid,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, ToSchema)]

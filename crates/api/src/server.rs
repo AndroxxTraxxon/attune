@@ -55,6 +55,7 @@ impl Server {
             .merge(routes::event_routes())
             .merge(routes::key_routes())
             .merge(routes::permission_routes())
+            .merge(routes::worker_routes())
             .merge(routes::workflow_routes())
             .merge(routes::webhook_routes())
             .merge(routes::history_routes())

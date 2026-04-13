@@ -11,6 +11,7 @@ import {
   useFilterSuggestions,
   useMergedSuggestions,
 } from "@/hooks/useFilterSuggestions";
+import Pagination from "@/components/executions/Pagination";
 
 // Memoized filter input component for non-ref fields (e.g. Event ID)
 const FilterInput = memo(
@@ -95,10 +96,6 @@ const EnforcementsResultsTable = memo(
     error,
     hasActiveFilters,
     clearFilters,
-    page,
-    setPage,
-    pageSize,
-    total,
   }: {
     enforcements: EnforcementSummary[];
     isLoading: boolean;
@@ -106,13 +103,7 @@ const EnforcementsResultsTable = memo(
     error: Error | null;
     hasActiveFilters: boolean;
     clearFilters: () => void;
-    page: number;
-    setPage: (page: number) => void;
-    pageSize: number;
-    total: number;
   }) => {
-    const totalPages = Math.ceil(total / pageSize);
-
     // Initial load (no cached data yet)
     if (isLoading && enforcements.length === 0) {
       return (
@@ -264,61 +255,6 @@ const EnforcementsResultsTable = memo(
             </tbody>
           </table>
         </div>
-
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="bg-gray-50 px-6 py-4 flex items-center justify-between border-t border-gray-200">
-            <div className="flex-1 flex justify-between sm:hidden">
-              <button
-                onClick={() => setPage(page - 1)}
-                disabled={page === 1}
-                className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <button
-                onClick={() => setPage(page + 1)}
-                disabled={page === totalPages}
-                className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
-            </div>
-            <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm text-gray-700">
-                  Showing{" "}
-                  <span className="font-medium">
-                    {(page - 1) * pageSize + 1}
-                  </span>{" "}
-                  to{" "}
-                  <span className="font-medium">
-                    {Math.min(page * pageSize, total)}
-                  </span>{" "}
-                  of <span className="font-medium">{total}</span> enforcements
-                </p>
-              </div>
-              <div>
-                <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
-                  <button
-                    onClick={() => setPage(page - 1)}
-                    disabled={page === 1}
-                    className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Previous
-                  </button>
-                  <button
-                    onClick={() => setPage(page + 1)}
-                    disabled={page === totalPages}
-                    className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Next
-                  </button>
-                </nav>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     );
   },
@@ -389,7 +325,9 @@ export default function EnforcementsPage() {
   const { isConnected } = useEnforcementStream({ enabled: true });
 
   const enforcements = useMemo(() => data?.data || [], [data]);
-  const total = data?.pagination?.total_items || 0;
+  const total = data?.pagination?.total_items ?? undefined;
+  const hasNext = data?.pagination?.has_next ?? false;
+  const hasPrevious = data?.pagination?.has_previous ?? page > 1;
 
   // Derive refs from currently-loaded enforcement data (no setState needed)
   const loadedRefs = useMemo(() => {
@@ -456,7 +394,7 @@ export default function EnforcementsPage() {
     selectedStatuses.length > 0;
 
   return (
-    <div className="p-6">
+    <div className="p-6 pb-28">
       {/* Header - always visible */}
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -533,10 +471,18 @@ export default function EnforcementsPage() {
         error={error as Error | null}
         hasActiveFilters={hasActiveFilters}
         clearFilters={clearFilters}
+      />
+
+      <Pagination
         page={page}
         setPage={setPage}
         pageSize={pageSize}
+        itemCount={filteredEnforcements.length}
         total={total}
+        hasNext={hasNext}
+        hasPrevious={hasPrevious}
+        itemLabel="enforcements"
+        floating
       />
     </div>
   );

@@ -16,6 +16,7 @@ use anyhow::Result;
 use attune_common::config::Config;
 use attune_common::db::Database;
 use attune_common::mq::MessageQueue;
+use serde_json::json;
 use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,6 +41,22 @@ struct SensorServiceInner {
 }
 
 impl SensorService {
+    async fn sync_worker_metrics(&self) -> Result<()> {
+        let metrics = self.inner.sensor_manager.activity_metrics().await?;
+        let mut registration = self.inner.sensor_worker_registration.write().await;
+        registration.add_capability(
+            "sensor_processes_monitored".to_string(),
+            json!(metrics.monitored_sensors),
+        );
+        registration.add_capability(
+            "sensor_processes_running".to_string(),
+            json!(metrics.running_sensors),
+        );
+        registration.add_capability("active_rules".to_string(), json!(metrics.active_rules));
+        registration.update_capabilities().await?;
+        Ok(())
+    }
+
     /// Create a new sensor service
     pub async fn new(config: Config) -> Result<Self> {
         info!("Initializing Sensor Service");
@@ -158,9 +175,14 @@ impl SensorService {
         }
         info!("Sensor manager started");
 
+        if let Err(e) = self.sync_worker_metrics().await {
+            warn!("Failed to sync initial sensor worker metrics: {}", e);
+        }
+
         // Start heartbeat loop
         *self.inner.heartbeat_running.write().await = true;
 
+        let sensor_manager = self.inner.sensor_manager.clone();
         let registration = self.inner.sensor_worker_registration.clone();
         let heartbeat_interval = self.inner.heartbeat_interval;
         let heartbeat_running = self.inner.heartbeat_running.clone();
@@ -173,6 +195,25 @@ impl SensorService {
                 if !*heartbeat_running.read().await {
                     info!("Heartbeat loop stopping");
                     break;
+                }
+
+                match sensor_manager.activity_metrics().await {
+                    Ok(metrics) => {
+                        let mut guard = registration.write().await;
+                        guard.add_capability(
+                            "sensor_processes_monitored".to_string(),
+                            json!(metrics.monitored_sensors),
+                        );
+                        guard.add_capability(
+                            "sensor_processes_running".to_string(),
+                            json!(metrics.running_sensors),
+                        );
+                        guard.add_capability("active_rules".to_string(), json!(metrics.active_rules));
+                        if let Err(e) = guard.update_capabilities().await {
+                            error!("Failed to update sensor worker metrics: {}", e);
+                        }
+                    }
+                    Err(e) => error!("Failed to collect sensor worker metrics: {}", e),
                 }
 
                 if let Err(e) = registration.read().await.heartbeat().await {

@@ -24,6 +24,7 @@ use attune_common::mq::{
 };
 use attune_common::repositories::{
     action::ActionRepository,
+    artifact::{ArtifactRepository, ArtifactVersionRepository},
     execution::{
         CreateExecutionInput, ExecutionRepository, ExecutionSearchFilters, UpdateExecutionInput,
     },
@@ -181,6 +182,7 @@ pub async fn list_executions(
         enforcement: query.enforcement,
         parent: query.parent,
         top_level_only: query.top_level_only == Some(true),
+        include_total: query.include_total == Some(true),
         limit: query.limit(),
         offset: query.offset(),
     };
@@ -198,7 +200,11 @@ pub async fn list_executions(
         page_size: query.per_page,
     };
 
-    let response = PaginatedResponse::new(paginated_executions, &pagination_params, result.total);
+    let response = if let Some(total) = result.total {
+        PaginatedResponse::new(paginated_executions, &pagination_params, total)
+    } else {
+        PaginatedResponse::without_totals(paginated_executions, &pagination_params, result.has_next)
+    };
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -289,7 +295,10 @@ pub async fn list_executions_by_status(
         .map(ExecutionSummary::from)
         .collect();
 
-    let response = PaginatedResponse::new(paginated_executions, &pagination, result.total);
+    let total = result.total.ok_or_else(|| {
+        ApiError::InternalServerError("Execution totals were not returned".to_string())
+    })?;
+    let response = PaginatedResponse::new(paginated_executions, &pagination, total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -331,7 +340,10 @@ pub async fn list_executions_by_enforcement(
         .map(ExecutionSummary::from)
         .collect();
 
-    let response = PaginatedResponse::new(paginated_executions, &pagination, result.total);
+    let total = result.total.ok_or_else(|| {
+        ApiError::InternalServerError("Execution totals were not returned".to_string())
+    })?;
+    let response = PaginatedResponse::new(paginated_executions, &pagination, total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -954,6 +966,13 @@ impl ExecutionLogStream {
             Self::Stderr => "stderr.log",
         }
     }
+
+    fn artifact_ref(self, execution_id: i64) -> String {
+        match self {
+            Self::Stdout => format!("execution.{}.stdout", execution_id),
+            Self::Stderr => format!("execution.{}.stderr", execution_id),
+        }
+    }
 }
 
 enum ExecutionLogTailState {
@@ -1013,9 +1032,7 @@ pub async fn stream_execution_log(
     authorize_execution_log_stream(&state, &authenticated_user, &execution).await?;
 
     let stream_name = ExecutionLogStream::parse(&stream_name)?;
-    let full_path = std::path::PathBuf::from(&state.config.artifacts_dir)
-        .join(format!("execution_{}", id))
-        .join(stream_name.file_name());
+    let full_path = resolve_execution_log_full_path(&state, id, stream_name).await?;
     let db = state.db.clone();
 
     let initial_state = ExecutionLogTailState::WaitingForFile {
@@ -1160,6 +1177,28 @@ pub async fn stream_execution_log(
     });
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+async fn resolve_execution_log_full_path(
+    state: &Arc<AppState>,
+    execution_id: i64,
+    stream_name: ExecutionLogStream,
+) -> Result<std::path::PathBuf, ApiError> {
+    let artifact_ref = stream_name.artifact_ref(execution_id);
+
+    if let Some(artifact) = ArtifactRepository::find_by_ref(&state.db, &artifact_ref).await? {
+        if let Some(version) =
+            ArtifactVersionRepository::find_latest(&state.db, artifact.id).await?
+        {
+            if let Some(file_path) = version.file_path {
+                return Ok(std::path::PathBuf::from(&state.config.artifacts_dir).join(file_path));
+            }
+        }
+    }
+
+    Ok(std::path::PathBuf::from(&state.config.artifacts_dir)
+        .join(format!("execution_{}", execution_id))
+        .join(stream_name.file_name()))
 }
 
 async fn read_log_chunk(

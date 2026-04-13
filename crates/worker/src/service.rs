@@ -127,6 +127,7 @@ pub struct WorkerService {
     publisher: Arc<Publisher>,
     consumer: Option<Arc<Consumer>>,
     consumer_handle: Option<JoinHandle<()>>,
+    task_reaper_handle: Option<JoinHandle<()>>,
     pack_consumer: Option<Arc<Consumer>>,
     pack_consumer_handle: Option<JoinHandle<()>>,
     cancel_consumer: Option<Arc<Consumer>>,
@@ -449,6 +450,7 @@ impl WorkerService {
             publisher: Arc::new(publisher),
             consumer: None,
             consumer_handle: None,
+            task_reaper_handle: None,
             pack_consumer: None,
             pack_consumer_handle: None,
             cancel_consumer: None,
@@ -553,6 +555,10 @@ impl WorkerService {
 
         // Start consuming cancel requests
         self.start_cancel_consumer().await?;
+
+        // Reap completed execution tasks continuously so finished JoinSet
+        // entries do not accumulate for the lifetime of a busy worker.
+        self.start_task_reaper();
 
         info!("Worker Service started successfully");
 
@@ -817,6 +823,12 @@ impl WorkerService {
             let _ = handle.await;
         }
 
+        if let Some(handle) = self.task_reaper_handle.take() {
+            info!("Stopping in-flight task reaper...");
+            handle.abort();
+            let _ = handle.await;
+        }
+
         if let Some(handle) = self.pack_consumer_handle.take() {
             info!("Stopping pack consumer task...");
             handle.abort();
@@ -846,12 +858,7 @@ impl WorkerService {
     /// Wait for in-flight tasks to complete
     async fn wait_for_in_flight_tasks(&self) {
         loop {
-            let remaining = {
-                let mut tasks = self.in_flight_tasks.lock().await;
-                // Drain any already-completed tasks
-                while tasks.try_join_next().is_some() {}
-                tasks.len()
-            };
+            let remaining = self.reap_completed_in_flight_tasks().await;
 
             if remaining == 0 {
                 info!("All in-flight execution tasks have completed");
@@ -864,6 +871,49 @@ impl WorkerService {
             );
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
+    }
+
+    async fn reap_completed_in_flight_tasks(&self) -> usize {
+        let mut tasks = self.in_flight_tasks.lock().await;
+        let drained = Self::drain_completed_in_flight_tasks(&mut tasks);
+        if drained > 0 {
+            debug!("Reaped {} completed in-flight execution task(s)", drained);
+        }
+        tasks.len()
+    }
+
+    fn drain_completed_in_flight_tasks(tasks: &mut JoinSet<()>) -> usize {
+        let mut drained = 0;
+        while let Some(join_result) = tasks.try_join_next() {
+            drained += 1;
+            if let Err(e) = join_result {
+                warn!("In-flight execution task ended with join error: {}", e);
+            }
+        }
+        drained
+    }
+
+    fn start_task_reaper(&mut self) {
+        let in_flight = self.in_flight_tasks.clone();
+        let handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            loop {
+                interval.tick().await;
+
+                let drained = {
+                    let mut tasks = in_flight.lock().await;
+                    Self::drain_completed_in_flight_tasks(&mut tasks)
+                };
+
+                if drained > 0 {
+                    debug!("Reaped {} completed in-flight execution task(s)", drained);
+                }
+            }
+        });
+
+        self.task_reaper_handle = Some(handle);
     }
 
     /// Start consuming execution.scheduled messages
@@ -979,6 +1029,7 @@ impl WorkerService {
                             // handler returns immediately, acking the message and freeing
                             // the consumer loop to process the next delivery.
                             let mut tasks = in_flight.lock().await;
+                            Self::drain_completed_in_flight_tasks(&mut tasks);
                             tasks.spawn(async move {
                                 // The permit is moved into this task and will be released
                                 // when the task completes (on drop).
@@ -1498,5 +1549,24 @@ mod tests {
         let filtered = filter_runtime_names_for_worker(&runtime_names, Some(&worker_filter));
 
         assert_eq!(filtered, vec!["python".to_string(), "python3".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_drain_completed_in_flight_tasks_only_reaps_finished_entries() {
+        let mut tasks = JoinSet::new();
+        tasks.spawn(async {});
+        tasks.spawn(async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        });
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let drained = WorkerService::drain_completed_in_flight_tasks(&mut tasks);
+        assert_eq!(drained, 1);
+        assert_eq!(tasks.len(), 1);
+
+        let remaining = tasks.join_next().await;
+        assert!(remaining.is_some());
+        assert_eq!(tasks.len(), 0);
     }
 }

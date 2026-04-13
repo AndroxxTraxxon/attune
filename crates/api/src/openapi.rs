@@ -40,6 +40,7 @@ use crate::dto::{
         TriggerSummary, UpdateSensorRequest, UpdateTriggerRequest,
     },
     webhook::{WebhookReceiverRequest, WebhookReceiverResponse},
+    worker::{WorkerLoadSnapshot, WorkerRuntimeSupport, WorkerSummary},
     workflow::{CreateWorkflowRequest, UpdateWorkflowRequest, WorkflowResponse, WorkflowSummary},
 };
 
@@ -109,6 +110,7 @@ use crate::dto::{
         crate::routes::runtimes::create_runtime,
         crate::routes::runtimes::update_runtime,
         crate::routes::runtimes::delete_runtime,
+        crate::routes::workers::list_workers,
 
         // Triggers
         crate::routes::triggers::list_triggers,
@@ -238,6 +240,7 @@ use crate::dto::{
             PaginatedResponse<PackSummary>,
             PaginatedResponse<ActionSummary>,
             PaginatedResponse<RuntimeSummary>,
+            PaginatedResponse<WorkerSummary>,
             PaginatedResponse<TriggerSummary>,
             PaginatedResponse<SensorSummary>,
             PaginatedResponse<RuleSummary>,
@@ -296,6 +299,9 @@ use crate::dto::{
             UpdateRuntimeRequest,
             RuntimeResponse,
             RuntimeSummary,
+            WorkerLoadSnapshot,
+            WorkerRuntimeSupport,
+            WorkerSummary,
             IdentitySummary,
 
             // Action DTOs
@@ -378,6 +384,7 @@ use crate::dto::{
         (name = "events", description = "Event query endpoints"),
         (name = "enforcements", description = "Enforcement query endpoints"),
         (name = "secrets", description = "Secret management endpoints"),
+        (name = "workers", description = "Worker inventory and load endpoints"),
         (name = "workflows", description = "Workflow management endpoints"),
         (name = "webhooks", description = "Webhook management and receiver endpoints"),
         (name = "agent", description = "Agent binary distribution endpoints"),

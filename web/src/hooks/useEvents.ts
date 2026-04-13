@@ -9,6 +9,7 @@ interface EventsQueryParams {
   triggerRef?: string | null;
   ruleRef?: string | null;
   source?: i64 | null;
+  includeTotal?: boolean;
 }
 
 interface EnforcementsQueryParams {
@@ -18,6 +19,8 @@ interface EnforcementsQueryParams {
   rule?: i64 | null;
   event?: i64 | null;
   triggerRef?: string | null;
+  ruleRef?: string | null;
+  includeTotal?: boolean;
 }
 
 // Fetch all events with pagination and filters
@@ -32,6 +35,7 @@ export function useEvents(params?: EventsQueryParams) {
         triggerRef: params?.triggerRef,
         ruleRef: params?.ruleRef,
         source: params?.source,
+        includeTotal: params?.includeTotal,
       });
     },
     staleTime: 30000, // 30 seconds
@@ -63,6 +67,8 @@ export function useEnforcements(params?: EnforcementsQueryParams) {
         rule: params?.rule,
         event: params?.event,
         triggerRef: params?.triggerRef,
+        ruleRef: params?.ruleRef,
+        includeTotal: params?.includeTotal,
       });
     },
     staleTime: 30000,

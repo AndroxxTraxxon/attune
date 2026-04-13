@@ -227,7 +227,7 @@ Once implemented, sensors will be scheduled on workers with required runtime:
 ```sql
 -- Find workers for Python sensor
 SELECT * FROM worker
-WHERE worker_role IN ('sensor', 'hybrid')
+WHERE worker_role = 'sensor'
   AND status = 'active'
   AND capabilities->'runtimes' ? 'python'
 ORDER BY last_heartbeat DESC;
