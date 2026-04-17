@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use attune_common::models::WorkerStatus;
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -7,7 +8,6 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use attune_common::models::WorkerStatus;
 
 use attune_common::repositories::{
     execution::ExecutionRepository, runtime::WorkerRepository, List,
@@ -96,8 +96,7 @@ pub async fn list_workers(
             let max_concurrent_sensors = capability_u32(capabilities, "max_concurrent_sensors");
             let sensor_processes_monitored =
                 capability_u64(capabilities, "sensor_processes_monitored");
-            let sensor_processes_running =
-                capability_u64(capabilities, "sensor_processes_running");
+            let sensor_processes_running = capability_u64(capabilities, "sensor_processes_running");
             let active_rules = capability_u64(capabilities, "active_rules");
             let queue_depth = worker
                 .capabilities

@@ -32,7 +32,6 @@ Successfully consolidated Attune's migration history from 22 files to 13 clean, 
 ### Items Included From Start
 
 1. **Execution table workflow columns** (in 00006):
-   - `is_workflow BOOLEAN DEFAULT false NOT NULL`
    - `workflow_def BIGINT REFERENCES workflow_definition(id)`
    - `workflow_task JSONB`
 

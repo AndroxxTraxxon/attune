@@ -31,7 +31,6 @@ CREATE TABLE execution (
     result JSONB,
     started_at TIMESTAMPTZ,         -- set when execution transitions to 'running'
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    is_workflow BOOLEAN DEFAULT false NOT NULL,
     workflow_def BIGINT,    -- references workflow_definition(id); no FK because execution becomes a hypertable
     workflow_task JSONB,
 

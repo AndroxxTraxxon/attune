@@ -63,7 +63,7 @@ Created comprehensive analysis documents:
    - ✅ Added: `is_adhoc` to rule from start
 
 6. `20250101000006_execution_system.sql` - Enforcement, execution, inquiry
-   - ✅ Added: `is_workflow`, `workflow_def`, `workflow_task` JSONB to execution from start
+   - ✅ Added: `workflow_def`, `workflow_task` JSONB to execution from start
    - ❌ Removed: `workflow_task_execution` table (consolidated to JSONB)
 
 7. `20250101000007_workflow_system.sql` - Workflow definition and execution
@@ -153,12 +153,10 @@ CREATE INDEX idx_runtime_verification ON runtime USING GIN ((distributions->'ver
 ### Execution Table Changes
 ```sql
 -- OLD (added incrementally):
--- Later: ADD COLUMN is_workflow
 -- Later: ADD COLUMN workflow_def
 -- Later: ADD COLUMN workflow_task
 
 -- NEW (from start):
-is_workflow BOOLEAN DEFAULT false NOT NULL,
 workflow_def BIGINT REFERENCES workflow_definition(id),
 workflow_task JSONB,
 ```

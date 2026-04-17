@@ -34,12 +34,12 @@ Removed the redundant `is_workflow` boolean column from the `action` table throu
 ### Database Migration
 
 **`migrations/20250101000006_workflow_system.sql`** (modified in-place, no production deployments)
-- Removed `ADD COLUMN is_workflow BOOLEAN DEFAULT false NOT NULL` from ALTER TABLE
+- Removed the `ADD COLUMN is_workflow` step from the ALTER TABLE
 - Removed `idx_action_is_workflow` partial index
 - Updated `workflow_action_link` view to use `LEFT JOIN action a ON a.workflow_def = wd.id` (dropped `AND a.is_workflow = true` filter)
 - Updated column comment on `workflow_def`
 
-> Note: `execution.is_workflow` is a separate DB-level column used by PostgreSQL notification triggers and was NOT removed. It exists only in SQL (not in the Rust `Execution` model).
+> Note: At the time of this action-table cleanup, the execution table still had separate DB-level workflow notification plumbing. That follow-up cleanup is handled independently.
 
 ### Frontend — Workflow Edit Button & Indicator
 

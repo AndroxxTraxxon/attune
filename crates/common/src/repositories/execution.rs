@@ -137,8 +137,8 @@ pub struct ExecutionWithRefs {
 /// Column list for SELECT queries on the execution table.
 ///
 /// Defined once to avoid drift between queries and the `Execution` model.
-/// The execution table has DB-only columns (`is_workflow`, `workflow_def`) that
-/// are NOT in the Rust struct, so `SELECT *` must never be used.
+/// The execution table has a DB-only `workflow_def` column that is NOT in the
+/// Rust struct, so `SELECT *` must never be used.
 pub const SELECT_COLUMNS: &str = "\
     id, action, action_ref, config, env_vars, parent, enforcement, \
     executor, worker, status, result, started_at, workflow_task, created, updated";

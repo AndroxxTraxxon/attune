@@ -392,7 +392,6 @@ CREATE INDEX idx_event_rule ON event(rule);
     execution_section = execution_section.replace(
         "created TIMESTAMPTZ NOT NULL DEFAULT NOW(),",
         """created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    is_workflow BOOLEAN DEFAULT false NOT NULL,
     workflow_def BIGINT,
     workflow_task JSONB,""",
     )

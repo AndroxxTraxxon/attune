@@ -33,7 +33,6 @@ The Attune project has accumulated 22 migrations during active development. Sinc
 ### Items Added Later (Include From Start)
 
 1. **Execution table workflow columns**:
-   - `is_workflow BOOLEAN` (added later)
    - `workflow_def BIGINT` (added later)
    - `workflow_task JSONB` (added in consolidation migration)
 

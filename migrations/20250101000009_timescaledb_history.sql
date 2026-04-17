@@ -362,7 +362,7 @@ SELECT add_compression_policy('worker_history', INTERVAL '7 days');
 ALTER TABLE event SET (
     timescaledb.compress,
     timescaledb.compress_segmentby = 'trigger_ref',
-    timescaledb.compress_orderby = 'created DESC'
+    timescaledb.compress_orderby = 'created DESC, id DESC'
 );
 SELECT add_compression_policy('event', INTERVAL '7 days');
 

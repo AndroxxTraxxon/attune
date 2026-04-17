@@ -88,7 +88,6 @@ CREATE TABLE rule (
 CREATE TABLE execution (
     -- ... existing columns ...
     -- ADD FROM START:
-    is_workflow BOOLEAN DEFAULT false NOT NULL,
     workflow_def BIGINT REFERENCES workflow_definition(id) ON DELETE CASCADE,
     workflow_task JSONB,
     -- ... rest of columns ...

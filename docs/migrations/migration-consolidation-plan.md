@@ -92,7 +92,6 @@ Since this project has no production deployments, we can freely consolidate migr
 **Problem**: Workflow-related columns added after initial table creation.
 
 **Added in `20250101000004_execution_system.sql` (line 381)**:
-- `is_workflow BOOLEAN DEFAULT false NOT NULL`
 - `workflow_def BIGINT REFERENCES workflow_definition(id)`
 
 **Action**: Include these columns in initial `execution` table creation (line ~60).
@@ -218,16 +217,15 @@ Create consolidated migrations:
 
 **Must be in initial table creation**:
 
-1. `execution.is_workflow` column
-2. `execution.workflow_def` column
-3. `execution.workflow_task` JSONB column
-4. `action.is_adhoc` column
-5. `sensor.is_adhoc` column  
-6. `rule.is_adhoc` column
-7. `event.rule` and `event.rule_ref` columns
-8. `worker_role_enum` type
-9. `worker.worker_role` column
-10. `trigger.webhook_enabled` column
+1. `execution.workflow_def` column
+2. `execution.workflow_task` JSONB column
+3. `action.is_adhoc` column
+4. `sensor.is_adhoc` column  
+5. `rule.is_adhoc` column
+6. `event.rule` and `event.rule_ref` columns
+7. `worker_role_enum` type
+8. `worker.worker_role` column
+9. `trigger.webhook_enabled` column
 11. `trigger.webhook_key` column
 12. `trigger.webhook_config` JSONB column
 13. `pack.installers` JSONB column

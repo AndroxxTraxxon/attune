@@ -330,7 +330,7 @@ Migration 4 includes comprehensive workflow orchestration support:
 - **workflow_definition**: Stores parsed YAML workflow definitions with tasks, variables, and transitions
 - **workflow_execution**: Tracks runtime state including current/completed/failed tasks and variables
 - **workflow_task_execution**: Individual task execution tracking with retry and timeout support
-- **Action table extensions**: `is_workflow` and `workflow_def` columns link actions to workflows
+- **Action table extensions**: `workflow_def` links actions to workflow definitions
 - **Helper views**: Three views for querying workflow state (summary, task detail, action links)
 
 ## Queue Statistics

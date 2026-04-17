@@ -25,7 +25,7 @@ Converted the `execution` table from a regular PostgreSQL table to a TimescaleDB
 - Adds `execution_volume_hourly` continuous aggregate with 30-minute refresh policy
 
 ### Rust Code Fixes
-- **`crates/executor/src/timeout_monitor.rs`**: Replaced `SELECT * FROM execution` with explicit column list. `SELECT *` on hypertables is fragile — the execution table has columns (`is_workflow`, `workflow_def`) not present in the Rust `Execution` model.
+- **`crates/executor/src/timeout_monitor.rs`**: Replaced `SELECT * FROM execution` with explicit column list. `SELECT *` on hypertables is fragile — the execution table has DB-only columns such as `workflow_def` that are not present in the Rust `Execution` model.
 - **`crates/api/tests/sse_execution_stream_tests.rs`**: Fixed references to non-existent `start_time` and `end_time` columns (replaced with `updated = NOW()`).
 - **`crates/common/src/repositories/analytics.rs`**: Added `ExecutionVolumeBucket` struct and `execution_volume_hourly` / `execution_volume_hourly_by_action` repository methods for the new continuous aggregate.
 

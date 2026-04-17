@@ -406,7 +406,7 @@ SELECT add_compression_policy('worker_history', INTERVAL '7 days');
 ALTER TABLE event SET (
     timescaledb.compress,
     timescaledb.compress_segmentby = 'trigger_ref',
-    timescaledb.compress_orderby = 'created DESC'
+    timescaledb.compress_orderby = 'created DESC, id DESC'
 );
 SELECT add_compression_policy('event', INTERVAL '7 days');
 
@@ -414,7 +414,7 @@ SELECT add_compression_policy('event', INTERVAL '7 days');
 ALTER TABLE enforcement SET (
     timescaledb.compress,
     timescaledb.compress_segmentby = 'rule_ref',
-    timescaledb.compress_orderby = 'created DESC'
+    timescaledb.compress_orderby = 'created DESC, id DESC'
 );
 SELECT add_compression_policy('enforcement', INTERVAL '7 days');
 
@@ -422,7 +422,7 @@ SELECT add_compression_policy('enforcement', INTERVAL '7 days');
 ALTER TABLE execution SET (
     timescaledb.compress,
     timescaledb.compress_segmentby = 'action_ref',
-    timescaledb.compress_orderby = 'created DESC'
+    timescaledb.compress_orderby = 'created DESC, id DESC'
 );
 SELECT add_compression_policy('execution', INTERVAL '7 days');
 

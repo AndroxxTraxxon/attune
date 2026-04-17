@@ -290,8 +290,8 @@ CREATE TABLE IF NOT EXISTS pack_environment (
     runtime_version_text TEXT,
     env_key TEXT GENERATED ALWAYS AS (
         CASE
-            WHEN runtime_version IS NULL THEN format('base:%s:%s', pack, runtime)
-            ELSE format('version:%s:%s:%s', pack, runtime, runtime_version)
+            WHEN runtime_version IS NULL THEN 'base:' || pack::text || ':' || runtime::text
+            ELSE 'version:' || pack::text || ':' || runtime::text || ':' || runtime_version::text
         END
     ) STORED,
     env_path TEXT NOT NULL,
