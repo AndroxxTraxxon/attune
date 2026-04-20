@@ -45,6 +45,7 @@ pub mod rule;
 pub mod runtime;
 pub mod runtime_version;
 pub mod trigger;
+pub mod work_queue;
 pub mod workflow;
 
 // Re-export repository types
@@ -66,6 +67,7 @@ pub use rule::RuleRepository;
 pub use runtime::{RuntimeRepository, WorkerRepository};
 pub use runtime_version::RuntimeVersionRepository;
 pub use trigger::{SensorRepository, TriggerRepository};
+pub use work_queue::{WorkQueueDispatchRepository, WorkQueueItemRepository, WorkQueueRepository};
 pub use workflow::{WorkflowDefinitionRepository, WorkflowExecutionRepository};
 
 /// Explicit patch operation for update inputs where callers must distinguish

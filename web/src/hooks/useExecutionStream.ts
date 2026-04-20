@@ -342,7 +342,7 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
         const page = old.pagination?.page ?? 1;
         const pageSize = old.pagination?.page_size ?? (isChildQuery ? old.data.length : 50);
         const hasExactTotal = old.pagination?.total_items != null;
-        let nextPagination = old.pagination ? { ...old.pagination } : undefined;
+        const nextPagination = old.pagination ? { ...old.pagination } : undefined;
 
         if (nextPagination) {
           nextPagination.has_previous = page > 1;

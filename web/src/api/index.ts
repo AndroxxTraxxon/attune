@@ -154,3 +154,4 @@ export { SensorsService } from './services/SensorsService';
 export { TriggersService } from './services/TriggersService';
 export { WebhooksService } from './services/WebhooksService';
 export { WorkflowsService } from './services/WorkflowsService';
+export * from './queues';

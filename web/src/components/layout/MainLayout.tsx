@@ -129,6 +129,12 @@ const navSections = [
         color: "gray",
       },
       {
+        to: "/queues",
+        label: "Queues",
+        icon: navIcons.queues,
+        color: "gray",
+      },
+      {
         to: "/access-control",
         label: "Access Control",
         icon: navIcons.accessControl,

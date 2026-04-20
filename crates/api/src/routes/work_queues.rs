@@ -1,0 +1,960 @@
+//! Work queue definition and item API routes.
+
+use std::sync::Arc;
+
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
+    Json, Router,
+};
+use serde_json::{Map, Value as JsonValue};
+use validator::Validate;
+
+use attune_common::{
+    rbac::{Action as RbacAction, AuthorizationContext, Resource},
+    repositories::{
+        action::ActionRepository,
+        pack::PackRepository,
+        work_queue::{
+            CreateWorkQueueInput, CreateWorkQueueItemInput, UpdateWorkQueueInput,
+            UpdateWorkQueueItemInput, WorkQueueItemRepository, WorkQueueItemSearchFilters,
+            WorkQueueRepository, WorkQueueSearchFilters,
+        },
+        Create, Delete, FindByRef, Patch, Update,
+    },
+};
+
+use crate::{
+    auth::{jwt::TokenType, middleware::AuthenticatedUser, middleware::RequireAuth},
+    authz::{AuthorizationCheck, AuthorizationService},
+    dto::{
+        common::{PaginatedResponse, PaginationParams},
+        runtime::NullableStringPatch,
+        work_queue::{
+            CreateWorkQueueRequest, EnqueueWorkQueueItemRequest, UpdateWorkQueueItemRequest,
+            UpdateWorkQueueRequest, WorkQueueItemQueryParams, WorkQueueItemResponse,
+            WorkQueueQueryParams, WorkQueueResponse, WorkQueueSummary,
+        },
+        ApiResponse, SuccessResponse,
+    },
+    middleware::{ApiError, ApiResult},
+    state::AppState,
+};
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/queues",
+    tag = "queues",
+    params(WorkQueueQueryParams),
+    responses(
+        (status = 200, description = "List of work queue definitions", body = PaginatedResponse<WorkQueueSummary>)
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn list_queues(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Query(query): Query<WorkQueueQueryParams>,
+) -> ApiResult<impl IntoResponse> {
+    let mut rows = WorkQueueRepository::search(
+        &state.db,
+        &WorkQueueSearchFilters {
+            enabled: query.enabled,
+            is_adhoc: query.is_adhoc,
+            search: query.search.clone(),
+            limit: u32::MAX,
+            offset: 0,
+            ..Default::default()
+        },
+    )
+    .await?
+    .rows;
+    if let Some((identity_id, grants)) = ensure_can_read_any_queue(&state, &user).await? {
+        rows.retain(|queue| {
+            AuthorizationService::is_allowed(
+                &grants,
+                Resource::Queues,
+                RbacAction::Read,
+                &queue_authorization_context(identity_id, queue),
+            )
+        });
+    }
+    let total = rows.len() as u64;
+    let rows = paginate_rows(rows, query.page, query.per_page);
+
+    Ok((
+        StatusCode::OK,
+        Json(PaginatedResponse::new(
+            rows.into_iter().map(WorkQueueSummary::from).collect(),
+            &PaginationParams {
+                page: query.page,
+                page_size: query.per_page,
+            },
+            total,
+        )),
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/packs/{pack_ref}/queues",
+    tag = "queues",
+    params(
+        ("pack_ref" = String, Path, description = "Pack reference identifier"),
+        WorkQueueQueryParams
+    ),
+    responses(
+        (status = 200, description = "List of work queue definitions for a pack", body = PaginatedResponse<WorkQueueSummary>),
+        (status = 403, description = "Insufficient permissions"),
+        (status = 404, description = "Pack not found")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn list_queues_by_pack(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(pack_ref): Path<String>,
+    Query(query): Query<WorkQueueQueryParams>,
+) -> ApiResult<impl IntoResponse> {
+    let pack = PackRepository::find_by_ref(&state.db, &pack_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", pack_ref)))?;
+
+    let mut rows = WorkQueueRepository::search(
+        &state.db,
+        &WorkQueueSearchFilters {
+            pack: Some(pack.id),
+            enabled: query.enabled,
+            is_adhoc: query.is_adhoc,
+            search: query.search.clone(),
+            limit: u32::MAX,
+            offset: 0,
+            ..Default::default()
+        },
+    )
+    .await?
+    .rows;
+    if let Some((identity_id, grants)) = ensure_can_read_any_queue(&state, &user).await? {
+        rows.retain(|queue| {
+            AuthorizationService::is_allowed(
+                &grants,
+                Resource::Queues,
+                RbacAction::Read,
+                &queue_authorization_context(identity_id, queue),
+            )
+        });
+    }
+    let total = rows.len() as u64;
+    let rows = paginate_rows(rows, query.page, query.per_page);
+
+    Ok((
+        StatusCode::OK,
+        Json(PaginatedResponse::new(
+            rows.into_iter().map(WorkQueueSummary::from).collect(),
+            &PaginationParams {
+                page: query.page,
+                page_size: query.per_page,
+            },
+            total,
+        )),
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/queues/{ref}",
+    tag = "queues",
+    params(("ref" = String, Path, description = "Queue reference identifier")),
+    responses(
+        (status = 200, description = "Work queue definition", body = ApiResponse<WorkQueueResponse>),
+        (status = 404, description = "Queue not found")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn get_queue(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(queue_ref): Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    let queue = WorkQueueRepository::find_by_ref(&state.db, &queue_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Work queue '{}' not found", queue_ref)))?;
+
+    authorize_queue_action(&state, &user, RbacAction::Read, &queue)
+        .await
+        .map_err(|_| ApiError::NotFound(format!("Work queue '{}' not found", queue_ref)))?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ApiResponse::new(WorkQueueResponse::from(queue))),
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/queues",
+    tag = "queues",
+    request_body = CreateWorkQueueRequest,
+    responses(
+        (status = 201, description = "Work queue created successfully", body = ApiResponse<WorkQueueResponse>),
+        (status = 400, description = "Validation error"),
+        (status = 403, description = "Insufficient permissions"),
+        (status = 404, description = "Pack or dispatch action not found"),
+        (status = 409, description = "Queue with same ref already exists")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn create_queue(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Json(request): Json<CreateWorkQueueRequest>,
+) -> ApiResult<impl IntoResponse> {
+    request.validate()?;
+
+    let (pack_id, pack_ref) = resolve_pack(&state, request.pack_ref.as_deref()).await?;
+    authorize_queue_create(&state, &user, &request.r#ref, pack_ref.as_deref()).await?;
+
+    if WorkQueueRepository::find_by_ref(&state.db, &request.r#ref)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::Conflict(format!(
+            "Work queue with ref '{}' already exists",
+            request.r#ref
+        )));
+    }
+
+    let is_adhoc = pack_id.is_none();
+    let action = resolve_dispatch_action(&state, &request.dispatch_action_ref).await?;
+
+    let queue = WorkQueueRepository::create(
+        &state.db,
+        CreateWorkQueueInput {
+            r#ref: request.r#ref,
+            pack: pack_id,
+            pack_ref,
+            is_adhoc,
+            label: request.label,
+            description: request.description,
+            enabled: request.enabled,
+            dispatch_action: Some(action.id),
+            dispatch_action_ref: action.r#ref,
+            default_priority: request.default_priority,
+            allow_pending_update: request.allow_pending_update,
+            update_strategy: request.update_strategy,
+            batch_mode: request.batch_mode,
+            config: request.config,
+        },
+    )
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ApiResponse::with_message(
+            WorkQueueResponse::from(queue),
+            "Work queue created successfully",
+        )),
+    ))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/queues/{ref}",
+    tag = "queues",
+    params(("ref" = String, Path, description = "Queue reference identifier")),
+    request_body = UpdateWorkQueueRequest,
+    responses(
+        (status = 200, description = "Work queue updated successfully", body = ApiResponse<WorkQueueResponse>),
+        (status = 400, description = "Validation error"),
+        (status = 403, description = "Insufficient permissions or pack-managed queue"),
+        (status = 404, description = "Queue, pack, or dispatch action not found")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn update_queue(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(queue_ref): Path<String>,
+    Json(request): Json<UpdateWorkQueueRequest>,
+) -> ApiResult<impl IntoResponse> {
+    request.validate()?;
+
+    let queue = WorkQueueRepository::find_by_ref(&state.db, &queue_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Work queue '{}' not found", queue_ref)))?;
+
+    authorize_queue_action(&state, &user, RbacAction::Update, &queue).await?;
+
+    if !queue.is_adhoc {
+        return Err(ApiError::Forbidden(
+            "Pack-managed queues must be changed via pack queue definition files".to_string(),
+        ));
+    }
+
+    let (pack_patch, pack_ref_patch, resolved_pack_ref) = match request.pack_ref.clone() {
+        Some(NullableStringPatch::Set(pack_ref)) => {
+            let (pack_id, resolved_pack_ref) = resolve_pack(&state, Some(&pack_ref)).await?;
+            (
+                pack_id.map(Patch::Set),
+                resolved_pack_ref.clone().map(Patch::Set),
+                resolved_pack_ref,
+            )
+        }
+        Some(NullableStringPatch::Clear) => (Some(Patch::Clear), Some(Patch::Clear), None),
+        None => (None, None, queue.pack_ref.clone()),
+    };
+
+    if request.pack_ref.is_some() {
+        let identity_id = requester_identity_id(&user)?;
+        if let Some(identity_id) = identity_id {
+            let mut ctx = AuthorizationContext::new(identity_id);
+            ctx.target_id = Some(queue.id);
+            ctx.target_ref = Some(queue.r#ref.clone());
+            ctx.pack_ref = resolved_pack_ref.clone();
+            authorize_queue_context_action(&state, &user, RbacAction::Update, ctx).await?;
+        }
+    }
+
+    let (dispatch_action_patch, dispatch_action_ref) =
+        if let Some(dispatch_action_ref) = request.dispatch_action_ref {
+            let action = resolve_dispatch_action(&state, &dispatch_action_ref).await?;
+            (Some(Patch::Set(action.id)), Some(action.r#ref))
+        } else {
+            (None, None)
+        };
+
+    let queue = WorkQueueRepository::update(
+        &state.db,
+        queue.id,
+        UpdateWorkQueueInput {
+            pack: pack_patch,
+            pack_ref: pack_ref_patch,
+            label: request.label,
+            description: request.description.map(|patch| match patch {
+                NullableStringPatch::Set(value) => Patch::Set(value),
+                NullableStringPatch::Clear => Patch::Clear,
+            }),
+            enabled: request.enabled,
+            dispatch_action: dispatch_action_patch,
+            dispatch_action_ref,
+            default_priority: request.default_priority,
+            allow_pending_update: request.allow_pending_update,
+            update_strategy: request.update_strategy,
+            batch_mode: request.batch_mode,
+            config: request.config,
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ApiResponse::with_message(
+            WorkQueueResponse::from(queue),
+            "Work queue updated successfully",
+        )),
+    ))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/queues/{ref}",
+    tag = "queues",
+    params(("ref" = String, Path, description = "Queue reference identifier")),
+    responses(
+        (status = 200, description = "Work queue deleted successfully", body = SuccessResponse),
+        (status = 403, description = "Insufficient permissions or pack-managed queue"),
+        (status = 404, description = "Queue not found")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn delete_queue(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(queue_ref): Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    let queue = WorkQueueRepository::find_by_ref(&state.db, &queue_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Work queue '{}' not found", queue_ref)))?;
+
+    authorize_queue_action(&state, &user, RbacAction::Delete, &queue).await?;
+
+    if !queue.is_adhoc {
+        return Err(ApiError::Forbidden(
+            "Pack-managed queues must be removed from pack queue definition files".to_string(),
+        ));
+    }
+
+    let deleted = WorkQueueRepository::delete(&state.db, queue.id).await?;
+    if !deleted {
+        return Err(ApiError::NotFound(format!(
+            "Work queue '{}' not found",
+            queue_ref
+        )));
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(SuccessResponse::new(format!(
+            "Work queue '{}' deleted successfully",
+            queue_ref
+        ))),
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/queues/{ref}/items",
+    tag = "queues",
+    params(
+        ("ref" = String, Path, description = "Queue reference identifier"),
+        WorkQueueItemQueryParams
+    ),
+    responses(
+        (status = 200, description = "List of queue items", body = PaginatedResponse<WorkQueueItemResponse>),
+        (status = 403, description = "Insufficient permissions"),
+        (status = 404, description = "Queue not found")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn list_queue_items(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(queue_ref): Path<String>,
+    Query(query): Query<WorkQueueItemQueryParams>,
+) -> ApiResult<impl IntoResponse> {
+    let queue = WorkQueueRepository::find_by_ref(&state.db, &queue_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Work queue '{}' not found", queue_ref)))?;
+
+    authorize_queue_action(&state, &user, RbacAction::Read, &queue).await?;
+
+    let result = WorkQueueItemRepository::search(
+        &state.db,
+        &WorkQueueItemSearchFilters {
+            queue: Some(queue.id),
+            item_key: query.item_key.clone(),
+            enqueue_source: query.enqueue_source.clone(),
+            statuses: (!query.statuses.is_empty()).then_some(query.statuses.clone()),
+            limit: query.limit(),
+            offset: query.offset(),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(PaginatedResponse::new(
+            result
+                .rows
+                .into_iter()
+                .map(WorkQueueItemResponse::from)
+                .collect(),
+            &PaginationParams {
+                page: query.page,
+                page_size: query.per_page,
+            },
+            result.total,
+        )),
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/queues/{ref}/items",
+    tag = "queues",
+    params(("ref" = String, Path, description = "Queue reference identifier")),
+    request_body = EnqueueWorkQueueItemRequest,
+    responses(
+        (status = 200, description = "Pending queue item updated", body = ApiResponse<WorkQueueItemResponse>),
+        (status = 201, description = "Queue item enqueued", body = ApiResponse<WorkQueueItemResponse>),
+        (status = 400, description = "Validation error"),
+        (status = 403, description = "Insufficient permissions"),
+        (status = 404, description = "Queue not found"),
+        (status = 409, description = "Pending item conflict")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn enqueue_queue_item(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(queue_ref): Path<String>,
+    Json(request): Json<EnqueueWorkQueueItemRequest>,
+) -> ApiResult<impl IntoResponse> {
+    request.validate()?;
+
+    let queue = WorkQueueRepository::find_by_ref(&state.db, &queue_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Work queue '{}' not found", queue_ref)))?;
+
+    authorize_queue_action(&state, &user, RbacAction::Create, &queue).await?;
+
+    let requested_by_identity = requester_identity_id(&user)?;
+    let create_priority = request.priority.unwrap_or(queue.default_priority);
+    let mutable_statuses = WorkQueueItemRepository::mutable_pending_statuses();
+
+    if let Some(item_key) = request.item_key.as_deref() {
+        if queue.allow_pending_update {
+            let pending =
+                WorkQueueItemRepository::find_pending_by_item_key(&state.db, queue.id, item_key)
+                    .await?;
+            if pending.len() > 1 {
+                return Err(ApiError::Conflict(format!(
+                    "Queue '{}' has multiple mutable pending items for item_key '{}'",
+                    queue.r#ref, item_key
+                )));
+            }
+
+            if let Some(existing) = pending.into_iter().next() {
+                let updated = match queue.update_strategy {
+                    attune_common::models::WorkQueueUpdateStrategy::Immutable => {
+                        return Err(ApiError::Conflict(format!(
+                            "Pending queue item with key '{}' already exists in queue '{}'",
+                            item_key, queue.r#ref
+                        )));
+                    }
+                    attune_common::models::WorkQueueUpdateStrategy::Replace => {
+                        WorkQueueItemRepository::update_if_statuses(
+                            &state.db,
+                            existing.id,
+                            mutable_statuses,
+                            UpdateWorkQueueItemInput {
+                                priority: Some(create_priority),
+                                payload: Some(request.payload.clone()),
+                                metadata: Some(request.metadata.clone()),
+                                enqueue_source: Some(request.enqueue_source.clone()),
+                                ..Default::default()
+                            },
+                        )
+                        .await?
+                    }
+                    attune_common::models::WorkQueueUpdateStrategy::MergePatch => {
+                        let merged_payload = merge_patch_value(existing.payload, &request.payload);
+                        let merged_metadata =
+                            merge_patch_value(existing.metadata, &request.metadata);
+                        WorkQueueItemRepository::update_if_statuses(
+                            &state.db,
+                            existing.id,
+                            mutable_statuses,
+                            UpdateWorkQueueItemInput {
+                                priority: request.priority,
+                                payload: Some(merged_payload),
+                                metadata: Some(merged_metadata),
+                                enqueue_source: Some(request.enqueue_source.clone()),
+                                ..Default::default()
+                            },
+                        )
+                        .await?
+                    }
+                }
+                .ok_or_else(|| {
+                    ApiError::Conflict(
+                        "Queue item is no longer in a mutable pending state".to_string(),
+                    )
+                })?;
+
+                return Ok((
+                    StatusCode::OK,
+                    Json(ApiResponse::with_message(
+                        WorkQueueItemResponse::from(updated),
+                        "Pending queue item updated successfully",
+                    )),
+                ));
+            }
+        }
+    }
+
+    let item = WorkQueueItemRepository::enqueue(
+        &state.db,
+        CreateWorkQueueItemInput {
+            queue: queue.id,
+            queue_ref: queue.r#ref.clone(),
+            item_key: request.item_key,
+            priority: create_priority,
+            status: attune_common::models::WorkQueueItemStatus::Queued,
+            payload: request.payload,
+            metadata: request.metadata,
+            enqueue_source: request.enqueue_source,
+            requested_by_identity,
+            requested_by_execution: None,
+            requested_by_enforcement: None,
+            leased_execution: None,
+            lease_token: None,
+            lease_expires_at: None,
+            attempt_count: 0,
+            last_error: None,
+            ack_summary: None,
+        },
+    )
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ApiResponse::with_message(
+            WorkQueueItemResponse::from(item),
+            "Queue item enqueued successfully",
+        )),
+    ))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/queues/{ref}/items/{item_id}",
+    tag = "queues",
+    params(
+        ("ref" = String, Path, description = "Queue reference identifier"),
+        ("item_id" = i64, Path, description = "Queue item identifier")
+    ),
+    request_body = UpdateWorkQueueItemRequest,
+    responses(
+        (status = 200, description = "Queue item updated", body = ApiResponse<WorkQueueItemResponse>),
+        (status = 400, description = "Validation error"),
+        (status = 403, description = "Insufficient permissions"),
+        (status = 404, description = "Queue or queue item not found"),
+        (status = 409, description = "Queue item is not mutable")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn update_queue_item(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path((queue_ref, item_id)): Path<(String, i64)>,
+    Json(request): Json<UpdateWorkQueueItemRequest>,
+) -> ApiResult<impl IntoResponse> {
+    request.validate()?;
+
+    let queue = WorkQueueRepository::find_by_ref(&state.db, &queue_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Work queue '{}' not found", queue_ref)))?;
+
+    authorize_queue_action(&state, &user, RbacAction::Update, &queue).await?;
+
+    let item = WorkQueueItemRepository::find_by_queue_and_id(&state.db, queue.id, item_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Queue item '{}' not found", item_id)))?;
+
+    if !WorkQueueItemRepository::is_mutable_pending_status(item.status) {
+        return Err(ApiError::Conflict(
+            "Only queued or retry queue items can be updated".to_string(),
+        ));
+    }
+
+    let updated = WorkQueueItemRepository::update_if_statuses(
+        &state.db,
+        item.id,
+        WorkQueueItemRepository::mutable_pending_statuses(),
+        UpdateWorkQueueItemInput {
+            item_key: request.item_key.map(|patch| match patch {
+                NullableStringPatch::Set(value) => Patch::Set(value),
+                NullableStringPatch::Clear => Patch::Clear,
+            }),
+            priority: request.priority,
+            payload: request.payload,
+            metadata: request.metadata,
+            ..Default::default()
+        },
+    )
+    .await?
+    .ok_or_else(|| {
+        ApiError::Conflict("Queue item is no longer in a mutable pending state".to_string())
+    })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(ApiResponse::with_message(
+            WorkQueueItemResponse::from(updated),
+            "Queue item updated successfully",
+        )),
+    ))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/queues/{ref}/items/{item_id}",
+    tag = "queues",
+    params(
+        ("ref" = String, Path, description = "Queue reference identifier"),
+        ("item_id" = i64, Path, description = "Queue item identifier")
+    ),
+    responses(
+        (status = 200, description = "Queue item deleted", body = SuccessResponse),
+        (status = 403, description = "Insufficient permissions"),
+        (status = 404, description = "Queue or queue item not found"),
+        (status = 409, description = "Queue item is not mutable")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn delete_queue_item(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path((queue_ref, item_id)): Path<(String, i64)>,
+) -> ApiResult<impl IntoResponse> {
+    let queue = WorkQueueRepository::find_by_ref(&state.db, &queue_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Work queue '{}' not found", queue_ref)))?;
+
+    authorize_queue_action(&state, &user, RbacAction::Delete, &queue).await?;
+
+    let item = WorkQueueItemRepository::find_by_queue_and_id(&state.db, queue.id, item_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Queue item '{}' not found", item_id)))?;
+
+    if !WorkQueueItemRepository::is_mutable_pending_status(item.status) {
+        return Err(ApiError::Conflict(
+            "Only queued or retry queue items can be deleted".to_string(),
+        ));
+    }
+
+    let deleted = WorkQueueItemRepository::delete_if_statuses(
+        &state.db,
+        item.id,
+        WorkQueueItemRepository::mutable_pending_statuses(),
+    )
+    .await?;
+    if !deleted {
+        return Err(ApiError::Conflict(
+            "Queue item is no longer in a mutable pending state".to_string(),
+        ));
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(SuccessResponse::new(format!(
+            "Queue item '{}' deleted successfully",
+            item_id
+        ))),
+    ))
+}
+
+pub fn routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/queues", get(list_queues).post(create_queue))
+        .route(
+            "/queues/{ref}",
+            get(get_queue).put(update_queue).delete(delete_queue),
+        )
+        .route("/packs/{pack_ref}/queues", get(list_queues_by_pack))
+        .route(
+            "/queues/{ref}/items",
+            get(list_queue_items).post(enqueue_queue_item),
+        )
+        .route(
+            "/queues/{ref}/items/{item_id}",
+            axum::routing::put(update_queue_item).delete(delete_queue_item),
+        )
+}
+
+async fn resolve_pack(
+    state: &Arc<AppState>,
+    pack_ref: Option<&str>,
+) -> ApiResult<(Option<i64>, Option<String>)> {
+    let Some(pack_ref) = pack_ref else {
+        return Ok((None, None));
+    };
+
+    let pack = PackRepository::find_by_ref(&state.db, pack_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", pack_ref)))?;
+
+    Ok((Some(pack.id), Some(pack.r#ref)))
+}
+
+async fn resolve_dispatch_action(
+    state: &Arc<AppState>,
+    action_ref: &str,
+) -> ApiResult<attune_common::models::action::Action> {
+    ActionRepository::find_by_ref(&state.db, action_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Action '{}' not found", action_ref)))
+}
+
+async fn authorize_queue_action(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    action: RbacAction,
+    queue: &attune_common::models::WorkQueue,
+) -> Result<(), ApiError> {
+    if user.claims.token_type != TokenType::Access {
+        return Ok(());
+    }
+
+    let identity_id = user
+        .identity_id()
+        .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+    authorize_queue_context_action(
+        state,
+        user,
+        action,
+        queue_authorization_context(identity_id, queue),
+    )
+    .await
+}
+
+async fn authorize_queue_create(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    queue_ref: &str,
+    pack_ref: Option<&str>,
+) -> Result<(), ApiError> {
+    if user.claims.token_type != TokenType::Access {
+        return Ok(());
+    }
+
+    let identity_id = user
+        .identity_id()
+        .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+    let mut ctx = AuthorizationContext::new(identity_id);
+    ctx.target_ref = Some(queue_ref.to_string());
+    ctx.pack_ref = pack_ref.map(str::to_string);
+    authorize_queue_context_action(state, user, RbacAction::Create, ctx).await
+}
+
+async fn authorize_queue_context_action(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    action: RbacAction,
+    context: AuthorizationContext,
+) -> Result<(), ApiError> {
+    let authz = AuthorizationService::new(state.db.clone());
+    authz
+        .authorize(
+            user,
+            AuthorizationCheck {
+                resource: Resource::Queues,
+                action,
+                context,
+            },
+        )
+        .await
+}
+
+async fn ensure_can_read_any_queue(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+) -> Result<Option<(i64, Vec<attune_common::rbac::Grant>)>, ApiError> {
+    if user.claims.token_type != TokenType::Access {
+        return Ok(None);
+    }
+
+    let identity_id = user
+        .identity_id()
+        .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+    let authz = AuthorizationService::new(state.db.clone());
+    let grants = authz.effective_grants(user).await?;
+
+    let can_read_any_queue = grants
+        .iter()
+        .any(|g| g.resource == Resource::Queues && g.actions.contains(&RbacAction::Read));
+    if !can_read_any_queue {
+        return Err(ApiError::Forbidden(
+            "Insufficient permissions: queues:read".to_string(),
+        ));
+    }
+
+    Ok(Some((identity_id, grants)))
+}
+
+fn queue_authorization_context(
+    identity_id: i64,
+    queue: &attune_common::models::WorkQueue,
+) -> AuthorizationContext {
+    let mut ctx = AuthorizationContext::new(identity_id);
+    ctx.target_id = Some(queue.id);
+    ctx.target_ref = Some(queue.r#ref.clone());
+    ctx.pack_ref = queue.pack_ref.clone();
+    ctx
+}
+
+fn requester_identity_id(user: &AuthenticatedUser) -> Result<Option<i64>, ApiError> {
+    if user.claims.token_type != TokenType::Access {
+        return Ok(None);
+    }
+
+    user.identity_id()
+        .map(Some)
+        .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))
+}
+
+fn paginate_rows<T>(rows: Vec<T>, page: u32, per_page: u32) -> Vec<T> {
+    let offset = page.saturating_sub(1) as usize * per_page as usize;
+    let limit = per_page as usize;
+
+    rows.into_iter().skip(offset).take(limit).collect()
+}
+
+fn merge_patch_value(current: JsonValue, patch: &JsonValue) -> JsonValue {
+    let mut merged = current;
+    apply_merge_patch(&mut merged, patch);
+    merged
+}
+
+fn apply_merge_patch(target: &mut JsonValue, patch: &JsonValue) {
+    match patch {
+        JsonValue::Object(patch_map) => {
+            if !target.is_object() {
+                *target = JsonValue::Object(Map::new());
+            }
+
+            let target_map = target
+                .as_object_mut()
+                .expect("target should be an object after initialization");
+            for (key, value) in patch_map {
+                if value.is_null() {
+                    target_map.remove(key);
+                } else {
+                    apply_merge_patch(
+                        target_map.entry(key.clone()).or_insert(JsonValue::Null),
+                        value,
+                    );
+                }
+            }
+        }
+        _ => *target = patch.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{apply_merge_patch, paginate_rows, routes};
+
+    #[test]
+    fn test_work_queue_routes_structure() {
+        let _router = routes();
+    }
+
+    #[test]
+    fn test_apply_merge_patch_uses_json_merge_patch_semantics() {
+        let mut value = json!({
+            "nested": {"keep": true, "remove": 1},
+            "replace": 1
+        });
+
+        apply_merge_patch(
+            &mut value,
+            &json!({
+                "nested": {"remove": null, "added": "yes"},
+                "replace": {"now": "object"}
+            }),
+        );
+
+        assert_eq!(
+            value,
+            json!({
+                "nested": {"keep": true, "added": "yes"},
+                "replace": {"now": "object"}
+            })
+        );
+    }
+
+    #[test]
+    fn test_paginate_rows_returns_requested_page() {
+        let rows = vec![1, 2, 3, 4, 5];
+
+        assert_eq!(paginate_rows(rows, 2, 2), vec![3, 4]);
+    }
+}

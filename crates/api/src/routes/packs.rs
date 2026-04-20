@@ -16,6 +16,7 @@ use attune_common::mq::{MessageEnvelope, MessageType, PackRegisteredPayload};
 use attune_common::rbac::{Action, AuthorizationContext, Resource};
 use attune_common::repositories::{
     pack::{CreatePackInput, UpdatePackInput},
+    work_queue::WorkQueueRepository,
     Create, Delete, FindById, FindByRef, PackRepository, PackTestRepository, Pagination, Patch,
     Update,
 };
@@ -357,6 +358,11 @@ pub async fn delete_pack(
             )
             .await?;
     }
+
+    // Remove pack-owned queue definitions first.
+    // work_queue.pack uses ON DELETE SET NULL so explicit cleanup preserves the
+    // shared model while ensuring declarative queues disappear with their pack.
+    WorkQueueRepository::delete_non_adhoc_by_pack_excluding(&state.db, pack.id, &[]).await?;
 
     // Delete the pack from the database (cascades to actions, triggers, sensors, rules, etc.
     // Foreign keys on execution, event, enforcement, and rule tables use ON DELETE SET NULL

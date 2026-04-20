@@ -16,6 +16,7 @@ pub mod rule;
 pub mod runtime;
 pub mod trigger;
 pub mod webhook;
+pub mod work_queue;
 pub mod worker;
 pub mod workflow;
 
@@ -64,6 +65,11 @@ pub use trigger::{
     TriggerSummary, UpdateSensorRequest, UpdateTriggerRequest,
 };
 pub use webhook::{WebhookReceiverRequest, WebhookReceiverResponse};
+pub use work_queue::{
+    CreateWorkQueueRequest, EnqueueWorkQueueItemRequest, UpdateWorkQueueItemRequest,
+    UpdateWorkQueueRequest, WorkQueueItemQueryParams, WorkQueueItemResponse, WorkQueueQueryParams,
+    WorkQueueResponse, WorkQueueSummary,
+};
 pub use worker::{WorkerLoadSnapshot, WorkerQueryParams, WorkerRuntimeSupport, WorkerSummary};
 pub use workflow::{
     CreateWorkflowRequest, UpdateWorkflowRequest, WorkflowResponse, WorkflowSearchParams,

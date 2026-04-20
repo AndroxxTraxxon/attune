@@ -1098,6 +1098,7 @@ impl ActionExecutor {
         // Include parsed result if available
         if let Some(parsed_result) = &result.result {
             result_data["data"] = parsed_result.clone();
+            Self::copy_reserved_queue_ack(&mut result_data, parsed_result);
         }
 
         let input = UpdateExecutionInput {
@@ -1109,6 +1110,18 @@ impl ActionExecutor {
         ExecutionRepository::update(&self.pool, execution_id, input).await?;
 
         Ok(())
+    }
+
+    fn copy_reserved_queue_ack(
+        result_data: &mut serde_json::Value,
+        parsed_result: &serde_json::Value,
+    ) {
+        if let Some(queue_ack) = parsed_result
+            .as_object()
+            .and_then(|object| object.get("queue_ack"))
+        {
+            result_data["queue_ack"] = queue_ack.clone();
+        }
     }
 
     /// Handle failed execution
@@ -1169,6 +1182,10 @@ impl ActionExecutor {
                 result_data["stderr_truncated"] = serde_json::json!(true);
                 result_data["stderr_bytes_truncated"] =
                     serde_json::json!(exec_result.stderr_bytes_truncated);
+            }
+
+            if let Some(parsed_result) = &exec_result.result {
+                Self::copy_reserved_queue_ack(&mut result_data, parsed_result);
             }
         } else {
             // No execution result available (early failure during setup/preparation)
@@ -1257,6 +1274,10 @@ impl ActionExecutor {
                 serde_json::json!(result.stderr_bytes_truncated);
         }
 
+        if let Some(parsed_result) = &result.result {
+            Self::copy_reserved_queue_ack(&mut result_data, parsed_result);
+        }
+
         let input = UpdateExecutionInput {
             status: Some(ExecutionStatus::Cancelled),
             result: Some(result_data),
@@ -1332,6 +1353,67 @@ mod tests {
             ActionExecutor::execution_log_artifact_ref(42, ExecutionLogArtifactStream::Stderr),
             "execution.42.stderr"
         );
+    }
+
+    #[test]
+    fn test_copy_reserved_queue_ack_preserves_data_shape() {
+        let parsed_result = serde_json::json!({
+            "message": "ok",
+            "queue_ack": {
+                "version": 1,
+                "items": [
+                    { "id": 42, "status": "completed" }
+                ]
+            }
+        });
+        let mut result_data = serde_json::json!({
+            "succeeded": true,
+            "data": parsed_result.clone()
+        });
+
+        ActionExecutor::copy_reserved_queue_ack(&mut result_data, &parsed_result);
+
+        assert_eq!(result_data["data"], parsed_result);
+        assert_eq!(result_data["queue_ack"], parsed_result["queue_ack"]);
+    }
+
+    #[test]
+    fn test_copy_reserved_queue_ack_ignores_missing_ack() {
+        let parsed_result = serde_json::json!({ "message": "ok" });
+        let mut result_data = serde_json::json!({
+            "succeeded": true,
+            "data": parsed_result.clone()
+        });
+
+        ActionExecutor::copy_reserved_queue_ack(&mut result_data, &parsed_result);
+
+        assert!(result_data.get("queue_ack").is_none());
+    }
+
+    #[test]
+    fn test_copy_reserved_queue_ack_supports_failed_or_cancelled_results() {
+        let parsed_result = serde_json::json!({
+            "queue_ack": {
+                "version": 1,
+                "items": [
+                    { "id": 7, "status": "retry" }
+                ]
+            }
+        });
+        let mut failed_result = serde_json::json!({
+            "succeeded": false,
+            "error": "boom"
+        });
+        let mut cancelled_result = serde_json::json!({
+            "succeeded": false,
+            "cancelled": true
+        });
+
+        ActionExecutor::copy_reserved_queue_ack(&mut failed_result, &parsed_result);
+        ActionExecutor::copy_reserved_queue_ack(&mut cancelled_result, &parsed_result);
+
+        assert_eq!(failed_result["queue_ack"], parsed_result["queue_ack"]);
+        assert_eq!(cancelled_result["queue_ack"], parsed_result["queue_ack"]);
     }
 
     #[test]

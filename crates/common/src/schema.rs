@@ -195,6 +195,38 @@ impl RefValidator {
         Self::validate_identifier(ref_str)
     }
 
+    /// Validate work queue reference format (`segment[.segment...]`).
+    pub fn validate_work_queue_ref(ref_str: &str) -> Result<()> {
+        let mut parts = ref_str.split('.');
+        let Some(first) = parts.next() else {
+            return Err(Error::validation(format!(
+                "Invalid work queue reference format: '{}'",
+                ref_str
+            )));
+        };
+
+        let is_valid_segment = |segment: &str, must_start_with_letter: bool| {
+            !segment.is_empty()
+                && (!must_start_with_letter
+                    || segment
+                        .chars()
+                        .next()
+                        .is_some_and(|ch| ch.is_ascii_lowercase()))
+                && segment.chars().all(|ch| {
+                    ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_'
+                })
+        };
+
+        if !is_valid_segment(first, true) || !parts.all(|part| is_valid_segment(part, false)) {
+            return Err(Error::validation(format!(
+                "Invalid work queue reference format: '{}'",
+                ref_str
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Validate identifier (lowercase alphanumeric with hyphens/underscores)
     fn validate_identifier(identifier: &str) -> Result<()> {
         if identifier.is_empty() {
@@ -283,6 +315,19 @@ mod tests {
         assert!(RefValidator::validate_pack_ref("Core").is_err());
         assert!(RefValidator::validate_pack_ref("pack.name").is_err()); // dots are not allowed in pack refs
         assert!(RefValidator::validate_pack_ref("pack name").is_err());
+    }
+
+    #[test]
+    fn test_ref_validator_work_queue() {
+        assert!(RefValidator::validate_work_queue_ref("core.inbox").is_ok());
+        assert!(RefValidator::validate_work_queue_ref("ops.retries.high").is_ok());
+        assert!(RefValidator::validate_work_queue_ref("queue_1").is_ok());
+
+        assert!(RefValidator::validate_work_queue_ref("").is_err());
+        assert!(RefValidator::validate_work_queue_ref("1queue").is_err());
+        assert!(RefValidator::validate_work_queue_ref("queue.").is_err());
+        assert!(RefValidator::validate_work_queue_ref(".queue").is_err());
+        assert!(RefValidator::validate_work_queue_ref("queue..part").is_err());
     }
 
     #[test]

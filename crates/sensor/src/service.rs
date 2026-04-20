@@ -208,7 +208,10 @@ impl SensorService {
                             "sensor_processes_running".to_string(),
                             json!(metrics.running_sensors),
                         );
-                        guard.add_capability("active_rules".to_string(), json!(metrics.active_rules));
+                        guard.add_capability(
+                            "active_rules".to_string(),
+                            json!(metrics.active_rules),
+                        );
                         if let Err(e) = guard.update_capabilities().await {
                             error!("Failed to update sensor worker metrics: {}", e);
                         }

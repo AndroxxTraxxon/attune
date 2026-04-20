@@ -5,6 +5,7 @@ import {
   FolderArchive,
   Home,
   KeyRound,
+  ListOrdered,
   Package,
   ShieldCheck,
   SquareArrowRight,
@@ -26,6 +27,7 @@ export const navIcons = {
   events: CircleDot,
   keys: KeyRound,
   artifacts: FolderArchive,
+  queues: ListOrdered,
   accessControl: ShieldCheck,
   packs: Package,
 } as const;

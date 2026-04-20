@@ -40,6 +40,10 @@ use crate::dto::{
         TriggerSummary, UpdateSensorRequest, UpdateTriggerRequest,
     },
     webhook::{WebhookReceiverRequest, WebhookReceiverResponse},
+    work_queue::{
+        CreateWorkQueueRequest, EnqueueWorkQueueItemRequest, UpdateWorkQueueItemRequest,
+        UpdateWorkQueueRequest, WorkQueueItemResponse, WorkQueueResponse, WorkQueueSummary,
+    },
     worker::{WorkerLoadSnapshot, WorkerRuntimeSupport, WorkerSummary},
     workflow::{CreateWorkflowRequest, UpdateWorkflowRequest, WorkflowResponse, WorkflowSummary},
 };
@@ -111,6 +115,18 @@ use crate::dto::{
         crate::routes::runtimes::update_runtime,
         crate::routes::runtimes::delete_runtime,
         crate::routes::workers::list_workers,
+
+        // Work queues
+        crate::routes::work_queues::list_queues,
+        crate::routes::work_queues::list_queues_by_pack,
+        crate::routes::work_queues::get_queue,
+        crate::routes::work_queues::create_queue,
+        crate::routes::work_queues::update_queue,
+        crate::routes::work_queues::delete_queue,
+        crate::routes::work_queues::list_queue_items,
+        crate::routes::work_queues::enqueue_queue_item,
+        crate::routes::work_queues::update_queue_item,
+        crate::routes::work_queues::delete_queue_item,
 
         // Triggers
         crate::routes::triggers::list_triggers,
@@ -237,10 +253,14 @@ use crate::dto::{
             ApiResponse<PermissionAssignmentResponse>,
             ApiResponse<WorkflowResponse>,
             ApiResponse<QueueStatsResponse>,
+            ApiResponse<WorkQueueResponse>,
+            ApiResponse<WorkQueueItemResponse>,
             PaginatedResponse<PackSummary>,
             PaginatedResponse<ActionSummary>,
             PaginatedResponse<RuntimeSummary>,
             PaginatedResponse<WorkerSummary>,
+            PaginatedResponse<WorkQueueSummary>,
+            PaginatedResponse<WorkQueueItemResponse>,
             PaginatedResponse<TriggerSummary>,
             PaginatedResponse<SensorSummary>,
             PaginatedResponse<RuleSummary>,
@@ -303,6 +323,13 @@ use crate::dto::{
             WorkerRuntimeSupport,
             WorkerSummary,
             IdentitySummary,
+            CreateWorkQueueRequest,
+            EnqueueWorkQueueItemRequest,
+            UpdateWorkQueueRequest,
+            UpdateWorkQueueItemRequest,
+            WorkQueueItemResponse,
+            WorkQueueResponse,
+            WorkQueueSummary,
 
             // Action DTOs
             CreateActionRequest,
@@ -385,6 +412,7 @@ use crate::dto::{
         (name = "enforcements", description = "Enforcement query endpoints"),
         (name = "secrets", description = "Secret management endpoints"),
         (name = "workers", description = "Worker inventory and load endpoints"),
+        (name = "queues", description = "Work queue definition endpoints"),
         (name = "workflows", description = "Workflow management endpoints"),
         (name = "webhooks", description = "Webhook management and receiver endpoints"),
         (name = "agent", description = "Agent binary distribution endpoints"),
@@ -522,5 +550,41 @@ mod tests {
              Registered schemas: {:?}",
             components.schemas.keys().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_work_queue_paths_and_schemas_registered() {
+        let doc = ApiDoc::openapi();
+
+        for path in [
+            "/api/v1/queues",
+            "/api/v1/queues/{ref}",
+            "/api/v1/queues/{ref}/items",
+            "/api/v1/queues/{ref}/items/{item_id}",
+            "/api/v1/packs/{pack_ref}/queues",
+        ] {
+            assert!(
+                doc.paths.paths.contains_key(path),
+                "expected work queue path '{}' to exist in OpenAPI spec",
+                path
+            );
+        }
+
+        let components = doc.components.as_ref().expect("components should exist");
+        for schema in [
+            "CreateWorkQueueRequest",
+            "UpdateWorkQueueRequest",
+            "EnqueueWorkQueueItemRequest",
+            "UpdateWorkQueueItemRequest",
+            "WorkQueueResponse",
+            "WorkQueueSummary",
+            "WorkQueueItemResponse",
+        ] {
+            assert!(
+                components.schemas.contains_key(schema),
+                "expected work queue schema '{}' to exist in OpenAPI components",
+                schema
+            );
+        }
     }
 }

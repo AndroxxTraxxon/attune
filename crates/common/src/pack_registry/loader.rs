@@ -1,6 +1,6 @@
 //! Pack Component Loader
 //!
-//! Reads permission set, runtime, action, trigger, and sensor YAML definitions from a pack directory
+//! Reads permission set, runtime, action, trigger, queue, and sensor YAML definitions from a pack directory
 //! and registers them in the database. This is the Rust-native equivalent of
 //! the Python `load_core_pack.py` script used during init-packs.
 //!
@@ -9,7 +9,8 @@
 //! 2. Runtimes (no dependencies)
 //! 3. Triggers (no dependencies)
 //! 4. Actions (depend on runtime; workflow actions also create workflow_definition records)
-//! 5. Sensors (depend on triggers and runtime)
+//! 5. Work queues (can reference actions)
+//! 6. Sensors (depend on triggers and runtime)
 //!
 //! All loaders use **upsert** semantics: if an entity with the same ref already
 //! exists it is updated in place (preserving its database ID); otherwise a new
@@ -38,6 +39,7 @@ use tracing::{debug, info, warn};
 
 use crate::error::{Error, Result};
 use crate::models::Id;
+use crate::queue_definition::parse_work_queue_definition_yaml;
 use crate::repositories::action::{ActionRepository, UpdateActionInput};
 use crate::repositories::identity::{
     CreatePermissionSetInput, PermissionSetRepository, UpdatePermissionSetInput,
@@ -54,10 +56,20 @@ use crate::repositories::workflow::{
 };
 use crate::repositories::{
     runtime::{CreateRuntimeInput, RuntimeRepository, UpdateRuntimeInput},
+    work_queue::{CreateWorkQueueInput, UpdateWorkQueueInput, WorkQueueRepository},
     Create, Delete, FindById, FindByRef, Patch, Update,
 };
 use crate::version_matching::extract_version_components;
 use crate::workflow::parser::parse_workflow_yaml;
+
+struct CleanupRefs<'a> {
+    permission_sets: &'a [String],
+    runtimes: &'a [String],
+    triggers: &'a [String],
+    actions: &'a [String],
+    queues: &'a [String],
+    sensors: &'a [String],
+}
 
 /// Result of loading pack components into the database.
 #[derive(Debug, Default)]
@@ -86,6 +98,12 @@ pub struct PackLoadResult {
     pub actions_updated: usize,
     /// Number of actions skipped
     pub actions_skipped: usize,
+    /// Number of queues created
+    pub queues_loaded: usize,
+    /// Number of queues updated
+    pub queues_updated: usize,
+    /// Number of queues skipped
+    pub queues_skipped: usize,
     /// Number of sensors created
     pub sensors_loaded: usize,
     /// Number of sensors updated
@@ -104,6 +122,7 @@ impl PackLoadResult {
             + self.runtimes_loaded
             + self.triggers_loaded
             + self.actions_loaded
+            + self.queues_loaded
             + self.sensors_loaded
     }
 
@@ -112,6 +131,7 @@ impl PackLoadResult {
             + self.runtimes_skipped
             + self.triggers_skipped
             + self.actions_skipped
+            + self.queues_skipped
             + self.sensors_skipped
     }
 
@@ -120,6 +140,7 @@ impl PackLoadResult {
             + self.runtimes_updated
             + self.triggers_updated
             + self.actions_updated
+            + self.queues_updated
             + self.sensors_updated
     }
 }
@@ -168,18 +189,24 @@ impl<'a> PackComponentLoader<'a> {
         // 4. Load actions (depend on runtime)
         let action_refs = self.load_actions(pack_dir, &mut result).await?;
 
-        // 5. Load sensors (depend on triggers and runtime)
+        // 5. Load work queues (can reference actions)
+        let queue_refs = self.load_queues(pack_dir, &mut result).await?;
+
+        // 6. Load sensors (depend on triggers and runtime)
         let sensor_refs = self
             .load_sensors(pack_dir, &trigger_ids, &mut result)
             .await?;
 
-        // 6. Clean up entities that are no longer in the pack's YAML files
+        // 7. Clean up entities that are no longer in the pack's YAML files
         self.cleanup_removed_entities(
-            &permission_set_refs,
-            &runtime_refs,
-            &trigger_refs,
-            &action_refs,
-            &sensor_refs,
+            CleanupRefs {
+                permission_sets: &permission_set_refs,
+                runtimes: &runtime_refs,
+                triggers: &trigger_refs,
+                actions: &action_refs,
+                queues: &queue_refs,
+                sensors: &sensor_refs,
+            },
             &mut result,
         )
         .await;
@@ -1078,6 +1105,138 @@ impl<'a> PackComponentLoader<'a> {
         Ok(loaded_refs)
     }
 
+    /// Load work queue definitions from `pack_dir/queues/*.yaml`.
+    async fn load_queues(
+        &self,
+        pack_dir: &Path,
+        result: &mut PackLoadResult,
+    ) -> Result<Vec<String>> {
+        let queues_dir = pack_dir.join("queues");
+        let mut loaded_refs = Vec::new();
+
+        if !queues_dir.exists() {
+            info!("No queues directory found for pack '{}'", self.pack_ref);
+            return Ok(loaded_refs);
+        }
+
+        let yaml_files = read_yaml_files(&queues_dir)?;
+        info!(
+            "Found {} work queue definition(s) for pack '{}'",
+            yaml_files.len(),
+            self.pack_ref
+        );
+
+        for (filename, content) in &yaml_files {
+            let definition = match parse_work_queue_definition_yaml(content) {
+                Ok(definition) => definition,
+                Err(e) => {
+                    let msg = format!("Failed to parse work queue YAML {}: {}", filename, e);
+                    warn!("{}", msg);
+                    result.warnings.push(msg);
+                    result.queues_skipped += 1;
+                    continue;
+                }
+            };
+
+            let dispatch_action = match ActionRepository::find_by_ref(
+                self.pool,
+                &definition.dispatch_action,
+            )
+            .await?
+            {
+                Some(action) => action,
+                None => {
+                    let msg = format!(
+                        "Work queue '{}' references unknown action '{}', skipping",
+                        definition.r#ref, definition.dispatch_action
+                    );
+                    warn!("{}", msg);
+                    result.warnings.push(msg);
+                    result.queues_skipped += 1;
+                    continue;
+                }
+            };
+
+            if let Some(existing) =
+                WorkQueueRepository::find_by_ref(self.pool, &definition.r#ref).await?
+            {
+                let update_input = UpdateWorkQueueInput {
+                    pack: Some(Patch::Set(self.pack_id)),
+                    pack_ref: Some(Patch::Set(self.pack_ref.clone())),
+                    is_adhoc: Some(false),
+                    label: Some(definition.label.clone()),
+                    description: Some(match definition.description.clone() {
+                        Some(description) => Patch::Set(description),
+                        None => Patch::Clear,
+                    }),
+                    enabled: Some(definition.enabled),
+                    dispatch_action: Some(Patch::Set(dispatch_action.id)),
+                    dispatch_action_ref: Some(definition.dispatch_action.clone()),
+                    default_priority: Some(definition.default_priority),
+                    allow_pending_update: Some(definition.allow_pending_update),
+                    update_strategy: Some(definition.update_strategy),
+                    batch_mode: Some(definition.batch_mode),
+                    config: Some(definition.config.clone()),
+                };
+
+                match WorkQueueRepository::update(self.pool, existing.id, update_input).await {
+                    Ok(_) => {
+                        info!(
+                            "Updated work queue '{}' (ID: {})",
+                            definition.r#ref, existing.id
+                        );
+                        result.queues_updated += 1;
+                        loaded_refs.push(definition.r#ref);
+                    }
+                    Err(e) => {
+                        let msg =
+                            format!("Failed to update work queue '{}': {}", definition.r#ref, e);
+                        warn!("{}", msg);
+                        result.warnings.push(msg);
+                        result.queues_skipped += 1;
+                    }
+                }
+                continue;
+            }
+
+            match WorkQueueRepository::create(
+                self.pool,
+                CreateWorkQueueInput {
+                    r#ref: definition.r#ref.clone(),
+                    pack: Some(self.pack_id),
+                    pack_ref: Some(self.pack_ref.clone()),
+                    is_adhoc: false,
+                    label: definition.label.clone(),
+                    description: definition.description.clone(),
+                    enabled: definition.enabled,
+                    dispatch_action: Some(dispatch_action.id),
+                    dispatch_action_ref: definition.dispatch_action.clone(),
+                    default_priority: definition.default_priority,
+                    allow_pending_update: definition.allow_pending_update,
+                    update_strategy: definition.update_strategy,
+                    batch_mode: definition.batch_mode,
+                    config: definition.config.clone(),
+                },
+            )
+            .await
+            {
+                Ok(queue) => {
+                    info!("Created work queue '{}' (ID: {})", queue.r#ref, queue.id);
+                    result.queues_loaded += 1;
+                    loaded_refs.push(queue.r#ref);
+                }
+                Err(e) => {
+                    let msg = format!("Failed to create work queue '{}': {}", definition.r#ref, e);
+                    warn!("{}", msg);
+                    result.warnings.push(msg);
+                    result.queues_skipped += 1;
+                }
+            }
+        }
+
+        Ok(loaded_refs)
+    }
+
     /// Load a workflow definition file referenced by an action's `workflow_file`
     /// field and create/update the corresponding `workflow_definition` record.
     ///
@@ -1527,19 +1686,11 @@ impl<'a> PackComponentLoader<'a> {
     /// This handles the case where an action/trigger/sensor/runtime was removed
     /// from the pack between versions. Ad-hoc (user-created) entities are never
     /// removed.
-    async fn cleanup_removed_entities(
-        &self,
-        permission_set_refs: &[String],
-        runtime_refs: &[String],
-        trigger_refs: &[String],
-        action_refs: &[String],
-        sensor_refs: &[String],
-        result: &mut PackLoadResult,
-    ) {
+    async fn cleanup_removed_entities(&self, refs: CleanupRefs<'_>, result: &mut PackLoadResult) {
         match PermissionSetRepository::delete_by_pack_excluding(
             self.pool,
             self.pack_id,
-            permission_set_refs,
+            refs.permission_sets,
         )
         .await
         {
@@ -1561,7 +1712,8 @@ impl<'a> PackComponentLoader<'a> {
         }
 
         // Clean up sensors first (they depend on triggers/runtimes)
-        match SensorRepository::delete_by_pack_excluding(self.pool, self.pack_id, sensor_refs).await
+        match SensorRepository::delete_by_pack_excluding(self.pool, self.pack_id, refs.sensors)
+            .await
         {
             Ok(count) => {
                 if count > 0 {
@@ -1580,11 +1732,37 @@ impl<'a> PackComponentLoader<'a> {
             }
         }
 
+        // Clean up queues before actions for consistency with load order; action deletion would
+        // null out queue dispatch_action references via ON DELETE SET NULL, so either order works.
+        match WorkQueueRepository::delete_non_adhoc_by_pack_excluding(
+            self.pool,
+            self.pack_id,
+            refs.queues,
+        )
+        .await
+        {
+            Ok(count) => {
+                if count > 0 {
+                    info!(
+                        "Removed {} stale work queue(s) from pack '{}'",
+                        count, self.pack_ref
+                    );
+                    result.removed += count as usize;
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to clean up stale work queues for pack '{}': {}",
+                    self.pack_ref, e
+                );
+            }
+        }
+
         // Clean up actions (ad-hoc preserved)
         match ActionRepository::delete_non_adhoc_by_pack_excluding(
             self.pool,
             self.pack_id,
-            action_refs,
+            refs.actions,
         )
         .await
         {
@@ -1609,7 +1787,7 @@ impl<'a> PackComponentLoader<'a> {
         match TriggerRepository::delete_non_adhoc_by_pack_excluding(
             self.pool,
             self.pack_id,
-            trigger_refs,
+            refs.triggers,
         )
         .await
         {
@@ -1631,7 +1809,7 @@ impl<'a> PackComponentLoader<'a> {
         }
 
         // Clean up runtimes last (actions/sensors may reference them)
-        match RuntimeRepository::delete_by_pack_excluding(self.pool, self.pack_id, runtime_refs)
+        match RuntimeRepository::delete_by_pack_excluding(self.pool, self.pack_id, refs.runtimes)
             .await
         {
             Ok(count) => {

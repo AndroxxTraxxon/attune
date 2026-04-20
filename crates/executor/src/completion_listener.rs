@@ -11,12 +11,24 @@
 
 use anyhow::Result;
 use attune_common::{
+    models::{
+        enums::ExecutionStatus, Execution, WorkQueueAck, WorkQueueAckItem, WorkQueueDispatch,
+        WorkQueueDispatchStatus, WorkQueueItem, WorkQueueItemStatus,
+    },
     mq::{
         Consumer, ExecutionCompletedPayload, ExecutionRequestedPayload, MessageEnvelope,
         MessageType, MqError, Publisher,
     },
-    repositories::{execution::ExecutionRepository, FindById},
+    repositories::{
+        execution::{ExecutionRepository, UpdateExecutionInput},
+        work_queue::{
+            UpdateWorkQueueDispatchInput, UpdateWorkQueueItemInput, WorkQueueDispatchRepository,
+            WorkQueueItemRepository, WorkQueueItemSearchFilters, WorkQueueRepository,
+        },
+        FindById, Patch, Update,
+    },
 };
+use serde_json::{json, Value as JsonValue};
 use sqlx::PgPool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -133,7 +145,11 @@ impl CompletionListener {
         );
 
         // Verify execution exists in database
-        let execution = ExecutionRepository::find_by_id(pool, execution_id).await?;
+        let mut execution = ExecutionRepository::find_by_id(pool, execution_id).await?;
+
+        if let Some(ref exec) = execution.clone() {
+            execution = Some(Self::handle_queue_dispatch_completion(pool, exec).await?);
+        }
 
         if let Some(ref exec) = execution {
             debug!(
@@ -269,6 +285,504 @@ impl CompletionListener {
         Ok(())
     }
 
+    async fn handle_queue_dispatch_completion(
+        pool: &PgPool,
+        execution: &Execution,
+    ) -> Result<Execution> {
+        let Some(dispatch) =
+            WorkQueueDispatchRepository::find_by_execution(pool, execution.id).await?
+        else {
+            return Ok(execution.clone());
+        };
+
+        if Self::is_terminal_dispatch_status(dispatch.status) {
+            return Ok(execution.clone());
+        }
+
+        let leased_items = WorkQueueItemRepository::search(
+            pool,
+            &WorkQueueItemSearchFilters {
+                leased_execution: Some(execution.id),
+                statuses: Some(vec![WorkQueueItemStatus::Leased]),
+                limit: dispatch.leased_item_count.max(1) as u32,
+                ..Default::default()
+            },
+        )
+        .await?
+        .rows;
+
+        let expected_ack_version = Self::expected_queue_ack_version(pool, &dispatch).await?;
+
+        if let Err(message) = Self::validate_execution_queue_metadata(
+            execution,
+            &dispatch,
+            &leased_items,
+            expected_ack_version,
+        ) {
+            return Self::fail_queue_dispatch_completion(
+                pool,
+                execution,
+                &dispatch,
+                &leased_items,
+                "queue_dispatch_metadata_mismatch",
+                message,
+            )
+            .await;
+        }
+
+        if leased_items.is_empty() {
+            return Self::fail_queue_dispatch_completion(
+                pool,
+                execution,
+                &dispatch,
+                &leased_items,
+                "queue_dispatch_items_missing",
+                format!(
+                    "queue dispatch {} for execution {} had no leased items to finalize",
+                    dispatch.id, execution.id
+                ),
+            )
+            .await;
+        }
+
+        let expected_item_ids: Vec<_> = leased_items.iter().map(|item| item.id).collect();
+        let queue_ack = match Self::validated_queue_ack_for_execution(
+            execution,
+            &expected_item_ids,
+            expected_ack_version,
+        ) {
+            Ok(queue_ack) => queue_ack,
+            Err((error_code, message)) => {
+                return Self::fail_queue_dispatch_completion(
+                    pool,
+                    execution,
+                    &dispatch,
+                    &leased_items,
+                    error_code,
+                    message,
+                )
+                .await;
+            }
+        };
+
+        let mut tx = pool.begin().await?;
+        for leased_item in &leased_items {
+            let ack_item = queue_ack
+                .item_for(leased_item.id)
+                .expect("validated queue acknowledgement must include every leased item");
+            let new_status = Self::ack_status_to_item_status(ack_item);
+            let ack_summary = Self::ack_summary_json(ack_item);
+            let last_error = Self::ack_item_error_json(ack_item);
+
+            let updated_item = WorkQueueItemRepository::update_if_statuses(
+                &mut *tx,
+                leased_item.id,
+                &[WorkQueueItemStatus::Leased],
+                UpdateWorkQueueItemInput {
+                    status: Some(new_status),
+                    leased_execution: Some(Patch::Clear),
+                    lease_token: Some(Patch::Clear),
+                    lease_expires_at: Some(Patch::Clear),
+                    last_error: Some(match last_error {
+                        Some(last_error) => Patch::Set(last_error),
+                        None => Patch::Clear,
+                    }),
+                    ack_summary: Some(Patch::Set(ack_summary)),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+            if updated_item.is_none() {
+                return Err(anyhow::anyhow!(
+                    "leased queue item {} disappeared while finalizing dispatch {}",
+                    leased_item.id,
+                    dispatch.id
+                ));
+            }
+        }
+
+        WorkQueueDispatchRepository::update(
+            &mut *tx,
+            dispatch.id,
+            UpdateWorkQueueDispatchInput {
+                status: Some(WorkQueueDispatchStatus::Completed),
+                ..Default::default()
+            },
+        )
+        .await?;
+        tx.commit().await?;
+
+        info!(
+            "Finalized queue dispatch {} for execution {} with {} leased item(s)",
+            dispatch.id,
+            execution.id,
+            leased_items.len()
+        );
+
+        Ok(execution.clone())
+    }
+
+    async fn fail_queue_dispatch_completion(
+        pool: &PgPool,
+        execution: &Execution,
+        dispatch: &WorkQueueDispatch,
+        leased_items: &[WorkQueueItem],
+        error_code: &str,
+        error_message: String,
+    ) -> Result<Execution> {
+        let mut tx = pool.begin().await?;
+        let retry_error = json!({
+            "code": error_code,
+            "message": error_message,
+            "execution_id": execution.id,
+            "dispatch_id": dispatch.id,
+        });
+
+        for leased_item in leased_items {
+            let updated_item = WorkQueueItemRepository::update_if_statuses(
+                &mut *tx,
+                leased_item.id,
+                &[WorkQueueItemStatus::Leased],
+                UpdateWorkQueueItemInput {
+                    status: Some(WorkQueueItemStatus::Retry),
+                    leased_execution: Some(Patch::Clear),
+                    lease_token: Some(Patch::Clear),
+                    lease_expires_at: Some(Patch::Clear),
+                    last_error: Some(Patch::Set(retry_error.clone())),
+                    ack_summary: Some(Patch::Clear),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+            if updated_item.is_none() {
+                return Err(anyhow::anyhow!(
+                    "leased queue item {} disappeared while failing dispatch {}",
+                    leased_item.id,
+                    dispatch.id
+                ));
+            }
+        }
+
+        let dispatch_status = Self::dispatch_status_for_execution(execution.status);
+        WorkQueueDispatchRepository::update(
+            &mut *tx,
+            dispatch.id,
+            UpdateWorkQueueDispatchInput {
+                status: Some(dispatch_status),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+        let updated_execution = if execution.status == ExecutionStatus::Completed {
+            ExecutionRepository::update(
+                &mut *tx,
+                execution.id,
+                UpdateExecutionInput {
+                    status: Some(ExecutionStatus::Failed),
+                    result: Some(Self::queue_ack_failure_result(
+                        execution.result.clone(),
+                        error_code,
+                        retry_error["message"]
+                            .as_str()
+                            .unwrap_or("queue acknowledgement failed"),
+                    )),
+                    ..Default::default()
+                },
+            )
+            .await?
+        } else {
+            execution.clone()
+        };
+
+        tx.commit().await?;
+
+        warn!(
+            "Queue dispatch {} for execution {} failed queue acknowledgement validation: {}",
+            dispatch.id,
+            execution.id,
+            retry_error["message"]
+                .as_str()
+                .unwrap_or("queue acknowledgement failed")
+        );
+
+        Ok(updated_execution)
+    }
+
+    fn expected_ack_version_from_queue_config(queue: &serde_json::Value) -> i32 {
+        serde_json::from_value::<attune_common::models::WorkQueueConfig>(queue.clone())
+            .ok()
+            .and_then(|config| config.ack_contract.map(|ack| ack.version))
+            .filter(|version| *version >= 1)
+            .unwrap_or(1)
+    }
+
+    async fn expected_queue_ack_version(
+        pool: &PgPool,
+        dispatch: &WorkQueueDispatch,
+    ) -> Result<i32> {
+        if let Some(queue) = WorkQueueRepository::find_by_id(pool, dispatch.queue).await? {
+            return Ok(Self::expected_ack_version_from_queue_config(&queue.config));
+        }
+
+        warn!(
+            "Queue dispatch {} references missing queue {}, defaulting queue_ack version to 1",
+            dispatch.id, dispatch.queue
+        );
+        Ok(1)
+    }
+
+    fn validated_queue_ack_for_execution(
+        execution: &Execution,
+        expected_item_ids: &[i64],
+        expected_ack_version: i32,
+    ) -> std::result::Result<WorkQueueAck, (&'static str, String)> {
+        if !Self::can_honor_queue_ack_for_status(execution.status) {
+            return Err((
+                "queue_dispatch_execution_failed",
+                format!(
+                    "queue dispatch execution {} completed with status {:?} before acknowledging leased items",
+                    execution.id, execution.status
+                ),
+            ));
+        }
+
+        let queue_ack = match execution.result.as_ref() {
+            Some(result) => match WorkQueueAck::from_execution_result(result) {
+                Ok(Some(queue_ack)) => queue_ack,
+                Ok(None) => {
+                    return Err(match execution.status {
+                        ExecutionStatus::Completed => (
+                            "queue_ack_missing",
+                            format!(
+                                "queue dispatch execution {} completed without execution.result.queue_ack",
+                                execution.id
+                            ),
+                        ),
+                        _ => (
+                            "queue_dispatch_execution_failed",
+                            format!(
+                                "queue dispatch execution {} completed with status {:?} before acknowledging leased items",
+                                execution.id, execution.status
+                            ),
+                        ),
+                    });
+                }
+                Err(message) => return Err(("queue_ack_malformed", message)),
+            },
+            None => {
+                return Err(match execution.status {
+                    ExecutionStatus::Completed => (
+                        "queue_ack_missing",
+                        format!(
+                            "queue dispatch execution {} completed without an execution result",
+                            execution.id
+                        ),
+                    ),
+                    _ => (
+                        "queue_dispatch_execution_failed",
+                        format!(
+                            "queue dispatch execution {} completed with status {:?} before acknowledging leased items",
+                            execution.id, execution.status
+                        ),
+                    ),
+                });
+            }
+        };
+
+        queue_ack
+            .validate_for_items(expected_item_ids, expected_ack_version)
+            .map_err(|message| ("queue_ack_invalid", message))?;
+
+        Ok(queue_ack)
+    }
+
+    fn can_honor_queue_ack_for_status(status: ExecutionStatus) -> bool {
+        matches!(
+            status,
+            ExecutionStatus::Completed
+                | ExecutionStatus::Failed
+                | ExecutionStatus::Cancelled
+                | ExecutionStatus::Canceling
+                | ExecutionStatus::Timeout
+                | ExecutionStatus::Abandoned
+        )
+    }
+
+    fn validate_execution_queue_metadata(
+        execution: &Execution,
+        dispatch: &WorkQueueDispatch,
+        leased_items: &[WorkQueueItem],
+        expected_ack_version: i32,
+    ) -> std::result::Result<(), String> {
+        let Some(config) = execution.config.as_ref() else {
+            return Ok(());
+        };
+        let Some(queue_metadata) = config.get("queue") else {
+            return Ok(());
+        };
+        let queue_metadata = queue_metadata
+            .as_object()
+            .ok_or_else(|| "execution.config.queue must be an object when present".to_string())?;
+
+        if let Some(queue_id) = queue_metadata.get("id") {
+            let queue_id = queue_id
+                .as_i64()
+                .ok_or_else(|| "execution.config.queue.id must be an integer".to_string())?;
+            if queue_id != dispatch.queue {
+                return Err(format!(
+                    "execution.config.queue.id {} does not match dispatch queue {}",
+                    queue_id, dispatch.queue
+                ));
+            }
+        }
+
+        if let Some(queue_ref) = queue_metadata.get("ref") {
+            let queue_ref = queue_ref
+                .as_str()
+                .ok_or_else(|| "execution.config.queue.ref must be a string".to_string())?;
+            if queue_ref != dispatch.queue_ref {
+                return Err(format!(
+                    "execution.config.queue.ref '{}' does not match dispatch queue_ref '{}'",
+                    queue_ref, dispatch.queue_ref
+                ));
+            }
+        }
+
+        if let Some(leased_item_count) = queue_metadata.get("leased_item_count") {
+            let leased_item_count = leased_item_count.as_u64().ok_or_else(|| {
+                "execution.config.queue.leased_item_count must be a positive integer".to_string()
+            })?;
+            if leased_item_count != leased_items.len() as u64 {
+                return Err(format!(
+                    "execution.config.queue.leased_item_count {} does not match {} leased item(s)",
+                    leased_item_count,
+                    leased_items.len()
+                ));
+            }
+        }
+
+        if let Some(ack_contract_version) = queue_metadata.get("ack_contract_version") {
+            let ack_contract_version = ack_contract_version.as_i64().ok_or_else(|| {
+                "execution.config.queue.ack_contract_version must be an integer".to_string()
+            })?;
+            if ack_contract_version != i64::from(expected_ack_version) {
+                return Err(format!(
+                    "execution.config.queue.ack_contract_version {} does not match expected version {}",
+                    ack_contract_version, expected_ack_version
+                ));
+            }
+        }
+
+        if let Some(items) = queue_metadata.get("items") {
+            let items = items
+                .as_array()
+                .ok_or_else(|| "execution.config.queue.items must be an array".to_string())?;
+            let metadata_ids = items
+                .iter()
+                .map(|item| {
+                    item.get("id").and_then(|id| id.as_i64()).ok_or_else(|| {
+                        "execution.config.queue.items[*].id must be an integer".to_string()
+                    })
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let leased_ids: Vec<_> = leased_items.iter().map(|item| item.id).collect();
+            if metadata_ids != leased_ids {
+                return Err(format!(
+                    "execution.config.queue.items ids {:?} do not match leased item ids {:?}",
+                    metadata_ids, leased_ids
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn is_terminal_dispatch_status(status: WorkQueueDispatchStatus) -> bool {
+        matches!(
+            status,
+            WorkQueueDispatchStatus::Completed
+                | WorkQueueDispatchStatus::Failed
+                | WorkQueueDispatchStatus::Released
+                | WorkQueueDispatchStatus::Cancelled
+        )
+    }
+
+    fn dispatch_status_for_execution(status: ExecutionStatus) -> WorkQueueDispatchStatus {
+        match status {
+            ExecutionStatus::Cancelled
+            | ExecutionStatus::Canceling
+            | ExecutionStatus::Abandoned => WorkQueueDispatchStatus::Cancelled,
+            _ => WorkQueueDispatchStatus::Failed,
+        }
+    }
+
+    fn ack_status_to_item_status(ack_item: &WorkQueueAckItem) -> WorkQueueItemStatus {
+        match ack_item.status {
+            attune_common::models::WorkQueueAckItemStatus::Completed => {
+                WorkQueueItemStatus::Completed
+            }
+            attune_common::models::WorkQueueAckItemStatus::Retry => WorkQueueItemStatus::Retry,
+            attune_common::models::WorkQueueAckItemStatus::Failed => WorkQueueItemStatus::Failed,
+            attune_common::models::WorkQueueAckItemStatus::Skipped => WorkQueueItemStatus::Skipped,
+        }
+    }
+
+    fn ack_summary_json(ack_item: &WorkQueueAckItem) -> JsonValue {
+        let mut summary = json!({
+            "status": ack_item.status,
+        });
+
+        if let Some(value) = &ack_item.summary {
+            summary["summary"] = value.clone();
+        }
+        if let Some(value) = &ack_item.error {
+            summary["error"] = value.clone();
+        }
+
+        summary
+    }
+
+    fn ack_item_error_json(ack_item: &WorkQueueAckItem) -> Option<JsonValue> {
+        match Self::ack_status_to_item_status(ack_item) {
+            WorkQueueItemStatus::Retry => Some(ack_item.error.clone().unwrap_or_else(|| {
+                json!({
+                    "code": "queue_dispatch_retry",
+                    "message": "queue dispatch requested retry without error details",
+                })
+            })),
+            WorkQueueItemStatus::Failed => Some(ack_item.error.clone().unwrap_or_else(|| {
+                json!({
+                    "code": "queue_dispatch_failed",
+                    "message": "queue dispatch reported failure without error details",
+                })
+            })),
+            _ => None,
+        }
+    }
+
+    fn queue_ack_failure_result(
+        existing_result: Option<JsonValue>,
+        error_code: &str,
+        error_message: &str,
+    ) -> JsonValue {
+        let mut result = match existing_result {
+            Some(JsonValue::Object(object)) => JsonValue::Object(object),
+            Some(other) => json!({ "data": other }),
+            None => json!({}),
+        };
+
+        result["succeeded"] = json!(false);
+        result["error"] = json!(error_message);
+        result["queue_ack_error"] = json!({
+            "code": error_code,
+            "message": error_message,
+        });
+        result
+    }
+
     async fn publish_execution_requested(
         pool: &PgPool,
         publisher: &Publisher,
@@ -306,6 +820,27 @@ impl CompletionListener {
 mod tests {
     use super::*;
     use crate::queue_manager::ExecutionQueueManager;
+    use chrono::Utc;
+
+    fn queue_dispatch_execution(status: ExecutionStatus, result: Option<JsonValue>) -> Execution {
+        Execution {
+            id: 42,
+            action: None,
+            action_ref: "core.queue_dispatch".to_string(),
+            config: None,
+            env_vars: None,
+            parent: None,
+            enforcement: None,
+            executor: None,
+            worker: None,
+            status,
+            result,
+            started_at: None,
+            workflow_task: None,
+            created: Utc::now(),
+            updated: Utc::now(),
+        }
+    }
 
     #[tokio::test]
     async fn test_release_active_slot_releases_slot() {
@@ -437,5 +972,184 @@ mod tests {
         let result = queue_manager.release_active_slot(execution_id).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_valid_queue_ack_is_accepted_for_failed_execution() {
+        let execution = queue_dispatch_execution(
+            ExecutionStatus::Failed,
+            Some(json!({
+                "queue_ack": {
+                    "version": 1,
+                    "items": [
+                        { "id": 10, "status": "completed" },
+                        { "id": 11, "status": "failed", "error": { "message": "bad item" } }
+                    ]
+                }
+            })),
+        );
+
+        let queue_ack =
+            CompletionListener::validated_queue_ack_for_execution(&execution, &[10, 11], 1)
+                .expect("failed execution should still honor a valid queue_ack");
+
+        assert_eq!(queue_ack.items.len(), 2);
+        assert_eq!(
+            queue_ack.item_for(10).unwrap().status,
+            attune_common::models::WorkQueueAckItemStatus::Completed
+        );
+        assert_eq!(
+            queue_ack.item_for(11).unwrap().status,
+            attune_common::models::WorkQueueAckItemStatus::Failed
+        );
+    }
+
+    #[test]
+    fn test_missing_queue_ack_for_failed_execution_stays_conservative() {
+        let execution = queue_dispatch_execution(
+            ExecutionStatus::Cancelled,
+            Some(json!({
+                "error": "worker cancelled execution"
+            })),
+        );
+
+        let error = CompletionListener::validated_queue_ack_for_execution(&execution, &[10], 1)
+            .unwrap_err();
+
+        assert_eq!(error.0, "queue_dispatch_execution_failed");
+        assert!(error.1.contains("before acknowledging leased items"));
+    }
+
+    #[test]
+    fn test_non_terminal_execution_status_cannot_apply_queue_ack() {
+        let execution = queue_dispatch_execution(
+            ExecutionStatus::Running,
+            Some(json!({
+                "queue_ack": {
+                    "version": 1,
+                    "items": [
+                        { "id": 10, "status": "completed" }
+                    ]
+                }
+            })),
+        );
+
+        let error = CompletionListener::validated_queue_ack_for_execution(&execution, &[10], 1)
+            .unwrap_err();
+
+        assert_eq!(error.0, "queue_dispatch_execution_failed");
+        assert!(error.1.contains("status Running"));
+    }
+
+    #[test]
+    fn test_queue_ack_version_mismatch_is_rejected() {
+        let execution = queue_dispatch_execution(
+            ExecutionStatus::Completed,
+            Some(json!({
+                "queue_ack": {
+                    "version": 2,
+                    "items": [
+                        { "id": 10, "status": "completed" }
+                    ]
+                }
+            })),
+        );
+
+        let error = CompletionListener::validated_queue_ack_for_execution(&execution, &[10], 1)
+            .unwrap_err();
+
+        assert_eq!(error.0, "queue_ack_invalid");
+        assert!(error.1.contains("queue_ack.version must be 1"));
+    }
+
+    #[test]
+    fn test_queue_ack_metadata_validation_detects_item_id_mismatch() {
+        let execution = Execution {
+            id: 52,
+            action: None,
+            action_ref: "core.queue_dispatch".to_string(),
+            config: Some(json!({
+                "queue": {
+                    "id": 7,
+                    "ref": "core.inbox",
+                    "leased_item_count": 1,
+                    "ack_contract_version": 1,
+                    "items": [
+                        { "id": 999 }
+                    ]
+                }
+            })),
+            env_vars: None,
+            parent: None,
+            enforcement: None,
+            executor: None,
+            worker: None,
+            status: ExecutionStatus::Completed,
+            result: None,
+            started_at: None,
+            workflow_task: None,
+            created: Utc::now(),
+            updated: Utc::now(),
+        };
+        let dispatch = WorkQueueDispatch {
+            id: 8,
+            queue: 7,
+            queue_ref: "core.inbox".to_string(),
+            execution: execution.id,
+            status: WorkQueueDispatchStatus::Leased,
+            leased_item_count: 1,
+            created: Utc::now(),
+            updated: Utc::now(),
+        };
+        let leased_items = vec![WorkQueueItem {
+            id: 10,
+            queue: 7,
+            queue_ref: "core.inbox".to_string(),
+            item_key: Some("order-1".to_string()),
+            priority: 1,
+            status: WorkQueueItemStatus::Leased,
+            payload: json!({"order": 1}),
+            metadata: json!({}),
+            enqueue_source: "test".to_string(),
+            requested_by_identity: None,
+            requested_by_execution: None,
+            requested_by_enforcement: None,
+            leased_execution: Some(execution.id),
+            lease_token: Some(uuid::Uuid::new_v4()),
+            lease_expires_at: Some(Utc::now()),
+            attempt_count: 1,
+            last_error: None,
+            ack_summary: None,
+            created: Utc::now(),
+            updated: Utc::now(),
+        }];
+
+        let error = CompletionListener::validate_execution_queue_metadata(
+            &execution,
+            &dispatch,
+            &leased_items,
+            1,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("do not match leased item ids"));
+    }
+
+    #[test]
+    fn test_queue_ack_failure_result_preserves_existing_payload() {
+        let result = CompletionListener::queue_ack_failure_result(
+            Some(json!({
+                "data": {
+                    "foo": "bar"
+                }
+            })),
+            "queue_ack_missing",
+            "missing queue ack",
+        );
+
+        assert_eq!(result["succeeded"], false);
+        assert_eq!(result["error"], "missing queue ack");
+        assert_eq!(result["data"]["foo"], "bar");
+        assert_eq!(result["queue_ack_error"]["code"], "queue_ack_missing");
     }
 }

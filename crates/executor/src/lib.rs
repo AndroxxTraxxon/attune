@@ -10,6 +10,7 @@ pub mod event_processor;
 pub mod execution_manager;
 pub mod inquiry_handler;
 pub mod policy_enforcer;
+pub mod queue_dispatcher;
 pub mod queue_manager;
 pub mod retry_manager;
 pub mod scheduler;

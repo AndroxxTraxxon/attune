@@ -15,6 +15,7 @@ mod event_processor;
 mod execution_manager;
 mod inquiry_handler;
 mod policy_enforcer;
+mod queue_dispatcher;
 mod queue_manager;
 mod retry_manager;
 mod scheduler;

@@ -25,6 +25,7 @@ pub use pack_test::*;
 pub use rule::*;
 pub use runtime::*;
 pub use trigger::*;
+pub use work_queue::*;
 pub use workflow::*;
 
 /// Common ID type used throughout the system
@@ -355,6 +356,77 @@ pub mod enums {
         Public,
         #[default]
         Private,
+    }
+
+    #[derive(
+        Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type, ToSchema,
+    )]
+    #[sqlx(
+        type_name = "work_queue_update_strategy_enum",
+        rename_all = "snake_case"
+    )]
+    #[serde(rename_all = "snake_case")]
+    pub enum WorkQueueUpdateStrategy {
+        Immutable,
+        #[default]
+        Replace,
+        MergePatch,
+    }
+
+    #[derive(
+        Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type, ToSchema,
+    )]
+    #[sqlx(type_name = "work_queue_batch_mode_enum", rename_all = "lowercase")]
+    #[serde(rename_all = "lowercase")]
+    pub enum WorkQueueBatchMode {
+        #[default]
+        Single,
+        Batch,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, ToSchema)]
+    #[sqlx(type_name = "work_queue_item_status_enum", rename_all = "lowercase")]
+    #[serde(rename_all = "lowercase")]
+    pub enum WorkQueueItemStatus {
+        Queued,
+        Leased,
+        Retry,
+        Completed,
+        Failed,
+        Skipped,
+        Cancelled,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, ToSchema)]
+    #[sqlx(
+        type_name = "work_queue_dispatch_status_enum",
+        rename_all = "lowercase"
+    )]
+    #[serde(rename_all = "lowercase")]
+    pub enum WorkQueueDispatchStatus {
+        Leased,
+        Dispatched,
+        Completed,
+        Failed,
+        Released,
+        Cancelled,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum WorkQueueAckItemStatus {
+        Completed,
+        Retry,
+        Failed,
+        Skipped,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum WorkQueueTunableSource {
+        Literal,
+        PackConfig,
+        Keystore,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, ToSchema)]
@@ -1467,6 +1539,313 @@ pub mod artifact_version {
     pub const SELECT_COLUMNS_WITH_CONTENT: &str =
         "id, artifact, version, content_type, size_bytes, \
          content, content_json, file_path, meta, created_by, created";
+}
+
+/// Work queue models
+pub mod work_queue {
+    use super::*;
+    use uuid::Uuid;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+    pub struct WorkQueue {
+        pub id: Id,
+        pub r#ref: String,
+        pub pack: Option<Id>,
+        pub pack_ref: Option<String>,
+        pub is_adhoc: bool,
+        pub label: String,
+        pub description: Option<String>,
+        pub enabled: bool,
+        pub dispatch_action: Option<Id>,
+        pub dispatch_action_ref: String,
+        pub default_priority: i32,
+        pub allow_pending_update: bool,
+        pub update_strategy: WorkQueueUpdateStrategy,
+        pub batch_mode: WorkQueueBatchMode,
+        pub config: JsonDict,
+        pub created: DateTime<Utc>,
+        pub updated: DateTime<Utc>,
+    }
+
+    pub const WORK_QUEUE_SELECT_COLUMNS: &str = "id, ref, pack, pack_ref, is_adhoc, label, \
+         description, enabled, dispatch_action, dispatch_action_ref, default_priority, \
+         allow_pending_update, update_strategy, batch_mode, config, created, updated";
+
+    #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+    pub struct WorkQueueItem {
+        pub id: Id,
+        pub queue: Id,
+        pub queue_ref: String,
+        pub item_key: Option<String>,
+        pub priority: i32,
+        pub status: WorkQueueItemStatus,
+        pub payload: JsonDict,
+        pub metadata: JsonDict,
+        pub enqueue_source: String,
+        pub requested_by_identity: Option<Id>,
+        pub requested_by_execution: Option<Id>,
+        pub requested_by_enforcement: Option<Id>,
+        pub leased_execution: Option<Id>,
+        pub lease_token: Option<Uuid>,
+        pub lease_expires_at: Option<DateTime<Utc>>,
+        pub attempt_count: i32,
+        pub last_error: Option<JsonDict>,
+        pub ack_summary: Option<JsonDict>,
+        pub created: DateTime<Utc>,
+        pub updated: DateTime<Utc>,
+    }
+
+    pub const WORK_QUEUE_ITEM_SELECT_COLUMNS: &str = "id, queue, queue_ref, item_key, priority, \
+         status, payload, metadata, enqueue_source, requested_by_identity, \
+         requested_by_execution, requested_by_enforcement, leased_execution, lease_token, \
+         lease_expires_at, attempt_count, last_error, ack_summary, created, updated";
+
+    #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+    pub struct WorkQueueDispatch {
+        pub id: Id,
+        pub queue: Id,
+        pub queue_ref: String,
+        pub execution: Id,
+        pub status: WorkQueueDispatchStatus,
+        pub leased_item_count: i32,
+        pub created: DateTime<Utc>,
+        pub updated: DateTime<Utc>,
+    }
+
+    pub const WORK_QUEUE_DISPATCH_SELECT_COLUMNS: &str =
+        "id, queue, queue_ref, execution, status, leased_item_count, created, updated";
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+    pub struct WorkQueueConfig {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub input_mapping: Option<WorkQueueInputMappingConfig>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub priority: Option<WorkQueuePriorityConfig>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub dispatch: Option<WorkQueueDispatchConfig>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub ack_contract: Option<WorkQueueAckContractConfig>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+    pub struct WorkQueueInputMappingConfig {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub items_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub single_item_path: Option<String>,
+        #[serde(default)]
+        pub include_queue_metadata: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+    pub struct WorkQueuePriorityConfig {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub default: Option<WorkQueueTunableValue>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+    pub struct WorkQueueDispatchConfig {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub concurrency: Option<WorkQueueTunableValue>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub batch_size: Option<WorkQueueTunableValue>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+    pub struct WorkQueueAckContractConfig {
+        #[serde(default)]
+        pub version: i32,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(deny_unknown_fields)]
+    pub struct WorkQueueAck {
+        #[serde(default = "default_work_queue_ack_version")]
+        pub version: i32,
+        pub items: Vec<WorkQueueAckItem>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(deny_unknown_fields)]
+    pub struct WorkQueueAckItem {
+        pub id: Id,
+        pub status: WorkQueueAckItemStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub summary: Option<JsonDict>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub error: Option<JsonDict>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct WorkQueueTunableValue {
+        pub source: WorkQueueTunableSource,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub value: Option<JsonDict>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub key_ref: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub fallback: Option<JsonDict>,
+    }
+
+    fn default_work_queue_ack_version() -> i32 {
+        1
+    }
+
+    impl WorkQueueAck {
+        pub fn from_execution_result(
+            result: &JsonValue,
+        ) -> std::result::Result<Option<Self>, String> {
+            let Some(object) = result.as_object() else {
+                return Ok(None);
+            };
+
+            let Some(queue_ack) = object.get("queue_ack") else {
+                return Ok(None);
+            };
+
+            serde_json::from_value(queue_ack.clone())
+                .map(Some)
+                .map_err(|error| format!("invalid execution.result.queue_ack: {error}"))
+        }
+
+        pub fn validate_for_items(
+            &self,
+            expected_item_ids: &[Id],
+            expected_version: i32,
+        ) -> std::result::Result<(), String> {
+            use std::collections::BTreeSet;
+
+            if self.version != expected_version {
+                return Err(format!(
+                    "queue_ack.version must be {expected_version}, got {}",
+                    self.version
+                ));
+            }
+
+            if self.items.is_empty() {
+                return Err("queue_ack.items cannot be empty".to_string());
+            }
+
+            let expected: BTreeSet<_> = expected_item_ids.iter().copied().collect();
+            if expected.len() != expected_item_ids.len() {
+                return Err("expected queue item ids contain duplicates".to_string());
+            }
+
+            let mut seen = BTreeSet::new();
+            for item in &self.items {
+                if !expected.contains(&item.id) {
+                    return Err(format!(
+                        "queue_ack.items contains unexpected leased item id {}",
+                        item.id
+                    ));
+                }
+                if !seen.insert(item.id) {
+                    return Err(format!(
+                        "queue_ack.items contains duplicate acknowledgement for item {}",
+                        item.id
+                    ));
+                }
+            }
+
+            let missing: Vec<_> = expected.difference(&seen).copied().collect();
+            if !missing.is_empty() {
+                return Err(format!(
+                    "queue_ack.items is missing acknowledgements for leased item ids {:?}",
+                    missing
+                ));
+            }
+
+            Ok(())
+        }
+
+        pub fn item_for(&self, item_id: Id) -> Option<&WorkQueueAckItem> {
+            self.items.iter().find(|item| item.id == item_id)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use serde_json::json;
+
+        #[test]
+        fn queue_ack_parses_from_reserved_execution_result_field() {
+            let result = json!({
+                "succeeded": true,
+                "data": {
+                    "queue_ack": {
+                        "version": 1,
+                        "items": [
+                            { "id": 10, "status": "completed" }
+                        ]
+                    }
+                },
+                "queue_ack": {
+                    "version": 1,
+                    "items": [
+                        { "id": 10, "status": "completed" }
+                    ]
+                }
+            });
+
+            let queue_ack = WorkQueueAck::from_execution_result(&result)
+                .expect("queue ack should parse")
+                .expect("queue ack should exist");
+
+            assert_eq!(queue_ack.version, 1);
+            assert_eq!(queue_ack.items.len(), 1);
+            assert_eq!(queue_ack.items[0].id, 10);
+            assert_eq!(queue_ack.items[0].status, WorkQueueAckItemStatus::Completed);
+        }
+
+        #[test]
+        fn queue_ack_validation_requires_all_expected_ids_once() {
+            let queue_ack = WorkQueueAck {
+                version: 1,
+                items: vec![WorkQueueAckItem {
+                    id: 10,
+                    status: WorkQueueAckItemStatus::Completed,
+                    summary: None,
+                    error: None,
+                }],
+            };
+
+            let error = queue_ack
+                .validate_for_items(&[10, 11], 1)
+                .expect_err("validation should fail when ids are missing");
+
+            assert!(error.contains("missing acknowledgements"));
+        }
+
+        #[test]
+        fn queue_ack_validation_rejects_duplicate_ids() {
+            let queue_ack = WorkQueueAck {
+                version: 1,
+                items: vec![
+                    WorkQueueAckItem {
+                        id: 10,
+                        status: WorkQueueAckItemStatus::Completed,
+                        summary: None,
+                        error: None,
+                    },
+                    WorkQueueAckItem {
+                        id: 10,
+                        status: WorkQueueAckItemStatus::Retry,
+                        summary: None,
+                        error: None,
+                    },
+                ],
+            };
+
+            let error = queue_ack
+                .validate_for_items(&[10], 1)
+                .expect_err("validation should fail when ids are duplicated");
+
+            assert!(error.contains("duplicate acknowledgement"));
+        }
+    }
 }
 
 /// Workflow orchestration models

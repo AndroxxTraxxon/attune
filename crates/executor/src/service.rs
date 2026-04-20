@@ -26,6 +26,7 @@ use crate::event_processor::EventProcessor;
 use crate::execution_manager::ExecutionManager;
 use crate::inquiry_handler::InquiryHandler;
 use crate::policy_enforcer::PolicyEnforcer;
+use crate::queue_dispatcher::WorkQueueDispatcher;
 use crate::queue_manager::{ExecutionQueueManager, QueueConfig};
 use crate::scheduler::ExecutionScheduler;
 use crate::timeout_monitor::{ExecutionTimeoutMonitor, TimeoutMonitorConfig};
@@ -406,6 +407,15 @@ impl ExecutorService {
             timeout_config,
         ));
         handles.push(tokio::spawn(async move { timeout_monitor.start().await }));
+
+        // Start work queue dispatcher
+        info!("Starting work queue dispatcher...");
+        let queue_dispatcher = WorkQueueDispatcher::new(
+            self.inner.pool.clone(),
+            self.inner.publisher.clone(),
+            self.inner.config.security.encryption_key.clone(),
+        );
+        handles.push(tokio::spawn(async move { queue_dispatcher.start().await }));
 
         // Start dead letter handler (if DLQ is enabled)
         if self.inner.mq_config.rabbitmq.dead_letter.enabled {

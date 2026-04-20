@@ -6,6 +6,8 @@ grants:
     actions: [read]
   - resource: actions
     actions: [read]
+  - resource: queues
+    actions: [read]
   - resource: rules
     actions: [read]
   - resource: triggers

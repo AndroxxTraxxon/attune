@@ -13,6 +13,7 @@ use std::collections::HashMap;
 pub enum Resource {
     Packs,
     Actions,
+    Queues,
     Rules,
     Triggers,
     Executions,
