@@ -6,6 +6,7 @@ import {
 } from "@/components/common/ParamSchemaForm";
 import {
   formatQueueInterExecutionDelay,
+  formatQueueRetryLimit,
   formatQueueTunable,
   getQueueBatchCoalescingSummary,
   getUpdateStrategyLabel,
@@ -261,6 +262,10 @@ function QueueConfigPreview({
         config.dispatch?.inter_execution_delay_seconds,
         effectiveConcurrency,
       ),
+    },
+    {
+      label: "Retry limit",
+      value: formatQueueRetryLimit(config.dispatch?.retry_limit),
     },
     {
       label: (

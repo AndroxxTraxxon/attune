@@ -22,6 +22,7 @@ import {
 interface QueueItemModalProps {
   queueRef: string;
   itemSchema?: JsonValue;
+  defaultPriority?: number;
   item?: WorkQueueItemResponse | null;
   onClose: () => void;
 }
@@ -65,6 +66,7 @@ function getErrorMessage(error: unknown, fallback: string): string {
 export default function QueueItemModal({
   queueRef,
   itemSchema,
+  defaultPriority = 0,
   item,
   onClose,
 }: QueueItemModalProps) {
@@ -79,7 +81,7 @@ export default function QueueItemModal({
   const initialPayloadParts = splitPayloadBySchema(initialPayload, payloadSchema);
 
   const [itemKey, setItemKey] = useState(item?.item_key ?? "");
-  const [priority, setPriority] = useState(() => item?.priority ?? 0);
+  const [priority, setPriority] = useState(() => item?.priority ?? defaultPriority);
   const [payloadValues, setPayloadValues] = useState<Record<string, JsonValue>>(
     initialPayloadParts.formValues,
   );

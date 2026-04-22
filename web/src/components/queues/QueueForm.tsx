@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useActions } from "@/hooks/useActions";
 import { useCreateQueue, useUpdateQueue } from "@/hooks/useQueues";
@@ -75,6 +75,12 @@ export default function QueueForm({
         ? String(initialQueueConfig.dispatch.inter_execution_delay_seconds)
         : "",
   );
+  const [retryLimit, setRetryLimit] = useState(
+    () =>
+      initialQueueConfig.dispatch?.retry_limit !== undefined
+        ? String(initialQueueConfig.dispatch.retry_limit)
+        : "",
+  );
   const [coalescingGroupByPath, setCoalescingGroupByPath] = useState(
     () => initialQueueConfig.dispatch?.coalescing?.group_by_path ?? "",
   );
@@ -85,26 +91,32 @@ export default function QueueForm({
   const isImmutableStrategy = updateStrategy === WorkQueueUpdateStrategy.IMMUTABLE;
   const effectiveAllowPendingUpdate = isImmutableStrategy ? false : allowPendingUpdate;
 
-  useEffect(() => {
-    try {
-      const parsed = parseJsonObject("Config", config);
-      const parsedConfig = parseQueueConfig(parsed);
-      setInterExecutionDelaySeconds(
-        parsedConfig.dispatch?.inter_execution_delay_seconds !== undefined
-          ? String(parsedConfig.dispatch.inter_execution_delay_seconds)
-          : "",
-      );
-      const coalescing = parsedConfig.dispatch?.coalescing;
-      setCoalescingEnabled(coalescing?.enabled ?? false);
-      setCoalescingGroupByPath(coalescing?.group_by_path ?? "");
-      setCoalescingAcrossPriorities(coalescing?.across_priorities ?? false);
-    } catch {
-      // Keep the current form state while the user edits invalid JSON.
-    }
-  }, [config]);
+  let parsedDispatchConfig: ReturnType<typeof parseQueueConfig> | null = null;
+  try {
+    parsedDispatchConfig = parseQueueConfig(parseJsonObject("Config", config));
+  } catch {
+    // Keep the current control state while the user edits invalid JSON.
+  }
+
+  const effectiveInterExecutionDelaySeconds =
+    parsedDispatchConfig?.dispatch?.inter_execution_delay_seconds !== undefined
+      ? String(parsedDispatchConfig.dispatch.inter_execution_delay_seconds)
+      : interExecutionDelaySeconds;
+  const effectiveRetryLimit =
+    parsedDispatchConfig?.dispatch?.retry_limit !== undefined
+      ? String(parsedDispatchConfig.dispatch.retry_limit)
+      : retryLimit;
+  const effectiveCoalescingEnabled =
+    parsedDispatchConfig?.dispatch?.coalescing?.enabled ?? coalescingEnabled;
+  const effectiveCoalescingGroupByPath =
+    parsedDispatchConfig?.dispatch?.coalescing?.group_by_path ?? coalescingGroupByPath;
+  const effectiveCoalescingAcrossPriorities =
+    parsedDispatchConfig?.dispatch?.coalescing?.across_priorities ??
+    coalescingAcrossPriorities;
 
   const applyDispatchSettingsToConfig = (
     configObject: ReturnType<typeof parseJsonObject>,
+    nextRetryLimit: string,
     nextDelaySeconds: string,
     nextEnabled: boolean,
     nextGroupByPath: string,
@@ -116,6 +128,17 @@ export default function QueueForm({
       currentDispatch && typeof currentDispatch === "object" && !Array.isArray(currentDispatch)
         ? { ...(currentDispatch as Record<string, JsonValue>) }
         : {};
+
+    const trimmedRetryLimit = nextRetryLimit.trim();
+    if (!trimmedRetryLimit) {
+      delete dispatch.retry_limit;
+    } else {
+      const parsedRetryLimit = Number(trimmedRetryLimit);
+      if (!Number.isInteger(parsedRetryLimit) || parsedRetryLimit < 0) {
+        throw new Error("Retry limit must be a non-negative integer");
+      }
+      dispatch.retry_limit = parsedRetryLimit;
+    }
 
     const trimmedDelay = nextDelaySeconds.trim();
     if (!trimmedDelay) {
@@ -154,6 +177,7 @@ export default function QueueForm({
   };
 
   const updateDispatchConfig = (
+    nextRetryLimit: string,
     nextDelaySeconds: string,
     nextEnabled: boolean,
     nextGroupByPath: string,
@@ -170,6 +194,7 @@ export default function QueueForm({
       prettyJson(
         applyDispatchSettingsToConfig(
           parsedConfig,
+          nextRetryLimit,
           nextDelaySeconds,
           nextEnabled,
           nextGroupByPath,
@@ -229,18 +254,26 @@ export default function QueueForm({
     try {
       parsedConfig = applyDispatchSettingsToConfig(
         parseJsonObject("Config", config),
-        interExecutionDelaySeconds,
-        coalescingEnabled,
-        coalescingGroupByPath,
-        coalescingAcrossPriorities,
+        effectiveRetryLimit,
+        effectiveInterExecutionDelaySeconds,
+        effectiveCoalescingEnabled,
+        effectiveCoalescingGroupByPath,
+        effectiveCoalescingAcrossPriorities,
       );
     } catch (error) {
       nextErrors.config =
         error instanceof Error ? error.message : "Config must be valid JSON";
     }
 
-    if (interExecutionDelaySeconds.trim()) {
-      const parsedDelay = Number(interExecutionDelaySeconds.trim());
+    if (effectiveRetryLimit.trim()) {
+      const parsedRetryLimit = Number(effectiveRetryLimit.trim());
+      if (!Number.isInteger(parsedRetryLimit) || parsedRetryLimit < 0) {
+        nextErrors.retry_limit = "Retry limit must be a non-negative integer";
+      }
+    }
+
+    if (effectiveInterExecutionDelaySeconds.trim()) {
+      const parsedDelay = Number(effectiveInterExecutionDelaySeconds.trim());
       if (!Number.isInteger(parsedDelay) || parsedDelay < 0) {
         nextErrors.inter_execution_delay_seconds =
           "Sequential inter-execution delay must be a non-negative integer";
@@ -485,21 +518,53 @@ export default function QueueForm({
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
+              Retry limit
+            </label>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={effectiveRetryLimit}
+              onChange={(e) => {
+                const nextValue = e.target.value;
+                setRetryLimit(nextValue);
+                updateDispatchConfig(
+                  nextValue,
+                  effectiveInterExecutionDelaySeconds,
+                  effectiveCoalescingEnabled,
+                  effectiveCoalescingGroupByPath,
+                  effectiveCoalescingAcrossPriorities,
+                );
+              }}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              placeholder="0"
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Number of times an item may return to <span className="font-mono">Retry</span> before it is marked <span className="font-mono">Failed</span>.
+            </p>
+            {errors.retry_limit && (
+              <p className="mt-1 text-sm text-red-600">{errors.retry_limit}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
               Sequential inter-execution delay (seconds)
             </label>
             <input
               type="number"
               min={0}
               step={1}
-              value={interExecutionDelaySeconds}
+              value={effectiveInterExecutionDelaySeconds}
               onChange={(e) => {
                 const nextValue = e.target.value;
                 setInterExecutionDelaySeconds(nextValue);
                 updateDispatchConfig(
+                  effectiveRetryLimit,
                   nextValue,
-                  coalescingEnabled,
-                  coalescingGroupByPath,
-                  coalescingAcrossPriorities,
+                  effectiveCoalescingEnabled,
+                  effectiveCoalescingGroupByPath,
+                  effectiveCoalescingAcrossPriorities,
                 );
               }}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
@@ -524,16 +589,17 @@ export default function QueueForm({
             <label className="flex items-start gap-3">
               <input
                 type="checkbox"
-                checked={coalescingEnabled}
+                checked={effectiveCoalescingEnabled}
                 disabled={batchMode !== WorkQueueBatchMode.BATCH}
                 onChange={(e) => {
                   const nextEnabled = e.target.checked;
                   setCoalescingEnabled(nextEnabled);
                   updateDispatchConfig(
-                    interExecutionDelaySeconds,
+                    effectiveRetryLimit,
+                    effectiveInterExecutionDelaySeconds,
                     nextEnabled,
-                    coalescingGroupByPath,
-                    coalescingAcrossPriorities,
+                    effectiveCoalescingGroupByPath,
+                    effectiveCoalescingAcrossPriorities,
                   );
                 }}
                 className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
@@ -553,16 +619,17 @@ export default function QueueForm({
                 Group by payload path
               </label>
               <input
-                value={coalescingGroupByPath}
-                disabled={batchMode !== WorkQueueBatchMode.BATCH || !coalescingEnabled}
+                value={effectiveCoalescingGroupByPath}
+                disabled={batchMode !== WorkQueueBatchMode.BATCH || !effectiveCoalescingEnabled}
                 onChange={(e) => {
                   const nextValue = e.target.value;
                   setCoalescingGroupByPath(nextValue);
                   updateDispatchConfig(
-                    interExecutionDelaySeconds,
-                    coalescingEnabled,
+                    effectiveRetryLimit,
+                    effectiveInterExecutionDelaySeconds,
+                    effectiveCoalescingEnabled,
                     nextValue,
-                    coalescingAcrossPriorities,
+                    effectiveCoalescingAcrossPriorities,
                   );
                 }}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-100"
@@ -577,15 +644,16 @@ export default function QueueForm({
             <label className="flex items-start gap-3">
               <input
                 type="checkbox"
-                checked={coalescingAcrossPriorities}
-                disabled={batchMode !== WorkQueueBatchMode.BATCH || !coalescingEnabled}
+                checked={effectiveCoalescingAcrossPriorities}
+                disabled={batchMode !== WorkQueueBatchMode.BATCH || !effectiveCoalescingEnabled}
                 onChange={(e) => {
                   const nextValue = e.target.checked;
                   setCoalescingAcrossPriorities(nextValue);
                   updateDispatchConfig(
-                    interExecutionDelaySeconds,
-                    coalescingEnabled,
-                    coalescingGroupByPath,
+                    effectiveRetryLimit,
+                    effectiveInterExecutionDelaySeconds,
+                    effectiveCoalescingEnabled,
+                    effectiveCoalescingGroupByPath,
                     nextValue,
                   );
                 }}

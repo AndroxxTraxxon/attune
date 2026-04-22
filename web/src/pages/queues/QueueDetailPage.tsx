@@ -610,6 +610,7 @@ export function QueueDetailPage() {
         <QueueItemModal
           queueRef={queue.ref}
           itemSchema={queue.item_schema}
+          defaultPriority={queue.default_priority}
           onClose={() => setShowCreateItemModal(false)}
         />
       )}

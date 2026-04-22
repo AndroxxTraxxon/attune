@@ -22,6 +22,7 @@ export interface QueuePriorityConfig {
 export interface QueueDispatchConfig {
   concurrency?: QueueTunableValue;
   batch_size?: QueueTunableValue;
+  retry_limit?: number;
   inter_execution_delay_seconds?: number;
   coalescing?: QueueBatchCoalescingConfig;
 }
@@ -204,6 +205,11 @@ export function getQueueBatchCoalescingSummary(
     acrossPriorities: coalescing.across_priorities === true,
     statusLabel: "Enabled",
   };
+}
+
+export function formatQueueRetryLimit(value: number | undefined): string {
+  const retryLimit = value ?? 0;
+  return retryLimit === 1 ? "1 retry" : `${retryLimit} retries`;
 }
 
 function formatJsonInline(value: JsonValue | undefined): string {
