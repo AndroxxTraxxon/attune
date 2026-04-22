@@ -12,6 +12,7 @@ import {
   extractProperties,
   type ParamSchemaProperty,
 } from "@/components/common/ParamSchemaForm";
+import OnOffSwitch from "@/components/common/OnOffSwitch";
 import {
   ChevronDown,
   ChevronRight,
@@ -350,16 +351,15 @@ function TriggerDetail({ triggerRef }: { triggerRef: string }) {
               <span className="text-gray-500">{trigger.data?.pack_ref}.</span>
               {trigger.data?.label}
             </h1>
-            {/* Toggle Switch */}
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
+            <div className="inline-flex items-center">
+              <OnOffSwitch
                 checked={trigger.data?.enabled || false}
-                onChange={handleToggleEnabled}
                 disabled={!isAuthenticated || isTogglingEnabled}
-                className="sr-only peer"
+                ariaLabel="Trigger enabled"
+                onChange={() => {
+                  handleToggleEnabled();
+                }}
               />
-              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:bg-blue-600 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-disabled:opacity-50 peer-disabled:cursor-not-allowed"></div>
               <span className="ms-3 text-sm font-medium text-gray-900">
                 {isTogglingEnabled ? (
                   <span className="text-gray-400">Updating...</span>
@@ -373,7 +373,7 @@ function TriggerDetail({ triggerRef }: { triggerRef: string }) {
                   </span>
                 )}
               </span>
-            </label>
+            </div>
           </div>
           <div className="flex gap-2">
             {/* Show edit and delete buttons for ad-hoc triggers (not from pack installation) */}

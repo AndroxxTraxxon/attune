@@ -311,7 +311,21 @@ impl CompletionListener {
         .await?
         .rows;
 
-        let expected_ack_version = Self::expected_queue_ack_version(pool, &dispatch).await?;
+        let queue = WorkQueueRepository::find_by_id(pool, dispatch.queue).await?;
+        let expected_ack_version = queue
+            .as_ref()
+            .map(|queue| Self::expected_ack_version_from_queue_config(&queue.config))
+            .unwrap_or_else(|| {
+                warn!(
+                    "Queue dispatch {} references missing queue {}, defaulting queue_ack version to 1",
+                    dispatch.id, dispatch.queue
+                );
+                1
+            });
+        let retry_limit = queue
+            .as_ref()
+            .map(|queue| Self::retry_limit_from_queue_config(&queue.config))
+            .unwrap_or(0);
 
         if let Err(message) = Self::validate_execution_queue_metadata(
             execution,
@@ -324,6 +338,7 @@ impl CompletionListener {
                 execution,
                 &dispatch,
                 &leased_items,
+                retry_limit,
                 "queue_dispatch_metadata_mismatch",
                 message,
             )
@@ -336,6 +351,7 @@ impl CompletionListener {
                 execution,
                 &dispatch,
                 &leased_items,
+                retry_limit,
                 "queue_dispatch_items_missing",
                 format!(
                     "queue dispatch {} for execution {} had no leased items to finalize",
@@ -358,6 +374,7 @@ impl CompletionListener {
                     execution,
                     &dispatch,
                     &leased_items,
+                    retry_limit,
                     error_code,
                     message,
                 )
@@ -370,9 +387,11 @@ impl CompletionListener {
             let ack_item = queue_ack
                 .item_for(leased_item.id)
                 .expect("validated queue acknowledgement must include every leased item");
-            let new_status = Self::ack_status_to_item_status(ack_item);
-            let ack_summary = Self::ack_summary_json(ack_item);
-            let last_error = Self::ack_item_error_json(ack_item);
+            let requested_status = Self::ack_status_to_item_status(ack_item);
+            let new_status =
+                Self::apply_retry_limit(requested_status, leased_item.attempt_count, retry_limit);
+            let ack_summary = Self::ack_summary_json(ack_item, new_status);
+            let last_error = Self::ack_item_error_json(ack_item, new_status, retry_limit);
 
             let updated_item = WorkQueueItemRepository::update_if_statuses(
                 &mut *tx,
@@ -428,6 +447,7 @@ impl CompletionListener {
         execution: &Execution,
         dispatch: &WorkQueueDispatch,
         leased_items: &[WorkQueueItem],
+        retry_limit: u32,
         error_code: &str,
         error_message: String,
     ) -> Result<Execution> {
@@ -440,17 +460,25 @@ impl CompletionListener {
         });
 
         for leased_item in leased_items {
+            let new_status = Self::apply_retry_limit(
+                WorkQueueItemStatus::Retry,
+                leased_item.attempt_count,
+                retry_limit,
+            );
             let updated_item = WorkQueueItemRepository::update_if_statuses(
                 &mut *tx,
                 leased_item.id,
                 &[WorkQueueItemStatus::Leased],
                 UpdateWorkQueueItemInput {
-                    status: Some(WorkQueueItemStatus::Retry),
+                    status: Some(new_status),
                     leased_execution: Some(Patch::Clear),
                     lease_token: Some(Patch::Clear),
                     lease_expires_at: Some(Patch::Clear),
                     last_error: Some(Patch::Set(retry_error.clone())),
-                    ack_summary: Some(Patch::Clear),
+                    ack_summary: Some(Patch::Set(json!({
+                        "status": "retry",
+                        "effective_status": new_status,
+                    }))),
                     ..Default::default()
                 },
             )
@@ -519,19 +547,11 @@ impl CompletionListener {
             .unwrap_or(1)
     }
 
-    async fn expected_queue_ack_version(
-        pool: &PgPool,
-        dispatch: &WorkQueueDispatch,
-    ) -> Result<i32> {
-        if let Some(queue) = WorkQueueRepository::find_by_id(pool, dispatch.queue).await? {
-            return Ok(Self::expected_ack_version_from_queue_config(&queue.config));
-        }
-
-        warn!(
-            "Queue dispatch {} references missing queue {}, defaulting queue_ack version to 1",
-            dispatch.id, dispatch.queue
-        );
-        Ok(1)
+    fn retry_limit_from_queue_config(queue: &serde_json::Value) -> u32 {
+        serde_json::from_value::<attune_common::models::WorkQueueConfig>(queue.clone())
+            .ok()
+            .and_then(|config| config.dispatch.and_then(|dispatch| dispatch.retry_limit))
+            .unwrap_or(0)
     }
 
     fn validated_queue_ack_for_execution(
@@ -730,10 +750,28 @@ impl CompletionListener {
         }
     }
 
-    fn ack_summary_json(ack_item: &WorkQueueAckItem) -> JsonValue {
+    fn apply_retry_limit(
+        status: WorkQueueItemStatus,
+        attempt_count: i32,
+        retry_limit: u32,
+    ) -> WorkQueueItemStatus {
+        if status == WorkQueueItemStatus::Retry && attempt_count > retry_limit as i32 {
+            return WorkQueueItemStatus::Failed;
+        }
+        status
+    }
+
+    fn ack_summary_json(
+        ack_item: &WorkQueueAckItem,
+        effective_status: WorkQueueItemStatus,
+    ) -> JsonValue {
         let mut summary = json!({
             "status": ack_item.status,
         });
+
+        if effective_status != Self::ack_status_to_item_status(ack_item) {
+            summary["effective_status"] = json!(effective_status);
+        }
 
         if let Some(value) = &ack_item.summary {
             summary["summary"] = value.clone();
@@ -745,14 +783,31 @@ impl CompletionListener {
         summary
     }
 
-    fn ack_item_error_json(ack_item: &WorkQueueAckItem) -> Option<JsonValue> {
-        match Self::ack_status_to_item_status(ack_item) {
+    fn ack_item_error_json(
+        ack_item: &WorkQueueAckItem,
+        effective_status: WorkQueueItemStatus,
+        retry_limit: u32,
+    ) -> Option<JsonValue> {
+        match effective_status {
             WorkQueueItemStatus::Retry => Some(ack_item.error.clone().unwrap_or_else(|| {
                 json!({
                     "code": "queue_dispatch_retry",
                     "message": "queue dispatch requested retry without error details",
                 })
             })),
+            WorkQueueItemStatus::Failed
+                if Self::ack_status_to_item_status(ack_item) == WorkQueueItemStatus::Retry =>
+            {
+                Some(json!({
+                    "code": "queue_dispatch_retry_limit_exhausted",
+                    "message": format!(
+                        "queue item exhausted retry limit after {} attempt(s); configured retry_limit={}",
+                        retry_limit as i32 + 1,
+                        retry_limit
+                    ),
+                    "retry_error": ack_item.error.clone(),
+                }))
+            }
             WorkQueueItemStatus::Failed => Some(ack_item.error.clone().unwrap_or_else(|| {
                 json!({
                     "code": "queue_dispatch_failed",
@@ -821,6 +876,30 @@ mod tests {
     use super::*;
     use crate::queue_manager::ExecutionQueueManager;
     use chrono::Utc;
+
+    #[test]
+    fn retry_limit_defaults_to_zero() {
+        assert_eq!(
+            CompletionListener::retry_limit_from_queue_config(&json!({})),
+            0
+        );
+    }
+
+    #[test]
+    fn retry_limit_is_exhausted_after_configured_retries() {
+        assert_eq!(
+            CompletionListener::apply_retry_limit(WorkQueueItemStatus::Retry, 1, 0),
+            WorkQueueItemStatus::Failed
+        );
+        assert_eq!(
+            CompletionListener::apply_retry_limit(WorkQueueItemStatus::Retry, 1, 1),
+            WorkQueueItemStatus::Retry
+        );
+        assert_eq!(
+            CompletionListener::apply_retry_limit(WorkQueueItemStatus::Retry, 2, 1),
+            WorkQueueItemStatus::Failed
+        );
+    }
 
     fn queue_dispatch_execution(status: ExecutionStatus, result: Option<JsonValue>) -> Execution {
         Execution {

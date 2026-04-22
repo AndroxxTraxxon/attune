@@ -87,6 +87,10 @@ pub struct CreateRuleInput {
 pub struct UpdateRuleInput {
     pub label: Option<String>,
     pub description: Option<Patch<String>>,
+    pub action: Option<Id>,
+    pub action_ref: Option<String>,
+    pub trigger: Option<Id>,
+    pub trigger_ref: Option<String>,
     pub conditions: Option<serde_json::Value>,
     pub action_params: Option<serde_json::Value>,
     pub trigger_params: Option<serde_json::Value>,
@@ -232,6 +236,42 @@ impl Update for RuleRepository {
                 Patch::Set(value) => query.push_bind(value),
                 Patch::Clear => query.push_bind(Option::<String>::None),
             };
+            has_updates = true;
+        }
+
+        if let Some(action) = input.action {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("action = ");
+            query.push_bind(action);
+            has_updates = true;
+        }
+
+        if let Some(action_ref) = &input.action_ref {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("action_ref = ");
+            query.push_bind(action_ref);
+            has_updates = true;
+        }
+
+        if let Some(trigger) = input.trigger {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("trigger = ");
+            query.push_bind(trigger);
+            has_updates = true;
+        }
+
+        if let Some(trigger_ref) = &input.trigger_ref {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("trigger_ref = ");
+            query.push_bind(trigger_ref);
             has_updates = true;
         }
 

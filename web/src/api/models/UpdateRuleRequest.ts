@@ -7,13 +7,17 @@
  */
 export type UpdateRuleRequest = {
     /**
+     * Action reference to execute when rule matches
+     */
+    action_ref?: string | null;
+    /**
      * Parameters to pass to the action when rule is triggered
      */
-    action_params: any | null;
+    action_params?: any | null;
     /**
      * Conditions for rule evaluation
      */
-    conditions: any | null;
+    conditions?: any | null;
     /**
      * Rule description
      */
@@ -27,8 +31,11 @@ export type UpdateRuleRequest = {
      */
     label?: string | null;
     /**
+     * Trigger reference that activates this rule
+     */
+    trigger_ref?: string | null;
+    /**
      * Parameters for trigger configuration and event filtering
      */
-    trigger_params: any | null;
+    trigger_params?: any | null;
 };
-

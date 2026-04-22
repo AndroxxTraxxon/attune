@@ -820,6 +820,10 @@ async fn test_update_rule_multiple_fields() {
     let update = UpdateRuleInput {
         label: Some("New Label".to_string()),
         description: Some(Patch::Set("New Description".to_string())),
+        action: None,
+        action_ref: None,
+        trigger: None,
+        trigger_ref: None,
         conditions: Some(json!({"updated": true})),
         action_params: None,
         trigger_params: None,
@@ -834,6 +838,73 @@ async fn test_update_rule_multiple_fields() {
     assert_eq!(updated.description, Some("New Description".to_string()));
     assert_eq!(updated.conditions, json!({"updated": true}));
     assert!(!updated.enabled);
+}
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_update_rule_action_and_trigger_refs() {
+    let pool = create_test_pool().await.unwrap();
+
+    let pack = PackFixture::new_unique("retarget_pack")
+        .create(&pool)
+        .await
+        .unwrap();
+
+    let original_action = ActionFixture::new_unique(pack.id, &pack.r#ref, "action_one")
+        .create(&pool)
+        .await
+        .unwrap();
+    let replacement_action = ActionFixture::new_unique(pack.id, &pack.r#ref, "action_two")
+        .create(&pool)
+        .await
+        .unwrap();
+
+    let original_trigger =
+        TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "trigger_one")
+            .create(&pool)
+            .await
+            .unwrap();
+    let replacement_trigger =
+        TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "trigger_two")
+            .create(&pool)
+            .await
+            .unwrap();
+
+    let input = CreateRuleInput {
+        r#ref: format!("{}.retarget_rule", pack.r#ref),
+        pack: pack.id,
+        pack_ref: pack.r#ref.clone(),
+        label: "Retarget Me".to_string(),
+        description: None,
+        action: original_action.id,
+        action_ref: original_action.r#ref.clone(),
+        trigger: original_trigger.id,
+        trigger_ref: original_trigger.r#ref.clone(),
+        conditions: json!([]),
+        action_params: json!({}),
+        trigger_params: json!({}),
+        enabled: true,
+        is_adhoc: false,
+    };
+
+    let created = RuleRepository::create(&pool, input).await.unwrap();
+
+    let update = UpdateRuleInput {
+        action: Some(replacement_action.id),
+        action_ref: Some(replacement_action.r#ref.clone()),
+        trigger: Some(replacement_trigger.id),
+        trigger_ref: Some(replacement_trigger.r#ref.clone()),
+        ..Default::default()
+    };
+
+    let updated = RuleRepository::update(&pool, created.id, update)
+        .await
+        .unwrap();
+
+    assert_eq!(updated.action, Some(replacement_action.id));
+    assert_eq!(updated.action_ref, replacement_action.r#ref);
+    assert_eq!(updated.trigger, Some(replacement_trigger.id));
+    assert_eq!(updated.trigger_ref, replacement_trigger.r#ref);
 }
 
 #[tokio::test]

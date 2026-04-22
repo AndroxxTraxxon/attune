@@ -58,6 +58,9 @@ CREATE INDEX idx_execution_result_gin ON execution USING GIN (result);
 CREATE INDEX idx_execution_env_vars_gin ON execution USING GIN (env_vars);
 CREATE INDEX idx_execution_original_execution ON execution(original_execution) WHERE original_execution IS NOT NULL;
 CREATE INDEX idx_execution_status_retry ON execution(status, retry_count) WHERE status = 'failed' AND retry_count < COALESCE(max_retries, 0);
+CREATE INDEX idx_execution_top_level_created
+    ON execution (created DESC)
+    WHERE parent IS NULL;
 CREATE UNIQUE INDEX uq_execution_top_level_enforcement
     ON execution (enforcement)
     WHERE enforcement IS NOT NULL

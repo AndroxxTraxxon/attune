@@ -6,14 +6,17 @@ use uuid::Uuid;
 
 use crate::models::{
     work_queue::{
-        WorkQueue, WorkQueueConfig, WorkQueueDispatch, WorkQueueItem,
-        WORK_QUEUE_DISPATCH_SELECT_COLUMNS, WORK_QUEUE_ITEM_SELECT_COLUMNS,
+        WorkQueue, WorkQueueBatchCoalescingConfig, WorkQueueConfig, WorkQueueDispatch,
+        WorkQueueItem, WORK_QUEUE_DISPATCH_SELECT_COLUMNS, WORK_QUEUE_ITEM_SELECT_COLUMNS,
         WORK_QUEUE_SELECT_COLUMNS,
     },
     Id, JsonDict, WorkQueueBatchMode, WorkQueueDispatchStatus, WorkQueueItemStatus,
     WorkQueueUpdateStrategy,
 };
-use crate::queue_definition::validate_work_queue_config;
+use crate::queue_definition::{
+    validate_work_queue_batch_settings, validate_work_queue_config,
+    validate_work_queue_config_for_batch_mode, validate_work_queue_item_schema,
+};
 use crate::schema::RefValidator;
 use crate::{Error, Result};
 
@@ -93,12 +96,15 @@ pub struct CreateWorkQueueInput {
     pub label: String,
     pub description: Option<String>,
     pub enabled: bool,
+    pub accepting_new_items: bool,
     pub dispatch_action: Option<Id>,
     pub dispatch_action_ref: String,
     pub default_priority: i32,
     pub allow_pending_update: bool,
     pub update_strategy: WorkQueueUpdateStrategy,
     pub batch_mode: WorkQueueBatchMode,
+    pub item_schema: JsonDict,
+    pub action_params: JsonDict,
     pub config: JsonDict,
 }
 
@@ -110,12 +116,15 @@ pub struct UpdateWorkQueueInput {
     pub label: Option<String>,
     pub description: Option<Patch<String>>,
     pub enabled: Option<bool>,
+    pub accepting_new_items: Option<bool>,
     pub dispatch_action: Option<Patch<Id>>,
     pub dispatch_action_ref: Option<String>,
     pub default_priority: Option<i32>,
     pub allow_pending_update: Option<bool>,
     pub update_strategy: Option<WorkQueueUpdateStrategy>,
     pub batch_mode: Option<WorkQueueBatchMode>,
+    pub item_schema: Option<JsonDict>,
+    pub action_params: Option<JsonDict>,
     pub config: Option<JsonDict>,
 }
 
@@ -182,14 +191,16 @@ impl Create for WorkQueueRepository {
     {
         RefValidator::validate_work_queue_ref(&input.r#ref)?;
         RefValidator::validate_component_ref(&input.dispatch_action_ref)?;
-        validate_work_queue_config(&input.config)?;
+        validate_work_queue_item_schema(&input.item_schema)?;
+        crate::queue_definition::validate_work_queue_action_params(&input.action_params)?;
+        validate_work_queue_config_for_batch_mode(input.batch_mode, &input.config)?;
 
         let query = format!(
             "INSERT INTO work_queue \
-             (ref, pack, pack_ref, is_adhoc, label, description, enabled, dispatch_action, \
-              dispatch_action_ref, default_priority, allow_pending_update, update_strategy, \
-              batch_mode, config) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
+             (ref, pack, pack_ref, is_adhoc, label, description, enabled, accepting_new_items, \
+                dispatch_action, dispatch_action_ref, default_priority, allow_pending_update, update_strategy, \
+                batch_mode, item_schema, action_params, config) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
              RETURNING {}",
             WORK_QUEUE_SELECT_COLUMNS
         );
@@ -202,12 +213,15 @@ impl Create for WorkQueueRepository {
             .bind(&input.label)
             .bind(&input.description)
             .bind(input.enabled)
+            .bind(input.accepting_new_items)
             .bind(input.dispatch_action)
             .bind(&input.dispatch_action_ref)
             .bind(input.default_priority)
             .bind(input.allow_pending_update)
             .bind(input.update_strategy)
             .bind(input.batch_mode)
+            .bind(&input.item_schema)
+            .bind(&input.action_params)
             .bind(&input.config)
             .fetch_one(executor)
             .await
@@ -233,8 +247,18 @@ impl Update for WorkQueueRepository {
         if let Some(dispatch_action_ref) = &input.dispatch_action_ref {
             RefValidator::validate_component_ref(dispatch_action_ref)?;
         }
+        if let Some(item_schema) = &input.item_schema {
+            validate_work_queue_item_schema(item_schema)?;
+        }
+        if let Some(action_params) = &input.action_params {
+            crate::queue_definition::validate_work_queue_action_params(action_params)?;
+        }
         if let Some(config) = &input.config {
             validate_work_queue_config(config)?;
+        }
+        if let (Some(batch_mode), Some(config)) = (input.batch_mode, input.config.as_ref()) {
+            let parsed_config = validate_work_queue_config(config)?;
+            validate_work_queue_batch_settings(batch_mode, &parsed_config)?;
         }
 
         let mut query = QueryBuilder::new("UPDATE work_queue SET ");
@@ -297,6 +321,16 @@ impl Update for WorkQueueRepository {
             has_updates = true;
         }
 
+        if let Some(accepting_new_items) = input.accepting_new_items {
+            if has_updates {
+                query.push(", ");
+            }
+            query
+                .push("accepting_new_items = ")
+                .push_bind(accepting_new_items);
+            has_updates = true;
+        }
+
         if let Some(dispatch_action) = &input.dispatch_action {
             if has_updates {
                 query.push(", ");
@@ -352,6 +386,22 @@ impl Update for WorkQueueRepository {
                 query.push(", ");
             }
             query.push("batch_mode = ").push_bind(batch_mode);
+            has_updates = true;
+        }
+
+        if let Some(item_schema) = &input.item_schema {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("item_schema = ").push_bind(item_schema);
+            has_updates = true;
+        }
+
+        if let Some(action_params) = &input.action_params {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("action_params = ").push_bind(action_params);
             has_updates = true;
         }
 
@@ -630,6 +680,7 @@ pub struct LeaseWorkQueueItemsInput {
     pub queue: Id,
     pub ready_statuses: Vec<WorkQueueItemStatus>,
     pub limit: i64,
+    pub batch_coalescing: Option<WorkQueueBatchCoalescingConfig>,
     pub leased_execution: Option<Id>,
     pub lease_token: Uuid,
     pub lease_expires_at: DateTime<Utc>,
@@ -1129,29 +1180,85 @@ impl WorkQueueItemRepository {
             return Ok(Vec::new());
         }
 
+        let coalescing = input
+            .batch_coalescing
+            .as_ref()
+            .filter(|config| config.enabled);
+        let coalescing_path_segments = coalescing
+            .and_then(|config| config.group_by_path.as_deref())
+            .map(|path| {
+                path.split('.')
+                    .filter(|segment| !segment.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|segments| !segments.is_empty())
+            .unwrap_or_else(|| vec!["__disabled__".to_string()]);
+        let coalescing_enabled = coalescing.is_some();
+        let across_priorities = coalescing.is_some_and(|config| config.across_priorities);
+
+        let returning_columns = format!(
+            "item.{}",
+            WORK_QUEUE_ITEM_SELECT_COLUMNS.replace(", ", ", item.")
+        );
         let query = format!(
             r#"
-            WITH candidate AS (
-                SELECT id
+            WITH anchor AS (
+                SELECT id,
+                       priority,
+                       payload #> $7::text[] AS group_value
                 FROM work_queue_item
                 WHERE queue = $1
                   AND status = ANY($2::work_queue_item_status_enum[])
                 ORDER BY priority DESC, created ASC, id ASC
-                LIMIT $3
+                LIMIT 1
                 FOR UPDATE SKIP LOCKED
+            ),
+            extra_candidates AS (
+                SELECT item.id,
+                       ROW_NUMBER() OVER (ORDER BY item.priority DESC, item.created ASC, item.id ASC) AS sort_order
+                FROM work_queue_item AS item
+                CROSS JOIN anchor
+                WHERE item.queue = $1
+                  AND item.status = ANY($2::work_queue_item_status_enum[])
+                  AND item.id <> anchor.id
+                  AND (
+                        $8 = false
+                        OR anchor.group_value IS NULL
+                        OR anchor.group_value = 'null'::jsonb
+                        OR (
+                            item.payload #> $7::text[] = anchor.group_value
+                            AND ($9 OR item.priority = anchor.priority)
+                        )
+                  )
+                ORDER BY item.priority DESC, item.created ASC, item.id ASC
+                LIMIT GREATEST($3 - 1, 0)
+                FOR UPDATE SKIP LOCKED
+            ),
+            candidate AS (
+                SELECT id, 0 AS sort_order
+                FROM anchor
+                UNION ALL
+                SELECT id, sort_order
+                FROM extra_candidates
+            ),
+            updated AS (
+                UPDATE work_queue_item AS item
+                SET status = 'leased'::work_queue_item_status_enum,
+                    leased_execution = $4,
+                    lease_token = $5,
+                    lease_expires_at = $6,
+                    attempt_count = item.attempt_count + 1,
+                    updated = NOW()
+                FROM candidate
+                WHERE item.id = candidate.id
+                RETURNING candidate.sort_order, {}
             )
-            UPDATE work_queue_item AS item
-            SET status = 'leased'::work_queue_item_status_enum,
-                leased_execution = $4,
-                lease_token = $5,
-                lease_expires_at = $6,
-                attempt_count = item.attempt_count + 1,
-                updated = NOW()
-            FROM candidate
-            WHERE item.id = candidate.id
-            RETURNING {}
+            SELECT {}
+            FROM updated AS item
+            ORDER BY item.sort_order ASC
             "#,
-            WORK_QUEUE_ITEM_SELECT_COLUMNS
+            returning_columns, WORK_QUEUE_ITEM_SELECT_COLUMNS
         );
 
         sqlx::query_as::<_, WorkQueueItem>(&query)
@@ -1161,6 +1268,9 @@ impl WorkQueueItemRepository {
             .bind(input.leased_execution)
             .bind(input.lease_token)
             .bind(input.lease_expires_at)
+            .bind(coalescing_path_segments)
+            .bind(coalescing_enabled)
+            .bind(across_priorities)
             .fetch_all(executor)
             .await
             .map_err(Into::into)
@@ -1445,6 +1555,33 @@ impl WorkQueueDispatchRepository {
         sqlx::query_as::<_, WorkQueueDispatch>(&query)
             .bind(active)
             .fetch_all(executor)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn latest_terminal_for_queue<'e, E>(
+        executor: E,
+        queue: Id,
+    ) -> Result<Option<WorkQueueDispatch>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let terminal = vec![
+            WorkQueueDispatchStatus::Completed,
+            WorkQueueDispatchStatus::Failed,
+            WorkQueueDispatchStatus::Released,
+            WorkQueueDispatchStatus::Cancelled,
+        ];
+        let query = format!(
+            "SELECT {} FROM work_queue_dispatch \
+             WHERE queue = $1 AND status = ANY($2::work_queue_dispatch_status_enum[]) \
+             ORDER BY updated DESC LIMIT 1",
+            WORK_QUEUE_DISPATCH_SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, WorkQueueDispatch>(&query)
+            .bind(queue)
+            .bind(terminal)
+            .fetch_optional(executor)
             .await
             .map_err(Into::into)
     }

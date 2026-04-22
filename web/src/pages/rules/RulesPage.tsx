@@ -12,6 +12,7 @@ import { useState, useMemo } from "react";
 import type { RuleSummary } from "@/api";
 import { ChevronDown, ChevronRight, Search, X } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import OnOffSwitch from "@/components/common/OnOffSwitch";
 import ParamSchemaDisplay, {
   type ParamSchema,
 } from "@/components/common/ParamSchemaDisplay";
@@ -328,16 +329,15 @@ function RuleDetail({ ruleRef }: { ruleRef: string }) {
               <span className="text-gray-500">{rule.data?.pack_ref}.</span>
               {rule.data?.label}
             </h1>
-            {/* Toggle Switch */}
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
+            <div className="inline-flex items-center">
+              <OnOffSwitch
                 checked={rule.data?.enabled || false}
-                onChange={handleToggleEnabled}
                 disabled={!isAuthenticated || isTogglingEnabled}
-                className="sr-only peer"
+                ariaLabel="Rule enabled"
+                onChange={() => {
+                  handleToggleEnabled();
+                }}
               />
-              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:bg-blue-600 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-disabled:opacity-50 peer-disabled:cursor-not-allowed"></div>
               <span className="ms-3 text-sm font-medium text-gray-900">
                 {isTogglingEnabled ? (
                   <span className="text-gray-400">Updating...</span>
@@ -351,7 +351,7 @@ function RuleDetail({ ruleRef }: { ruleRef: string }) {
                   </span>
                 )}
               </span>
-            </label>
+            </div>
           </div>
           <div className="flex gap-2">
             <Link

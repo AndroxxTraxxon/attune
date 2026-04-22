@@ -1,6 +1,10 @@
 //! Work queue dispatcher - polls business queues and creates executions.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{anyhow, Context, Result};
 use attune_common::{
@@ -10,7 +14,9 @@ use attune_common::{
         enums::{ExecutionStatus, WorkQueueDispatchStatus, WorkQueueItemStatus},
         key::Key,
         pack::Pack,
-        work_queue::{WorkQueue, WorkQueueConfig, WorkQueueItem, WorkQueueTunableValue},
+        work_queue::{
+            WorkQueue, WorkQueueConfig, WorkQueueDispatch, WorkQueueItem, WorkQueueTunableValue,
+        },
     },
     mq::{ExecutionRequestedPayload, MessageEnvelope, MessageType, Publisher},
     repositories::{
@@ -28,10 +34,12 @@ use attune_common::{
     },
 };
 use chrono::Utc;
-use serde_json::{json, Map, Value as JsonValue};
+use serde_json::{json, Value as JsonValue};
 use sqlx::PgPool;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+
+use crate::workflow::context::WorkflowContext;
 
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const DEFAULT_LEASE_DURATION: Duration = Duration::from_secs(24 * 60 * 60);
@@ -57,8 +65,10 @@ impl Default for QueueDispatcherConfig {
 struct ResolvedQueueContext {
     action: Action,
     parsed_config: WorkQueueConfig,
+    pack_config: JsonValue,
     concurrency: u32,
     batch_size: u32,
+    inter_execution_delay_seconds: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -254,6 +264,23 @@ impl WorkQueueDispatcher {
             return Ok(());
         }
 
+        if let Some(delay_until) = Self::sequential_delay_until(
+            WorkQueueDispatchRepository::latest_terminal_for_queue(&self.pool, queue.id)
+                .await?
+                .as_ref(),
+            context.concurrency,
+            context.inter_execution_delay_seconds,
+        ) {
+            let now = Utc::now();
+            if delay_until > now {
+                debug!(
+                    "Queue '{}' is waiting for sequential inter-execution delay until {}",
+                    queue.r#ref, delay_until
+                );
+                return Ok(());
+            }
+        }
+
         let open_slots = context.concurrency - active_dispatches;
         for _ in 0..open_slots {
             let Some(dispatch) = Self::prepare_next_dispatch(
@@ -343,12 +370,21 @@ impl WorkQueueDispatcher {
             )
             .await?
         };
+        let inter_execution_delay_seconds = parsed_config
+            .dispatch
+            .as_ref()
+            .and_then(|dispatch| dispatch.inter_execution_delay_seconds)
+            .unwrap_or(0);
 
         Ok(ResolvedQueueContext {
             action,
             parsed_config,
+            pack_config: pack
+                .map(|pack| pack.config.clone())
+                .unwrap_or(JsonValue::Null),
             concurrency,
             batch_size,
+            inter_execution_delay_seconds,
         })
     }
 
@@ -449,6 +485,21 @@ impl WorkQueueDispatcher {
         }
     }
 
+    fn sequential_delay_until(
+        latest_terminal_dispatch: Option<&WorkQueueDispatch>,
+        concurrency: u32,
+        delay_seconds: u32,
+    ) -> Option<chrono::DateTime<Utc>> {
+        if concurrency != 1 || delay_seconds == 0 {
+            return None;
+        }
+
+        latest_terminal_dispatch.and_then(|dispatch| {
+            chrono::Duration::try_seconds(i64::from(delay_seconds))
+                .map(|delay| dispatch.updated + delay)
+        })
+    }
+
     async fn prepare_next_dispatch(
         pool: &PgPool,
         queue: &WorkQueue,
@@ -473,6 +524,11 @@ impl WorkQueueDispatcher {
                 queue: queue.id,
                 ready_statuses: vec![WorkQueueItemStatus::Queued, WorkQueueItemStatus::Retry],
                 limit: i64::from(batch_limit),
+                batch_coalescing: context
+                    .parsed_config
+                    .dispatch
+                    .as_ref()
+                    .and_then(|dispatch| dispatch.coalescing.clone()),
                 leased_execution: None,
                 lease_token,
                 lease_expires_at,
@@ -485,7 +541,12 @@ impl WorkQueueDispatcher {
             return Ok(None);
         }
 
-        let execution_config = Self::build_execution_config(queue, &context.parsed_config, &items)?;
+        let execution_config = Self::build_execution_config(
+            queue,
+            &context.parsed_config,
+            &context.pack_config,
+            &items,
+        )?;
         let execution = ExecutionRepository::create(
             &mut *tx,
             CreateExecutionInput {
@@ -533,6 +594,7 @@ impl WorkQueueDispatcher {
     fn build_execution_config(
         queue: &WorkQueue,
         parsed_config: &WorkQueueConfig,
+        pack_config: &JsonValue,
         items: &[WorkQueueItem],
     ) -> Result<JsonValue> {
         if items.is_empty() {
@@ -542,91 +604,96 @@ impl WorkQueueDispatcher {
             ));
         }
 
-        let input_mapping = parsed_config.input_mapping.as_ref();
-        let include_queue_metadata = input_mapping
-            .map(|mapping| mapping.include_queue_metadata)
-            .unwrap_or(false);
+        if queue
+            .action_params
+            .as_object()
+            .is_none_or(|action_params| action_params.is_empty())
+        {
+            return Self::build_default_execution_config(queue, items);
+        }
 
+        let context = Self::build_action_params_context(queue, parsed_config, pack_config, items);
+        let rendered = context.render_json(&queue.action_params).map_err(|error| {
+            anyhow!(
+                "failed to render action_params for queue '{}': {}",
+                queue.r#ref,
+                error
+            )
+        })?;
+
+        if !rendered.is_object() {
+            return Err(anyhow!(
+                "queue '{}' action_params must render to a JSON object",
+                queue.r#ref
+            ));
+        }
+
+        Ok(rendered)
+    }
+
+    fn build_default_execution_config(
+        queue: &WorkQueue,
+        items: &[WorkQueueItem],
+    ) -> Result<JsonValue> {
         match queue.batch_mode {
             attune_common::models::WorkQueueBatchMode::Single => {
                 let item = items
                     .first()
                     .ok_or_else(|| anyhow!("single-item queue dispatch had no leased item"))?;
-                Ok(Self::build_single_item_config(
-                    queue,
-                    parsed_config,
-                    item,
-                    include_queue_metadata,
-                ))
+                if item.payload.is_object() {
+                    Ok(item.payload.clone())
+                } else {
+                    Ok(json!({ "item": item.payload.clone() }))
+                }
             }
-            attune_common::models::WorkQueueBatchMode::Batch => Ok(Self::build_batch_config(
-                queue,
-                parsed_config,
-                items,
-                include_queue_metadata,
-            )),
+            attune_common::models::WorkQueueBatchMode::Batch => Ok(json!({
+                "items": items.iter().map(|item| item.payload.clone()).collect::<Vec<_>>()
+            })),
         }
     }
 
-    fn build_single_item_config(
+    fn build_action_params_context(
         queue: &WorkQueue,
         parsed_config: &WorkQueueConfig,
-        item: &WorkQueueItem,
-        include_queue_metadata: bool,
-    ) -> JsonValue {
-        let single_item_path = parsed_config
-            .input_mapping
-            .as_ref()
-            .and_then(|mapping| mapping.single_item_path.as_deref());
-
-        let mut root = if single_item_path.is_none() && item.payload.is_object() {
-            item.payload.clone()
-        } else {
-            json!({})
-        };
-
-        if let Some(path) = single_item_path {
-            Self::json_path_set(&mut root, path, item.payload.clone());
-        } else if !item.payload.is_object() {
-            Self::json_path_set(&mut root, "item", item.payload.clone());
-        }
-
-        if include_queue_metadata {
-            Self::json_path_set(
-                &mut root,
-                "queue",
-                Self::build_queue_metadata(queue, parsed_config, std::slice::from_ref(item)),
-            );
-        }
-
-        root
-    }
-
-    fn build_batch_config(
-        queue: &WorkQueue,
-        parsed_config: &WorkQueueConfig,
+        pack_config: &JsonValue,
         items: &[WorkQueueItem],
-        include_queue_metadata: bool,
-    ) -> JsonValue {
-        let items_path = parsed_config
-            .input_mapping
-            .as_ref()
-            .and_then(|mapping| mapping.items_path.as_deref())
-            .unwrap_or("items");
-
-        let mut root = json!({});
-        let payloads = JsonValue::Array(items.iter().map(|item| item.payload.clone()).collect());
-        Self::json_path_set(&mut root, items_path, payloads);
-
-        if include_queue_metadata {
-            Self::json_path_set(
-                &mut root,
-                "queue",
-                Self::build_queue_metadata(queue, parsed_config, items),
-            );
+    ) -> WorkflowContext {
+        let mut context = WorkflowContext::new(JsonValue::Null, HashMap::new());
+        context.set_pack_config(pack_config.clone());
+        context.set_var(
+            "queue",
+            Self::build_queue_metadata(queue, parsed_config, items),
+        );
+        context.set_var(
+            "items",
+            JsonValue::Array(items.iter().map(|item| item.payload.clone()).collect()),
+        );
+        context.set_var(
+            "queue_items",
+            JsonValue::Array(items.iter().map(Self::build_queue_item_context).collect()),
+        );
+        if queue.batch_mode == attune_common::models::WorkQueueBatchMode::Single {
+            if let Some(item) = items.first() {
+                context.set_current_item(item.payload.clone(), 0);
+                context.set_var("queue_item", Self::build_queue_item_context(item));
+            }
         }
+        context
+    }
 
-        root
+    fn build_queue_item_context(item: &WorkQueueItem) -> JsonValue {
+        json!({
+            "id": item.id,
+            "item_key": item.item_key,
+            "priority": item.priority,
+            "payload": item.payload,
+            "metadata": item.metadata,
+            "enqueue_source": item.enqueue_source,
+            "attempt_count": item.attempt_count,
+            "requested_by_identity": item.requested_by_identity,
+            "requested_by_execution": item.requested_by_execution,
+            "requested_by_enforcement": item.requested_by_enforcement,
+        })
     }
 
     fn build_queue_metadata(
@@ -646,20 +713,22 @@ impl WorkQueueDispatcher {
             "batch_mode": queue.batch_mode,
             "leased_item_count": items.len(),
             "ack_contract_version": ack_version,
-            "items": items.iter().map(|item| {
-                json!({
-                    "id": item.id,
-                    "item_key": item.item_key,
-                    "priority": item.priority,
-                    "metadata": item.metadata,
-                    "enqueue_source": item.enqueue_source,
-                    "attempt_count": item.attempt_count,
-                    "requested_by_identity": item.requested_by_identity,
-                    "requested_by_execution": item.requested_by_execution,
-                    "requested_by_enforcement": item.requested_by_enforcement,
-                })
-            }).collect::<Vec<_>>(),
         })
+    }
+
+    fn json_path_get<'a>(value: &'a JsonValue, path: &str) -> Option<&'a JsonValue> {
+        let mut current = value;
+        for segment in path.split('.').filter(|segment| !segment.is_empty()) {
+            current = match current {
+                JsonValue::Object(object) => object.get(segment)?,
+                JsonValue::Array(array) => {
+                    let index = segment.parse::<usize>().ok()?;
+                    array.get(index)?
+                }
+                _ => return None,
+            };
+        }
+        Some(current)
     }
 
     async fn publish_dispatch(&self, dispatch: PreparedDispatch) -> Result<()> {
@@ -693,75 +762,20 @@ impl WorkQueueDispatcher {
 
         Ok(())
     }
-
-    fn json_path_get<'a>(value: &'a JsonValue, path: &str) -> Option<&'a JsonValue> {
-        let mut current = value;
-        for segment in path.split('.').filter(|segment| !segment.is_empty()) {
-            current = match current {
-                JsonValue::Object(object) => object.get(segment)?,
-                JsonValue::Array(array) => {
-                    let index = segment.parse::<usize>().ok()?;
-                    array.get(index)?
-                }
-                _ => return None,
-            };
-        }
-        Some(current)
-    }
-
-    fn json_path_set(target: &mut JsonValue, path: &str, value: JsonValue) {
-        if path.trim().is_empty() {
-            *target = value;
-            return;
-        }
-
-        let mut segments = path
-            .split('.')
-            .filter(|segment| !segment.is_empty())
-            .peekable();
-        if segments.peek().is_none() {
-            *target = value;
-            return;
-        }
-
-        if !target.is_object() {
-            *target = JsonValue::Object(Map::new());
-        }
-
-        let mut current = target;
-        let mut value = Some(value);
-        while let Some(segment) = segments.next() {
-            let is_last = segments.peek().is_none();
-            if is_last {
-                if let JsonValue::Object(object) = current {
-                    object.insert(
-                        segment.to_string(),
-                        value.take().expect("value only inserted once"),
-                    );
-                }
-                return;
-            }
-
-            if !current.is_object() {
-                *current = JsonValue::Object(Map::new());
-            }
-
-            let object = current
-                .as_object_mut()
-                .expect("current value must be an object");
-            current = object
-                .entry(segment.to_string())
-                .or_insert_with(|| JsonValue::Object(Map::new()));
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use attune_common::models::{enums::OwnerType, key::Key, WorkQueueBatchMode};
+    use attune_common::models::{
+        enums::OwnerType, key::Key, WorkQueueBatchMode, WorkQueueDispatchStatus,
+    };
 
-    fn sample_queue(batch_mode: WorkQueueBatchMode, config: JsonValue) -> WorkQueue {
+    fn sample_queue(
+        batch_mode: WorkQueueBatchMode,
+        action_params: JsonValue,
+        config: JsonValue,
+    ) -> WorkQueue {
         WorkQueue {
             id: 1,
             r#ref: "core.inbox".to_string(),
@@ -771,12 +785,15 @@ mod tests {
             label: "Inbox".to_string(),
             description: None,
             enabled: true,
+            accepting_new_items: true,
             dispatch_action: Some(11),
             dispatch_action_ref: "core.process".to_string(),
             default_priority: 0,
             allow_pending_update: false,
             update_strategy: attune_common::models::WorkQueueUpdateStrategy::Replace,
             batch_mode,
+            item_schema: json!({}),
+            action_params,
             config,
             created: Utc::now(),
             updated: Utc::now(),
@@ -808,15 +825,34 @@ mod tests {
         }
     }
 
+    fn sample_dispatch(
+        status: WorkQueueDispatchStatus,
+        updated: chrono::DateTime<Utc>,
+    ) -> WorkQueueDispatch {
+        WorkQueueDispatch {
+            id: 1,
+            queue: 1,
+            queue_ref: "core.inbox".to_string(),
+            execution: 42,
+            status,
+            leased_item_count: 1,
+            created: updated,
+            updated,
+        }
+    }
+
     #[test]
     fn build_batch_execution_config_maps_items_and_queue_metadata() {
         let queue = sample_queue(
             WorkQueueBatchMode::Batch,
             json!({
-                "input_mapping": {
-                    "items_path": "payload.items",
-                    "include_queue_metadata": true
+                "payload": {
+                    "items": "{{ items }}"
                 },
+                "queue": "{{ queue }}",
+                "queue_items": "{{ queue_items }}"
+            }),
+            json!({
                 "ack_contract": {
                     "version": 2
                 }
@@ -828,33 +864,41 @@ mod tests {
             sample_item(1002, 5, json!({"order_id": 1002})),
         ];
 
-        let config = WorkQueueDispatcher::build_execution_config(&queue, &parsed_config, &items)
-            .expect("config should build");
+        let config = WorkQueueDispatcher::build_execution_config(
+            &queue,
+            &parsed_config,
+            &JsonValue::Null,
+            &items,
+        )
+        .expect("config should build");
 
         assert_eq!(
-            WorkQueueDispatcher::json_path_get(&config, "payload.items"),
-            Some(&json!([{"order_id": 1001}, {"order_id": 1002}]))
+            config["payload"]["items"],
+            json!([{"order_id": 1001}, {"order_id": 1002}])
         );
+        assert_eq!(config["queue"]["ack_contract_version"].as_i64(), Some(2));
+        assert_eq!(config["queue"]["leased_item_count"].as_i64(), Some(2));
+        assert!(config["queue"].get("items").is_none());
+        assert_eq!(config["queue_items"][0]["id"].as_i64(), Some(1001));
         assert_eq!(
-            WorkQueueDispatcher::json_path_get(&config, "queue.ack_contract_version")
-                .and_then(JsonValue::as_i64),
-            Some(2)
-        );
-        assert_eq!(
-            WorkQueueDispatcher::json_path_get(&config, "queue.items.0.id")
-                .and_then(JsonValue::as_i64),
+            config["queue_items"][0]["payload"]["order_id"].as_i64(),
             Some(1001)
         );
     }
 
     #[test]
     fn build_single_execution_config_preserves_object_payload_without_mapping() {
-        let queue = sample_queue(WorkQueueBatchMode::Single, json!({}));
+        let queue = sample_queue(WorkQueueBatchMode::Single, json!({}), json!({}));
         let parsed_config: WorkQueueConfig = serde_json::from_value(queue.config.clone()).unwrap();
         let item = sample_item(42, 1, json!({"customer": "alice", "order_id": 42}));
 
-        let config =
-            WorkQueueDispatcher::build_execution_config(&queue, &parsed_config, &[item]).unwrap();
+        let config = WorkQueueDispatcher::build_execution_config(
+            &queue,
+            &parsed_config,
+            &JsonValue::Null,
+            &[item],
+        )
+        .unwrap();
 
         assert_eq!(
             config,
@@ -863,6 +907,67 @@ mod tests {
                 "order_id": 42
             })
         );
+    }
+
+    #[test]
+    fn build_single_execution_config_renders_action_params_with_item_and_pack_config() {
+        let queue = sample_queue(
+            WorkQueueBatchMode::Single,
+            json!({
+                "customer": "{{ item.customer }}",
+                "priority": "{{ item.priority }}",
+                "region": "{{ config.region }}"
+            }),
+            json!({}),
+        );
+        let parsed_config: WorkQueueConfig = serde_json::from_value(queue.config.clone()).unwrap();
+        let item = sample_item(42, 1, json!({"customer": "alice", "priority": 7}));
+
+        let config = WorkQueueDispatcher::build_execution_config(
+            &queue,
+            &parsed_config,
+            &json!({"region": "us-east-1"}),
+            &[item],
+        )
+        .expect("config should build");
+
+        assert_eq!(
+            config,
+            json!({
+                "customer": "alice",
+                "priority": 7,
+                "region": "us-east-1"
+            })
+        );
+    }
+
+    #[test]
+    fn sequential_delay_until_returns_none_without_delay() {
+        let dispatch = sample_dispatch(WorkQueueDispatchStatus::Completed, Utc::now());
+
+        let result = WorkQueueDispatcher::sequential_delay_until(Some(&dispatch), 1, 0);
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn sequential_delay_until_returns_none_when_concurrency_is_not_one() {
+        let dispatch = sample_dispatch(WorkQueueDispatchStatus::Completed, Utc::now());
+
+        let result = WorkQueueDispatcher::sequential_delay_until(Some(&dispatch), 2, 30);
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn sequential_delay_until_uses_terminal_dispatch_timestamp() {
+        let updated = Utc::now();
+        let dispatch = sample_dispatch(WorkQueueDispatchStatus::Completed, updated);
+
+        let result = WorkQueueDispatcher::sequential_delay_until(Some(&dispatch), 1, 30)
+            .expect("delay should be calculated");
+
+        assert_eq!(result, updated + chrono::Duration::seconds(30));
     }
 
     #[test]
@@ -935,15 +1040,20 @@ mod tests {
 
     #[test]
     fn build_batch_execution_config_defaults_to_items_path_without_metadata() {
-        let queue = sample_queue(WorkQueueBatchMode::Batch, json!({}));
+        let queue = sample_queue(WorkQueueBatchMode::Batch, json!({}), json!({}));
         let parsed_config: WorkQueueConfig = serde_json::from_value(queue.config.clone()).unwrap();
         let items = vec![
             sample_item(1, 10, json!({"order_id": 1})),
             sample_item(2, 5, json!({"order_id": 2})),
         ];
 
-        let config = WorkQueueDispatcher::build_execution_config(&queue, &parsed_config, &items)
-            .expect("config should build");
+        let config = WorkQueueDispatcher::build_execution_config(
+            &queue,
+            &parsed_config,
+            &JsonValue::Null,
+            &items,
+        )
+        .expect("config should build");
 
         assert_eq!(
             config,
@@ -953,17 +1063,6 @@ mod tests {
                     {"order_id": 2}
                 ]
             })
-        );
-    }
-
-    #[test]
-    fn json_path_helpers_support_nested_objects_and_arrays() {
-        let mut value = json!({});
-        WorkQueueDispatcher::json_path_set(&mut value, "payload.items", json!([1, 2, 3]));
-
-        assert_eq!(
-            WorkQueueDispatcher::json_path_get(&value, "payload.items.1"),
-            Some(&json!(2))
         );
     }
 }

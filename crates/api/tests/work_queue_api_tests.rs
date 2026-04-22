@@ -72,9 +72,14 @@ async fn queue_api_supports_merge_patch_enqueue_and_pending_item_lifecycle() {
                 "ref": queue_ref,
                 "label": "API Queue",
                 "dispatch_action_ref": action.r#ref,
+                "accepting_new_items": true,
                 "allow_pending_update": true,
                 "update_strategy": "merge_patch",
                 "batch_mode": "batch",
+                "item_schema": {
+                    "customer": { "type": "string", "required": true },
+                    "flags": { "type": "object" }
+                },
                 "config": {
                     "ack_contract": { "version": 2 }
                 }
@@ -106,6 +111,7 @@ async fn queue_api_supports_merge_patch_enqueue_and_pending_item_lifecycle() {
     assert_eq!(first_enqueue.status(), StatusCode::CREATED);
     let first_body: serde_json::Value = first_enqueue.json().await.expect("enqueue body");
     let item_id = first_body["data"]["id"].as_i64().expect("queue item id");
+    assert_eq!(first_body["data"]["enqueue_source"], "api");
 
     let merged_enqueue = ctx
         .post(
@@ -134,6 +140,7 @@ async fn queue_api_supports_merge_patch_enqueue_and_pending_item_lifecycle() {
     assert_eq!(merged_body["data"]["payload"]["status"], "retrying");
     assert_eq!(merged_body["data"]["metadata"]["attempt"], 1);
     assert_eq!(merged_body["data"]["metadata"]["worker"], "api-test");
+    assert_eq!(merged_body["data"]["enqueue_source"], "api");
 
     let update = ctx
         .put(
@@ -159,7 +166,10 @@ async fn queue_api_supports_merge_patch_enqueue_and_pending_item_lifecycle() {
 
     let list = ctx
         .get(
-            &format!("/api/v1/queues/{}/items?statuses=queued", queue_ref),
+            &format!(
+                "/api/v1/queues/{}/items?statuses=queued&statuses=retry",
+                queue_ref
+            ),
             token,
         )
         .await
@@ -168,6 +178,15 @@ async fn queue_api_supports_merge_patch_enqueue_and_pending_item_lifecycle() {
     let list_body: serde_json::Value = list.json().await.expect("list body");
     assert_eq!(list_body["pagination"]["total_items"].as_u64(), Some(1));
     assert_eq!(list_body["data"][0]["id"].as_i64(), Some(item_id));
+
+    let list_comma_separated = ctx
+        .get(
+            &format!("/api/v1/queues/{}/items?statuses=queued,retry", queue_ref),
+            token,
+        )
+        .await
+        .expect("list queue items with comma separated statuses");
+    assert_eq!(list_comma_separated.status(), StatusCode::OK);
 
     let delete = ctx
         .delete(
@@ -185,6 +204,10 @@ async fn queue_api_supports_merge_patch_enqueue_and_pending_item_lifecycle() {
     assert_eq!(get_queue.status(), StatusCode::OK);
     let queue_body: serde_json::Value = get_queue.json().await.expect("queue body");
     assert_eq!(queue_body["data"]["batch_mode"], "batch");
+    assert_eq!(
+        queue_body["data"]["item_schema"]["customer"]["type"],
+        "string"
+    );
 }
 
 #[tokio::test]
@@ -215,12 +238,19 @@ async fn queue_api_blocks_pack_managed_queue_mutations_but_lists_pack_queues() {
             label: "Pack Queue".to_string(),
             description: Some("Pack-managed queue".to_string()),
             enabled: true,
+            accepting_new_items: true,
             dispatch_action: Some(action.id),
             dispatch_action_ref: action.r#ref.clone(),
             default_priority: 0,
             allow_pending_update: false,
             update_strategy: WorkQueueUpdateStrategy::Replace,
             batch_mode: WorkQueueBatchMode::Single,
+            item_schema: json!({
+                "item": { "type": "object", "required": true }
+            }),
+            action_params: json!({
+                "item": "{{ item }}"
+            }),
             config: json!({}),
         },
     )
@@ -250,6 +280,23 @@ async fn queue_api_blocks_pack_managed_queue_mutations_but_lists_pack_queues() {
         .await
         .expect("update pack queue");
     assert_eq!(update.status(), StatusCode::FORBIDDEN);
+
+    let toggle_processing = ctx
+        .put(
+            &format!("/api/v1/queues/{}", queue.r#ref),
+            json!({
+                "enabled": false,
+                "accepting_new_items": false
+            }),
+            token,
+        )
+        .await
+        .expect("toggle pack queue operational flags");
+    assert_eq!(toggle_processing.status(), StatusCode::OK);
+
+    let toggle_body: serde_json::Value = toggle_processing.json().await.expect("toggle body");
+    assert_eq!(toggle_body["data"]["enabled"], false);
+    assert_eq!(toggle_body["data"]["accepting_new_items"], false);
 
     let delete = ctx
         .delete(&format!("/api/v1/queues/{}", queue.r#ref), token)

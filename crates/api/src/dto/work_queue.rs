@@ -1,9 +1,12 @@
 //! Work queue DTOs for API requests and responses.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, fmt};
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{self, SeqAccess, Visitor},
+    Deserialize, Deserializer, Serialize,
+};
 use serde_json::Value as JsonValue;
 use utoipa::{IntoParams, ToSchema};
 use validator::{Validate, ValidationError};
@@ -13,7 +16,7 @@ use attune_common::{
         Id, WorkQueue, WorkQueueBatchMode, WorkQueueItem, WorkQueueItemStatus,
         WorkQueueUpdateStrategy,
     },
-    queue_definition::validate_work_queue_config,
+    queue_definition::{validate_work_queue_action_params, validate_work_queue_config},
     schema::RefValidator,
 };
 
@@ -43,6 +46,10 @@ pub struct CreateWorkQueueRequest {
     #[serde(default = "default_true")]
     pub enabled: bool,
 
+    #[schema(example = true, default = true)]
+    #[serde(default = "default_true")]
+    pub accepting_new_items: bool,
+
     #[validate(custom(function = "validate_action_ref_field"))]
     #[schema(example = "core.process_item")]
     pub dispatch_action_ref: String,
@@ -60,6 +67,16 @@ pub struct CreateWorkQueueRequest {
 
     #[serde(default)]
     pub batch_mode: WorkQueueBatchMode,
+
+    #[validate(custom(function = "validate_item_schema_field"))]
+    #[schema(value_type = Object, example = json!({"order_id": {"type": "integer", "required": true}}))]
+    #[serde(default = "default_json_object")]
+    pub item_schema: JsonValue,
+
+    #[validate(custom(function = "validate_action_params_field"))]
+    #[schema(value_type = Object, example = json!({"items": "{{ items }}"}))]
+    #[serde(default = "default_json_object")]
+    pub action_params: JsonValue,
 
     #[validate(custom(function = "validate_queue_config_field"))]
     #[schema(value_type = Object, example = json!({"dispatch": {"concurrency": {"source": "literal", "value": 5}}}))]
@@ -81,6 +98,9 @@ pub struct UpdateWorkQueueRequest {
     #[schema(example = false)]
     pub enabled: Option<bool>,
 
+    #[schema(example = true)]
+    pub accepting_new_items: Option<bool>,
+
     #[validate(custom(function = "validate_action_ref_field"))]
     #[schema(example = "core.process_item")]
     pub dispatch_action_ref: Option<String>,
@@ -95,9 +115,25 @@ pub struct UpdateWorkQueueRequest {
 
     pub batch_mode: Option<WorkQueueBatchMode>,
 
+    #[validate(custom(function = "validate_item_schema_field"))]
+    #[schema(value_type = Object, nullable = true)]
+    pub item_schema: Option<JsonValue>,
+
+    #[validate(custom(function = "validate_action_params_field"))]
+    #[schema(value_type = Object, nullable = true)]
+    pub action_params: Option<JsonValue>,
+
     #[validate(custom(function = "validate_queue_config_field"))]
     #[schema(value_type = Object, nullable = true)]
     pub config: Option<JsonValue>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ResolvedWorkQueueDispatchTuningResponse {
+    #[schema(example = 5, nullable = true)]
+    pub concurrency: Option<u32>,
+    #[schema(example = 10, nullable = true)]
+    pub batch_size: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -121,6 +157,8 @@ pub struct WorkQueueResponse {
     pub description: Option<String>,
     #[schema(example = true)]
     pub enabled: bool,
+    #[schema(example = true)]
+    pub accepting_new_items: bool,
     #[schema(example = 42, nullable = true)]
     pub dispatch_action: Option<Id>,
     #[schema(example = "core.process_item")]
@@ -132,7 +170,14 @@ pub struct WorkQueueResponse {
     pub update_strategy: WorkQueueUpdateStrategy,
     pub batch_mode: WorkQueueBatchMode,
     #[schema(value_type = Object)]
+    pub item_schema: JsonValue,
+    #[schema(value_type = Object)]
+    pub action_params: JsonValue,
+    #[schema(value_type = Object)]
     pub config: JsonValue,
+    #[schema(nullable = true)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_dispatch_tuning: Option<ResolvedWorkQueueDispatchTuningResponse>,
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
     #[schema(example = "2024-01-13T10:30:00Z")]
@@ -158,6 +203,8 @@ pub struct WorkQueueSummary {
     pub description: Option<String>,
     #[schema(example = true)]
     pub enabled: bool,
+    #[schema(example = true)]
+    pub accepting_new_items: bool,
     #[schema(example = "core.process_item")]
     pub dispatch_action_ref: String,
     #[schema(example = "2024-01-13T10:30:00Z")]
@@ -211,11 +258,6 @@ pub struct EnqueueWorkQueueItemRequest {
     #[schema(value_type = Object, example = json!({"source": "api"}))]
     #[serde(default = "default_json_object")]
     pub metadata: JsonValue,
-
-    #[validate(length(min = 1, max = 255))]
-    #[schema(example = "api", default = "api")]
-    #[serde(default = "default_enqueue_source")]
-    pub enqueue_source: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
@@ -284,7 +326,7 @@ pub struct WorkQueueItemQueryParams {
     #[param(example = "api")]
     pub enqueue_source: Option<String>,
 
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_status_filters")]
     #[param(value_type = Vec<WorkQueueItemStatus>, example = json!(["queued", "retry"]))]
     pub statuses: Vec<WorkQueueItemStatus>,
 
@@ -318,16 +360,31 @@ impl From<WorkQueue> for WorkQueueResponse {
             label: queue.label,
             description: queue.description,
             enabled: queue.enabled,
+            accepting_new_items: queue.accepting_new_items,
             dispatch_action: queue.dispatch_action,
             dispatch_action_ref: queue.dispatch_action_ref,
             default_priority: queue.default_priority,
             allow_pending_update: queue.allow_pending_update,
             update_strategy: queue.update_strategy,
             batch_mode: queue.batch_mode,
+            item_schema: queue.item_schema,
+            action_params: queue.action_params,
             config: queue.config,
+            resolved_dispatch_tuning: None,
             created: queue.created,
             updated: queue.updated,
         }
+    }
+}
+
+impl WorkQueueResponse {
+    pub fn from_with_resolved_tuning(
+        queue: WorkQueue,
+        resolved_dispatch_tuning: Option<ResolvedWorkQueueDispatchTuningResponse>,
+    ) -> Self {
+        let mut response = Self::from(queue);
+        response.resolved_dispatch_tuning = resolved_dispatch_tuning;
+        response
     }
 }
 
@@ -341,6 +398,7 @@ impl From<WorkQueue> for WorkQueueSummary {
             label: queue.label,
             description: queue.description,
             enabled: queue.enabled,
+            accepting_new_items: queue.accepting_new_items,
             dispatch_action_ref: queue.dispatch_action_ref,
             created: queue.created,
             updated: queue.updated,
@@ -383,16 +441,86 @@ fn default_json_object() -> JsonValue {
     serde_json::json!({})
 }
 
-fn default_enqueue_source() -> String {
-    "api".to_string()
-}
-
 fn default_page() -> u32 {
     1
 }
 
 fn default_per_page() -> u32 {
     50
+}
+
+fn deserialize_status_filters<'de, D>(deserializer: D) -> Result<Vec<WorkQueueItemStatus>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct StatusFilterVisitor;
+
+    impl<'de> Visitor<'de> for StatusFilterVisitor {
+        type Value = Vec<WorkQueueItemStatus>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str(
+                "a work queue item status, a comma-separated list, or repeated query parameters",
+            )
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            parse_status_filters([value]).map_err(E::custom)
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            parse_status_filters([value]).map_err(E::custom)
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut values = Vec::new();
+            while let Some(value) = seq.next_element::<String>()? {
+                values.push(value);
+            }
+            parse_status_filters(values).map_err(de::Error::custom)
+        }
+    }
+
+    deserializer.deserialize_any(StatusFilterVisitor)
+}
+
+fn parse_status_filters<I, S>(values: I) -> std::result::Result<Vec<WorkQueueItemStatus>, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut statuses = Vec::new();
+
+    for value in values {
+        for part in value.as_ref().split(',') {
+            let status = match part.trim() {
+                "" => continue,
+                "queued" => WorkQueueItemStatus::Queued,
+                "leased" => WorkQueueItemStatus::Leased,
+                "retry" => WorkQueueItemStatus::Retry,
+                "completed" => WorkQueueItemStatus::Completed,
+                "failed" => WorkQueueItemStatus::Failed,
+                other => {
+                    return Err(format!(
+                        "invalid work queue item status '{}' (expected one of queued, leased, retry, completed, failed)",
+                        other
+                    ));
+                }
+            };
+            statuses.push(status);
+        }
+    }
+
+    Ok(statuses)
 }
 
 fn validation_error(code: &'static str, message: String) -> ValidationError {
@@ -455,4 +583,39 @@ fn validate_queue_config_field(value: &JsonValue) -> Result<(), ValidationError>
     validate_work_queue_config(value)
         .map(|_| ())
         .map_err(|e| validation_error("config", e.to_string()))
+}
+
+fn validate_item_schema_field(value: &JsonValue) -> Result<(), ValidationError> {
+    attune_common::queue_definition::validate_work_queue_item_schema(value)
+        .map(|_| ())
+        .map_err(|e| validation_error("item_schema", e.to_string()))
+}
+
+fn validate_action_params_field(value: &JsonValue) -> Result<(), ValidationError> {
+    validate_work_queue_action_params(value)
+        .map(|_| ())
+        .map_err(|e| validation_error("action_params", e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_status_filters, WorkQueueItemStatus};
+
+    #[test]
+    fn parse_status_filters_accepts_comma_separated_values() {
+        let parsed = parse_status_filters(["queued,retry"]).expect("parse statuses");
+        assert_eq!(
+            parsed,
+            vec![WorkQueueItemStatus::Queued, WorkQueueItemStatus::Retry]
+        );
+    }
+
+    #[test]
+    fn parse_status_filters_accepts_repeated_values() {
+        let parsed = parse_status_filters(["queued", "retry"]).expect("parse statuses");
+        assert_eq!(
+            parsed,
+            vec![WorkQueueItemStatus::Queued, WorkQueueItemStatus::Retry]
+        );
+    }
 }

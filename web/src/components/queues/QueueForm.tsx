@@ -1,13 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useActions } from "@/hooks/useActions";
 import { useCreateQueue, useUpdateQueue } from "@/hooks/useQueues";
 import {
   WorkQueueBatchMode,
   WorkQueueUpdateStrategy,
+  type JsonValue,
   type WorkQueueResponse,
 } from "@/api/queues";
 import {
+  parseQueueConfig,
   parseJsonObject,
   prettyJson,
 } from "./queueUtils";
@@ -41,6 +43,9 @@ export default function QueueForm({
     () => initialData?.dispatch_action_ref ?? "",
   );
   const [enabled, setEnabled] = useState(() => initialData?.enabled ?? true);
+  const [acceptingNewItems, setAcceptingNewItems] = useState(
+    () => initialData?.accepting_new_items ?? true,
+  );
   const [defaultPriority, setDefaultPriority] = useState(
     () => initialData?.default_priority ?? 0,
   );
@@ -53,10 +58,126 @@ export default function QueueForm({
   const [batchMode, setBatchMode] = useState<WorkQueueBatchMode>(
     () => initialData?.batch_mode ?? WorkQueueBatchMode.SINGLE,
   );
+  const [itemSchema, setItemSchema] = useState(
+    () => prettyJson(initialData?.item_schema),
+  );
+  const [actionParams, setActionParams] = useState(
+    () => prettyJson(initialData?.action_params),
+  );
   const [config, setConfig] = useState(() => prettyJson(initialData?.config));
+  const initialQueueConfig = parseQueueConfig(initialData?.config);
+  const [coalescingEnabled, setCoalescingEnabled] = useState(
+    () => initialQueueConfig.dispatch?.coalescing?.enabled ?? false,
+  );
+  const [interExecutionDelaySeconds, setInterExecutionDelaySeconds] = useState(
+    () =>
+      initialQueueConfig.dispatch?.inter_execution_delay_seconds !== undefined
+        ? String(initialQueueConfig.dispatch.inter_execution_delay_seconds)
+        : "",
+  );
+  const [coalescingGroupByPath, setCoalescingGroupByPath] = useState(
+    () => initialQueueConfig.dispatch?.coalescing?.group_by_path ?? "",
+  );
+  const [coalescingAcrossPriorities, setCoalescingAcrossPriorities] = useState(
+    () => initialQueueConfig.dispatch?.coalescing?.across_priorities ?? false,
+  );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const isImmutableStrategy = updateStrategy === WorkQueueUpdateStrategy.IMMUTABLE;
   const effectiveAllowPendingUpdate = isImmutableStrategy ? false : allowPendingUpdate;
+
+  useEffect(() => {
+    try {
+      const parsed = parseJsonObject("Config", config);
+      const parsedConfig = parseQueueConfig(parsed);
+      setInterExecutionDelaySeconds(
+        parsedConfig.dispatch?.inter_execution_delay_seconds !== undefined
+          ? String(parsedConfig.dispatch.inter_execution_delay_seconds)
+          : "",
+      );
+      const coalescing = parsedConfig.dispatch?.coalescing;
+      setCoalescingEnabled(coalescing?.enabled ?? false);
+      setCoalescingGroupByPath(coalescing?.group_by_path ?? "");
+      setCoalescingAcrossPriorities(coalescing?.across_priorities ?? false);
+    } catch {
+      // Keep the current form state while the user edits invalid JSON.
+    }
+  }, [config]);
+
+  const applyDispatchSettingsToConfig = (
+    configObject: ReturnType<typeof parseJsonObject>,
+    nextDelaySeconds: string,
+    nextEnabled: boolean,
+    nextGroupByPath: string,
+    nextAcrossPriorities: boolean,
+  ) => {
+    const nextConfig = { ...configObject };
+    const currentDispatch = nextConfig.dispatch;
+    const dispatch: Record<string, JsonValue> =
+      currentDispatch && typeof currentDispatch === "object" && !Array.isArray(currentDispatch)
+        ? { ...(currentDispatch as Record<string, JsonValue>) }
+        : {};
+
+    const trimmedDelay = nextDelaySeconds.trim();
+    if (!trimmedDelay) {
+      delete dispatch.inter_execution_delay_seconds;
+    } else {
+      const parsedDelay = Number(trimmedDelay);
+      if (!Number.isInteger(parsedDelay) || parsedDelay < 0) {
+        throw new Error("Sequential inter-execution delay must be a non-negative integer");
+      }
+      dispatch.inter_execution_delay_seconds = parsedDelay;
+    }
+
+    if (
+      batchMode !== WorkQueueBatchMode.BATCH ||
+      (!nextEnabled && !nextGroupByPath.trim() && !nextAcrossPriorities)
+    ) {
+      delete dispatch.coalescing;
+    } else {
+      const nextCoalescing: Record<string, JsonValue> = {
+        enabled: nextEnabled,
+        across_priorities: nextAcrossPriorities,
+      };
+      if (nextGroupByPath.trim()) {
+        nextCoalescing.group_by_path = nextGroupByPath.trim();
+      }
+      dispatch.coalescing = nextCoalescing;
+    }
+
+    if (Object.keys(dispatch).length === 0) {
+      delete nextConfig.dispatch;
+    } else {
+      nextConfig.dispatch = dispatch;
+    }
+
+    return nextConfig;
+  };
+
+  const updateDispatchConfig = (
+    nextDelaySeconds: string,
+    nextEnabled: boolean,
+    nextGroupByPath: string,
+    nextAcrossPriorities: boolean,
+  ) => {
+    let parsedConfig: ReturnType<typeof parseJsonObject>;
+    try {
+      parsedConfig = parseJsonObject("Config", config);
+    } catch {
+      parsedConfig = {};
+    }
+
+    setConfig(
+      prettyJson(
+        applyDispatchSettingsToConfig(
+          parsedConfig,
+          nextDelaySeconds,
+          nextEnabled,
+          nextGroupByPath,
+          nextAcrossPriorities,
+        ),
+      ),
+    );
+  };
 
   const actions = actionsData?.data ?? [];
   const actionOptions =
@@ -88,12 +209,42 @@ export default function QueueForm({
       nextErrors.dispatch_action_ref = "Dispatch action is required";
     }
 
+    let parsedItemSchema: ReturnType<typeof parseJsonObject> | undefined;
+    try {
+      parsedItemSchema = parseJsonObject("Queue item schema", itemSchema);
+    } catch (error) {
+      nextErrors.item_schema =
+        error instanceof Error ? error.message : "Queue item schema must be valid JSON";
+    }
+
+    let parsedActionParams: ReturnType<typeof parseJsonObject> | undefined;
+    try {
+      parsedActionParams = parseJsonObject("Action parameters", actionParams);
+    } catch (error) {
+      nextErrors.action_params =
+        error instanceof Error ? error.message : "Action parameters must be valid JSON";
+    }
+
     let parsedConfig: ReturnType<typeof parseJsonObject> | undefined;
     try {
-      parsedConfig = parseJsonObject("Config", config);
+      parsedConfig = applyDispatchSettingsToConfig(
+        parseJsonObject("Config", config),
+        interExecutionDelaySeconds,
+        coalescingEnabled,
+        coalescingGroupByPath,
+        coalescingAcrossPriorities,
+      );
     } catch (error) {
       nextErrors.config =
         error instanceof Error ? error.message : "Config must be valid JSON";
+    }
+
+    if (interExecutionDelaySeconds.trim()) {
+      const parsedDelay = Number(interExecutionDelaySeconds.trim());
+      if (!Number.isInteger(parsedDelay) || parsedDelay < 0) {
+        nextErrors.inter_execution_delay_seconds =
+          "Sequential inter-execution delay must be a non-negative integer";
+      }
     }
 
     if (Object.keys(nextErrors).length > 0) {
@@ -111,11 +262,14 @@ export default function QueueForm({
               ? { op: "set", value: description.trim() }
               : { op: "clear" },
             enabled,
+            accepting_new_items: acceptingNewItems,
             dispatch_action_ref: dispatchActionRef,
             default_priority: defaultPriority,
             allow_pending_update: effectiveAllowPendingUpdate,
             update_strategy: updateStrategy,
             batch_mode: batchMode,
+            item_schema: parsedItemSchema,
+            action_params: parsedActionParams,
             config: parsedConfig,
           },
         });
@@ -128,11 +282,14 @@ export default function QueueForm({
         label: label.trim(),
         description: description.trim() || null,
         enabled,
+        accepting_new_items: acceptingNewItems,
         dispatch_action_ref: dispatchActionRef,
         default_priority: defaultPriority,
         allow_pending_update: effectiveAllowPendingUpdate,
         update_strategy: updateStrategy,
         batch_mode: batchMode,
+        item_schema: parsedItemSchema,
+        action_params: parsedActionParams,
         config: parsedConfig,
       });
       navigate(`/queues/${encodeURIComponent(response.data.ref)}`);
@@ -231,10 +388,27 @@ export default function QueueForm({
             />
             <span>
               <span className="block text-sm font-medium text-gray-900">
-                Queue enabled
+                Executor processing enabled
               </span>
               <span className="block text-sm text-gray-500">
-                Disabled queues remain visible but should not accept new work through normal flows.
+                Disabled queues remain visible but the executor will stop dispatching items from them.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-3 rounded-lg border border-gray-200 p-4">
+            <input
+              type="checkbox"
+              checked={acceptingNewItems}
+              onChange={(e) => setAcceptingNewItems(e.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span>
+              <span className="block text-sm font-medium text-gray-900">
+                Accept new items
+              </span>
+              <span className="block text-sm text-gray-500">
+                Disable this to reject enqueue requests while keeping current items intact.
               </span>
             </span>
           </label>
@@ -311,6 +485,165 @@ export default function QueueForm({
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
+              Sequential inter-execution delay (seconds)
+            </label>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={interExecutionDelaySeconds}
+              onChange={(e) => {
+                const nextValue = e.target.value;
+                setInterExecutionDelaySeconds(nextValue);
+                updateDispatchConfig(
+                  nextValue,
+                  coalescingEnabled,
+                  coalescingGroupByPath,
+                  coalescingAcrossPriorities,
+                );
+              }}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              placeholder="0"
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Only applies when concurrency resolves to <span className="font-mono">1</span>. The cooldown starts after the prior queue execution reaches a terminal state.
+            </p>
+            {errors.inter_execution_delay_seconds && (
+              <p className="mt-1 text-sm text-red-600">{errors.inter_execution_delay_seconds}</p>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-gray-200 p-4 space-y-4">
+            <div>
+              <h3 className="text-sm font-medium text-gray-900">Batch coalescing</h3>
+              <p className="mt-1 text-xs text-gray-500">
+                Start from the first queued batch item, then hoist later items with the same grouping value.
+              </p>
+            </div>
+
+            <label className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                checked={coalescingEnabled}
+                disabled={batchMode !== WorkQueueBatchMode.BATCH}
+                onChange={(e) => {
+                  const nextEnabled = e.target.checked;
+                  setCoalescingEnabled(nextEnabled);
+                  updateDispatchConfig(
+                    interExecutionDelaySeconds,
+                    nextEnabled,
+                    coalescingGroupByPath,
+                    coalescingAcrossPriorities,
+                  );
+                }}
+                className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
+              />
+              <span>
+                <span className="block text-sm font-medium text-gray-900">
+                  Enable coalescing
+                </span>
+                <span className="block text-sm text-gray-500">
+                  Available only for batch queues.
+                </span>
+              </span>
+            </label>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Group by payload path
+              </label>
+              <input
+                value={coalescingGroupByPath}
+                disabled={batchMode !== WorkQueueBatchMode.BATCH || !coalescingEnabled}
+                onChange={(e) => {
+                  const nextValue = e.target.value;
+                  setCoalescingGroupByPath(nextValue);
+                  updateDispatchConfig(
+                    interExecutionDelaySeconds,
+                    coalescingEnabled,
+                    nextValue,
+                    coalescingAcrossPriorities,
+                  );
+                }}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-100"
+                placeholder="attributes.sobject_type"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Dot-separated payload path used to group batch items, such as
+                <span className="font-mono"> attributes.sobject_type</span>.
+              </p>
+            </div>
+
+            <label className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                checked={coalescingAcrossPriorities}
+                disabled={batchMode !== WorkQueueBatchMode.BATCH || !coalescingEnabled}
+                onChange={(e) => {
+                  const nextValue = e.target.checked;
+                  setCoalescingAcrossPriorities(nextValue);
+                  updateDispatchConfig(
+                    interExecutionDelaySeconds,
+                    coalescingEnabled,
+                    coalescingGroupByPath,
+                    nextValue,
+                  );
+                }}
+                className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
+              />
+              <span>
+                <span className="block text-sm font-medium text-gray-900">
+                  Coalesce batches across priorities
+                </span>
+                <span className="block text-sm text-gray-500">
+                  When disabled, only items in the anchor item&apos;s priority band may be hoisted into the batch.
+                </span>
+              </span>
+            </label>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Queue item schema (JSON)
+            </label>
+            <textarea
+              value={itemSchema}
+              onChange={(e) => setItemSchema(e.target.value)}
+              rows={10}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm"
+              placeholder={'{\n  "order_id": { "type": "integer", "required": true }\n}'}
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Uses the same flat schema format as triggers and is enforced when queue items are enqueued or updated.
+            </p>
+            {errors.item_schema && (
+              <p className="mt-1 text-sm text-red-600">{errors.item_schema}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Action parameters (JSON)
+            </label>
+            <textarea
+              value={actionParams}
+              onChange={(e) => setActionParams(e.target.value)}
+              rows={10}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm"
+              placeholder={'{\n  "item": "{{ item }}"\n}'}
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Use queue templates like <span className="font-mono">{"{{ item }}"}</span> for single dispatch,
+              <span className="font-mono"> {"{{ items }}"} </span> for batch dispatch, and
+              <span className="font-mono"> {"{{ queue }}"} </span> for queue metadata.
+            </p>
+            {errors.action_params && (
+              <p className="mt-1 text-sm text-red-600">{errors.action_params}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
               Queue config (JSON)
             </label>
             <textarea
@@ -319,6 +652,9 @@ export default function QueueForm({
               rows={12}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm"
             />
+            <p className="mt-1 text-xs text-gray-500">
+              Queue config now covers tunables and ack behavior. Parameter mapping belongs in action parameters above.
+            </p>
             {errors.config && <p className="mt-1 text-sm text-red-600">{errors.config}</p>}
           </div>
         </div>

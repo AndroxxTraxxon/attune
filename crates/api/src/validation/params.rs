@@ -10,7 +10,7 @@
 //! validation, so template expressions pass type checks while literal values are
 //! still validated normally.
 
-use attune_common::models::{action::Action, trigger::Trigger};
+use attune_common::models::{action::Action, trigger::Trigger, work_queue::WorkQueue};
 use jsonschema::Validator;
 use serde_json::Value;
 
@@ -230,32 +230,26 @@ fn replace_templates_with_placeholders(params: &Value, schema: &Value) -> Value 
     }
 }
 
-/// Validate trigger parameters against the trigger's parameter schema.
-/// Template expressions (`{{ ... }}`) are accepted for any field type.
-///
-/// The schema is expected in flat StackStorm format and is converted to
-/// JSON Schema internally for validation.
-pub fn validate_trigger_params(trigger: &Trigger, params: &Value) -> Result<(), ApiError> {
-    // If no schema is defined, accept any parameters
-    let Some(flat_schema) = &trigger.param_schema else {
+fn validate_params_against_flat_schema(
+    resource_kind: &str,
+    resource_ref: &str,
+    flat_schema: Option<&Value>,
+    params: &Value,
+) -> Result<(), ApiError> {
+    let Some(flat_schema) = flat_schema else {
         return Ok(());
     };
 
-    // Convert flat format to JSON Schema for validation
     let schema = flat_to_json_schema(flat_schema);
-
-    // Replace template expressions with schema-appropriate placeholders
     let sanitized = replace_templates_with_placeholders(params, &schema);
 
-    // Compile the JSON schema
     let compiled_schema = Validator::new(&schema).map_err(|e| {
         ApiError::InternalServerError(format!(
-            "Invalid parameter schema for trigger '{}': {}",
-            trigger.r#ref, e
+            "Invalid parameter schema for {} '{}': {}",
+            resource_kind, resource_ref, e
         ))
     })?;
 
-    // Validate the sanitized parameters
     let errors: Vec<String> = compiled_schema
         .iter_errors(&sanitized)
         .map(|e| {
@@ -270,13 +264,28 @@ pub fn validate_trigger_params(trigger: &Trigger, params: &Value) -> Result<(), 
 
     if !errors.is_empty() {
         return Err(ApiError::ValidationError(format!(
-            "Invalid parameters for trigger '{}': {}",
-            trigger.r#ref,
+            "Invalid parameters for {} '{}': {}",
+            resource_kind,
+            resource_ref,
             errors.join(", ")
         )));
     }
 
     Ok(())
+}
+
+/// Validate trigger parameters against the trigger's parameter schema.
+/// Template expressions (`{{ ... }}`) are accepted for any field type.
+///
+/// The schema is expected in flat StackStorm format and is converted to
+/// JSON Schema internally for validation.
+pub fn validate_trigger_params(trigger: &Trigger, params: &Value) -> Result<(), ApiError> {
+    validate_params_against_flat_schema(
+        "trigger",
+        &trigger.r#ref,
+        trigger.param_schema.as_ref(),
+        params,
+    )
 }
 
 /// Validate action parameters against the action's parameter schema.
@@ -285,47 +294,21 @@ pub fn validate_trigger_params(trigger: &Trigger, params: &Value) -> Result<(), 
 /// The schema is expected in flat StackStorm format and is converted to
 /// JSON Schema internally for validation.
 pub fn validate_action_params(action: &Action, params: &Value) -> Result<(), ApiError> {
-    // If no schema is defined, accept any parameters
-    let Some(flat_schema) = &action.param_schema else {
-        return Ok(());
-    };
+    validate_params_against_flat_schema(
+        "action",
+        &action.r#ref,
+        action.param_schema.as_ref(),
+        params,
+    )
+}
 
-    // Convert flat format to JSON Schema for validation
-    let schema = flat_to_json_schema(flat_schema);
-
-    // Replace template expressions with schema-appropriate placeholders
-    let sanitized = replace_templates_with_placeholders(params, &schema);
-
-    // Compile the JSON schema
-    let compiled_schema = Validator::new(&schema).map_err(|e| {
-        ApiError::InternalServerError(format!(
-            "Invalid parameter schema for action '{}': {}",
-            action.r#ref, e
-        ))
-    })?;
-
-    // Validate the sanitized parameters
-    let errors: Vec<String> = compiled_schema
-        .iter_errors(&sanitized)
-        .map(|e| {
-            let path = e.instance_path().to_string();
-            if path.is_empty() {
-                e.to_string()
-            } else {
-                format!("{} at {}", e, path)
-            }
-        })
-        .collect();
-
-    if !errors.is_empty() {
-        return Err(ApiError::ValidationError(format!(
-            "Invalid parameters for action '{}': {}",
-            action.r#ref,
-            errors.join(", ")
-        )));
-    }
-
-    Ok(())
+pub fn validate_queue_item_payload(queue: &WorkQueue, payload: &Value) -> Result<(), ApiError> {
+    validate_params_against_flat_schema(
+        "queue item payload for queue",
+        &queue.r#ref,
+        Some(&queue.item_schema),
+        payload,
+    )
 }
 
 #[cfg(test)]

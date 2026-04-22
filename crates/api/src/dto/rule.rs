@@ -71,6 +71,16 @@ pub struct UpdateRuleRequest {
     #[schema(example = "Enhanced error notification with filtering")]
     pub description: Option<String>,
 
+    /// Action reference to execute when rule matches
+    #[validate(length(min = 1, max = 255))]
+    #[schema(example = "slack.post_message")]
+    pub action_ref: Option<String>,
+
+    /// Trigger reference that activates this rule
+    #[validate(length(min = 1, max = 255))]
+    #[schema(example = "system.error_event")]
+    pub trigger_ref: Option<String>,
+
     /// Conditions for rule evaluation
     #[schema(value_type = Object, nullable = true)]
     pub conditions: Option<JsonValue>,
@@ -335,6 +345,8 @@ mod tests {
         let req = UpdateRuleRequest {
             label: None,
             description: None,
+            action_ref: None,
+            trigger_ref: None,
             conditions: None,
             action_params: None,
             trigger_params: None,
@@ -350,6 +362,8 @@ mod tests {
         let req = UpdateRuleRequest {
             label: Some("Updated Rule".to_string()),
             description: None,
+            action_ref: Some("test.action.updated".to_string()),
+            trigger_ref: Some("test.trigger.updated".to_string()),
             conditions: Some(serde_json::json!({"var": "status", "==": "ok"})),
             action_params: None,
             trigger_params: None,

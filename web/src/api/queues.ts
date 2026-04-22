@@ -71,6 +71,7 @@ export interface WorkQueueSummary {
   label: string;
   description?: string | null;
   enabled: boolean;
+  accepting_new_items: boolean;
   dispatch_action_ref: string;
   created: string;
   updated: string;
@@ -83,7 +84,13 @@ export interface WorkQueueResponse extends WorkQueueSummary {
   allow_pending_update: boolean;
   update_strategy: WorkQueueUpdateStrategy;
   batch_mode: WorkQueueBatchMode;
+  item_schema: JsonValue;
+  action_params: JsonValue;
   config: JsonValue;
+  resolved_dispatch_tuning?: {
+    concurrency?: number | null;
+    batch_size?: number | null;
+  } | null;
 }
 
 export interface WorkQueueItemResponse {
@@ -114,11 +121,14 @@ export interface CreateWorkQueueRequest {
   label: string;
   description?: string | null;
   enabled?: boolean;
+  accepting_new_items?: boolean;
   dispatch_action_ref: string;
   default_priority?: number;
   allow_pending_update?: boolean;
   update_strategy?: WorkQueueUpdateStrategy;
   batch_mode?: WorkQueueBatchMode;
+  item_schema?: JsonValue;
+  action_params?: JsonValue;
   config?: JsonValue;
 }
 
@@ -126,11 +136,14 @@ export interface UpdateWorkQueueRequest {
   label?: string;
   description?: NullableStringPatch;
   enabled?: boolean;
+  accepting_new_items?: boolean;
   dispatch_action_ref?: string;
   default_priority?: number;
   allow_pending_update?: boolean;
   update_strategy?: WorkQueueUpdateStrategy;
   batch_mode?: WorkQueueBatchMode;
+  item_schema?: JsonValue;
+  action_params?: JsonValue;
   config?: JsonValue;
 }
 
@@ -139,7 +152,6 @@ export interface EnqueueWorkQueueItemRequest {
   priority?: number | null;
   payload: JsonValue;
   metadata?: JsonValue;
-  enqueue_source?: string;
 }
 
 export interface UpdateWorkQueueItemRequest {

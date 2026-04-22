@@ -1,8 +1,13 @@
 import { Link, useParams } from "react-router-dom";
 import { usePacks, usePack, useDeletePack } from "@/hooks/usePacks";
 import { usePackActions } from "@/hooks/useActions";
+import { usePackTriggers } from "@/hooks/useTriggers";
+import { usePackSensors } from "@/hooks/useSensors";
+import { usePackRules } from "@/hooks/useRules";
+import { useWorkflows } from "@/hooks/useWorkflows";
+import { useQueues } from "@/hooks/useQueues";
 import { useState, useMemo } from "react";
-import type { PackSummary, PackResponse, ActionSummary } from "@/api";
+import type { PackSummary, PackResponse } from "@/api";
 import {
   Search,
   X,
@@ -260,6 +265,11 @@ export default function PacksPage() {
 function PackDetail({ packRef }: { packRef: string }) {
   const { data: pack, isLoading, error } = usePack(packRef);
   const { data: actions } = usePackActions(packRef);
+  const { data: triggers } = usePackTriggers(packRef);
+  const { data: sensors } = usePackSensors(packRef);
+  const { data: rules } = usePackRules(packRef);
+  const { data: workflows } = useWorkflows({ packRef, pageSize: 100 });
+  const { data: queues } = useQueues({ pageSize: 200 });
   const deletePack = useDeletePack();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
@@ -291,6 +301,43 @@ function PackDetail({ packRef }: { packRef: string }) {
   }
 
   const packActions = actions || [];
+  const packTriggers = triggers?.data || [];
+  const packSensors = sensors?.data || [];
+  const packRules = rules || [];
+  const packWorkflows = workflows?.data || [];
+  const packQueues = (queues?.data || []).filter((queue) => queue.pack_ref === packRef);
+  const componentLinks = [
+    {
+      label: "Actions",
+      count: packActions.length,
+      to: `/actions?pack=${encodeURIComponent(packRef)}`,
+    },
+    {
+      label: "Triggers",
+      count: packTriggers.length,
+      to: `/triggers?pack=${encodeURIComponent(packRef)}`,
+    },
+    {
+      label: "Sensors",
+      count: packSensors.length,
+      to: `/sensors?pack=${encodeURIComponent(packRef)}`,
+    },
+    {
+      label: "Rules",
+      count: packRules.length,
+      to: `/rules?pack=${encodeURIComponent(packRef)}`,
+    },
+    {
+      label: "Workflows",
+      count: packWorkflows.length,
+      to: `/workflows?packRef=${encodeURIComponent(packRef)}`,
+    },
+    {
+      label: "Queues",
+      count: packQueues.length,
+      to: `/queues?search=${encodeURIComponent(packRef)}`,
+    },
+  ];
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -399,87 +446,28 @@ function PackDetail({ packRef }: { packRef: string }) {
             </dl>
           </div>
 
-          {/* Configuration */}
+          {/* Pack Config */}
           <PackConfiguration pack={pack.data} />
-
-          {/* Actions */}
-          {packActions.length > 0 && (
-            <div className="bg-white shadow rounded-lg p-6">
-              <h2 className="text-xl font-semibold mb-4">
-                Actions ({packActions.length})
-              </h2>
-              <div className="space-y-2">
-                {packActions.map((action: ActionSummary) => (
-                  <Link
-                    key={action.id}
-                    to={`/actions/${action.ref}`}
-                    className="block p-3 border border-gray-200 rounded hover:bg-gray-50 transition-colors"
-                  >
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <div className="font-medium text-sm text-gray-900">
-                          {action.label}
-                        </div>
-                        <div className="font-mono text-xs text-gray-500 mt-1">
-                          {action.ref}
-                        </div>
-                      </div>
-                    </div>
-                    {action.description && (
-                      <p className="text-xs text-gray-600 mt-2">
-                        {action.description}
-                      </p>
-                    )}
-                  </Link>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Sidebar */}
         <div className="space-y-6">
-          {/* Stats */}
+          {/* Components */}
           <div className="bg-white shadow rounded-lg p-6">
-            <h2 className="text-lg font-semibold mb-4">Statistics</h2>
+            <h2 className="text-lg font-semibold mb-4">Components</h2>
             <div className="space-y-3">
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-gray-600">Actions</span>
-                <span className="text-lg font-semibold">
-                  {packActions.length}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Quick Actions */}
-          <div className="bg-white shadow rounded-lg p-6">
-            <h2 className="text-lg font-semibold mb-4">Quick Actions</h2>
-            <div className="space-y-2">
-              <Link
-                to={`/actions?pack=${packRef}`}
-                className="block w-full px-4 py-2 text-sm text-center bg-gray-100 hover:bg-gray-200 rounded"
-              >
-                View Actions
-              </Link>
-              <Link
-                to={`/triggers?pack=${packRef}`}
-                className="block w-full px-4 py-2 text-sm text-center bg-gray-100 hover:bg-gray-200 rounded"
-              >
-                View Triggers
-              </Link>
-              <Link
-                to={`/sensors?pack=${packRef}`}
-                className="block w-full px-4 py-2 text-sm text-center bg-gray-100 hover:bg-gray-200 rounded"
-              >
-                View Sensors
-              </Link>
-              <Link
-                to={`/rules?pack=${packRef}`}
-                className="block w-full px-4 py-2 text-sm text-center bg-gray-100 hover:bg-gray-200 rounded"
-              >
-                View Rules
-              </Link>
+              {componentLinks.map((component) => (
+                <Link
+                  key={component.label}
+                  to={component.to}
+                  className="flex items-center justify-between rounded border border-gray-200 px-3 py-2 text-sm transition-colors hover:bg-gray-50"
+                >
+                  <span className="text-gray-700">{component.label}</span>
+                  <span className="rounded bg-gray-100 px-2 py-0.5 text-sm font-semibold text-gray-900">
+                    {component.count}
+                  </span>
+                </Link>
+              ))}
             </div>
           </div>
         </div>
@@ -494,26 +482,39 @@ function PackConfiguration({ pack }: { pack: PackResponse | undefined }) {
 
   const confSchema = pack.conf_schema || {};
   const config = pack.config || {};
-  const properties = confSchema.properties || {};
-
-  // If no schema properties, don't show the section
-  if (Object.keys(properties).length === 0) {
-    return null;
-  }
+  const properties =
+    confSchema && typeof confSchema === "object" && !Array.isArray(confSchema)
+      ? (confSchema.properties || {})
+      : {};
+  const configEntries =
+    config && typeof config === "object" && !Array.isArray(config)
+      ? Object.entries(config)
+      : [];
+  const entryKeys = Array.from(
+    new Set([
+      ...Object.keys(properties),
+      ...configEntries.map(([key]) => key),
+    ]),
+  ).sort((left, right) => left.localeCompare(right));
 
   return (
     <div className="bg-white shadow rounded-lg p-6">
       <div className="flex items-center gap-2 mb-4">
         <Settings className="w-5 h-5 text-gray-600" />
-        <h2 className="text-xl font-semibold">Configuration</h2>
+        <h2 className="text-xl font-semibold">Pack Config</h2>
       </div>
-      <div className="space-y-4">
-        {Object.entries(properties).map(
-          ([key, schema]: [string, JsonValue]) => {
+      {entryKeys.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-sm text-gray-500">
+          No pack configuration is currently set.
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {entryKeys.map((key) => {
+            const schema = properties[key] as JsonValue;
             const value = config[key];
             const hasValue = value !== undefined && value !== null;
-            const displayValue = hasValue ? value : schema.default;
-            const isUsingDefault = !hasValue && schema.default !== undefined;
+            const displayValue = hasValue ? value : schema?.default;
+            const isUsingDefault = !hasValue && schema?.default !== undefined;
 
             return (
               <div
@@ -523,39 +524,41 @@ function PackConfiguration({ pack }: { pack: PackResponse | undefined }) {
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <dt className="text-sm font-medium text-gray-900 font-mono">
-                        {key}
-                      </dt>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
-                        {schema.type || "any"}
-                      </span>
-                      {isUsingDefault && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
-                          default
+                        <dt className="text-sm font-medium text-gray-900 font-mono">
+                          {key}
+                        </dt>
+                        {schema?.type && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
+                            {schema.type}
+                          </span>
+                        )}
+                       {isUsingDefault && (
+                         <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                           default
                         </span>
                       )}
                     </div>
-                    {schema.description && (
+                    {schema?.description && (
                       <p className="mt-1 text-sm text-gray-600">
                         {schema.description}
                       </p>
                     )}
                   </div>
                   <dd className="ml-4 text-sm text-right">
-                    <ConfigValue value={displayValue} type={schema.type} />
+                    <ConfigValue value={displayValue} type={schema?.type} />
                   </dd>
                 </div>
-                {schema.minimum !== undefined &&
-                  schema.maximum !== undefined && (
+                {schema?.minimum !== undefined &&
+                  schema?.maximum !== undefined && (
                     <p className="mt-1 text-xs text-gray-500">
                       Range: {schema.minimum} - {schema.maximum}
                     </p>
                   )}
               </div>
             );
-          },
-        )}
-      </div>
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -78,6 +78,12 @@ const navSections = [
       },
       { to: "/rules", label: "Rules", icon: navIcons.rules, color: "blue" },
       {
+        to: "/queues",
+        label: "Queues",
+        icon: navIcons.queues,
+        color: "blue",
+      },
+      {
         to: "/triggers",
         label: "Triggers",
         icon: navIcons.triggers,
@@ -126,12 +132,6 @@ const navSections = [
         to: "/keys",
         label: "Keys & Secrets",
         icon: navIcons.keys,
-        color: "gray",
-      },
-      {
-        to: "/queues",
-        label: "Queues",
-        icon: navIcons.queues,
         color: "gray",
       },
       {
@@ -376,7 +376,8 @@ export default function MainLayout() {
             </div>
 
             {/* User Menu Popup (collapsed mode only) */}
-            {isCollapsed && showUserMenu && (
+            {isCollapsed &&
+              showUserMenu &&
               createPortal(
                 <>
                   <div
@@ -406,8 +407,7 @@ export default function MainLayout() {
                   </div>
                 </>,
                 document.body,
-              )
-            )}
+              )}
           </div>
         </div>
       </div>

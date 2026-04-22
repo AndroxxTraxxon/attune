@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { X } from "lucide-react";
+import ParamSchemaForm, {
+  extractProperties,
+  type ParamSchema,
+  validateParamSchema,
+} from "@/components/common/ParamSchemaForm";
 import {
+  type JsonValue,
   type WorkQueueItemResponse,
 } from "@/api/queues";
 import {
@@ -15,8 +21,39 @@ import {
 
 interface QueueItemModalProps {
   queueRef: string;
+  itemSchema?: JsonValue;
   item?: WorkQueueItemResponse | null;
   onClose: () => void;
+}
+
+function isJsonObject(value: JsonValue | undefined | null): value is Record<string, JsonValue> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function splitPayloadBySchema(
+  payload: JsonValue | undefined,
+  schema: ParamSchema,
+): {
+  formValues: Record<string, JsonValue>;
+  extraValues: Record<string, JsonValue>;
+} {
+  if (!isJsonObject(payload)) {
+    return { formValues: {}, extraValues: {} };
+  }
+
+  const schemaKeys = new Set(Object.keys(extractProperties(schema)));
+  const formValues: Record<string, JsonValue> = {};
+  const extraValues: Record<string, JsonValue> = {};
+
+  for (const [key, value] of Object.entries(payload)) {
+    if (schemaKeys.has(key)) {
+      formValues[key] = value;
+    } else {
+      extraValues[key] = value;
+    }
+  }
+
+  return { formValues, extraValues };
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -27,23 +64,41 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 export default function QueueItemModal({
   queueRef,
+  itemSchema,
   item,
   onClose,
 }: QueueItemModalProps) {
   const enqueueItem = useEnqueueQueueItem();
   const updateItem = useUpdateQueueItem();
   const isEditing = !!item;
+  const payloadSchema: ParamSchema = (itemSchema as ParamSchema) || {};
+  const hasPayloadSchema = Object.keys(extractProperties(payloadSchema)).length > 0;
+  const initialPayload = isEditing ? item?.payload : {};
+  const supportsStructuredPayload =
+    hasPayloadSchema && (isJsonObject(initialPayload) || initialPayload === undefined);
+  const initialPayloadParts = splitPayloadBySchema(initialPayload, payloadSchema);
 
   const [itemKey, setItemKey] = useState(item?.item_key ?? "");
   const [priority, setPriority] = useState(() => item?.priority ?? 0);
-  const [enqueueSource, setEnqueueSource] = useState(
-    () => item?.enqueue_source ?? "api",
+  const [payloadValues, setPayloadValues] = useState<Record<string, JsonValue>>(
+    initialPayloadParts.formValues,
+  );
+  const [payloadErrors, setPayloadErrors] = useState<Record<string, string>>({});
+  const [extraPayload, setExtraPayload] = useState(
+    () => prettyJson(initialPayloadParts.extraValues),
   );
   const [payload, setPayload] = useState(() => prettyJson(item?.payload, {}));
   const [metadata, setMetadata] = useState(() => prettyJson(item?.metadata, {}));
   const [error, setError] = useState<string | null>(null);
 
   const isSubmitting = enqueueItem.isPending || updateItem.isPending;
+
+  const handlePayloadValuesChange = (nextValues: Record<string, JsonValue>) => {
+    setPayloadValues(nextValues);
+    if (Object.keys(payloadErrors).length > 0) {
+      setPayloadErrors({});
+    }
+  };
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -52,7 +107,21 @@ export default function QueueItemModal({
     let parsedPayload;
     let parsedMetadata;
     try {
-      parsedPayload = parseJsonValue("Payload", payload);
+      if (supportsStructuredPayload) {
+        const validationErrors = validateParamSchema(payloadSchema, payloadValues);
+        setPayloadErrors(validationErrors);
+        if (Object.keys(validationErrors).length > 0) {
+          setError("Please correct the payload form errors.");
+          return;
+        }
+
+        parsedPayload = {
+          ...parseJsonObject("Additional payload fields", extraPayload),
+          ...payloadValues,
+        };
+      } else {
+        parsedPayload = parseJsonValue("Payload", payload);
+      }
       parsedMetadata = parseJsonObject("Metadata", metadata);
     } catch (parseError) {
       setError(
@@ -64,6 +133,7 @@ export default function QueueItemModal({
     }
 
     try {
+      setPayloadErrors({});
       if (item) {
         await updateItem.mutateAsync({
           ref: queueRef,
@@ -85,7 +155,6 @@ export default function QueueItemModal({
             priority,
             payload: parsedPayload,
             metadata: parsedMetadata,
-            enqueue_source: enqueueSource.trim() || "api",
           },
         });
       }
@@ -155,30 +224,52 @@ export default function QueueItemModal({
             </div>
           </div>
 
-          {!isEditing && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Enqueue source
-              </label>
-              <input
-                value={enqueueSource}
-                onChange={(e) => setEnqueueSource(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                placeholder="api"
-              />
-            </div>
-          )}
-
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Payload (JSON)
+              Payload
             </label>
-            <textarea
-              value={payload}
-              onChange={(e) => setPayload(e.target.value)}
-              rows={10}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm"
-            />
+            {supportsStructuredPayload ? (
+              <div className="space-y-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <p className="text-xs text-gray-500">
+                  Fill in the queue item fields defined by this queue&apos;s item schema.
+                </p>
+                <ParamSchemaForm
+                  schema={payloadSchema}
+                  values={payloadValues}
+                  onChange={handlePayloadValuesChange}
+                  errors={payloadErrors}
+                />
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">
+                    Additional payload fields (JSON object)
+                  </label>
+                  <textarea
+                    value={extraPayload}
+                    onChange={(e) => setExtraPayload(e.target.value)}
+                    rows={4}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Optional extra payload keys not covered by the queue item schema.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <textarea
+                  value={payload}
+                  onChange={(e) => setPayload(e.target.value)}
+                  rows={10}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm"
+                />
+                {hasPayloadSchema && (
+                  <p className="mt-1 text-xs text-amber-600">
+                    This item&apos;s payload does not match the queue item schema shape, so the
+                    raw JSON editor is shown instead.
+                  </p>
+                )}
+              </>
+            )}
           </div>
 
           <div>

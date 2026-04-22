@@ -9,20 +9,23 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use axum_extra::extract::Query as FormQuery;
 use serde_json::{Map, Value as JsonValue};
 use validator::Validate;
 
 use attune_common::{
+    models::{key::Key, Pack, WorkQueueBatchMode, WorkQueueConfig, WorkQueueTunableValue},
     rbac::{Action as RbacAction, AuthorizationContext, Resource},
     repositories::{
         action::ActionRepository,
+        key::KeyRepository,
         pack::PackRepository,
         work_queue::{
             CreateWorkQueueInput, CreateWorkQueueItemInput, UpdateWorkQueueInput,
             UpdateWorkQueueItemInput, WorkQueueItemRepository, WorkQueueItemSearchFilters,
             WorkQueueRepository, WorkQueueSearchFilters,
         },
-        Create, Delete, FindByRef, Patch, Update,
+        Create, Delete, FindById, FindByRef, Patch, Update,
     },
 };
 
@@ -33,7 +36,8 @@ use crate::{
         common::{PaginatedResponse, PaginationParams},
         runtime::NullableStringPatch,
         work_queue::{
-            CreateWorkQueueRequest, EnqueueWorkQueueItemRequest, UpdateWorkQueueItemRequest,
+            CreateWorkQueueRequest, EnqueueWorkQueueItemRequest,
+            ResolvedWorkQueueDispatchTuningResponse, UpdateWorkQueueItemRequest,
             UpdateWorkQueueRequest, WorkQueueItemQueryParams, WorkQueueItemResponse,
             WorkQueueQueryParams, WorkQueueResponse, WorkQueueSummary,
         },
@@ -41,7 +45,10 @@ use crate::{
     },
     middleware::{ApiError, ApiResult},
     state::AppState,
+    validation::validate_queue_item_payload,
 };
+
+const API_ENQUEUE_SOURCE: &str = "api";
 
 #[utoipa::path(
     get,
@@ -185,10 +192,13 @@ pub async fn get_queue(
     authorize_queue_action(&state, &user, RbacAction::Read, &queue)
         .await
         .map_err(|_| ApiError::NotFound(format!("Work queue '{}' not found", queue_ref)))?;
+    let resolved_dispatch_tuning = resolve_queue_dispatch_tuning(&state, &user, &queue).await?;
 
     Ok((
         StatusCode::OK,
-        Json(ApiResponse::new(WorkQueueResponse::from(queue))),
+        Json(ApiResponse::new(
+            WorkQueueResponse::from_with_resolved_tuning(queue, resolved_dispatch_tuning),
+        )),
     ))
 }
 
@@ -215,6 +225,10 @@ pub async fn create_queue(
 
     let (pack_id, pack_ref) = resolve_pack(&state, request.pack_ref.as_deref()).await?;
     authorize_queue_create(&state, &user, &request.r#ref, pack_ref.as_deref()).await?;
+    attune_common::queue_definition::validate_work_queue_config_for_batch_mode(
+        request.batch_mode,
+        &request.config,
+    )?;
 
     if WorkQueueRepository::find_by_ref(&state.db, &request.r#ref)
         .await?
@@ -239,12 +253,15 @@ pub async fn create_queue(
             label: request.label,
             description: request.description,
             enabled: request.enabled,
+            accepting_new_items: request.accepting_new_items,
             dispatch_action: Some(action.id),
             dispatch_action_ref: action.r#ref,
             default_priority: request.default_priority,
             allow_pending_update: request.allow_pending_update,
             update_strategy: request.update_strategy,
             batch_mode: request.batch_mode,
+            item_schema: request.item_schema,
+            action_params: request.action_params,
             config: request.config,
         },
     )
@@ -288,9 +305,24 @@ pub async fn update_queue(
     authorize_queue_action(&state, &user, RbacAction::Update, &queue).await?;
 
     if !queue.is_adhoc {
-        return Err(ApiError::Forbidden(
-            "Pack-managed queues must be changed via pack queue definition files".to_string(),
-        ));
+        let mut has_non_operational_changes = false;
+        has_non_operational_changes |= request.pack_ref.is_some();
+        has_non_operational_changes |= request.label.is_some();
+        has_non_operational_changes |= request.description.is_some();
+        has_non_operational_changes |= request.dispatch_action_ref.is_some();
+        has_non_operational_changes |= request.default_priority.is_some();
+        has_non_operational_changes |= request.allow_pending_update.is_some();
+        has_non_operational_changes |= request.update_strategy.is_some();
+        has_non_operational_changes |= request.batch_mode.is_some();
+        has_non_operational_changes |= request.item_schema.is_some();
+        has_non_operational_changes |= request.action_params.is_some();
+        has_non_operational_changes |= request.config.is_some();
+
+        if has_non_operational_changes {
+            return Err(ApiError::Forbidden(
+                "Pack-managed queues may only change operational flags through the API".to_string(),
+            ));
+        }
     }
 
     let (pack_patch, pack_ref_patch, resolved_pack_ref) = match request.pack_ref.clone() {
@@ -325,6 +357,13 @@ pub async fn update_queue(
             (None, None)
         };
 
+    let effective_batch_mode = request.batch_mode.unwrap_or(queue.batch_mode);
+    let effective_config = request.config.as_ref().unwrap_or(&queue.config);
+    attune_common::queue_definition::validate_work_queue_config_for_batch_mode(
+        effective_batch_mode,
+        effective_config,
+    )?;
+
     let queue = WorkQueueRepository::update(
         &state.db,
         queue.id,
@@ -337,12 +376,15 @@ pub async fn update_queue(
                 NullableStringPatch::Clear => Patch::Clear,
             }),
             enabled: request.enabled,
+            accepting_new_items: request.accepting_new_items,
             dispatch_action: dispatch_action_patch,
             dispatch_action_ref,
             default_priority: request.default_priority,
             allow_pending_update: request.allow_pending_update,
             update_strategy: request.update_strategy,
             batch_mode: request.batch_mode,
+            item_schema: request.item_schema,
+            action_params: request.action_params,
             config: request.config,
             ..Default::default()
         },
@@ -423,7 +465,7 @@ pub async fn list_queue_items(
     State(state): State<Arc<AppState>>,
     RequireAuth(user): RequireAuth,
     Path(queue_ref): Path<String>,
-    Query(query): Query<WorkQueueItemQueryParams>,
+    FormQuery(query): FormQuery<WorkQueueItemQueryParams>,
 ) -> ApiResult<impl IntoResponse> {
     let queue = WorkQueueRepository::find_by_ref(&state.db, &queue_ref)
         .await?
@@ -491,6 +533,13 @@ pub async fn enqueue_queue_item(
         .ok_or_else(|| ApiError::NotFound(format!("Work queue '{}' not found", queue_ref)))?;
 
     authorize_queue_action(&state, &user, RbacAction::Create, &queue).await?;
+    if !queue.accepting_new_items {
+        return Err(ApiError::Conflict(format!(
+            "Work queue '{}' is not accepting new items",
+            queue_ref
+        )));
+    }
+    validate_queue_item_payload(&queue, &request.payload)?;
 
     let requested_by_identity = requester_identity_id(&user)?;
     let create_priority = request.priority.unwrap_or(queue.default_priority);
@@ -525,7 +574,6 @@ pub async fn enqueue_queue_item(
                                 priority: Some(create_priority),
                                 payload: Some(request.payload.clone()),
                                 metadata: Some(request.metadata.clone()),
-                                enqueue_source: Some(request.enqueue_source.clone()),
                                 ..Default::default()
                             },
                         )
@@ -533,6 +581,7 @@ pub async fn enqueue_queue_item(
                     }
                     attune_common::models::WorkQueueUpdateStrategy::MergePatch => {
                         let merged_payload = merge_patch_value(existing.payload, &request.payload);
+                        validate_queue_item_payload(&queue, &merged_payload)?;
                         let merged_metadata =
                             merge_patch_value(existing.metadata, &request.metadata);
                         WorkQueueItemRepository::update_if_statuses(
@@ -543,7 +592,6 @@ pub async fn enqueue_queue_item(
                                 priority: request.priority,
                                 payload: Some(merged_payload),
                                 metadata: Some(merged_metadata),
-                                enqueue_source: Some(request.enqueue_source.clone()),
                                 ..Default::default()
                             },
                         )
@@ -577,7 +625,7 @@ pub async fn enqueue_queue_item(
             status: attune_common::models::WorkQueueItemStatus::Queued,
             payload: request.payload,
             metadata: request.metadata,
-            enqueue_source: request.enqueue_source,
+            enqueue_source: API_ENQUEUE_SOURCE.to_string(),
             requested_by_identity,
             requested_by_execution: None,
             requested_by_enforcement: None,
@@ -640,6 +688,10 @@ pub async fn update_queue_item(
         return Err(ApiError::Conflict(
             "Only queued or retry queue items can be updated".to_string(),
         ));
+    }
+
+    if let Some(payload) = &request.payload {
+        validate_queue_item_payload(&queue, payload)?;
     }
 
     let updated = WorkQueueItemRepository::update_if_statuses(
@@ -769,6 +821,259 @@ async fn resolve_dispatch_action(
     ActionRepository::find_by_ref(&state.db, action_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Action '{}' not found", action_ref)))
+}
+
+async fn resolve_queue_dispatch_tuning(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    queue: &attune_common::models::WorkQueue,
+) -> Result<Option<ResolvedWorkQueueDispatchTuningResponse>, ApiError> {
+    let parsed_config: WorkQueueConfig =
+        serde_json::from_value(queue.config.clone()).map_err(|e| {
+            ApiError::InternalServerError(format!(
+                "Invalid persisted queue config for '{}': {}",
+                queue.r#ref, e
+            ))
+        })?;
+
+    let pack = if let Some(pack_id) = queue.pack {
+        PackRepository::find_by_id(&state.db, pack_id).await?
+    } else if let Some(pack_ref) = &queue.pack_ref {
+        PackRepository::find_by_ref(&state.db, pack_ref).await?
+    } else {
+        None
+    };
+
+    let identity_id = if user.claims.token_type == TokenType::Access {
+        Some(
+            user.identity_id()
+                .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?,
+        )
+    } else {
+        None
+    };
+
+    let concurrency = resolve_u32_tunable_for_display(
+        state,
+        user,
+        identity_id,
+        pack.as_ref(),
+        parsed_config
+            .dispatch
+            .as_ref()
+            .and_then(|dispatch| dispatch.concurrency.as_ref()),
+        1,
+    )
+    .await?;
+
+    let batch_size = if queue.batch_mode == WorkQueueBatchMode::Single {
+        Some(1)
+    } else {
+        resolve_u32_tunable_for_display(
+            state,
+            user,
+            identity_id,
+            pack.as_ref(),
+            parsed_config
+                .dispatch
+                .as_ref()
+                .and_then(|dispatch| dispatch.batch_size.as_ref()),
+            1,
+        )
+        .await?
+    };
+
+    Ok(Some(ResolvedWorkQueueDispatchTuningResponse {
+        concurrency,
+        batch_size,
+    }))
+}
+
+async fn resolve_u32_tunable_for_display(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    identity_id: Option<i64>,
+    pack: Option<&Pack>,
+    tunable: Option<&WorkQueueTunableValue>,
+    default: u32,
+) -> Result<Option<u32>, ApiError> {
+    let Some(tunable) = tunable else {
+        return Ok(Some(default));
+    };
+
+    match resolve_tunable_value_for_display(state, user, identity_id, pack, tunable).await? {
+        DisplayTunableValue::Restricted => Ok(None),
+        DisplayTunableValue::Resolved(value) => Ok(value
+            .as_ref()
+            .and_then(parse_positive_u32)
+            .or_else(|| tunable.fallback.as_ref().and_then(parse_positive_u32))
+            .or(Some(default))),
+    }
+}
+
+enum DisplayTunableValue {
+    Resolved(Option<JsonValue>),
+    Restricted,
+}
+
+async fn resolve_tunable_value_for_display(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    identity_id: Option<i64>,
+    pack: Option<&Pack>,
+    tunable: &WorkQueueTunableValue,
+) -> Result<DisplayTunableValue, ApiError> {
+    use attune_common::models::WorkQueueTunableSource;
+
+    let value = match tunable.source {
+        WorkQueueTunableSource::Literal => tunable.value.clone(),
+        WorkQueueTunableSource::PackConfig => pack.and_then(|pack| {
+            tunable
+                .path
+                .as_deref()
+                .and_then(|path| json_path_get(&pack.config, path).cloned())
+        }),
+        WorkQueueTunableSource::Keystore => {
+            let Some(key_ref) = tunable.key_ref.as_deref() else {
+                return Ok(DisplayTunableValue::Resolved(tunable.fallback.clone()));
+            };
+            let Some(key) = KeyRepository::find_by_ref(&state.db, key_ref).await? else {
+                return Ok(DisplayTunableValue::Resolved(None));
+            };
+
+            let Some(value) = resolve_display_key_value(state, user, identity_id, &key).await?
+            else {
+                return Ok(DisplayTunableValue::Restricted);
+            };
+
+            if let Some(path) = tunable.path.as_deref() {
+                json_path_get(&value, path).cloned()
+            } else {
+                Some(value)
+            }
+        }
+    };
+
+    Ok(DisplayTunableValue::Resolved(
+        value.or_else(|| tunable.fallback.clone()),
+    ))
+}
+
+async fn resolve_display_key_value(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    identity_id: Option<i64>,
+    key: &Key,
+) -> Result<Option<JsonValue>, ApiError> {
+    if user.claims.token_type != TokenType::Access {
+        return decrypt_key_for_display(state, key);
+    }
+
+    let Some(identity_id) = identity_id else {
+        return Ok(None);
+    };
+    let authz = AuthorizationService::new(state.db.clone());
+    let context = key_authorization_context(identity_id, key);
+
+    if authz
+        .authorize(
+            user,
+            AuthorizationCheck {
+                resource: Resource::Keys,
+                action: RbacAction::Read,
+                context: context.clone(),
+            },
+        )
+        .await
+        .is_err()
+    {
+        return Ok(None);
+    }
+
+    if key.encrypted
+        && authz
+            .authorize(
+                user,
+                AuthorizationCheck {
+                    resource: Resource::Keys,
+                    action: RbacAction::Decrypt,
+                    context,
+                },
+            )
+            .await
+            .is_err()
+    {
+        return Ok(None);
+    }
+
+    decrypt_key_for_display(state, key)
+}
+
+fn decrypt_key_for_display(
+    state: &Arc<AppState>,
+    key: &Key,
+) -> Result<Option<JsonValue>, ApiError> {
+    if !key.encrypted {
+        return Ok(Some(key.value.clone()));
+    }
+
+    let encryption_key = state
+        .config
+        .security
+        .encryption_key
+        .as_ref()
+        .ok_or_else(|| {
+            ApiError::InternalServerError("Encryption key not configured on server".to_string())
+        })?;
+    let decrypted =
+        attune_common::crypto::decrypt_json(&key.value, encryption_key).map_err(|e| {
+            ApiError::InternalServerError(format!("Failed to decrypt key '{}': {}", key.r#ref, e))
+        })?;
+
+    Ok(Some(decrypted))
+}
+
+fn parse_positive_u32(value: &JsonValue) -> Option<u32> {
+    match value {
+        JsonValue::Number(number) => number
+            .as_u64()
+            .or_else(|| number.as_i64().and_then(|value| u64::try_from(value).ok()))
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| *value > 0),
+        JsonValue::String(value) => value.parse::<u32>().ok().filter(|value| *value > 0),
+        _ => None,
+    }
+}
+
+fn json_path_get<'a>(value: &'a JsonValue, path: &str) -> Option<&'a JsonValue> {
+    let mut current = value;
+    for segment in path.split('.').filter(|segment| !segment.is_empty()) {
+        current = match current {
+            JsonValue::Object(object) => object.get(segment)?,
+            JsonValue::Array(array) => {
+                let index = segment.parse::<usize>().ok()?;
+                array.get(index)?
+            }
+            _ => return None,
+        };
+    }
+    Some(current)
+}
+
+fn key_authorization_context(identity_id: i64, key: &Key) -> AuthorizationContext {
+    let mut ctx = AuthorizationContext::new(identity_id);
+    ctx.target_id = Some(key.id);
+    ctx.target_ref = Some(key.r#ref.clone());
+    ctx.owner_identity_id = key.owner_identity;
+    ctx.owner_type = Some(key.owner_type);
+    ctx.owner_ref = match key.owner_type {
+        attune_common::models::OwnerType::Pack => key.owner_pack_ref.clone(),
+        attune_common::models::OwnerType::Action => key.owner_action_ref.clone(),
+        attune_common::models::OwnerType::Sensor => key.owner_sensor_ref.clone(),
+        _ => key.owner.clone(),
+    };
+    ctx.encrypted = Some(key.encrypted);
+    ctx
 }
 
 async fn authorize_queue_action(

@@ -229,17 +229,19 @@ impl RuleLifecycleListener {
             payload.rule_ref, payload.trigger_ref
         );
 
-        // Fetch trigger_id from database
-        let trigger_id = match Self::get_trigger_id_for_rule(db, payload.rule_id).await {
+        let trigger_id = match Self::get_trigger_id_by_ref(db, &payload.trigger_ref).await {
             Ok(Some(id)) => id,
             Ok(None) => {
-                warn!("Trigger not found for rule {}", payload.rule_id);
+                warn!(
+                    "Trigger '{}' not found for rule {}",
+                    payload.trigger_ref, payload.rule_id
+                );
                 return Ok(());
             }
             Err(e) => {
                 error!(
-                    "Failed to fetch trigger for rule {}: {}",
-                    payload.rule_id, e
+                    "Failed to fetch trigger '{}' for rule {}: {}",
+                    payload.trigger_ref, payload.rule_id, e
                 );
                 return Err(e);
             }
@@ -267,17 +269,19 @@ impl RuleLifecycleListener {
             payload.rule_ref, payload.trigger_ref
         );
 
-        // Fetch trigger_id from database
-        let trigger_id = match Self::get_trigger_id_for_rule(db, payload.rule_id).await {
+        let trigger_id = match Self::get_trigger_id_by_ref(db, &payload.trigger_ref).await {
             Ok(Some(id)) => id,
             Ok(None) => {
-                warn!("Trigger not found for rule {}", payload.rule_id);
+                warn!(
+                    "Trigger '{}' not found for rule {}",
+                    payload.trigger_ref, payload.rule_id
+                );
                 return Ok(());
             }
             Err(e) => {
                 error!(
-                    "Failed to fetch trigger for rule {}: {}",
-                    payload.rule_id, e
+                    "Failed to fetch trigger '{}' for rule {}: {}",
+                    payload.trigger_ref, payload.rule_id, e
                 );
                 return Err(e);
             }
@@ -294,16 +298,16 @@ impl RuleLifecycleListener {
         Ok(())
     }
 
-    /// Helper function to get trigger_id for a rule
-    async fn get_trigger_id_for_rule(db: &PgPool, rule_id: i64) -> Result<Option<i64>> {
+    /// Helper function to get trigger_id for a trigger ref
+    async fn get_trigger_id_by_ref(db: &PgPool, trigger_ref: &str) -> Result<Option<i64>> {
         let trigger_id = sqlx::query_scalar::<_, i64>(
             r#"
-            SELECT trigger
-            FROM rule
-            WHERE id = $1
+            SELECT id
+            FROM trigger
+            WHERE ref = $1
             "#,
         )
-        .bind(rule_id)
+        .bind(trigger_ref)
         .fetch_optional(db)
         .await?;
 

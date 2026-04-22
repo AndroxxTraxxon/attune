@@ -5,13 +5,13 @@ import {
   FolderArchive,
   Home,
   KeyRound,
-  ListOrdered,
   Package,
   ShieldCheck,
   SquareArrowRight,
   SquareAsterisk,
   SquareDot,
   SquarePlay,
+  SquareStack,
   TerminalSquare,
 } from "lucide-react";
 
@@ -27,7 +27,7 @@ export const navIcons = {
   events: CircleDot,
   keys: KeyRound,
   artifacts: FolderArchive,
-  queues: ListOrdered,
+  queues: SquareStack,
   accessControl: ShieldCheck,
   packs: Package,
 } as const;

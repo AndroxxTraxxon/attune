@@ -44,16 +44,19 @@ impl SensorService {
     async fn sync_worker_metrics(&self) -> Result<()> {
         let metrics = self.inner.sensor_manager.activity_metrics().await?;
         let mut registration = self.inner.sensor_worker_registration.write().await;
-        registration.add_capability(
+        let changed_monitored = registration.add_capability(
             "sensor_processes_monitored".to_string(),
             json!(metrics.monitored_sensors),
         );
-        registration.add_capability(
+        let changed_running = registration.add_capability(
             "sensor_processes_running".to_string(),
             json!(metrics.running_sensors),
         );
-        registration.add_capability("active_rules".to_string(), json!(metrics.active_rules));
-        registration.update_capabilities().await?;
+        let changed_rules =
+            registration.add_capability("active_rules".to_string(), json!(metrics.active_rules));
+        if changed_monitored || changed_running || changed_rules {
+            registration.update_capabilities().await?;
+        }
         Ok(())
     }
 
@@ -200,20 +203,22 @@ impl SensorService {
                 match sensor_manager.activity_metrics().await {
                     Ok(metrics) => {
                         let mut guard = registration.write().await;
-                        guard.add_capability(
+                        let changed_monitored = guard.add_capability(
                             "sensor_processes_monitored".to_string(),
                             json!(metrics.monitored_sensors),
                         );
-                        guard.add_capability(
+                        let changed_running = guard.add_capability(
                             "sensor_processes_running".to_string(),
                             json!(metrics.running_sensors),
                         );
-                        guard.add_capability(
+                        let changed_rules = guard.add_capability(
                             "active_rules".to_string(),
                             json!(metrics.active_rules),
                         );
-                        if let Err(e) = guard.update_capabilities().await {
-                            error!("Failed to update sensor worker metrics: {}", e);
+                        if changed_monitored || changed_running || changed_rules {
+                            if let Err(e) = guard.update_capabilities().await {
+                                error!("Failed to update sensor worker metrics: {}", e);
+                            }
                         }
                     }
                     Err(e) => error!("Failed to collect sensor worker metrics: {}", e),

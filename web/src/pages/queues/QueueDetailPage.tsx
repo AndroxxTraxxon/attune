@@ -8,29 +8,33 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import OnOffSwitch from "@/components/common/OnOffSwitch";
 import Pagination from "@/components/executions/Pagination";
+import QueueConfigSummary from "@/components/queues/QueueConfigSummary";
 import QueueItemModal from "@/components/queues/QueueItemModal";
 import {
   formatDateTime,
   formatJsonPreview,
-  getBatchModeLabel,
   getQueueSourceBadge,
   getStatusBadge,
-  getUpdateStrategyLabel,
   isMutablePendingStatus,
-  prettyJson,
 } from "@/components/queues/queueUtils";
 import {
   WorkQueueItemStatus,
+  type WorkQueueResponse,
   type WorkQueueItemResponse,
 } from "@/api/queues";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   useDeleteQueue,
   useDeleteQueueItem,
   useQueue,
   useQueueItems,
+  useUpdateQueue,
 } from "@/hooks/useQueues";
 import { useQueueStream } from "@/hooks/useQueueStream";
+import { useAction } from "@/hooks/useActions";
+import { useIdentity, usePermissionSets } from "@/hooks/usePermissions";
 
 const STATUS_FILTERS: Array<{
   value: string;
@@ -70,10 +74,72 @@ function getErrorMessage(error: unknown, fallback: string): string {
     (error instanceof Error ? error.message : fallback);
 }
 
-export default function QueueDetailPage() {
+function grantIncludesQueueUpdate(grants: unknown): boolean {
+  if (!Array.isArray(grants)) {
+    return false;
+  }
+
+  return grants.some((grant) => {
+    if (!grant || typeof grant !== "object") {
+      return false;
+    }
+
+    const candidate = grant as { resource?: unknown; actions?: unknown };
+    return candidate.resource === "queues" &&
+      Array.isArray(candidate.actions) &&
+      candidate.actions.includes("update");
+  });
+}
+
+interface QueueFlagToggleProps {
+  label: string;
+  description: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => Promise<void>;
+}
+
+function QueueFlagToggle({
+  label,
+  description,
+  checked,
+  disabled = false,
+  onChange,
+}: QueueFlagToggleProps) {
+  return (
+    <label className="flex items-center justify-between gap-4 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm">
+      <div>
+        <div className="text-sm font-medium text-gray-900">{label}</div>
+        <div className="mt-1 text-xs text-gray-500">{description}</div>
+      </div>
+      <OnOffSwitch
+        checked={checked}
+        disabled={disabled}
+        ariaLabel={label}
+        onChange={(nextChecked) => {
+          void onChange(nextChecked);
+        }}
+      />
+    </label>
+  );
+}
+
+async function updateOperationalFlag(
+  updateQueue: ReturnType<typeof useUpdateQueue>,
+  queue: WorkQueueResponse,
+  patch: { enabled?: boolean; accepting_new_items?: boolean },
+) {
+  await updateQueue.mutateAsync({
+    ref: queue.ref,
+    data: patch,
+  });
+}
+
+export function QueueDetailPage() {
   const { ref } = useParams<{ ref: string }>();
   const queueRef = ref ?? "";
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [page, setPage] = useState(1);
   const [itemKeyFilter, setItemKeyFilter] = useState("");
@@ -82,11 +148,16 @@ export default function QueueDetailPage() {
   const [showCreateItemModal, setShowCreateItemModal] = useState(false);
   const [editingItem, setEditingItem] = useState<WorkQueueItemResponse | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [showRawConfigJson, setShowRawConfigJson] = useState(false);
   const pageSize = 20;
 
   const { data, isLoading, error } = useQueue(queueRef);
+  const updateQueue = useUpdateQueue();
   useQueueStream({ queueRef });
+  const { data: identityData, isLoading: isIdentityLoading } = useIdentity(user?.id ?? 0);
+  const { data: permissionSetsData, isLoading: isPermissionSetsLoading } = usePermissionSets();
   const queue = data?.data;
+  const { data: actionData } = useAction(queue?.dispatch_action_ref || "");
   const statuses = useMemo(
     () => STATUS_FILTERS.find((filter) => filter.value === statusFilter)?.statuses,
     [statusFilter],
@@ -112,6 +183,33 @@ export default function QueueDetailPage() {
   const itemPagination = itemsData?.pagination;
   const itemTotal = itemPagination?.total_items ?? 0;
   const sourceBadge = queue ? getQueueSourceBadge(queue.is_adhoc) : null;
+  const canUpdateQueues = useMemo(() => {
+    if (!user) {
+      return false;
+    }
+
+    const identity = identityData?.data;
+    if (!identity || !permissionSetsData) {
+      return false;
+    }
+
+    const directlyAssignedRefs = new Set(
+      identity.direct_permissions.map((assignment) => assignment.permission_set_ref),
+    );
+    const assignedRoles = new Set(identity.roles.map((role) => role.role));
+
+    return permissionSetsData.some((permissionSet) => {
+      const matchesIdentity =
+        directlyAssignedRefs.has(permissionSet.ref) ||
+        permissionSet.roles.some((role) => assignedRoles.has(role.role));
+
+      return matchesIdentity && grantIncludesQueueUpdate(permissionSet.grants);
+    });
+  }, [identityData, permissionSetsData, user]);
+  const canUpdateQueuesResolved =
+    !user || (!isIdentityLoading && !isPermissionSetsLoading);
+  const queueFlagControlsDisabled =
+    !queue || updateQueue.isPending || (canUpdateQueuesResolved && !canUpdateQueues);
 
   const clearItemFilters = () => {
     setItemKeyFilter("");
@@ -189,16 +287,49 @@ export default function QueueDetailPage() {
                 {sourceBadge.label}
               </span>
             )}
-            <span
-              className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${queue.enabled ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-700"}`}
-            >
-              {queue.enabled ? "Enabled" : "Disabled"}
-            </span>
           </div>
           <p className="mt-2 font-mono text-sm text-gray-500">{queue.ref}</p>
           <p className="mt-2 max-w-3xl text-gray-600">
             {queue.description || "No description provided."}
           </p>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <QueueFlagToggle
+              label="Processing enabled"
+              description="Allow the executor to lease and process queued items."
+              checked={queue.enabled}
+              disabled={queueFlagControlsDisabled}
+              onChange={async (checked) => {
+                try {
+                  await updateOperationalFlag(updateQueue, queue, { enabled: checked });
+                  setActionError(null);
+                } catch (toggleError) {
+                  setActionError(getErrorMessage(toggleError, "Failed to update queue"));
+                }
+              }}
+            />
+            <QueueFlagToggle
+              label="Accepting items"
+              description="Allow new queue items to be inserted through the API and UI."
+              checked={queue.accepting_new_items}
+              disabled={queueFlagControlsDisabled}
+              onChange={async (checked) => {
+                try {
+                  await updateOperationalFlag(updateQueue, queue, {
+                    accepting_new_items: checked,
+                  });
+                  setActionError(null);
+                } catch (toggleError) {
+                  setActionError(getErrorMessage(toggleError, "Failed to update queue"));
+                }
+              }}
+            />
+          </div>
+          {canUpdateQueuesResolved && !canUpdateQueues && (
+            <p className="mt-3 text-sm text-gray-500">
+              Queue status controls require the <span className="font-mono">queues:update</span>
+              {" "}permission.
+            </p>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -214,7 +345,8 @@ export default function QueueDetailPage() {
           <button
             type="button"
             onClick={() => setShowCreateItemModal(true)}
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 transition-colors"
+            disabled={!queue.accepting_new_items}
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 transition-colors disabled:cursor-not-allowed disabled:bg-gray-300"
           >
             <Plus className="h-4 w-4" />
             Add Queue Item
@@ -238,68 +370,19 @@ export default function QueueDetailPage() {
         </div>
       )}
 
+      {!queue.accepting_new_items && (
+        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          New queue items are currently blocked for this queue.
+        </div>
+      )}
+
       {actionError && (
         <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-700">
           {actionError}
         </div>
       )}
 
-      <div className="mb-6 grid gap-6 lg:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-lg bg-white p-5 shadow">
-          <h2 className="text-sm font-medium uppercase tracking-wide text-gray-500">
-            Dispatch action
-          </h2>
-          <Link
-            to={`/actions/${encodeURIComponent(queue.dispatch_action_ref)}`}
-            className="mt-2 block font-mono text-sm text-blue-600 hover:text-blue-800"
-          >
-            {queue.dispatch_action_ref}
-          </Link>
-        </div>
-        <div className="rounded-lg bg-white p-5 shadow">
-          <h2 className="text-sm font-medium uppercase tracking-wide text-gray-500">
-            Pending updates
-          </h2>
-          <p className="mt-2 text-sm text-gray-900">
-            {queue.allow_pending_update ? "Allowed" : "Rejected"}
-          </p>
-          <p className="mt-1 text-xs text-gray-500">
-            Strategy: {getUpdateStrategyLabel(queue.update_strategy)}
-          </p>
-        </div>
-        <div className="rounded-lg bg-white p-5 shadow">
-          <h2 className="text-sm font-medium uppercase tracking-wide text-gray-500">
-            Batch mode
-          </h2>
-          <p className="mt-2 text-sm text-gray-900">{getBatchModeLabel(queue.batch_mode)}</p>
-          <p className="mt-1 text-xs text-gray-500">
-            Default priority {queue.default_priority}
-          </p>
-        </div>
-        <div className="rounded-lg bg-white p-5 shadow">
-          <h2 className="text-sm font-medium uppercase tracking-wide text-gray-500">
-            Timestamps
-          </h2>
-          <p className="mt-2 text-sm text-gray-900">Created: {formatDateTime(queue.created)}</p>
-          <p className="mt-1 text-sm text-gray-900">Updated: {formatDateTime(queue.updated)}</p>
-        </div>
-      </div>
-
       <div className="mb-6 rounded-lg bg-white p-5 shadow">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">Queue config</h2>
-            <p className="mt-1 text-sm text-gray-500">
-              Raw JSON configuration persisted for this queue definition.
-            </p>
-          </div>
-        </div>
-        <pre className="mt-4 overflow-x-auto rounded-lg bg-gray-50 p-4 text-xs text-gray-800">
-          {prettyJson(queue.config)}
-        </pre>
-      </div>
-
-      <div className="rounded-lg bg-white p-5 shadow">
         <div className="mb-4 flex items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Queue items</h2>
@@ -483,19 +566,33 @@ export default function QueueDetailPage() {
                 </tbody>
               </table>
             </div>
-
-            <div className="mt-4 rounded-lg bg-gray-50 p-4">
-              <details>
-                <summary className="cursor-pointer text-sm font-medium text-gray-700">
-                  Inspect current queue config JSON
-                </summary>
-                <pre className="mt-3 overflow-x-auto rounded bg-white p-4 text-xs text-gray-800">
-                  {prettyJson(queue.config)}
-                </pre>
-              </details>
-            </div>
           </>
         )}
+      </div>
+
+      <div className="rounded-lg bg-white p-5 shadow">
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Queue config</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              {showRawConfigJson
+                ? "Inspect the persisted queue item schema, action params, and queue config JSON."
+                : "Dispatch behaviour, action parameter mappings, and tunables for this queue."}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowRawConfigJson((current) => !current)}
+            className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+          >
+            {showRawConfigJson ? "Show structured view" : "Show raw JSON"}
+          </button>
+        </div>
+        <QueueConfigSummary
+          queue={queue}
+          dispatchActionParamSchema={actionData?.data?.param_schema}
+          showRawJson={showRawConfigJson}
+        />
       </div>
 
       <Pagination
@@ -512,12 +609,14 @@ export default function QueueDetailPage() {
       {showCreateItemModal && (
         <QueueItemModal
           queueRef={queue.ref}
+          itemSchema={queue.item_schema}
           onClose={() => setShowCreateItemModal(false)}
         />
       )}
       {editingItem && (
         <QueueItemModal
           queueRef={queue.ref}
+          itemSchema={queue.item_schema}
           item={editingItem}
           onClose={() => setEditingItem(null)}
         />
@@ -525,3 +624,5 @@ export default function QueueDetailPage() {
     </div>
   );
 }
+
+export default QueueDetailPage;

@@ -447,34 +447,64 @@ pub async fn update_rule(
             .await?;
     }
 
-    // If action parameters are being updated, validate against the action's schema
-    if let Some(ref action_params) = request.action_params {
-        let action = ActionRepository::find_by_ref(&state.db, &existing_rule.action_ref)
-            .await?
-            .ok_or_else(|| {
-                ApiError::NotFound(format!("Action '{}' not found", existing_rule.action_ref))
-            })?;
-        validate_action_params(&action, action_params)?;
+    let action_ref = request
+        .action_ref
+        .as_deref()
+        .unwrap_or(&existing_rule.action_ref);
+    let action = ActionRepository::find_by_ref(&state.db, action_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Action '{}' not found", action_ref)))?;
+
+    let trigger_ref = request
+        .trigger_ref
+        .as_deref()
+        .unwrap_or(&existing_rule.trigger_ref);
+    let trigger = TriggerRepository::find_by_ref(&state.db, trigger_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Trigger '{}' not found", trigger_ref)))?;
+
+    if request.action_params.is_some() || request.action_ref.is_some() {
+        validate_action_params(
+            &action,
+            request
+                .action_params
+                .as_ref()
+                .unwrap_or(&existing_rule.action_params),
+        )?;
     }
 
-    // If trigger parameters are being updated, validate against the trigger's schema
-    if let Some(ref trigger_params) = request.trigger_params {
-        let trigger = TriggerRepository::find_by_ref(&state.db, &existing_rule.trigger_ref)
-            .await?
-            .ok_or_else(|| {
-                ApiError::NotFound(format!("Trigger '{}' not found", existing_rule.trigger_ref))
-            })?;
-        validate_trigger_params(&trigger, trigger_params)?;
+    if request.trigger_params.is_some() || request.trigger_ref.is_some() {
+        validate_trigger_params(
+            &trigger,
+            request
+                .trigger_params
+                .as_ref()
+                .unwrap_or(&existing_rule.trigger_params),
+        )?;
     }
 
-    // Track if trigger params changed
-    let trigger_params_changed = request.trigger_params.is_some()
-        && request.trigger_params != Some(existing_rule.trigger_params.clone());
+    let trigger_ref_changed = request
+        .trigger_ref
+        .as_ref()
+        .is_some_and(|value| value != &existing_rule.trigger_ref);
+    let trigger_params_changed = request
+        .trigger_params
+        .as_ref()
+        .is_some_and(|value| value != &existing_rule.trigger_params);
+    let trigger_config_changed = trigger_ref_changed || trigger_params_changed;
+    let enabled_after_update = request.enabled.unwrap_or(existing_rule.enabled);
+    let was_enabled = existing_rule.enabled;
+    let became_enabled = !was_enabled && enabled_after_update;
+    let became_disabled = was_enabled && !enabled_after_update;
 
     // Create update input
     let update_input = UpdateRuleInput {
         label: request.label,
         description: request.description.map(Patch::Set),
+        action: request.action_ref.as_ref().map(|_| action.id),
+        action_ref: request.action_ref,
+        trigger: request.trigger_ref.as_ref().map(|_| trigger.id),
+        trigger_ref: request.trigger_ref,
         conditions: request.conditions,
         action_params: request.action_params,
         trigger_params: request.trigger_params,
@@ -483,10 +513,35 @@ pub async fn update_rule(
 
     let rule = RuleRepository::update(&state.db, existing_rule.id, update_input).await?;
 
-    // If the rule is enabled and trigger params changed, publish RuleEnabled message
-    // to notify sensors to restart with new parameters
-    if rule.enabled && trigger_params_changed {
-        if let Some(publisher) = state.get_publisher().await {
+    if let Some(publisher) = state.get_publisher().await {
+        if became_disabled || (was_enabled && trigger_ref_changed) {
+            let payload = RuleDisabledPayload {
+                rule_id: rule.id,
+                rule_ref: rule.r#ref.clone(),
+                trigger_ref: if trigger_ref_changed {
+                    existing_rule.trigger_ref.clone()
+                } else {
+                    rule.trigger_ref.clone()
+                },
+            };
+
+            let envelope =
+                MessageEnvelope::new(MessageType::RuleDisabled, payload).with_source("api-service");
+
+            if let Err(e) = publisher.publish_envelope(&envelope).await {
+                warn!(
+                    "Failed to publish RuleDisabled message for updated rule {}: {}",
+                    rule.r#ref, e
+                );
+            } else {
+                info!(
+                    "Published RuleDisabled message for updated rule {}",
+                    rule.r#ref
+                );
+            }
+        }
+
+        if became_enabled || (rule.enabled && trigger_config_changed) {
             let payload = RuleEnabledPayload {
                 rule_id: rule.id,
                 rule_ref: rule.r#ref.clone(),
@@ -504,7 +559,7 @@ pub async fn update_rule(
                 );
             } else {
                 info!(
-                    "Published RuleEnabled message for updated rule {} (trigger params changed)",
+                    "Published RuleEnabled message for updated rule {}",
                     rule.r#ref
                 );
             }
@@ -601,6 +656,10 @@ pub async fn enable_rule(
     let update_input = UpdateRuleInput {
         label: None,
         description: None,
+        action: None,
+        action_ref: None,
+        trigger: None,
+        trigger_ref: None,
         conditions: None,
         action_params: None,
         trigger_params: None,
@@ -664,6 +723,10 @@ pub async fn disable_rule(
     let update_input = UpdateRuleInput {
         label: None,
         description: None,
+        action: None,
+        action_ref: None,
+        trigger: None,
+        trigger_ref: None,
         conditions: None,
         action_params: None,
         trigger_params: None,

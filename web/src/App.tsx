@@ -6,6 +6,7 @@ import { WebSocketProvider } from "@/contexts/WebSocketContext";
 import { queryClient } from "@/lib/query-client";
 import ProtectedRoute from "@/components/common/ProtectedRoute";
 import MainLayout from "@/components/layout/MainLayout";
+import { QueueDetailPage } from "@/pages/queues/QueueDetailPage";
 
 // Lazy-loaded page components for code splitting
 const LoginPage = lazy(() => import("@/pages/auth/LoginPage"));
@@ -35,7 +36,6 @@ const ArtifactDetailPage = lazy(
 const QueuesPage = lazy(() => import("@/pages/queues/QueuesPage"));
 const QueueCreatePage = lazy(() => import("@/pages/queues/QueueCreatePage"));
 const QueueEditPage = lazy(() => import("@/pages/queues/QueueEditPage"));
-const QueueDetailPage = lazy(() => import("@/pages/queues/QueueDetailPage"));
 const EventsPage = lazy(() => import("@/pages/events/EventsPage"));
 const EventDetailPage = lazy(() => import("@/pages/events/EventDetailPage"));
 const EnforcementsPage = lazy(

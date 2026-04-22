@@ -22,6 +22,8 @@ pub struct WorkQueueDefinition {
     pub description: Option<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub accepting_new_items: bool,
     pub dispatch_action: String,
     #[serde(default)]
     pub default_priority: i32,
@@ -31,6 +33,10 @@ pub struct WorkQueueDefinition {
     pub update_strategy: WorkQueueUpdateStrategy,
     #[serde(default)]
     pub batch_mode: WorkQueueBatchMode,
+    #[serde(default = "default_item_schema")]
+    pub item_schema: JsonValue,
+    #[serde(default = "default_action_params")]
+    pub action_params: JsonValue,
     #[serde(default = "default_config")]
     pub config: JsonValue,
 }
@@ -40,6 +46,14 @@ fn default_true() -> bool {
 }
 
 fn default_config() -> JsonValue {
+    serde_json::json!({})
+}
+
+fn default_action_params() -> JsonValue {
+    serde_json::json!({})
+}
+
+fn default_item_schema() -> JsonValue {
     serde_json::json!({})
 }
 
@@ -54,6 +68,8 @@ pub fn parse_work_queue_definition_yaml(content: &str) -> Result<WorkQueueDefini
 pub fn validate_work_queue_definition(definition: &WorkQueueDefinition) -> Result<WorkQueueConfig> {
     RefValidator::validate_work_queue_ref(&definition.r#ref)?;
     RefValidator::validate_component_ref(&definition.dispatch_action)?;
+    validate_work_queue_item_schema(&definition.item_schema)?;
+    validate_work_queue_action_params(&definition.action_params)?;
 
     if definition.label.trim().is_empty() {
         return Err(Error::validation("Work queue label cannot be empty"));
@@ -69,34 +85,30 @@ pub fn validate_work_queue_definition(definition: &WorkQueueDefinition) -> Resul
         ));
     }
 
-    validate_work_queue_config(&definition.config)
+    validate_work_queue_config_for_batch_mode(definition.batch_mode, &definition.config)
+}
+
+pub fn validate_work_queue_item_schema(item_schema: &JsonValue) -> Result<()> {
+    if !item_schema.is_object() {
+        return Err(Error::validation(
+            "item_schema must be a JSON object using the flat trigger-style schema format",
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_work_queue_action_params(action_params: &JsonValue) -> Result<()> {
+    if !action_params.is_object() {
+        return Err(Error::validation(
+            "action_params must be a JSON object mapping action parameter names to values",
+        ));
+    }
+    Ok(())
 }
 
 pub fn validate_work_queue_config(config: &JsonValue) -> Result<WorkQueueConfig> {
     let config: WorkQueueConfig = serde_json::from_value(config.clone())
         .map_err(|e| Error::validation(format!("Invalid work queue config structure: {}", e)))?;
-
-    if let Some(mapping) = &config.input_mapping {
-        if mapping
-            .items_path
-            .as_ref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
-            return Err(Error::validation(
-                "config.input_mapping.items_path cannot be empty",
-            ));
-        }
-
-        if mapping
-            .single_item_path
-            .as_ref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
-            return Err(Error::validation(
-                "config.input_mapping.single_item_path cannot be empty",
-            ));
-        }
-    }
 
     if let Some(priority) = &config.priority {
         if let Some(default) = &priority.default {
@@ -122,6 +134,64 @@ pub fn validate_work_queue_config(config: &JsonValue) -> Result<WorkQueueConfig>
     }
 
     Ok(config)
+}
+
+pub fn validate_work_queue_config_for_batch_mode(
+    batch_mode: WorkQueueBatchMode,
+    config: &JsonValue,
+) -> Result<WorkQueueConfig> {
+    let config = validate_work_queue_config(config)?;
+    validate_work_queue_batch_settings(batch_mode, &config)?;
+    Ok(config)
+}
+
+pub fn validate_work_queue_batch_settings(
+    batch_mode: WorkQueueBatchMode,
+    config: &WorkQueueConfig,
+) -> Result<()> {
+    let Some(coalescing) = config
+        .dispatch
+        .as_ref()
+        .and_then(|dispatch| dispatch.coalescing.as_ref())
+    else {
+        return Ok(());
+    };
+
+    if batch_mode != WorkQueueBatchMode::Batch {
+        return Err(Error::validation(
+            "config.dispatch.coalescing is only supported when batch_mode is 'batch'",
+        ));
+    }
+
+    if let Some(group_by_path) = coalescing.group_by_path.as_ref() {
+        if group_by_path.trim().is_empty() {
+            return Err(Error::validation(
+                "config.dispatch.coalescing.group_by_path cannot be empty",
+            ));
+        }
+
+        if group_by_path
+            .split('.')
+            .any(|segment| segment.trim().is_empty())
+        {
+            return Err(Error::validation(
+                "config.dispatch.coalescing.group_by_path must use non-empty dot-separated segments",
+            ));
+        }
+    }
+
+    if coalescing.enabled
+        && coalescing
+            .group_by_path
+            .as_ref()
+            .is_none_or(|path| path.trim().is_empty())
+    {
+        return Err(Error::validation(
+            "config.dispatch.coalescing.group_by_path is required when coalescing is enabled",
+        ));
+    }
+
+    Ok(())
 }
 
 fn validate_tunable_value(path: &str, value: &WorkQueueTunableValue) -> Result<()> {
@@ -198,7 +268,11 @@ fn validate_tunable_value(path: &str, value: &WorkQueueTunableValue) -> Result<(
 mod tests {
     use serde_json::json;
 
-    use super::{parse_work_queue_definition_yaml, validate_work_queue_config};
+    use super::{
+        parse_work_queue_definition_yaml, validate_work_queue_action_params,
+        validate_work_queue_batch_settings, validate_work_queue_config,
+        validate_work_queue_config_for_batch_mode, validate_work_queue_item_schema,
+    };
     use crate::models::{WorkQueueBatchMode, WorkQueueUpdateStrategy};
 
     #[test]
@@ -207,10 +281,18 @@ mod tests {
             r#"
 ref: core.inbox
 label: Core Inbox
+accepting_new_items: false
 dispatch_action: core.process_item
 allow_pending_update: true
 update_strategy: merge_patch
 batch_mode: batch
+item_schema:
+  order_id:
+    type: integer
+    required: true
+action_params:
+  items: "{{ items }}"
+  queue: "{{ queue }}"
 config:
   dispatch:
     concurrency:
@@ -222,11 +304,17 @@ config:
 
         assert_eq!(definition.r#ref, "core.inbox");
         assert_eq!(definition.dispatch_action, "core.process_item");
+        assert!(!definition.accepting_new_items);
         assert_eq!(definition.batch_mode, WorkQueueBatchMode::Batch);
         assert_eq!(
             definition.update_strategy,
             WorkQueueUpdateStrategy::MergePatch
         );
+        assert_eq!(
+            definition.action_params,
+            json!({"items": "{{ items }}", "queue": "{{ queue }}"})
+        );
+        assert_eq!(definition.item_schema["order_id"]["type"], "integer");
     }
 
     #[test]
@@ -241,5 +329,139 @@ config:
         .expect_err("config should be rejected");
 
         assert!(error.to_string().contains("config.dispatch.concurrency"));
+    }
+
+    #[test]
+    fn validates_batch_coalescing_config() {
+        let parsed = validate_work_queue_config_for_batch_mode(
+            WorkQueueBatchMode::Batch,
+            &json!({
+                "dispatch": {
+                    "coalescing": {
+                        "enabled": true,
+                        "group_by_path": "attributes.sobject_type",
+                        "across_priorities": true
+                    }
+                }
+            }),
+        )
+        .expect("config should validate");
+
+        assert!(parsed
+            .dispatch
+            .and_then(|dispatch| dispatch.coalescing)
+            .is_some());
+    }
+
+    #[test]
+    fn validates_inter_execution_delay_config() {
+        let parsed = validate_work_queue_config(&json!({
+            "dispatch": {
+                "retry_limit": 2,
+                "inter_execution_delay_seconds": 15
+            }
+        }))
+        .expect("config should validate");
+
+        assert_eq!(
+            parsed
+                .dispatch
+                .as_ref()
+                .and_then(|dispatch| dispatch.retry_limit),
+            Some(2)
+        );
+        assert_eq!(
+            parsed
+                .dispatch
+                .and_then(|dispatch| dispatch.inter_execution_delay_seconds),
+            Some(15)
+        );
+    }
+
+    #[test]
+    fn rejects_negative_retry_limit_config() {
+        let error = validate_work_queue_config(&json!({
+            "dispatch": {
+                "retry_limit": -1
+            }
+        }))
+        .expect_err("config should be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("Invalid work queue config structure"));
+    }
+
+    #[test]
+    fn rejects_negative_inter_execution_delay_config() {
+        let error = validate_work_queue_config(&json!({
+            "dispatch": {
+                "inter_execution_delay_seconds": -1
+            }
+        }))
+        .expect_err("config should be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("Invalid work queue config structure"));
+    }
+
+    #[test]
+    fn rejects_enabled_coalescing_without_group_path() {
+        let error = validate_work_queue_config_for_batch_mode(
+            WorkQueueBatchMode::Batch,
+            &json!({
+                "dispatch": {
+                    "coalescing": {
+                        "enabled": true
+                    }
+                }
+            }),
+        )
+        .expect_err("config should be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("group_by_path is required when coalescing is enabled"));
+    }
+
+    #[test]
+    fn rejects_coalescing_for_single_mode() {
+        let config = validate_work_queue_config(&json!({
+            "dispatch": {
+                "coalescing": {
+                    "enabled": false,
+                    "group_by_path": "attributes.sobject_type"
+                }
+            }
+        }))
+        .expect("config shape should parse");
+
+        let error = validate_work_queue_batch_settings(WorkQueueBatchMode::Single, &config)
+            .expect_err("single mode should reject coalescing");
+
+        assert!(error
+            .to_string()
+            .contains("only supported when batch_mode is 'batch'"));
+    }
+
+    #[test]
+    fn rejects_non_object_action_params() {
+        let error = validate_work_queue_action_params(&json!(["not", "an", "object"]))
+            .expect_err("action_params should be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("action_params must be a JSON object"));
+    }
+
+    #[test]
+    fn rejects_non_object_item_schema() {
+        let error = validate_work_queue_item_schema(&json!(["not", "an", "object"]))
+            .expect_err("item_schema should be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("item_schema must be a JSON object"));
     }
 }

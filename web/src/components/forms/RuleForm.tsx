@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePacks } from "@/hooks/usePacks";
 import { useTriggers, useTrigger } from "@/hooks/useTriggers";
@@ -71,6 +71,8 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
     Record<string, string>
   >({});
   const [conditionsError, setConditionsError] = useState<string | undefined>();
+  const previousTriggerIdRef = useRef(triggerId);
+  const previousActionIdRef = useRef(actionId);
 
   // Data fetching
   const { data: packsData } = usePacks({ pageSize: 1000 });
@@ -131,18 +133,22 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
   // Reset trigger parameters when trigger changes
   /* eslint-disable react-hooks/set-state-in-effect -- intentional dependent-state reset */
   useEffect(() => {
-    if (!isEditing) {
+    if (previousTriggerIdRef.current !== triggerId) {
       setTriggerParameters({});
+      setTriggerParamErrors({});
     }
+    previousTriggerIdRef.current = triggerId;
   }, [triggerId, isEditing]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Reset action parameters when action changes
   /* eslint-disable react-hooks/set-state-in-effect -- intentional dependent-state reset */
   useEffect(() => {
-    if (!isEditing) {
+    if (previousActionIdRef.current !== actionId) {
       setActionParameters({});
+      setActionParamErrors({});
     }
+    previousActionIdRef.current = actionId;
   }, [actionId, isEditing]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -229,13 +235,11 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
       formData.conditions = conditions;
     }
 
-    // Add trigger parameters if any
-    if (Object.keys(triggerParameters).length > 0) {
+    if (isEditing || Object.keys(triggerParameters).length > 0) {
       formData.trigger_params = triggerParameters;
     }
 
-    // Add action parameters if any
-    if (Object.keys(actionParameters).length > 0) {
+    if (isEditing || Object.keys(actionParameters).length > 0) {
       formData.action_params = actionParameters;
     }
 
@@ -439,7 +443,6 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
                     label: `${trigger.ref} - ${trigger.label}`,
                   }))}
                   placeholder="Select a trigger..."
-                  disabled={isEditing}
                   error={!!errors.trigger}
                 />
                 {errors.trigger && (
@@ -502,7 +505,6 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
                     label: `${action.ref} - ${action.label}`,
                   }))}
                   placeholder="Select an action..."
-                  disabled={isEditing}
                   error={!!errors.action}
                 />
                 {errors.action && (

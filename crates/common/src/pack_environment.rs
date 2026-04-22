@@ -14,7 +14,7 @@ use crate::repositories::runtime::{self, RuntimeRepository};
 use crate::repositories::FindById as _;
 use regex::Regex;
 use serde_json::Value as JsonValue;
-use sqlx::{postgres::PgRow, PgPool, Row};
+use sqlx::{postgres::PgRow, PgPool, Row, Type};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -22,7 +22,8 @@ use tokio::fs;
 use tracing::{debug, error, info, warn};
 
 /// Status of a pack environment
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[sqlx(type_name = "pack_environment_status_enum", rename_all = "lowercase")]
 pub enum PackEnvironmentStatus {
     Pending,
     Installing,
@@ -141,10 +142,6 @@ impl PackEnvironmentManager {
     }
 
     fn pack_environment_from_row(row: &PgRow) -> Result<PackEnvironment> {
-        let status_str: String = row.try_get("status")?;
-        let status = PackEnvironmentStatus::parse_status(&status_str)
-            .unwrap_or(PackEnvironmentStatus::Failed);
-
         Ok(PackEnvironment {
             id: row.try_get("id")?,
             pack: row.try_get("pack")?,
@@ -152,7 +149,7 @@ impl PackEnvironmentManager {
             runtime: row.try_get("runtime")?,
             runtime_ref: row.try_get("runtime_ref")?,
             env_path: row.try_get("env_path")?,
-            status,
+            status: row.try_get("status")?,
             installed_at: row.try_get("installed_at")?,
             last_verified: row.try_get("last_verified")?,
             install_log: row.try_get("install_log")?,
@@ -162,10 +159,6 @@ impl PackEnvironmentManager {
     }
 
     fn coordinated_environment_from_row(row: &PgRow) -> Result<CoordinatedPackEnvironment> {
-        let status_str: String = row.try_get("status")?;
-        let status = PackEnvironmentStatus::parse_status(&status_str)
-            .unwrap_or(PackEnvironmentStatus::Failed);
-
         Ok(CoordinatedPackEnvironment {
             id: row.try_get("id")?,
             pack: row.try_get("pack")?,
@@ -176,7 +169,7 @@ impl PackEnvironmentManager {
             runtime_version_text: row.try_get("runtime_version_text")?,
             env_key: row.try_get("env_key")?,
             env_path: row.try_get("env_path")?,
-            status,
+            status: row.try_get("status")?,
             manifest_checksum: row.try_get("manifest_checksum")?,
             claimed_by_worker: row.try_get("claimed_by_worker")?,
             claim_expires_at: row.try_get("claim_expires_at")?,

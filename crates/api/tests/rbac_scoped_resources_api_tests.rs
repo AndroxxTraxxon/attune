@@ -492,12 +492,19 @@ async fn test_pack_scoped_queue_permissions_cover_definitions_and_items() {
             label: "Blocked Queue".to_string(),
             description: None,
             enabled: true,
+            accepting_new_items: true,
             dispatch_action: Some(blocked_action.id),
             dispatch_action_ref: blocked_action.r#ref.clone(),
             default_priority: 0,
             allow_pending_update: true,
             update_strategy: WorkQueueUpdateStrategy::Replace,
             batch_mode: WorkQueueBatchMode::Single,
+            item_schema: json!({
+                "item": { "type": "object", "required": true }
+            }),
+            action_params: json!({
+                "item": "{{ item }}"
+            }),
             config: json!({}),
         },
     )

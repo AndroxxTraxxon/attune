@@ -1,7 +1,7 @@
-import { Link, useParams, useNavigate } from "react-router-dom";
+import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useActions, useAction, useDeleteAction } from "@/hooks/useActions";
 import { useExecutions } from "@/hooks/useExecutions";
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionSummary, ExecutionSummary } from "@/api";
 import type { ParamSchemaProperty } from "@/components/common/ParamSchemaForm";
 import {
@@ -21,10 +21,14 @@ import { extractProperties } from "@/components/common/ParamSchemaForm";
 export default function ActionsPage() {
   const { ref } = useParams<{ ref?: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { data, isLoading, error } = useActions();
   const actions = useMemo(() => data?.data || [], [data?.data]);
   const [collapsedPacks, setCollapsedPacks] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
+  const sidebarRef = useRef<HTMLDivElement | null>(null);
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const packSectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // Filter actions based on search query
   const filteredActions = useMemo(() => {
@@ -55,6 +59,53 @@ export default function ActionsPage() {
       [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0])),
     );
   }, [filteredActions]);
+
+  const requestedPack = searchParams.get("pack")?.trim() || "";
+  const focusedPack = useMemo(() => {
+    if (!requestedPack) {
+      return null;
+    }
+
+    return actionsByPack.has(requestedPack) ? requestedPack : null;
+  }, [actionsByPack, requestedPack]);
+
+  const orderedPackEntries = useMemo(() => {
+    const entries = Array.from(actionsByPack.entries());
+    if (!focusedPack) {
+      return entries;
+    }
+
+    return entries.sort(([left], [right]) => {
+      if (left === focusedPack) {
+        return -1;
+      }
+      if (right === focusedPack) {
+        return 1;
+      }
+      return left.localeCompare(right);
+    });
+  }, [actionsByPack, focusedPack]);
+
+  useEffect(() => {
+    if (!focusedPack) {
+      return;
+    }
+
+    const target = packSectionRefs.current[focusedPack];
+    const container = sidebarRef.current;
+    if (!target || !container) {
+      return;
+    }
+
+    const stickyHeaderHeight = headerRef.current?.offsetHeight ?? 0;
+    const targetTop =
+      target.offsetTop - stickyHeaderHeight - 8;
+
+    container.scrollTo({
+      top: Math.max(0, targetTop),
+      behavior: "auto",
+    });
+  }, [focusedPack, orderedPackEntries.length]);
 
   const togglePack = (packRef: string) => {
     setCollapsedPacks((prev) => {
@@ -89,13 +140,14 @@ export default function ActionsPage() {
   return (
     <div className="flex h-full">
       {/* Left sidebar - Actions List */}
-      <div className="w-96 border-r border-gray-200 overflow-y-auto bg-gray-50">
-        <div className="p-4 border-b border-gray-200 bg-white sticky top-0 z-10">
+      <div ref={sidebarRef} className="w-96 border-r border-gray-200 overflow-y-auto bg-gray-50">
+        <div ref={headerRef} className="p-4 border-b border-gray-200 bg-white sticky top-0 z-10">
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-bold">Actions</h1>
               <p className="text-sm text-gray-600 mt-1">
                 {filteredActions.length} of {actions.length} actions
+                {focusedPack ? ` • Focused pack: ${focusedPack}` : ""}
               </p>
             </div>
             <button
@@ -147,12 +199,18 @@ export default function ActionsPage() {
             </div>
           ) : (
             <div className="space-y-2">
-              {Array.from(actionsByPack.entries()).map(
+              {orderedPackEntries.map(
                 ([packRef, packActions]) => {
-                  const isCollapsed = collapsedPacks.has(packRef);
+                  const isCollapsed =
+                    focusedPack !== null && packRef !== focusedPack
+                      ? true
+                      : collapsedPacks.has(packRef);
                   return (
                     <div
                       key={packRef}
+                      ref={(element) => {
+                        packSectionRefs.current[packRef] = element;
+                      }}
                       className="bg-white rounded-lg shadow-sm overflow-hidden"
                     >
                       {/* Pack Header */}

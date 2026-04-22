@@ -1,45 +1,153 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import {
-  Eye,
-  Pencil,
-  Plus,
-  Search,
-  Workflow,
-} from "lucide-react";
+import { Plus, Search, Workflow } from "lucide-react";
+import OnOffSwitch from "@/components/common/OnOffSwitch";
 import Pagination from "@/components/executions/Pagination";
+import QueueInspectionPreview from "@/components/queues/QueueInspectionPreview";
+import QueueUpNextList from "@/components/queues/QueueUpNextList";
+import type { WorkQueueSummary } from "@/api/queues";
+import { useAuth } from "@/contexts/AuthContext";
+import { useActions } from "@/hooks/useActions";
 import { useQueueStream } from "@/hooks/useQueueStream";
-import { useQueues } from "@/hooks/useQueues";
-import { getQueueSourceBadge, formatDateTime } from "@/components/queues/queueUtils";
+import { useIdentity, usePermissionSets } from "@/hooks/usePermissions";
+import { useQueue, useQueues, useUpdateQueue } from "@/hooks/useQueues";
+
+function getMutationErrorMessage(error: unknown): string {
+  const maybeApiError = error as { body?: { message?: string } };
+  const maybeAxios = error as { response?: { data?: { message?: string } } };
+  return maybeApiError.body?.message ||
+    maybeAxios.response?.data?.message ||
+    (error instanceof Error ? error.message : "Failed to update queue");
+}
+
+function grantIncludesQueueUpdate(grants: unknown): boolean {
+  if (!Array.isArray(grants)) {
+    return false;
+  }
+
+  return grants.some((grant) => {
+    if (!grant || typeof grant !== "object") {
+      return false;
+    }
+
+    const candidate = grant as { resource?: unknown; actions?: unknown };
+    return candidate.resource === "queues" &&
+      Array.isArray(candidate.actions) &&
+      candidate.actions.includes("update");
+  });
+}
+
+interface QueueFlagToggleProps {
+  label: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => Promise<void>;
+}
+
+function QueueFlagToggle({
+  label,
+  checked,
+  disabled = false,
+  onChange,
+}: QueueFlagToggleProps) {
+  return (
+    <div className="flex items-center gap-2 text-xs text-gray-700">
+      <OnOffSwitch
+        checked={checked}
+        disabled={disabled}
+        ariaLabel={label}
+        stopPropagation
+        onChange={(nextChecked) => {
+          void onChange(nextChecked);
+        }}
+      />
+      <span>{label}</span>
+    </div>
+  );
+}
 
 export default function QueuesPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [enabledFilter, setEnabledFilter] = useState<"all" | "enabled" | "disabled">("all");
   const [managementFilter, setManagementFilter] = useState<"all" | "api" | "pack">("all");
+  const [preferredQueueRef, setPreferredQueueRef] = useState("");
+  const [statusError, setStatusError] = useState<string | null>(null);
   const pageSize = 20;
+  const { user } = useAuth();
 
-  const queryParams = useMemo(() => ({
-    page,
-    pageSize,
-    search: search.trim() || undefined,
-    enabled:
-      enabledFilter === "all"
-        ? undefined
-        : enabledFilter === "enabled",
-    isAdhoc:
-      managementFilter === "all"
-        ? undefined
-        : managementFilter === "api",
-  }), [enabledFilter, managementFilter, page, search]);
+  const queryParams = useMemo(
+    () => ({
+      page,
+      pageSize,
+      search: search.trim() || undefined,
+      enabled:
+        enabledFilter === "all"
+          ? undefined
+          : enabledFilter === "enabled",
+      isAdhoc:
+        managementFilter === "all"
+          ? undefined
+          : managementFilter === "api",
+    }),
+    [enabledFilter, managementFilter, page, search],
+  );
 
   const { data, isLoading, error, isFetching } = useQueues(queryParams);
+  const { data: actionsData } = useActions({ pageSize: 1000 });
+  const updateQueue = useUpdateQueue();
   useQueueStream();
+  const { data: identityData, isLoading: isIdentityLoading } = useIdentity(user?.id ?? 0);
+  const { data: permissionSetsData, isLoading: isPermissionSetsLoading } = usePermissionSets();
+
   const queues = data?.data ?? [];
+  const actionDescriptionsByRef = useMemo(
+    () =>
+      new Map(
+        (actionsData?.data ?? []).map((action) => [action.ref, action.description]),
+      ),
+    [actionsData?.data],
+  );
+  const selectedQueueRef =
+    queues.some((queue) => queue.ref === preferredQueueRef)
+      ? preferredQueueRef
+      : queues[0]?.ref ?? "";
+  const {
+    data: selectedQueueData,
+    isLoading: isSelectedQueueLoading,
+    error: selectedQueueError,
+  } = useQueue(selectedQueueRef);
   const pagination = data?.pagination;
   const total = pagination?.total_items ?? 0;
   const hasActiveFilters =
     search.trim().length > 0 || enabledFilter !== "all" || managementFilter !== "all";
+
+  const selectedQueue = selectedQueueData?.data;
+  const canUpdateQueues = useMemo(() => {
+    if (!user) {
+      return false;
+    }
+
+    const identity = identityData?.data;
+    if (!identity || !permissionSetsData) {
+      return false;
+    }
+
+    const directlyAssignedRefs = new Set(
+      identity.direct_permissions.map((assignment) => assignment.permission_set_ref),
+    );
+    const assignedRoles = new Set(identity.roles.map((role) => role.role));
+
+    return permissionSetsData.some((permissionSet) => {
+      const matchesIdentity =
+        directlyAssignedRefs.has(permissionSet.ref) ||
+        permissionSet.roles.some((role) => assignedRoles.has(role.role));
+
+      return matchesIdentity && grantIncludesQueueUpdate(permissionSet.grants);
+    });
+  }, [identityData, permissionSetsData, user]);
+  const canUpdateQueuesResolved =
+    !user || (!isIdentityLoading && !isPermissionSetsLoading);
 
   const clearFilters = () => {
     setSearch("");
@@ -48,18 +156,33 @@ export default function QueuesPage() {
     setPage(1);
   };
 
+  const updateOperationalFlag = async (
+    queue: WorkQueueSummary,
+    patch: { enabled?: boolean; accepting_new_items?: boolean },
+  ) => {
+    setStatusError(null);
+    try {
+      await updateQueue.mutateAsync({
+        ref: queue.ref,
+        data: patch,
+      });
+    } catch (mutationError) {
+      setStatusError(getMutationErrorMessage(mutationError));
+    }
+  };
+
   return (
     <div className="p-6 pb-28">
       <div className="mb-6 flex items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Work Queues</h1>
           <p className="mt-2 text-gray-600">
-            Browse queue definitions, inspect queue state, and manage API-managed queues.
+            Browse queue definitions, inspect queue state, and manage queue processing.
           </p>
         </div>
         <Link
           to="/queues/new"
-          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 transition-colors"
+          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-white transition-colors hover:bg-blue-700"
         >
           <Plus className="h-4 w-4" />
           Create Queue
@@ -77,8 +200,8 @@ export default function QueuesPage() {
             </label>
             <input
               value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
+              onChange={(event) => {
+                setSearch(event.target.value);
                 setPage(1);
               }}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
@@ -88,19 +211,19 @@ export default function QueuesPage() {
 
           <div>
             <label className="mb-1 block text-sm font-medium text-gray-700">
-              Enabled state
+              Processing state
             </label>
             <select
               value={enabledFilter}
-              onChange={(e) => {
-                setEnabledFilter(e.target.value as typeof enabledFilter);
+              onChange={(event) => {
+                setEnabledFilter(event.target.value as typeof enabledFilter);
                 setPage(1);
               }}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
             >
               <option value="all">All queues</option>
-              <option value="enabled">Enabled only</option>
-              <option value="disabled">Disabled only</option>
+              <option value="enabled">Processing enabled</option>
+              <option value="disabled">Processing paused</option>
             </select>
           </div>
 
@@ -110,8 +233,8 @@ export default function QueuesPage() {
             </label>
             <select
               value={managementFilter}
-              onChange={(e) => {
-                setManagementFilter(e.target.value as typeof managementFilter);
+              onChange={(event) => {
+                setManagementFilter(event.target.value as typeof managementFilter);
                 setPage(1);
               }}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
@@ -142,144 +265,185 @@ export default function QueuesPage() {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-lg bg-white shadow">
-        {isLoading ? (
-          <div className="p-12 text-center">
-            <div className="inline-block h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
-            <p className="mt-4 text-gray-600">Loading queues...</p>
-          </div>
-        ) : error ? (
-          <div className="p-12 text-center">
-            <p className="text-red-600">Failed to load queues</p>
-            <p className="mt-2 text-sm text-gray-600">
-              {error instanceof Error ? error.message : "Unknown error"}
-            </p>
-          </div>
-        ) : queues.length === 0 ? (
-          <div className="p-12 text-center">
-            <Workflow className="mx-auto h-12 w-12 text-gray-400" />
-            <p className="mt-4 text-gray-600">No queues found</p>
-            <p className="mt-1 text-sm text-gray-500">
-              {hasActiveFilters
-                ? "Try adjusting your filters."
-                : "Create your first API-managed queue to get started."}
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                    Queue
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                    Source
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                    Dispatch action
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                    Updated
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 bg-white">
-                {queues.map((queue) => {
-                  const sourceBadge = getQueueSourceBadge(queue.is_adhoc);
-                  return (
-                    <tr key={queue.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4">
-                        <div className="min-w-0">
-                          <Link
-                            to={`/queues/${encodeURIComponent(queue.ref)}`}
-                            className="block truncate text-sm font-medium text-blue-600 hover:text-blue-800"
-                          >
-                            {queue.label}
-                          </Link>
-                          <div className="truncate text-xs font-mono text-gray-500">
-                            {queue.ref}
-                          </div>
-                          {queue.description && (
-                            <p className="mt-1 truncate text-sm text-gray-600">
-                              {queue.description}
-                            </p>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div>
-                          <span
-                            className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${sourceBadge.classes}`}
-                          >
-                            {sourceBadge.label}
-                          </span>
-                          {queue.pack_ref && (
-                            <div className="mt-1 text-xs text-gray-500">
-                              Pack: {queue.pack_ref}
-                            </div>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span
-                          className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${queue.enabled ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-700"}`}
-                        >
-                          {queue.enabled ? "Enabled" : "Disabled"}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-mono">
-                        {queue.dispatch_action_ref}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                        {formatDateTime(queue.updated)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
-                        <div className="flex items-center justify-end gap-2">
-                          <Link
-                            to={`/queues/${encodeURIComponent(queue.ref)}`}
-                            className="text-gray-500 hover:text-blue-600"
-                            title="View queue"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </Link>
-                          {queue.is_adhoc && (
-                            <Link
-                              to={`/queues/${encodeURIComponent(queue.ref)}/edit`}
-                              className="text-gray-500 hover:text-blue-600"
-                              title="Edit queue"
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Link>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      {statusError && (
+        <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {statusError}
+        </div>
+      )}
 
-      <Pagination
-        page={page}
-        setPage={setPage}
-        pageSize={pageSize}
-        itemCount={queues.length}
-        total={total}
-        hasPrevious={pagination?.has_previous}
-        hasNext={pagination?.has_next}
-        itemLabel="queues"
-        floating
-      />
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.8fr)_360px]">
+        <div>
+          <div className="mb-3 text-sm text-gray-600">
+            Select a queue row to inspect it. Use the inline toggles to control inserts and
+            executor processing.
+          </div>
+          {canUpdateQueuesResolved && !canUpdateQueues && (
+            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              Queue status controls require the <span className="font-mono">queues:update</span>
+              {" "}permission.
+            </div>
+          )}
+
+          <div className="overflow-hidden rounded-lg bg-white shadow">
+            {isLoading ? (
+              <div className="p-12 text-center">
+                <div className="inline-block h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
+                <p className="mt-4 text-gray-600">Loading queues...</p>
+              </div>
+            ) : error ? (
+              <div className="p-12 text-center">
+                <p className="text-red-600">Failed to load queues</p>
+                <p className="mt-2 text-sm text-gray-600">
+                  {error instanceof Error ? error.message : "Unknown error"}
+                </p>
+              </div>
+            ) : queues.length === 0 ? (
+              <div className="p-12 text-center">
+                <Workflow className="mx-auto h-12 w-12 text-gray-400" />
+                <p className="mt-4 text-gray-600">No queues found</p>
+                <p className="mt-1 text-sm text-gray-500">
+                  {hasActiveFilters
+                    ? "Try adjusting your filters."
+                    : "Create your first API-managed queue to get started."}
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full table-fixed divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="w-[40%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                        Queue
+                      </th>
+                      <th className="w-[30%] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                        Enablement
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                        Dispatch action
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 bg-white">
+                    {queues.map((queue) => {
+                      const isSelected = queue.ref === selectedQueueRef;
+                      const isUpdating =
+                        updateQueue.isPending && updateQueue.variables?.ref === queue.ref;
+                      const actionDescription = actionDescriptionsByRef.get(
+                        queue.dispatch_action_ref,
+                      );
+
+                      return (
+                        <tr
+                          key={queue.id}
+                          tabIndex={0}
+                          onClick={() => setPreferredQueueRef(queue.ref)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              setPreferredQueueRef(queue.ref);
+                            }
+                          }}
+                          className={`cursor-pointer ${
+                            isSelected ? "bg-blue-50" : "hover:bg-gray-50"
+                          }`}
+                        >
+                          <td className="px-4 py-4">
+                            <div className="min-w-0">
+                              <Link
+                                to={`/queues/${encodeURIComponent(queue.ref)}`}
+                                onClick={() => setPreferredQueueRef(queue.ref)}
+                                className={`block truncate text-sm font-medium hover:underline ${
+                                  isSelected ? "text-blue-700" : "text-blue-600"
+                                }`}
+                              >
+                                {queue.pack_ref ? `${queue.pack_ref}: ${queue.label}` : queue.label}
+                              </Link>
+                              <div className="truncate text-xs font-mono text-gray-500">
+                                {queue.ref}
+                              </div>
+                              {queue.description && (
+                                <p className="mt-1 whitespace-normal break-words text-sm text-gray-600">
+                                  {queue.description}
+                                </p>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 align-top">
+                            <div className="space-y-2">
+                              <QueueFlagToggle
+                                label="Accept new items"
+                                checked={queue.accepting_new_items}
+                                disabled={isUpdating || !canUpdateQueues}
+                                onChange={async (checked) =>
+                                  updateOperationalFlag(queue, {
+                                    accepting_new_items: checked,
+                                  })}
+                              />
+                              <QueueFlagToggle
+                                label="Executor processing"
+                                checked={queue.enabled}
+                                disabled={isUpdating || !canUpdateQueues}
+                                onChange={async (checked) =>
+                                  updateOperationalFlag(queue, { enabled: checked })}
+                              />
+                            </div>
+                            {isUpdating && (
+                              <div className="mt-2 text-xs text-gray-500">Saving…</div>
+                            )}
+                          </td>
+                          <td className="px-4 py-4 text-sm font-mono text-gray-700">
+                            <div className="truncate">{queue.dispatch_action_ref}</div>
+                            {actionDescription && (
+                              <div className="mt-1 whitespace-normal break-words text-xs text-gray-500">
+                                {actionDescription}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <Pagination
+            page={page}
+            setPage={setPage}
+            pageSize={pageSize}
+            itemCount={queues.length}
+            total={total}
+            hasPrevious={pagination?.has_previous}
+            hasNext={pagination?.has_next}
+            itemLabel="queues"
+            floating
+          />
+        </div>
+
+        <div className="space-y-6 xl:sticky xl:top-6 xl:self-start">
+          {!selectedQueueRef ? (
+            <div className="rounded-lg border border-dashed border-gray-300 bg-white px-5 py-10 text-center text-sm text-gray-500 shadow">
+              Select a queue from the list to inspect it.
+            </div>
+          ) : isSelectedQueueLoading ? (
+            <div className="rounded-lg bg-white py-10 text-center shadow">
+              <div className="inline-block h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
+              <p className="mt-4 text-sm text-gray-600">Loading queue configuration...</p>
+            </div>
+          ) : selectedQueueError || !selectedQueue ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow">
+              {selectedQueueError instanceof Error
+                ? selectedQueueError.message
+                : "Failed to load queue details"}
+            </div>
+          ) : (
+            <QueueInspectionPreview queue={selectedQueue} />
+          )}
+
+          {selectedQueue && <QueueUpNextList queueRef={selectedQueue.ref} />}
+        </div>
+      </div>
     </div>
   );
 }

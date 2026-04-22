@@ -1556,20 +1556,23 @@ pub mod work_queue {
         pub label: String,
         pub description: Option<String>,
         pub enabled: bool,
+        pub accepting_new_items: bool,
         pub dispatch_action: Option<Id>,
         pub dispatch_action_ref: String,
         pub default_priority: i32,
         pub allow_pending_update: bool,
         pub update_strategy: WorkQueueUpdateStrategy,
         pub batch_mode: WorkQueueBatchMode,
+        pub item_schema: JsonDict,
+        pub action_params: JsonDict,
         pub config: JsonDict,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
     }
 
     pub const WORK_QUEUE_SELECT_COLUMNS: &str = "id, ref, pack, pack_ref, is_adhoc, label, \
-         description, enabled, dispatch_action, dispatch_action_ref, default_priority, \
-         allow_pending_update, update_strategy, batch_mode, config, created, updated";
+         description, enabled, accepting_new_items, dispatch_action, dispatch_action_ref, default_priority, \
+         allow_pending_update, update_strategy, batch_mode, item_schema, action_params, config, created, updated";
 
     #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
     pub struct WorkQueueItem {
@@ -1618,23 +1621,11 @@ pub mod work_queue {
     #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
     pub struct WorkQueueConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub input_mapping: Option<WorkQueueInputMappingConfig>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         pub priority: Option<WorkQueuePriorityConfig>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub dispatch: Option<WorkQueueDispatchConfig>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub ack_contract: Option<WorkQueueAckContractConfig>,
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-    pub struct WorkQueueInputMappingConfig {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub items_path: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub single_item_path: Option<String>,
-        #[serde(default)]
-        pub include_queue_metadata: bool,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -1649,6 +1640,22 @@ pub mod work_queue {
         pub concurrency: Option<WorkQueueTunableValue>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub batch_size: Option<WorkQueueTunableValue>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub retry_limit: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub inter_execution_delay_seconds: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub coalescing: Option<WorkQueueBatchCoalescingConfig>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+    pub struct WorkQueueBatchCoalescingConfig {
+        #[serde(default)]
+        pub enabled: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub group_by_path: Option<String>,
+        #[serde(default)]
+        pub across_priorities: bool,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

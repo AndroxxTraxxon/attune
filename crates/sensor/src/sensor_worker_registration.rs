@@ -246,9 +246,13 @@ impl SensorWorkerRegistration {
         &self.worker_name
     }
 
-    /// Add a capability to the sensor worker
-    pub fn add_capability(&mut self, key: String, value: serde_json::Value) {
+    /// Add or replace a capability on the sensor worker.
+    ///
+    /// Returns true when the stored value changed.
+    pub fn add_capability(&mut self, key: String, value: serde_json::Value) -> bool {
+        let changed = self.capabilities.get(&key) != Some(&value);
         self.capabilities.insert(key, value);
+        changed
     }
 
     /// Update sensor worker capabilities in the database

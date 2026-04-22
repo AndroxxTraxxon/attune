@@ -1,6 +1,6 @@
 -- Migration: Work Queues
 -- Description: Creates first-class business work queue tables and enums
--- Version: 20250101000013
+-- Version: 20250101000012
 
 -- ============================================================================
 -- ENUM TYPES
@@ -77,12 +77,15 @@ CREATE TABLE work_queue (
     label TEXT NOT NULL,
     description TEXT,
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    accepting_new_items BOOLEAN NOT NULL DEFAULT TRUE,
     dispatch_action BIGINT REFERENCES action(id) ON DELETE SET NULL,
     dispatch_action_ref TEXT NOT NULL,
     default_priority INTEGER NOT NULL DEFAULT 0,
     allow_pending_update BOOLEAN NOT NULL DEFAULT FALSE,
     update_strategy work_queue_update_strategy_enum NOT NULL DEFAULT 'replace',
     batch_mode work_queue_batch_mode_enum NOT NULL DEFAULT 'single',
+    item_schema JSONB NOT NULL DEFAULT '{}'::jsonb,
+    action_params JSONB NOT NULL DEFAULT '{}'::jsonb,
     config JSONB NOT NULL DEFAULT '{}'::jsonb,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -119,6 +122,10 @@ COMMENT ON COLUMN work_queue.dispatch_action IS
     'Optional action ID for the dispatch target; NULL preserves queue metadata if the action is deleted';
 COMMENT ON COLUMN work_queue.dispatch_action_ref IS
     'Stable action ref used as the dispatch target';
+COMMENT ON COLUMN work_queue.enabled IS
+    'Whether the executor is allowed to process queued items from this queue';
+COMMENT ON COLUMN work_queue.accepting_new_items IS
+    'Whether new queue items may be inserted into this queue';
 COMMENT ON COLUMN work_queue.default_priority IS
     'Fallback priority applied when producers do not provide one';
 COMMENT ON COLUMN work_queue.allow_pending_update IS
@@ -127,8 +134,12 @@ COMMENT ON COLUMN work_queue.update_strategy IS
     'How item_key collisions are handled for mutable pending items';
 COMMENT ON COLUMN work_queue.batch_mode IS
     'Whether dispatches deliver one item at a time or batches';
+COMMENT ON COLUMN work_queue.item_schema IS
+    'Flat trigger-style schema describing the payload shape accepted for queue items. Enforced on queue item enqueue/update writes.';
+COMMENT ON COLUMN work_queue.action_params IS
+    'Declarative action parameter mappings resolved at dispatch time using queue template expressions';
 COMMENT ON COLUMN work_queue.config IS
-    'Typed JSON configuration for queue input mapping, tunables, and ack contract';
+    'Typed JSON configuration for queue tunables and ack contract';
 
 -- ============================================================================
 -- WORK_QUEUE_ITEM TABLE
@@ -246,3 +257,174 @@ COMMENT ON COLUMN work_queue_dispatch.execution IS
     'Execution ID consuming the leased queue items (no FK because execution is a hypertable)';
 COMMENT ON COLUMN work_queue_dispatch.leased_item_count IS
     'Number of queue items leased into the dispatch batch';
+
+-- ============================================================================
+-- WORK QUEUE NOTIFICATIONS
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION notify_work_queue_created()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    payload := json_build_object(
+        'entity_type', 'work_queue',
+        'entity_id', NEW.id,
+        'id', NEW.id,
+        'ref', NEW.ref,
+        'pack_ref', NEW.pack_ref,
+        'is_adhoc', NEW.is_adhoc,
+        'label', NEW.label,
+        'description', NEW.description,
+        'enabled', NEW.enabled,
+        'dispatch_action_ref', NEW.dispatch_action_ref,
+        'default_priority', NEW.default_priority,
+        'allow_pending_update', NEW.allow_pending_update,
+        'update_strategy', NEW.update_strategy,
+        'batch_mode', NEW.batch_mode,
+        'item_schema', NEW.item_schema,
+        'action_params', NEW.action_params,
+        'created', NEW.created,
+        'updated', NEW.updated
+    );
+
+    PERFORM pg_notify('work_queue_created', payload::text);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION notify_work_queue_updated()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        payload := json_build_object(
+            'entity_type', 'work_queue',
+            'entity_id', NEW.id,
+            'id', NEW.id,
+            'ref', NEW.ref,
+            'pack_ref', NEW.pack_ref,
+            'is_adhoc', NEW.is_adhoc,
+            'label', NEW.label,
+            'description', NEW.description,
+            'enabled', NEW.enabled,
+            'dispatch_action_ref', NEW.dispatch_action_ref,
+            'default_priority', NEW.default_priority,
+            'allow_pending_update', NEW.allow_pending_update,
+            'update_strategy', NEW.update_strategy,
+            'batch_mode', NEW.batch_mode,
+            'item_schema', NEW.item_schema,
+            'action_params', NEW.action_params,
+            'created', NEW.created,
+            'updated', NEW.updated
+        );
+
+        PERFORM pg_notify('work_queue_updated', payload::text);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER work_queue_created_notify
+    AFTER INSERT ON work_queue
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_work_queue_created();
+
+CREATE TRIGGER work_queue_updated_notify
+    AFTER UPDATE ON work_queue
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_work_queue_updated();
+
+COMMENT ON FUNCTION notify_work_queue_created() IS 'Sends work queue creation notifications via PostgreSQL LISTEN/NOTIFY';
+COMMENT ON FUNCTION notify_work_queue_updated() IS 'Sends work queue update notifications via PostgreSQL LISTEN/NOTIFY';
+
+-- ============================================================================
+-- WORK QUEUE ITEM NOTIFICATIONS
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION notify_work_queue_item_created()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    payload := json_build_object(
+        'entity_type', 'work_queue_item',
+        'entity_id', NEW.id,
+        'id', NEW.id,
+        'queue', NEW.queue,
+        'queue_ref', NEW.queue_ref,
+        'item_key', NEW.item_key,
+        'priority', NEW.priority,
+        'status', NEW.status,
+        'enqueue_source', NEW.enqueue_source,
+        'requested_by_identity', NEW.requested_by_identity,
+        'requested_by_execution', NEW.requested_by_execution,
+        'requested_by_enforcement', NEW.requested_by_enforcement,
+        'leased_execution', NEW.leased_execution,
+        'lease_token', NEW.lease_token,
+        'lease_expires_at', NEW.lease_expires_at,
+        'attempt_count', NEW.attempt_count,
+        'last_error', NEW.last_error,
+        'ack_summary', NEW.ack_summary,
+        'created', NEW.created,
+        'updated', NEW.updated
+    );
+
+    PERFORM pg_notify('work_queue_item_created', payload::text);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION notify_work_queue_item_updated()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        payload := json_build_object(
+            'entity_type', 'work_queue_item',
+            'entity_id', NEW.id,
+            'id', NEW.id,
+            'queue', NEW.queue,
+            'queue_ref', NEW.queue_ref,
+            'item_key', NEW.item_key,
+            'priority', NEW.priority,
+            'status', NEW.status,
+            'old_status', OLD.status,
+            'enqueue_source', NEW.enqueue_source,
+            'requested_by_identity', NEW.requested_by_identity,
+            'requested_by_execution', NEW.requested_by_execution,
+            'requested_by_enforcement', NEW.requested_by_enforcement,
+            'leased_execution', NEW.leased_execution,
+            'lease_token', NEW.lease_token,
+            'lease_expires_at', NEW.lease_expires_at,
+            'attempt_count', NEW.attempt_count,
+            'last_error', NEW.last_error,
+            'ack_summary', NEW.ack_summary,
+            'created', NEW.created,
+            'updated', NEW.updated
+        );
+
+        PERFORM pg_notify('work_queue_item_updated', payload::text);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER work_queue_item_created_notify
+    AFTER INSERT ON work_queue_item
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_work_queue_item_created();
+
+CREATE TRIGGER work_queue_item_updated_notify
+    AFTER UPDATE ON work_queue_item
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_work_queue_item_updated();
+
+COMMENT ON FUNCTION notify_work_queue_item_created() IS 'Sends work queue item creation notifications via PostgreSQL LISTEN/NOTIFY';
+COMMENT ON FUNCTION notify_work_queue_item_updated() IS 'Sends work queue item update notifications via PostgreSQL LISTEN/NOTIFY';
