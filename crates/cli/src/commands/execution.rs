@@ -231,26 +231,29 @@ struct ExecutionListFilters {
     limit: usize,
 }
 
+#[derive(Debug)]
+struct ExecutionListArgs {
+    pack: Option<String>,
+    action: Option<String>,
+    rule: Option<String>,
+    trigger: Option<String>,
+    status: Vec<String>,
+    result: Option<String>,
+    top_level_only: bool,
+    limit: i32,
+}
+
 impl ExecutionListFilters {
-    fn from_args(
-        pack: Option<String>,
-        action: Option<String>,
-        rule: Option<String>,
-        trigger: Option<String>,
-        status: Vec<String>,
-        result: Option<String>,
-        top_level_only: bool,
-        limit: i32,
-    ) -> Self {
+    fn from_args(args: ExecutionListArgs) -> Self {
         Self {
-            pack,
-            action,
-            rule,
-            trigger,
-            statuses: normalize_statuses(status),
-            result: result.map(|value| value.to_lowercase()),
-            top_level_only,
-            limit: limit.max(1) as usize,
+            pack: args.pack,
+            action: args.action,
+            rule: args.rule,
+            trigger: args.trigger,
+            statuses: normalize_statuses(args.status),
+            result: args.result.map(|value| value.to_lowercase()),
+            top_level_only: args.top_level_only,
+            limit: args.limit.max(1) as usize,
         }
     }
 }
@@ -272,7 +275,7 @@ pub async fn handle_execution_command(
             top_level_only,
             limit,
         } => {
-            let filters = ExecutionListFilters::from_args(
+            let filters = ExecutionListFilters::from_args(ExecutionListArgs {
                 pack,
                 action,
                 rule,
@@ -281,7 +284,7 @@ pub async fn handle_execution_command(
                 result,
                 top_level_only,
                 limit,
-            );
+            });
             handle_list(profile, filters, api_url, output_format).await
         }
         ExecutionCommands::Watch {
@@ -297,17 +300,18 @@ pub async fn handle_execution_command(
             timeout,
             notifier_url,
         } => {
+            let args = ExecutionListArgs {
+                pack,
+                action,
+                rule,
+                trigger,
+                status,
+                result,
+                top_level_only,
+                limit,
+            };
             if let Some(execution_id) = execution_id {
-                ensure_watch_execution_mode_has_no_list_filters(
-                    &pack,
-                    &action,
-                    &rule,
-                    &trigger,
-                    &status,
-                    &result,
-                    top_level_only,
-                    limit,
-                )?;
+                ensure_watch_execution_mode_has_no_list_filters(&args)?;
                 handle_watch_execution(
                     profile,
                     execution_id,
@@ -318,16 +322,7 @@ pub async fn handle_execution_command(
                 )
                 .await
             } else {
-                let filters = ExecutionListFilters::from_args(
-                    pack,
-                    action,
-                    rule,
-                    trigger,
-                    status,
-                    result,
-                    top_level_only,
-                    limit,
-                );
+                let filters = ExecutionListFilters::from_args(args);
                 handle_watch_list(profile, filters, api_url, output_format).await
             }
         }
@@ -505,24 +500,15 @@ async fn handle_watch_execution(
     render_watched_execution_summary(summary, output_format, suppress_final_stdout)
 }
 
-fn ensure_watch_execution_mode_has_no_list_filters(
-    pack: &Option<String>,
-    action: &Option<String>,
-    rule: &Option<String>,
-    trigger: &Option<String>,
-    status: &[String],
-    result: &Option<String>,
-    top_level_only: bool,
-    limit: i32,
-) -> Result<()> {
-    if pack.is_some()
-        || action.is_some()
-        || rule.is_some()
-        || trigger.is_some()
-        || !status.is_empty()
-        || result.is_some()
-        || top_level_only
-        || limit != 50
+fn ensure_watch_execution_mode_has_no_list_filters(args: &ExecutionListArgs) -> Result<()> {
+    if args.pack.is_some()
+        || args.action.is_some()
+        || args.rule.is_some()
+        || args.trigger.is_some()
+        || !args.status.is_empty()
+        || args.result.is_some()
+        || args.top_level_only
+        || args.limit != 50
     {
         anyhow::bail!(
             "execution watch <id> observes a single execution and does not accept list-watch filters"
@@ -1108,16 +1094,16 @@ mod tests {
 
     #[test]
     fn build_execution_query_includes_new_filters() {
-        let filters = ExecutionListFilters::from_args(
-            Some("core".to_string()),
-            Some("core.echo".to_string()),
-            Some("core.rule".to_string()),
-            Some("core.trigger".to_string()),
-            vec!["running".to_string()],
-            Some("boom".to_string()),
-            true,
-            25,
-        );
+        let filters = ExecutionListFilters::from_args(ExecutionListArgs {
+            pack: Some("core".to_string()),
+            action: Some("core.echo".to_string()),
+            rule: Some("core.rule".to_string()),
+            trigger: Some("core.trigger".to_string()),
+            status: vec!["running".to_string()],
+            result: Some("boom".to_string()),
+            top_level_only: true,
+            limit: 25,
+        });
 
         let query = build_execution_query(&filters);
 
@@ -1133,16 +1119,16 @@ mod tests {
 
     #[test]
     fn build_execution_query_omits_status_when_multiple_selected() {
-        let filters = ExecutionListFilters::from_args(
-            None,
-            None,
-            None,
-            None,
-            vec!["running".to_string(), "failed".to_string()],
-            None,
-            false,
-            50,
-        );
+        let filters = ExecutionListFilters::from_args(ExecutionListArgs {
+            pack: None,
+            action: None,
+            rule: None,
+            trigger: None,
+            status: vec!["running".to_string(), "failed".to_string()],
+            result: None,
+            top_level_only: false,
+            limit: 50,
+        });
 
         let query = build_execution_query(&filters);
 
@@ -1164,16 +1150,16 @@ mod tests {
             updated: Some("2024-01-01T00:00:00Z".to_string()),
         };
 
-        let filters = ExecutionListFilters::from_args(
-            None,
-            Some("core.*".to_string()),
-            Some("core.*".to_string()),
-            Some("core.timer".to_string()),
-            vec!["running".to_string(), "scheduled".to_string()],
-            Some("hello".to_string()),
-            true,
-            50,
-        );
+        let filters = ExecutionListFilters::from_args(ExecutionListArgs {
+            pack: None,
+            action: Some("core.*".to_string()),
+            rule: Some("core.*".to_string()),
+            trigger: Some("core.timer".to_string()),
+            status: vec!["running".to_string(), "scheduled".to_string()],
+            result: Some("hello".to_string()),
+            top_level_only: true,
+            limit: 50,
+        });
 
         assert!(matches_execution_filters(&execution, &filters));
     }

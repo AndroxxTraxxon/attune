@@ -539,7 +539,7 @@ fn validate_action_ref_field(value: &str) -> Result<(), ValidationError> {
         .map_err(|e| validation_error("dispatch_action_ref", e.to_string()))
 }
 
-fn validate_pack_ref_field(value: &String) -> Result<(), ValidationError> {
+fn validate_pack_ref_field(value: &str) -> Result<(), ValidationError> {
     RefValidator::validate_pack_ref(value).map_err(|e| validation_error("pack_ref", e.to_string()))
 }
 
@@ -551,7 +551,7 @@ fn validate_pack_ref_patch(value: &NullableStringPatch) -> Result<(), Validation
     Ok(())
 }
 
-fn validate_item_key_field(value: &String) -> Result<(), ValidationError> {
+fn validate_item_key_field(value: &str) -> Result<(), ValidationError> {
     validate_item_key(value)
 }
 

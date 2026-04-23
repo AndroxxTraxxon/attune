@@ -261,64 +261,54 @@ pub async fn create_key(
     let mut owner_pack = request.owner_pack;
 
     match request.owner_type {
-        OwnerType::Sensor => {
-            if owner_sensor.is_none() {
-                if let Some(ref sensor_ref) = request.owner_sensor_ref {
-                    if let Some(sensor) =
-                        SensorRepository::find_by_ref(&state.db, sensor_ref).await?
-                    {
-                        tracing::debug!(
-                            "Auto-resolved owner_sensor from ref '{}' to id {}",
-                            sensor_ref,
-                            sensor.id
-                        );
-                        owner_sensor = Some(sensor.id);
-                    } else {
-                        return Err(ApiError::BadRequest(format!(
-                            "Sensor with ref '{}' not found",
-                            sensor_ref
-                        )));
-                    }
+        OwnerType::Sensor if owner_sensor.is_none() => {
+            if let Some(ref sensor_ref) = request.owner_sensor_ref {
+                if let Some(sensor) = SensorRepository::find_by_ref(&state.db, sensor_ref).await? {
+                    tracing::debug!(
+                        "Auto-resolved owner_sensor from ref '{}' to id {}",
+                        sensor_ref,
+                        sensor.id
+                    );
+                    owner_sensor = Some(sensor.id);
+                } else {
+                    return Err(ApiError::BadRequest(format!(
+                        "Sensor with ref '{}' not found",
+                        sensor_ref
+                    )));
                 }
             }
         }
-        OwnerType::Action => {
-            if owner_action.is_none() {
-                if let Some(ref action_ref) = request.owner_action_ref {
-                    if let Some(action) =
-                        ActionRepository::find_by_ref(&state.db, action_ref).await?
-                    {
-                        tracing::debug!(
-                            "Auto-resolved owner_action from ref '{}' to id {}",
-                            action_ref,
-                            action.id
-                        );
-                        owner_action = Some(action.id);
-                    } else {
-                        return Err(ApiError::BadRequest(format!(
-                            "Action with ref '{}' not found",
-                            action_ref
-                        )));
-                    }
+        OwnerType::Action if owner_action.is_none() => {
+            if let Some(ref action_ref) = request.owner_action_ref {
+                if let Some(action) = ActionRepository::find_by_ref(&state.db, action_ref).await? {
+                    tracing::debug!(
+                        "Auto-resolved owner_action from ref '{}' to id {}",
+                        action_ref,
+                        action.id
+                    );
+                    owner_action = Some(action.id);
+                } else {
+                    return Err(ApiError::BadRequest(format!(
+                        "Action with ref '{}' not found",
+                        action_ref
+                    )));
                 }
             }
         }
-        OwnerType::Pack => {
-            if owner_pack.is_none() {
-                if let Some(ref pack_ref) = request.owner_pack_ref {
-                    if let Some(pack) = PackRepository::find_by_ref(&state.db, pack_ref).await? {
-                        tracing::debug!(
-                            "Auto-resolved owner_pack from ref '{}' to id {}",
-                            pack_ref,
-                            pack.id
-                        );
-                        owner_pack = Some(pack.id);
-                    } else {
-                        return Err(ApiError::BadRequest(format!(
-                            "Pack with ref '{}' not found",
-                            pack_ref
-                        )));
-                    }
+        OwnerType::Pack if owner_pack.is_none() => {
+            if let Some(ref pack_ref) = request.owner_pack_ref {
+                if let Some(pack) = PackRepository::find_by_ref(&state.db, pack_ref).await? {
+                    tracing::debug!(
+                        "Auto-resolved owner_pack from ref '{}' to id {}",
+                        pack_ref,
+                        pack.id
+                    );
+                    owner_pack = Some(pack.id);
+                } else {
+                    return Err(ApiError::BadRequest(format!(
+                        "Pack with ref '{}' not found",
+                        pack_ref
+                    )));
                 }
             }
         }

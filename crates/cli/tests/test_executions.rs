@@ -537,9 +537,7 @@ async fn test_execution_watch_streams_updates() {
         .mount(&fixture.mock_server)
         .await;
 
-    let body = concat!(
-        "data: {\"entity_id\":3,\"payload\":{\"id\":3,\"action_ref\":\"core.echo\",\"status\":\"running\",\"parent\":null,\"rule_ref\":\"core.on_timer\",\"trigger_ref\":\"core.timer\",\"created\":\"2024-01-01T00:00:01Z\",\"updated\":\"2024-01-01T00:00:02Z\"}}\n\n"
-    );
+    let body = "data: {\"entity_id\":3,\"payload\":{\"id\":3,\"action_ref\":\"core.echo\",\"status\":\"running\",\"parent\":null,\"rule_ref\":\"core.on_timer\",\"trigger_ref\":\"core.timer\",\"created\":\"2024-01-01T00:00:01Z\",\"updated\":\"2024-01-01T00:00:02Z\"}}\n\n";
     Mock::given(method("GET"))
         .and(path("/api/v1/executions/stream"))
         .respond_with(

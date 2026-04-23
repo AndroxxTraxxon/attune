@@ -347,12 +347,7 @@ impl WorkQueueDispatcher {
         )
         .await?;
 
-        let batch_size_default =
-            if queue.batch_mode == attune_common::models::WorkQueueBatchMode::Single {
-                1
-            } else {
-                1
-            };
+        let batch_size_default = 1;
         let batch_size = if queue.batch_mode == attune_common::models::WorkQueueBatchMode::Single {
             1
         } else {
@@ -407,14 +402,16 @@ impl WorkQueueDispatcher {
             .or_else(|| tunable.fallback.as_ref().and_then(Self::parse_positive_u32))
             .unwrap_or(default);
 
-        if parsed == default && resolved.is_some() && parsed_resolved.is_none() {
-            warn!(
-                "Queue '{}' resolved non-positive/non-integer {} tunable {}, falling back to {}",
-                queue.r#ref,
-                name,
-                resolved.as_ref().expect("resolved is_some() checked above"),
-                default
-            );
+        if parsed == default && parsed_resolved.is_none() {
+            if let Some(resolved_value) = resolved.as_ref() {
+                warn!(
+                    "Queue '{}' resolved non-positive/non-integer {} tunable {}, falling back to {}",
+                    queue.r#ref,
+                    name,
+                    resolved_value,
+                    default
+                );
+            }
         }
 
         Ok(parsed)
