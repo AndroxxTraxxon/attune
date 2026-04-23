@@ -1078,8 +1078,10 @@ jobs:
       - publish-web-images
     if: |
       !cancelled() &&
-      needs.publish-rust-images.result != 'failure' &&
-      needs.publish-web-images.result != 'failure' &&
+      (
+        (matrix.repository == 'attune/web' && needs.publish-web-images.result == 'success') ||
+        (matrix.repository != 'attune/web' && needs.publish-rust-images.result == 'success')
+      ) &&
       (needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true') &&
       (github.event_name != 'workflow_dispatch' ||
       (inputs.target_arch == 'all' && inputs.target_image == 'all'))
