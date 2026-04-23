@@ -820,7 +820,12 @@ async fn dependency_manifest_checksum(
     let manifest_file = exec_config.dependencies.as_ref()?.manifest_file.as_str();
     let manifest_path = pack_dir.join(manifest_file);
     let data = tokio::fs::read(manifest_path).await.ok()?;
-    Some(format!("{:x}", Sha256::digest(&data)))
+    Some(
+        Sha256::digest(&data)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
 }
 
 fn coordinated_target_label(target_name: &str, runtime_version: Option<&RuntimeVersion>) -> String {

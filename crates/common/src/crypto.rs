@@ -159,7 +159,7 @@ pub fn hash_encryption_key(encryption_key: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(encryption_key.as_bytes());
     let result = hasher.finalize();
-    format!("{:x}", result)
+    result.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]

@@ -87,7 +87,7 @@ async fn create_test_trigger(
 
 /// Helper to generate HMAC signature
 fn generate_hmac_signature(payload: &[u8], secret: &str, algorithm: &str) -> String {
-    use hmac::{Hmac, Mac};
+    use hmac::{digest::KeyInit, Hmac, Mac};
     use sha1::Sha1;
     use sha2::{Sha256, Sha512};
 

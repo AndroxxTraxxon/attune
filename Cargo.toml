@@ -68,14 +68,14 @@ redis = { version = "1.2", features = ["tokio-comp", "connection-manager"] }
 
 # JSON Schema
 schemars = { version = "1.2", features = ["chrono04"] }
-jsonschema = "0.44"
+jsonschema = "0.46"
 
 # OpenAPI/Swagger
 utoipa = { version = "5.4", features = ["chrono", "uuid"] }
 
 # JWT
 jsonwebtoken = { version = "10.3", features = ["hmac", "sha2"] }
-hmac = "0.12"
+hmac = "0.13"
 signature = "2.2"
 
 # Encryption
@@ -83,7 +83,7 @@ argon2 = "0.5"
 ring = "0.17"
 base64 = "0.22"
 aes-gcm = "0.10"
-sha2 = "0.10"
+sha2 = "0.11"
 
 # Regular expressions
 regex = "1.12"
@@ -101,7 +101,7 @@ tar = "0.4"
 flate2 = "1.1"
 
 # WebSocket client
-tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
 
 # URL parsing
 url = "2.5"

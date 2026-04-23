@@ -11,7 +11,7 @@
 //!
 //! Call [`install()`] once at process startup (before any JWT operations).
 
-use hmac::{Hmac, Mac};
+use hmac::{digest::KeyInit, Hmac, Mac};
 use jsonwebtoken::crypto::{CryptoProvider, JwkUtils, JwtSigner, JwtVerifier};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey};
 use sha2::{Sha256, Sha384, Sha512};
@@ -41,7 +41,6 @@ macro_rules! define_hmac_signer {
         impl Signer<Vec<u8>> for $name {
             fn try_sign(&self, msg: &[u8]) -> std::result::Result<Vec<u8>, signature::Error> {
                 let mut mac = self.0.clone();
-                mac.reset();
                 mac.update(msg);
                 Ok(mac.finalize().into_bytes().to_vec())
             }
@@ -82,7 +81,6 @@ macro_rules! define_hmac_verifier {
                 sig: &Vec<u8>,
             ) -> std::result::Result<(), signature::Error> {
                 let mut mac = self.0.clone();
-                mac.reset();
                 mac.update(msg);
                 mac.verify_slice(sig).map_err(signature::Error::from_source)
             }

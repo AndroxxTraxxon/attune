@@ -234,7 +234,7 @@ pub fn calculate_directory_checksum<P: AsRef<Path>>(path: P) -> Result<String> {
     }
 
     let result = hasher.finalize();
-    Ok(format!("{:x}", result))
+    Ok(result.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 /// Calculate SHA256 checksum of a single file
@@ -279,7 +279,7 @@ pub fn calculate_file_checksum<P: AsRef<Path>>(path: P) -> Result<String> {
     }
 
     let result = hasher.finalize();
-    Ok(format!("{:x}", result))
+    Ok(result.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 /// Copy a directory recursively

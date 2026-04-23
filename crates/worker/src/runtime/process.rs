@@ -500,7 +500,7 @@ impl ProcessRuntime {
         use sha2::{Digest, Sha256};
         let data = tokio::fs::read(path).await.ok()?;
         let hash = Sha256::digest(&data);
-        Some(format!("{:x}", hash))
+        Some(hash.iter().map(|byte| format!("{byte:02x}")).collect())
     }
 
     /// Check whether a pack has dependencies that need to be installed.

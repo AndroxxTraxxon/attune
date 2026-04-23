@@ -601,5 +601,11 @@ fn hash_value_for_display(value: &JsonValue) -> String {
     let mut hasher = Sha256::new();
     hasher.update(serialized.as_bytes());
     let result = hasher.finalize();
-    format!("sha256:{:x}", result)
+    format!(
+        "sha256:{}",
+        result
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
 }

@@ -1,6 +1,6 @@
 //! Webhook security helpers for HMAC verification and validation
 
-use hmac::{Hmac, Mac};
+use hmac::{digest::KeyInit, Hmac, Mac};
 use sha1::Sha1;
 use sha2::{Sha256, Sha512};
 

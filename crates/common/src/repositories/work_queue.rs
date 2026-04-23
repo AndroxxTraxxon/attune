@@ -1214,9 +1214,10 @@ impl WorkQueueItemRepository {
                 LIMIT 1
                 FOR UPDATE SKIP LOCKED
             ),
-            extra_candidates AS (
+            extra_candidates_locked AS (
                 SELECT item.id,
-                       ROW_NUMBER() OVER (ORDER BY item.priority DESC, item.created ASC, item.id ASC) AS sort_order
+                       item.priority,
+                       item.created
                 FROM work_queue_item AS item
                 CROSS JOIN anchor
                 WHERE item.queue = $1
@@ -1234,6 +1235,11 @@ impl WorkQueueItemRepository {
                 ORDER BY item.priority DESC, item.created ASC, item.id ASC
                 LIMIT GREATEST($3 - 1, 0)
                 FOR UPDATE SKIP LOCKED
+            ),
+            extra_candidates AS (
+                SELECT id,
+                       ROW_NUMBER() OVER (ORDER BY priority DESC, created ASC, id ASC) AS sort_order
+                FROM extra_candidates_locked
             ),
             candidate AS (
                 SELECT id, 0 AS sort_order
