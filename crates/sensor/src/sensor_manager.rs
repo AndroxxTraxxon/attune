@@ -16,13 +16,14 @@ use attune_common::repositories::{FindById, List, RuntimeRepository};
 
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
+use std::io;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
-use tokio::time::{interval, Duration};
+use tokio::time::{interval, timeout, Duration};
 use tracing::{debug, error, info, warn};
 
 use crate::api_client::ApiClient;
@@ -55,6 +56,83 @@ fn apply_runtime_env_vars(
         let resolved = env_var_config.resolve(&vars, existing_command_env(cmd, key).as_deref());
         debug!("Setting sensor runtime env var: {}={}", key, resolved);
         cmd.env(key, resolved);
+    }
+}
+
+fn configure_sensor_process(cmd: &mut Command) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        // Run each sensor in its own process group so shutdown can terminate
+        // the interpreter wrapper and any children it spawned.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setpgid(0, 0) == -1 {
+                    Err(io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn signal_process_group_or_process(pid: u32, signal: i32) {
+    #[cfg(unix)]
+    {
+        let pgid = -(pid as i32);
+        let rc = unsafe { libc::kill(pgid, signal) };
+        if rc == 0 {
+            return;
+        }
+
+        let err = io::Error::last_os_error();
+        warn!(
+            "Failed to signal sensor process group {} with signal {}: {}. Falling back to PID {}",
+            pid, signal, err, pid
+        );
+    }
+
+    unsafe {
+        libc::kill(pid as i32, signal);
+    }
+}
+
+async fn terminate_sensor_child(child: &mut Child, sensor_label: &str) {
+    let Some(pid) = child.id() else {
+        if let Err(e) = child.start_kill() {
+            error!("Failed to kill sensor process {}: {}", sensor_label, e);
+            return;
+        }
+        if let Err(e) = child.wait().await {
+            error!("Failed to reap sensor process {}: {}", sensor_label, e);
+        }
+        return;
+    };
+
+    info!(
+        "Sending SIGTERM to sensor {} process group {}",
+        sensor_label, pid
+    );
+    signal_process_group_or_process(pid, libc::SIGTERM);
+
+    match timeout(Duration::from_secs(5), child.wait()).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => error!("Failed waiting for sensor process {}: {}", sensor_label, e),
+        Err(_) => {
+            warn!(
+                "Sensor {} did not exit after SIGTERM + 5s, sending SIGKILL",
+                sensor_label
+            );
+            signal_process_group_or_process(pid, libc::SIGKILL);
+            if let Err(e) = child.wait().await {
+                error!(
+                    "Failed to reap sensor process {} after SIGKILL: {}",
+                    sensor_label, e
+                );
+            }
+        }
     }
 }
 
@@ -541,6 +619,8 @@ impl SensorManager {
             .env("ATTUNE_LOG_LEVEL", "info");
 
         apply_runtime_env_vars(&mut cmd, &exec_config, &pack_dir, env_dir_opt);
+        configure_sensor_process(&mut cmd)
+            .map_err(|e| anyhow!("Failed to configure sensor process: {}", e))?;
 
         let mut child = cmd
             .stdin(Stdio::null())
@@ -598,6 +678,7 @@ impl SensorManager {
         });
 
         Ok(SensorInstance::new_standalone(
+            sensor.r#ref.clone(),
             child,
             stdout_handle,
             stderr_handle,
@@ -888,6 +969,7 @@ impl SensorManager {
 
 /// Sensor instance managing a running sensor
 struct SensorInstance {
+    sensor_ref: String,
     status: Arc<RwLock<SensorStatus>>,
     child_process: Option<Child>,
     stderr_handle: Option<JoinHandle<()>>,
@@ -897,11 +979,13 @@ struct SensorInstance {
 impl SensorInstance {
     /// Create a new standalone sensor instance
     fn new_standalone(
+        sensor_ref: String,
         child_process: Child,
         stdout_handle: JoinHandle<()>,
         stderr_handle: JoinHandle<()>,
     ) -> Self {
         Self {
+            sensor_ref,
             status: Arc::new(RwLock::new(SensorStatus {
                 running: true,
                 failed: false,
@@ -923,9 +1007,7 @@ impl SensorInstance {
 
         // Kill child process if exists
         if let Some(ref mut child) = self.child_process {
-            if let Err(e) = child.start_kill() {
-                error!("Failed to kill sensor process: {}", e);
-            }
+            terminate_sensor_child(child, &self.sensor_ref).await;
         }
 
         // Abort task handles
@@ -967,6 +1049,8 @@ mod tests {
         RuntimeEnvVarConfig, RuntimeEnvVarOperation, RuntimeEnvVarSpec,
     };
     use std::collections::HashMap;
+    use tempfile::NamedTempFile;
+    use tokio::fs;
 
     #[test]
     fn test_sensor_status_default() {
@@ -1017,5 +1101,54 @@ mod tests {
             .expect("PYTHONPATH should be set");
 
         assert_eq!(resolved, "/packs/testpack/lib:/existing/pythonpath");
+    }
+
+    #[tokio::test]
+    async fn test_sensor_instance_stop_reaps_child_process() {
+        let script = NamedTempFile::new().unwrap();
+        fs::write(script.path(), "#!/bin/sh\ntrap '' TERM\nsleep 30 &\nwait\n")
+            .await
+            .unwrap();
+
+        let mut perms = fs::metadata(script.path()).await.unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            perms.set_mode(0o755);
+        }
+        fs::set_permissions(script.path(), perms).await.unwrap();
+
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg(script.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        configure_sensor_process(&mut cmd).unwrap();
+
+        let mut child = cmd.spawn().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let stdout_handle = tokio::spawn(async move {
+            let mut reader = BufReader::new(stdout).lines();
+            while let Ok(Some(_)) = reader.next_line().await {}
+        });
+        let stderr_handle = tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr).lines();
+            while let Ok(Some(_)) = reader.next_line().await {}
+        });
+
+        let mut instance = SensorInstance::new_standalone(
+            "test.sensor".to_string(),
+            child,
+            stdout_handle,
+            stderr_handle,
+        );
+        instance.stop().await;
+
+        let status = instance.child_process.as_mut().unwrap().try_wait().unwrap();
+        assert!(
+            status.is_some(),
+            "child process should be reaped after stop()"
+        );
     }
 }
