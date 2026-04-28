@@ -149,10 +149,11 @@ esac
 1. **echo.sh** - Outputs a message (reference implementation)
 2. **sleep.sh** - Pauses execution for a specified duration
 3. **noop.sh** - Does nothing (useful for testing and placeholder workflows)
+4. **run_agent_command.sh** - Launches an AI/agent harness with execution-scoped `attune-mcp` access
 
 ### HTTP Action
 
-4. **http_request.sh** - Makes HTTP requests with full feature support:
+5. **http_request.sh** - Makes HTTP requests with full feature support:
    - Multiple HTTP methods (GET, POST, PUT, PATCH, DELETE, etc.)
    - Custom headers and query parameters
    - Authentication (basic, bearer token)
@@ -164,10 +165,10 @@ esac
 
 These actions wrap Attune API endpoints for pack management:
 
-5. **download_packs.sh** - Downloads packs from git/HTTP/registry
-6. **build_pack_envs.sh** - Builds runtime environments for packs
-7. **register_packs.sh** - Registers packs in the database
-8. **get_pack_dependencies.sh** - Analyzes pack dependencies
+6. **download_packs.sh** - Downloads packs from git/HTTP/registry
+7. **build_pack_envs.sh** - Builds runtime environments for packs
+8. **register_packs.sh** - Registers packs in the database
+9. **get_pack_dependencies.sh** - Analyzes pack dependencies
 
 All API wrappers:
 - Accept parameters via DOTENV format
@@ -175,6 +176,18 @@ All API wrappers:
 - Make authenticated API calls with curl
 - Extract response data using simple sed patterns
 - Return structured JSON output
+
+### Agent Harness Actions
+
+`run_agent_command.sh` is the reference bridge for AI-agent actions that need Attune MCP access from inside a workflow execution.
+
+It:
+- requires the worker-provided `ATTUNE_API_TOKEN` execution token
+- exports `ATTUNE_MCP_COMMAND` (default `/opt/attune/agent/attune-mcp`)
+- exports `ATTUNE_MCP_TRANSPORT=stdio`
+- optionally creates `ATTUNE_AGENT_STATE_DIR` under the shared artifacts volume
+
+This lets an agent harness spawn `attune-mcp` as a child process and ensure all tool calls run under the current execution identity rather than a shared service token.
 
 ## Testing Actions Locally
 

@@ -1,0 +1,64 @@
+ARG RUST_VERSION=1.92
+ARG DEBIAN_VERSION=bookworm
+
+FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+ENV RUST_MIN_STACK=67108864
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates/common/Cargo.toml ./crates/common/Cargo.toml
+COPY crates/cli/Cargo.toml ./crates/cli/Cargo.toml
+
+RUN mkdir -p crates/common/src && echo "" > crates/common/src/lib.rs && \
+    mkdir -p crates/cli/src/bin && echo "" > crates/cli/src/lib.rs && \
+    echo "fn main(){}" > crates/cli/src/main.rs && \
+    echo "fn main(){}" > crates/cli/src/bin/attune-mcp.rs
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
+    cargo fetch
+
+COPY crates/common/ ./crates/common/
+COPY crates/cli/ ./crates/cli/
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
+    --mount=type=cache,target=/build/target,sharing=locked \
+    cargo build --release --bin attune-mcp -j 4
+
+FROM debian:${DEBIAN_VERSION}-slim AS runtime
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 attune && \
+    mkdir -p /opt/attune && \
+    chown -R attune:attune /opt/attune
+
+WORKDIR /opt/attune
+
+COPY --from=builder /build/target/release/attune-mcp /usr/local/bin/attune-mcp
+
+USER attune
+
+ENV RUST_LOG=info
+ENV ATTUNE_MCP_TRANSPORT=http
+ENV ATTUNE_MCP_LISTEN_ADDR=0.0.0.0:8090
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8090/health || exit 1
+
+EXPOSE 8090
+
+CMD ["/usr/local/bin/attune-mcp"]

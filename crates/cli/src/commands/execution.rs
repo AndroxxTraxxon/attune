@@ -127,6 +127,37 @@ pub enum ExecutionCommands {
         #[arg(short = 'f', long, value_enum, default_value = "json")]
         format: ResultFormat,
     },
+    /// Re-run an existing execution with the same (or edited) parameters
+    Rerun {
+        /// Execution ID to clone
+        execution_id: i64,
+
+        /// Interactively edit parameters before submitting
+        #[arg(short, long)]
+        interactive: bool,
+
+        /// Override a single parameter (key=value, JSON or string).
+        /// Repeat for multiple values. Applied on top of the original config.
+        #[arg(long)]
+        param: Vec<String>,
+
+        /// Replace parameters entirely with this JSON object
+        #[arg(long, conflicts_with_all = ["param", "interactive"])]
+        params_json: Option<String>,
+
+        /// Watch the new execution until it completes
+        #[arg(short, long)]
+        watch: bool,
+
+        /// Timeout in seconds when watching (default: 300)
+        #[arg(long, default_value = "300", requires = "watch")]
+        timeout: u64,
+
+        /// Notifier WebSocket base URL (e.g. ws://localhost:8081).
+        /// Derived from --api-url automatically when not set.
+        #[arg(long, requires = "watch")]
+        notifier_url: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -340,6 +371,29 @@ pub async fn handle_execution_command(
             execution_id,
             format,
         } => handle_result(profile, execution_id, format, api_url).await,
+        ExecutionCommands::Rerun {
+            execution_id,
+            interactive,
+            param,
+            params_json,
+            watch,
+            timeout,
+            notifier_url,
+        } => {
+            handle_rerun(
+                profile,
+                execution_id,
+                interactive,
+                param,
+                params_json,
+                watch,
+                timeout,
+                notifier_url,
+                api_url,
+                output_format,
+            )
+            .await
+        }
     }
 }
 
@@ -485,6 +539,211 @@ async fn handle_watch_execution(
     ));
     let summary = wait_for_execution(WaitOptions {
         execution_id,
+        timeout_secs: timeout,
+        api_client: &mut client,
+        notifier_ws_url: notifier_url,
+        verbose: debug_wait,
+    })
+    .await?;
+    let (delivered_output, root_stdout_completed) = match watch_task {
+        Some(task) => task.join().await,
+        None => (false, false),
+    };
+    let suppress_final_stdout = delivered_output && root_stdout_completed;
+
+    render_watched_execution_summary(summary, output_format, suppress_final_stdout)
+}
+
+#[derive(Debug, Serialize)]
+struct ExecuteActionRequest {
+    action_ref: String,
+    parameters: serde_json::Value,
+}
+
+fn parse_param_overrides(params: &[String]) -> Result<Vec<(String, serde_json::Value)>> {
+    let mut overrides = Vec::with_capacity(params.len());
+    for p in params {
+        let parts: Vec<&str> = p.splitn(2, '=').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("Invalid parameter format: '{}'. Expected key=value", p);
+        }
+        let value: serde_json::Value = serde_json::from_str(parts[1])
+            .unwrap_or_else(|_| serde_json::Value::String(parts[1].to_string()));
+        overrides.push((parts[0].to_string(), value));
+    }
+    Ok(overrides)
+}
+
+/// Prompt the user to edit each existing parameter; allow skipping (keep
+/// original) or removing (empty + confirm). Also offers to add new keys.
+fn interactively_edit_parameters(
+    initial: &serde_json::Map<String, serde_json::Value>,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
+    use std::io::IsTerminal;
+
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!("--interactive requires a TTY");
+    }
+
+    output::print_info(
+        "Edit parameters (press Enter to keep current value; values are parsed as JSON when possible):",
+    );
+    let mut result = serde_json::Map::new();
+    for (key, value) in initial {
+        let current = serde_json::to_string(value).unwrap_or_else(|_| value.to_string());
+        let input: String = dialoguer::Input::new()
+            .with_prompt(format!("  {}", key))
+            .default(current.clone())
+            .allow_empty(true)
+            .interact_text()?;
+
+        let new_value = if input.is_empty() {
+            value.clone()
+        } else {
+            serde_json::from_str::<serde_json::Value>(&input)
+                .unwrap_or_else(|_| serde_json::Value::String(input))
+        };
+        result.insert(key.clone(), new_value);
+    }
+
+    loop {
+        let add_more = dialoguer::Confirm::new()
+            .with_prompt("Add another parameter?")
+            .default(false)
+            .interact()?;
+        if !add_more {
+            break;
+        }
+        let key: String = dialoguer::Input::new()
+            .with_prompt("  key")
+            .interact_text()?;
+        if key.trim().is_empty() {
+            continue;
+        }
+        let value_input: String = dialoguer::Input::new()
+            .with_prompt("  value (JSON or string)")
+            .allow_empty(true)
+            .interact_text()?;
+        let value = serde_json::from_str::<serde_json::Value>(&value_input)
+            .unwrap_or_else(|_| serde_json::Value::String(value_input));
+        result.insert(key, value);
+    }
+
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_rerun(
+    profile: &Option<String>,
+    execution_id: i64,
+    interactive: bool,
+    params: Vec<String>,
+    params_json: Option<String>,
+    watch: bool,
+    timeout: u64,
+    notifier_url: Option<String>,
+    api_url: &Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let config = CliConfig::load_with_profile(profile.as_deref())?;
+    let mut client = ApiClient::from_config(&config, api_url);
+
+    let original: ExecutionDetail = client
+        .get(&format!("/executions/{}", execution_id))
+        .await
+        .with_context(|| format!("Failed to fetch execution {}", execution_id))?;
+
+    if original.action_ref.is_empty() {
+        anyhow::bail!(
+            "Execution {} has no action_ref (may have been triggered by a deleted action)",
+            execution_id
+        );
+    }
+
+    let base_map = match original.config.clone() {
+        Some(serde_json::Value::Object(map)) => map,
+        Some(serde_json::Value::Null) | None => serde_json::Map::new(),
+        Some(other) => {
+            anyhow::bail!(
+                "Original execution config is not a JSON object (got {}); cannot rerun",
+                match other {
+                    serde_json::Value::Array(_) => "array",
+                    serde_json::Value::String(_) => "string",
+                    serde_json::Value::Number(_) => "number",
+                    serde_json::Value::Bool(_) => "bool",
+                    _ => "unknown",
+                }
+            );
+        }
+    };
+
+    let parameters: serde_json::Value = if let Some(json_str) = params_json {
+        serde_json::from_str(&json_str).context("Invalid --params-json")?
+    } else if interactive {
+        serde_json::Value::Object(interactively_edit_parameters(&base_map)?)
+    } else {
+        let mut map = base_map;
+        for (k, v) in parse_param_overrides(&params)? {
+            map.insert(k, v);
+        }
+        serde_json::Value::Object(map)
+    };
+
+    if output_format == OutputFormat::Table {
+        output::print_info(&format!(
+            "Rerunning execution {} (action: {})",
+            execution_id, original.action_ref
+        ));
+    }
+
+    let request = ExecuteActionRequest {
+        action_ref: original.action_ref.clone(),
+        parameters,
+    };
+
+    let new_execution: ExecutionDetail = client.post("/executions/execute", &request).await?;
+
+    if !watch {
+        match output_format {
+            OutputFormat::Json | OutputFormat::Yaml => {
+                output::print_output(&new_execution, output_format)?;
+            }
+            OutputFormat::Table => {
+                output::print_success(&format!(
+                    "Execution {} started (rerun of {})",
+                    new_execution.id, execution_id
+                ));
+                output::print_key_value_table(vec![
+                    ("Execution ID", new_execution.id.to_string()),
+                    ("Action", new_execution.action_ref.clone()),
+                    ("Status", output::format_status(&new_execution.status)),
+                    ("Rerun of", execution_id.to_string()),
+                ]);
+            }
+        }
+        return Ok(());
+    }
+
+    if output_format == OutputFormat::Table {
+        output::print_info(&format!(
+            "Waiting for execution {} to complete...",
+            new_execution.id
+        ));
+    }
+
+    let interactive_wait = true;
+    let stream_live_logs = true;
+    let debug_wait = false;
+    let watch_task = Some(spawn_execution_output_watch(
+        ApiClient::from_config(&config, api_url),
+        new_execution.id,
+        notifier_url.clone(),
+        interactive_wait,
+        stream_live_logs,
+        debug_wait,
+    ));
+    let summary = wait_for_execution(WaitOptions {
+        execution_id: new_execution.id,
         timeout_secs: timeout,
         api_client: &mut client,
         notifier_ws_url: notifier_url,

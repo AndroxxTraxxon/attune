@@ -344,3 +344,96 @@ spec:
             periodSeconds: 15
           resources:
             {{- toYaml .Values.web.resources | nindent 12 }}
+{{- if .Values.mcp.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "attune.mcpServiceName" . }}
+  labels:
+    {{- include "attune.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.mcp.service.type }}
+  selector:
+    {{- include "attune.componentLabels" (dict "root" . "component" "mcp") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.mcp.service.port }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "attune.mcpServiceName" . }}
+  labels:
+    {{- include "attune.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.mcp.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "attune.componentLabels" (dict "root" . "component" "mcp") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "attune.componentLabels" (dict "root" . "component" "mcp") | nindent 8 }}
+    spec:
+      {{- if .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.global.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-api
+          image: busybox:1.36
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              until wget -qO- "http://{{ include "attune.apiServiceName" . }}:{{ .Values.api.service.port }}/health" >/dev/null; do
+                echo "waiting for api";
+                sleep 2;
+              done
+      containers:
+        - name: mcp
+          image: {{ include "attune.image" (dict "root" . "image" .Values.images.mcp) }}
+          imagePullPolicy: {{ .Values.images.mcp.pullPolicy }}
+          env:
+            - name: ATTUNE_API_URL
+              value: http://{{ include "attune.apiServiceName" . }}:{{ .Values.api.service.port }}
+            - name: ATTUNE_MCP_TRANSPORT
+              value: http
+            - name: ATTUNE_MCP_LISTEN_ADDR
+              value: 0.0.0.0:{{ .Values.mcp.service.port }}
+            {{- if .Values.mcp.auth.useBootstrapTestUser }}
+            - name: ATTUNE_LOGIN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "attune.secretName" . }}
+                  key: TEST_LOGIN
+            - name: ATTUNE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "attune.secretName" . }}
+                  key: TEST_PASSWORD
+            {{- else }}
+            - name: ATTUNE_LOGIN
+              value: {{ .Values.mcp.auth.login | quote }}
+            - name: ATTUNE_PASSWORD
+              value: {{ .Values.mcp.auth.password | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.mcp.service.port }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.mcp.resources | nindent 12 }}
+{{- end }}

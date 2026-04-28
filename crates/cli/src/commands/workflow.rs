@@ -338,7 +338,6 @@ async fn handle_upload(
                 response.workflow_ref
             ));
             output::print_key_value_table(vec![
-                ("ID", response.id.to_string()),
                 ("Reference", response.workflow_ref.clone()),
                 ("Pack", response.pack_ref.clone()),
                 ("Label", response.label.clone()),
@@ -401,12 +400,11 @@ async fn handle_list(
                 let mut table = output::create_table();
                 output::add_header(
                     &mut table,
-                    vec!["ID", "Reference", "Pack", "Label", "Version", "Tags"],
+                    vec!["Reference", "Pack", "Label", "Version", "Tags"],
                 );
 
                 for wf in &workflows {
                     table.add_row(vec![
-                        wf.id.to_string(),
                         wf.workflow_ref.clone(),
                         wf.pack_ref.clone(),
                         output::truncate(&wf.label, 30),
@@ -449,10 +447,8 @@ async fn handle_show(
         OutputFormat::Table => {
             output::print_section(&format!("Workflow: {}", workflow.workflow_ref));
             output::print_key_value_table(vec![
-                ("ID", workflow.id.to_string()),
                 ("Reference", workflow.workflow_ref.clone()),
                 ("Pack", workflow.pack_ref.clone()),
-                ("Pack ID", workflow.pack.to_string()),
                 ("Label", workflow.label.clone()),
                 (
                     "Description",

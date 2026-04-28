@@ -349,6 +349,7 @@ mod tests {
             entrypoint: "test.sh".to_string(),
             runtime: Some(1),
             runtime_version_constraint: None,
+            required_worker_runtimes: serde_json::json!({}),
             param_schema: schema,
             out_schema: None,
             workflow_def: None,

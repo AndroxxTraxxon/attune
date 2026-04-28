@@ -515,6 +515,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "attune-common",
+ "axum",
  "chrono",
  "clap",
  "colored",
@@ -544,6 +545,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "urlencoding",
+ "webpki-root-certs",
  "wiremock",
 ]
 

@@ -32,6 +32,20 @@ const NOTIFICATION_META_FIELDS = [
   "action_id",
 ] as const;
 
+/**
+ * Statuses for which the execution has reached a terminal state and the
+ * server-side `result` is now final. The NOTIFY payload does not include
+ * `result` (it's potentially large JSONB), so we must refetch the execution
+ * detail to display it.
+ */
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "timeout",
+  "abandoned",
+]);
+
 /** Shape of data coming from WebSocket notifications for executions */
 interface ExecutionNotification {
   entity_id: number;
@@ -225,6 +239,21 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
         queryKey: ["history", "execution", executionNotification.entity_id],
         exact: false,
       });
+
+      // The NOTIFY payload omits `result` (large JSONB). When the execution
+      // transitions into a terminal status, refetch the detail query so the
+      // UI can promptly display the final result/output.
+      const newStatus = executionData.status;
+      const becameTerminal =
+        typeof newStatus === "string" &&
+        TERMINAL_STATUSES.has(newStatus) &&
+        oldStatus !== newStatus;
+      if (becameTerminal) {
+        queryClient.invalidateQueries({
+          queryKey: ["executions", executionNotification.entity_id],
+          exact: true,
+        });
+      }
 
       // Update execution list queries by modifying existing data.
       // We need to iterate manually to access query keys for filtering.

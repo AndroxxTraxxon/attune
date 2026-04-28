@@ -7,6 +7,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use serde_json::json;
 use std::sync::Arc;
 use validator::Validate;
 
@@ -15,6 +16,7 @@ use attune_common::repositories::{
     action::{ActionRepository, ActionSearchFilters, CreateActionInput, UpdateActionInput},
     pack::PackRepository,
     queue_stats::QueueStatsRepository,
+    runtime::RuntimeRepository,
     Create, Delete, FindByRef, Patch, Update,
 };
 
@@ -59,8 +61,19 @@ pub async fn list_actions(
 
     let result = ActionRepository::list_search(&state.db, &filters).await?;
 
-    let paginated_actions: Vec<ActionSummary> =
-        result.rows.into_iter().map(ActionSummary::from).collect();
+    let runtime_refs =
+        fetch_runtime_refs(&state, result.rows.iter().filter_map(|a| a.runtime)).await?;
+    let paginated_actions: Vec<ActionSummary> = result
+        .rows
+        .into_iter()
+        .map(|a| {
+            let mut summary = ActionSummary::from(a);
+            summary.runtime_ref = summary
+                .runtime
+                .and_then(|id| runtime_refs.get(&id).cloned());
+            summary
+        })
+        .collect();
 
     let response = PaginatedResponse::new(paginated_actions, &pagination, result.total);
 
@@ -103,8 +116,19 @@ pub async fn list_actions_by_pack(
 
     let result = ActionRepository::list_search(&state.db, &filters).await?;
 
-    let paginated_actions: Vec<ActionSummary> =
-        result.rows.into_iter().map(ActionSummary::from).collect();
+    let runtime_refs =
+        fetch_runtime_refs(&state, result.rows.iter().filter_map(|a| a.runtime)).await?;
+    let paginated_actions: Vec<ActionSummary> = result
+        .rows
+        .into_iter()
+        .map(|a| {
+            let mut summary = ActionSummary::from(a);
+            summary.runtime_ref = summary
+                .runtime
+                .and_then(|id| runtime_refs.get(&id).cloned());
+            summary
+        })
+        .collect();
 
     let response = PaginatedResponse::new(paginated_actions, &pagination, result.total);
 
@@ -134,7 +158,9 @@ pub async fn get_action(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Action '{}' not found", action_ref)))?;
 
-    let response = ApiResponse::new(ActionResponse::from(action));
+    let mut response_body = ActionResponse::from(action);
+    response_body.runtime_ref = resolve_runtime_ref(&state, response_body.runtime).await?;
+    let response = ApiResponse::new(response_body);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -210,6 +236,7 @@ pub async fn create_action(
         entrypoint: request.entrypoint,
         runtime: request.runtime,
         runtime_version_constraint: request.runtime_version_constraint,
+        required_worker_runtimes: json!(request.required_worker_runtimes),
         param_schema: request.param_schema,
         out_schema: request.out_schema,
         is_adhoc: true, // Actions created via API are ad-hoc (not from pack installation)
@@ -217,8 +244,9 @@ pub async fn create_action(
 
     let action = ActionRepository::create(&state.db, action_input).await?;
 
-    let response =
-        ApiResponse::with_message(ActionResponse::from(action), "Action created successfully");
+    let mut response_body = ActionResponse::from(action);
+    response_body.runtime_ref = resolve_runtime_ref(&state, response_body.runtime).await?;
+    let response = ApiResponse::with_message(response_body, "Action created successfully");
 
     Ok((StatusCode::CREATED, Json(response)))
 }
@@ -284,6 +312,9 @@ pub async fn update_action(
             RuntimeVersionConstraintPatch::Set(value) => Patch::Set(value),
             RuntimeVersionConstraintPatch::Clear => Patch::Clear,
         }),
+        required_worker_runtimes: request
+            .required_worker_runtimes
+            .map(|runtimes| json!(runtimes)),
         param_schema: request.param_schema,
         out_schema: request.out_schema,
         parameter_delivery: None,
@@ -293,8 +324,9 @@ pub async fn update_action(
 
     let action = ActionRepository::update(&state.db, existing_action.id, update_input).await?;
 
-    let response =
-        ApiResponse::with_message(ActionResponse::from(action), "Action updated successfully");
+    let mut response_body = ActionResponse::from(action);
+    response_body.runtime_ref = resolve_runtime_ref(&state, response_body.runtime).await?;
+    let response = ApiResponse::with_message(response_body, "Action updated successfully");
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -412,6 +444,33 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route("/actions/{ref}/queue-stats", get(get_queue_stats))
         .route("/packs/{pack_ref}/actions", get(list_actions_by_pack))
+}
+
+/// Bulk-resolve runtime IDs to refs.
+async fn fetch_runtime_refs(
+    state: &Arc<AppState>,
+    ids: impl IntoIterator<Item = i64>,
+) -> ApiResult<std::collections::HashMap<i64, String>> {
+    let unique: Vec<i64> = {
+        let mut set = std::collections::HashSet::new();
+        ids.into_iter().filter(|id| set.insert(*id)).collect()
+    };
+    if unique.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    Ok(RuntimeRepository::find_refs_by_ids(&state.db, &unique).await?)
+}
+
+/// Resolve a single runtime ID to its ref.
+async fn resolve_runtime_ref(
+    state: &Arc<AppState>,
+    runtime_id: Option<i64>,
+) -> ApiResult<Option<String>> {
+    let Some(id) = runtime_id else {
+        return Ok(None);
+    };
+    let refs = RuntimeRepository::find_refs_by_ids(&state.db, &[id]).await?;
+    Ok(refs.get(&id).cloned())
 }
 
 #[cfg(test)]

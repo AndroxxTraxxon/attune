@@ -470,6 +470,51 @@ function PackDetail({ packRef }: { packRef: string }) {
               ))}
             </div>
           </div>
+
+          {/* Dependencies */}
+          <div className="bg-white shadow rounded-lg p-6">
+            <h2 className="text-lg font-semibold mb-4">Dependencies</h2>
+            <div className="space-y-4">
+              <div>
+                <dt className="text-sm font-medium text-gray-500 mb-2">
+                  Runtime Dependencies
+                </dt>
+                {pack.data?.runtime_deps && pack.data.runtime_deps.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {pack.data.runtime_deps.map((dep) => (
+                      <span
+                        key={dep}
+                        className="inline-flex items-center rounded bg-blue-50 px-2 py-0.5 text-xs font-mono text-blue-700 border border-blue-200"
+                      >
+                        {dep}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400 italic">None declared</p>
+                )}
+              </div>
+              <div>
+                <dt className="text-sm font-medium text-gray-500 mb-2">
+                  Pack Dependencies
+                </dt>
+                {pack.data?.dependencies && pack.data.dependencies.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {pack.data.dependencies.map((dep) => (
+                      <span
+                        key={dep}
+                        className="inline-flex items-center rounded bg-purple-50 px-2 py-0.5 text-xs font-mono text-purple-700 border border-purple-200"
+                      >
+                        {dep}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400 italic">None declared</p>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

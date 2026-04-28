@@ -111,3 +111,7 @@ app.kubernetes.io/component: {{ .component }}
 {{- define "attune.notifierServiceName" -}}
 {{- printf "%s-notifier" (include "attune.fullname" .) -}}
 {{- end -}}
+
+{{- define "attune.mcpServiceName" -}}
+{{- printf "%s-mcp" (include "attune.fullname" .) -}}
+{{- end -}}

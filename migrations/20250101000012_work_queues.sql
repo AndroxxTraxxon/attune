@@ -275,15 +275,12 @@ BEGIN
         'pack_ref', NEW.pack_ref,
         'is_adhoc', NEW.is_adhoc,
         'label', NEW.label,
-        'description', NEW.description,
         'enabled', NEW.enabled,
         'dispatch_action_ref', NEW.dispatch_action_ref,
         'default_priority', NEW.default_priority,
         'allow_pending_update', NEW.allow_pending_update,
         'update_strategy', NEW.update_strategy,
         'batch_mode', NEW.batch_mode,
-        'item_schema', NEW.item_schema,
-        'action_params', NEW.action_params,
         'created', NEW.created,
         'updated', NEW.updated
     );
@@ -308,15 +305,12 @@ BEGIN
             'pack_ref', NEW.pack_ref,
             'is_adhoc', NEW.is_adhoc,
             'label', NEW.label,
-            'description', NEW.description,
             'enabled', NEW.enabled,
             'dispatch_action_ref', NEW.dispatch_action_ref,
             'default_priority', NEW.default_priority,
             'allow_pending_update', NEW.allow_pending_update,
             'update_strategy', NEW.update_strategy,
             'batch_mode', NEW.batch_mode,
-            'item_schema', NEW.item_schema,
-            'action_params', NEW.action_params,
             'created', NEW.created,
             'updated', NEW.updated
         );
@@ -364,11 +358,8 @@ BEGIN
         'requested_by_execution', NEW.requested_by_execution,
         'requested_by_enforcement', NEW.requested_by_enforcement,
         'leased_execution', NEW.leased_execution,
-        'lease_token', NEW.lease_token,
         'lease_expires_at', NEW.lease_expires_at,
         'attempt_count', NEW.attempt_count,
-        'last_error', NEW.last_error,
-        'ack_summary', NEW.ack_summary,
         'created', NEW.created,
         'updated', NEW.updated
     );
@@ -400,11 +391,8 @@ BEGIN
             'requested_by_execution', NEW.requested_by_execution,
             'requested_by_enforcement', NEW.requested_by_enforcement,
             'leased_execution', NEW.leased_execution,
-            'lease_token', NEW.lease_token,
             'lease_expires_at', NEW.lease_expires_at,
             'attempt_count', NEW.attempt_count,
-            'last_error', NEW.last_error,
-            'ack_summary', NEW.ack_summary,
             'created', NEW.created,
             'updated', NEW.updated
         );

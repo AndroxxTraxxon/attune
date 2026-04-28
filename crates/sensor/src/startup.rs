@@ -1,5 +1,6 @@
 use crate::service::SensorService;
 use anyhow::Result;
+use attune_common::agent_runtime_detection::DetectedRuntime;
 use attune_common::config::{Config, SensorConfig};
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info};
@@ -47,8 +48,15 @@ pub fn log_config_details(config: &Config) {
     }
 }
 
-pub async fn run_sensor_service(config: Config, ready_message: &str) -> Result<()> {
-    let service = SensorService::new(config).await?;
+pub async fn run_sensor_service(
+    config: Config,
+    detected_runtimes: Option<Vec<DetectedRuntime>>,
+    ready_message: &str,
+) -> Result<()> {
+    let mut service = SensorService::new(config).await?;
+    if let Some(detected) = detected_runtimes {
+        service = service.with_detected_runtimes(detected).await;
+    }
 
     info!("Sensor Service initialized successfully");
     info!("Starting Sensor Service components...");

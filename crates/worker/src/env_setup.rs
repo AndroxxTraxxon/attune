@@ -337,7 +337,7 @@ async fn setup_environments_for_pack(
         }
     };
 
-    let runtime_requirements = collect_runtime_requirements(&actions);
+    let runtime_requirements = collect_runtime_requirements(db_pool, &actions).await;
     let seen_runtime_ids: HashSet<i64> = runtime_requirements.keys().copied().collect();
     let env_manager =
         PackEnvironmentManager::with_base_path(db_pool.clone(), runtime_envs_dir.to_path_buf());
@@ -940,40 +940,102 @@ fn filter_versions_for_worker(
         .collect()
 }
 
-fn collect_runtime_requirements(
+async fn collect_runtime_requirements(
+    db_pool: &PgPool,
     actions: &[attune_common::models::action::Action],
 ) -> HashMap<i64, RuntimeRequirementProfile> {
     let mut requirements = HashMap::new();
 
     for action in actions {
-        let Some(runtime_id) = action.runtime else {
-            continue;
-        };
+        if let Some(runtime_id) = action.runtime {
+            let profile = requirements
+                .entry(runtime_id)
+                .or_insert_with(RuntimeRequirementProfile::default);
 
-        let profile = requirements
-            .entry(runtime_id)
-            .or_insert_with(RuntimeRequirementProfile::default);
+            match action
+                .runtime_version_constraint
+                .as_deref()
+                .map(str::trim)
+                .filter(|constraint| !constraint.is_empty())
+            {
+                Some(constraint) => {
+                    if !profile
+                        .constraints
+                        .iter()
+                        .any(|existing| existing == constraint)
+                    {
+                        profile.constraints.push(constraint.to_string());
+                    }
+                }
+                None => profile.any_version = true,
+            }
+        }
 
-        match action
-            .runtime_version_constraint
-            .as_deref()
-            .map(str::trim)
-            .filter(|constraint| !constraint.is_empty())
-        {
-            Some(constraint) => {
-                if !profile
+        for (required_runtime, constraint) in action.required_worker_runtime_constraints() {
+            if let Some(runtime_id) = resolve_required_runtime_id(db_pool, &required_runtime).await
+            {
+                let profile = requirements
+                    .entry(runtime_id)
+                    .or_insert_with(RuntimeRequirementProfile::default);
+                if constraint.trim() == "*" {
+                    profile.any_version = true;
+                } else if !profile
                     .constraints
                     .iter()
-                    .any(|existing| existing == constraint)
+                    .any(|existing| existing == &constraint)
                 {
-                    profile.constraints.push(constraint.to_string());
+                    profile.constraints.push(constraint);
                 }
+            } else {
+                warn!(
+                    "Failed to resolve required worker runtime '{}' while collecting versioned pack environment requirements",
+                    required_runtime
+                );
             }
-            None => profile.any_version = true,
         }
     }
 
     requirements
+}
+
+async fn resolve_required_runtime_id(db_pool: &PgPool, requirement: &str) -> Option<i64> {
+    let normalized_requirement = normalize_runtime_name(requirement);
+
+    match RuntimeRepository::find_by_alias(db_pool, &normalized_requirement).await {
+        Ok(Some(runtime)) => return Some(runtime.id),
+        Ok(None) => {}
+        Err(e) => {
+            warn!(
+                "Failed to resolve required worker runtime '{}' by alias during env setup: {}",
+                requirement, e
+            );
+            return None;
+        }
+    }
+
+    match RuntimeRepository::find_by_name(db_pool, &normalized_requirement).await {
+        Ok(Some(runtime)) => return Some(runtime.id),
+        Ok(None) => {}
+        Err(e) => {
+            warn!(
+                "Failed to resolve required worker runtime '{}' by name during env setup: {}",
+                requirement, e
+            );
+            return None;
+        }
+    }
+
+    match RuntimeRepository::find_by_ref(db_pool, requirement).await {
+        Ok(Some(runtime)) => Some(runtime.id),
+        Ok(None) => None,
+        Err(e) => {
+            warn!(
+                "Failed to resolve required worker runtime '{}' by ref during env setup: {}",
+                requirement, e
+            );
+            None
+        }
+    }
 }
 
 fn version_qualifies_for_pack(

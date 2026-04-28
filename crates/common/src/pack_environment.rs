@@ -11,7 +11,8 @@ use crate::error::{Error, Result};
 use crate::models::{Runtime, RuntimeVersion};
 use crate::repositories::action::ActionRepository;
 use crate::repositories::runtime::{self, RuntimeRepository};
-use crate::repositories::FindById as _;
+use crate::repositories::{FindById as _, FindByRef as _};
+use crate::runtime_detection::normalize_runtime_name;
 use regex::Regex;
 use serde_json::Value as JsonValue;
 use sqlx::{postgres::PgRow, PgPool, Row, Type};
@@ -1212,6 +1213,50 @@ pub async fn collect_runtime_names_for_pack(
             }
             Err(e) => {
                 warn!("Failed to load runtime {}: {}", runtime_id, e);
+            }
+        }
+    }
+
+    for action in &actions {
+        for requirement in action.required_worker_runtime_constraints().into_keys() {
+            let normalized_requirement = normalize_runtime_name(&requirement);
+            let runtime = match RuntimeRepository::find_by_alias(db_pool, &normalized_requirement)
+                .await
+            {
+                Ok(Some(runtime)) => Some(runtime),
+                Ok(None) => {
+                    match RuntimeRepository::find_by_name(db_pool, &normalized_requirement).await {
+                        Ok(Some(runtime)) => Some(runtime),
+                        Ok(None) => RuntimeRepository::find_by_ref(db_pool, &requirement)
+                            .await
+                            .ok()
+                            .flatten(),
+                        Err(e) => {
+                            warn!(
+                                "Failed to resolve runtime requirement '{}' by name: {}",
+                                requirement, e
+                            );
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to resolve runtime requirement '{}' by alias: {}",
+                        requirement, e
+                    );
+                    None
+                }
+            };
+
+            if let Some(rt) = runtime {
+                let exec_config = rt.parsed_execution_config();
+                let runtime_name = rt.name.to_lowercase();
+                if (exec_config.environment.is_some() || exec_config.has_dependencies(pack_path))
+                    && !runtime_names.contains(&runtime_name)
+                {
+                    runtime_names.push(runtime_name);
+                }
             }
         }
     }

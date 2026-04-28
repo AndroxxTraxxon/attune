@@ -13,6 +13,7 @@ use crate::rule_lifecycle_listener::RuleLifecycleListener;
 use crate::sensor_manager::SensorManager;
 use crate::sensor_worker_registration::SensorWorkerRegistration;
 use anyhow::Result;
+use attune_common::agent_runtime_detection::DetectedRuntime;
 use attune_common::config::Config;
 use attune_common::db::Database;
 use attune_common::mq::MessageQueue;
@@ -38,6 +39,7 @@ struct SensorServiceInner {
     sensor_worker_registration: Arc<RwLock<SensorWorkerRegistration>>,
     heartbeat_interval: u64,
     heartbeat_running: Arc<RwLock<bool>>,
+    detected_runtimes: RwLock<Option<Vec<DetectedRuntime>>>,
 }
 
 impl SensorService {
@@ -140,8 +142,16 @@ impl SensorService {
                 sensor_worker_registration: Arc::new(RwLock::new(sensor_worker_registration)),
                 heartbeat_interval,
                 heartbeat_running: Arc::new(RwLock::new(false)),
+                detected_runtimes: RwLock::new(None),
             }),
         })
+    }
+
+    /// Pass agent-detected runtimes (with versions) to be stored in worker
+    /// capabilities at registration time. Used by `attune-sensor-agent`.
+    pub async fn with_detected_runtimes(self, runtimes: Vec<DetectedRuntime>) -> Self {
+        *self.inner.detected_runtimes.write().await = Some(runtimes);
+        self
     }
 
     /// Start the sensor service
@@ -153,6 +163,18 @@ impl SensorService {
 
         // Register sensor worker
         info!("Registering sensor worker...");
+        // If running as agent with auto-detected runtimes, push them into
+        // capabilities BEFORE registration so they survive into the DB.
+        let detected = self.inner.detected_runtimes.write().await.take();
+        if let Some(detected) = detected {
+            let mut reg = self.inner.sensor_worker_registration.write().await;
+            info!(
+                "Sensor agent mode: storing {} detected interpreter(s) in capabilities",
+                detected.len()
+            );
+            reg.set_detected_runtimes(detected);
+            reg.set_agent_mode(true);
+        }
         let worker_id = self
             .inner
             .sensor_worker_registration
@@ -161,6 +183,7 @@ impl SensorService {
             .register(&self.inner.config)
             .await?;
         info!("Sensor worker registered with ID: {}", worker_id);
+        self.inner.sensor_manager.set_worker_id(worker_id);
 
         // Start rule lifecycle listener
         info!("Starting rule lifecycle listener...");

@@ -2,7 +2,8 @@
 //!
 //! This module provides CRUD operations and queries for Action and Policy entities.
 
-use crate::models::{action::*, enums::PolicyMethod, Id, JsonSchema};
+use crate::models::{action::*, enums::PolicyMethod, Id, JsonDict, JsonSchema};
+use crate::version_matching::parse_constraint;
 use crate::{Error, Result};
 use sqlx::{Executor, Postgres, QueryBuilder};
 
@@ -10,7 +11,8 @@ use super::{Create, Delete, FindById, FindByRef, List, Patch, Repository, Update
 
 /// Columns selected in all Action queries. Must match the `Action` model's `FromRow` fields.
 pub const ACTION_COLUMNS: &str = "id, ref, pack, pack_ref, label, description, entrypoint, \
-    runtime, runtime_version_constraint, param_schema, out_schema, workflow_def, is_adhoc, \
+    runtime, runtime_version_constraint, required_worker_runtimes, \
+    param_schema, out_schema, workflow_def, is_adhoc, \
     parameter_delivery, parameter_format, output_format, created, updated";
 
 /// Filters for [`ActionRepository::list_search`].
@@ -36,6 +38,45 @@ pub struct ActionSearchResult {
 /// Repository for Action operations
 pub struct ActionRepository;
 
+fn validate_version_constraint(field_name: &str, constraint: &str) -> Result<()> {
+    parse_constraint(constraint).map_err(|e| {
+        Error::validation(format!("Invalid {} '{}': {}", field_name, constraint, e))
+    })?;
+    Ok(())
+}
+
+fn validate_required_worker_runtimes(required_worker_runtimes: &JsonDict) -> Result<()> {
+    let Some(runtime_versions) = required_worker_runtimes.as_object() else {
+        return Err(Error::validation(
+            "required_worker_runtimes must be a JSON object mapping runtime names to version constraints",
+        ));
+    };
+
+    for (runtime_name, constraint) in runtime_versions {
+        if runtime_name.trim().is_empty() {
+            return Err(Error::validation(
+                "required_worker_runtimes keys must be non-empty runtime names",
+            ));
+        }
+
+        let Some(constraint) = constraint.as_str() else {
+            return Err(Error::validation(format!(
+                "required_worker_runtimes['{}'] must be a string semver constraint or \"*\"",
+                runtime_name
+            )));
+        };
+
+        if constraint.trim() != "*" {
+            validate_version_constraint(
+                &format!("required_worker_runtimes['{}']", runtime_name),
+                constraint,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
 impl Repository for ActionRepository {
     type Entity = Action;
 
@@ -55,6 +96,7 @@ pub struct CreateActionInput {
     pub entrypoint: String,
     pub runtime: Option<Id>,
     pub runtime_version_constraint: Option<String>,
+    pub required_worker_runtimes: JsonDict,
     pub param_schema: Option<JsonSchema>,
     pub out_schema: Option<JsonSchema>,
     pub is_adhoc: bool,
@@ -68,6 +110,7 @@ pub struct UpdateActionInput {
     pub entrypoint: Option<String>,
     pub runtime: Option<Id>,
     pub runtime_version_constraint: Option<Patch<String>>,
+    pub required_worker_runtimes: Option<JsonDict>,
     pub param_schema: Option<JsonSchema>,
     pub out_schema: Option<JsonSchema>,
     pub parameter_delivery: Option<String>,
@@ -147,12 +190,18 @@ impl Create for ActionRepository {
             ));
         }
 
+        if let Some(runtime_version_constraint) = input.runtime_version_constraint.as_deref() {
+            validate_version_constraint("runtime_version_constraint", runtime_version_constraint)?;
+        }
+        validate_required_worker_runtimes(&input.required_worker_runtimes)?;
+
         // Try to insert - database will enforce uniqueness constraint
         let action = sqlx::query_as::<_, Action>(&format!(
             r#"
             INSERT INTO action (ref, pack, pack_ref, label, description, entrypoint,
-                                runtime, runtime_version_constraint, param_schema, out_schema, is_adhoc)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                                runtime, runtime_version_constraint, required_worker_runtimes,
+                                param_schema, out_schema, is_adhoc)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING {}
             "#,
             ACTION_COLUMNS
@@ -165,6 +214,7 @@ impl Create for ActionRepository {
         .bind(&input.entrypoint)
         .bind(input.runtime)
         .bind(&input.runtime_version_constraint)
+        .bind(&input.required_worker_runtimes)
         .bind(&input.param_schema)
         .bind(&input.out_schema)
         .bind(input.is_adhoc)
@@ -192,6 +242,13 @@ impl Update for ActionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
+        if let Some(Patch::Set(runtime_version_constraint)) = &input.runtime_version_constraint {
+            validate_version_constraint("runtime_version_constraint", runtime_version_constraint)?;
+        }
+        if let Some(required_worker_runtimes) = &input.required_worker_runtimes {
+            validate_required_worker_runtimes(required_worker_runtimes)?;
+        }
+
         // Build dynamic UPDATE query
         let mut query = QueryBuilder::new("UPDATE action SET ");
         let mut has_updates = false;
@@ -244,6 +301,15 @@ impl Update for ActionRepository {
                 Patch::Set(value) => query.push_bind(value),
                 Patch::Clear => query.push_bind(Option::<String>::None),
             };
+            has_updates = true;
+        }
+
+        if let Some(required_worker_runtimes) = &input.required_worker_runtimes {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("required_worker_runtimes = ");
+            query.push_bind(required_worker_runtimes);
             has_updates = true;
         }
 

@@ -411,6 +411,7 @@ impl WorkerService {
             max_stderr_bytes,
             packs_base_dir.clone(),
             artifacts_dir,
+            PathBuf::from(&config.runtime_envs_dir),
             api_url,
             jwt_config,
         ));

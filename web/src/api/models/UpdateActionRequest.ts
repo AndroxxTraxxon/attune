@@ -28,9 +28,12 @@ export type UpdateActionRequest = {
      */
     param_schema: any | null;
     /**
+     * Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
+     */
+    required_worker_runtimes?: Record<string, string> | null;
+    /**
      * Runtime ID
      */
     runtime?: number | null;
     runtime_version_constraint?: (null | RuntimeVersionConstraintPatch);
 };
-

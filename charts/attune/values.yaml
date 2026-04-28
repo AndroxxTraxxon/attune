@@ -107,6 +107,10 @@ images:
     repository: attune-notifier
     tag: ""
     pullPolicy: IfNotPresent
+  mcp:
+    repository: attune-mcp
+    tag: ""
+    pullPolicy: IfNotPresent
   web:
     repository: attune-web
     tag: ""
@@ -155,6 +159,18 @@ notifier:
   service:
     type: ClusterIP
     port: 8081
+  resources: {}
+
+mcp:
+  enabled: false
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 8090
+  auth:
+    useBootstrapTestUser: true
+    login: ""
+    password: ""
   resources: {}
 
 web:

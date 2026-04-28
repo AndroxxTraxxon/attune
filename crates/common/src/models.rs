@@ -1057,6 +1057,7 @@ pub mod trigger {
 /// Action model
 pub mod action {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
     pub struct Action {
@@ -1071,6 +1072,8 @@ pub mod action {
         /// Optional semver version constraint for the runtime
         /// (e.g., ">=3.12", ">=3.12,<4.0", "~18.0"). NULL means any version.
         pub runtime_version_constraint: Option<String>,
+        #[sqlx(default)]
+        pub required_worker_runtimes: JsonDict,
         pub param_schema: Option<JsonSchema>,
         pub out_schema: Option<JsonSchema>,
         pub workflow_def: Option<Id>,
@@ -1083,6 +1086,21 @@ pub mod action {
         pub output_format: OutputFormat,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
+    }
+
+    impl Action {
+        pub fn required_worker_runtime_constraints(&self) -> BTreeMap<String, String> {
+            self.required_worker_runtimes
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter_map(|(runtime, constraint)| {
+                    constraint
+                        .as_str()
+                        .map(|constraint| (runtime.clone(), constraint.to_string()))
+                })
+                .collect()
+        }
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

@@ -83,6 +83,22 @@ pub enum ActionCommands {
     },
 }
 
+fn format_runtime(
+    runtime_ref: Option<&str>,
+    version_constraint: Option<&str>,
+    is_workflow: bool,
+) -> String {
+    if is_workflow {
+        return "Workflow".to_string();
+    }
+    match (runtime_ref, version_constraint) {
+        (Some(r), Some(v)) => format!("{} ({})", r, v),
+        (Some(r), None) => r.to_string(),
+        (None, Some(v)) => format!("(unknown) ({})", v),
+        (None, None) => "none".to_string(),
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Action {
     id: i64,
@@ -93,6 +109,12 @@ struct Action {
     description: Option<String>,
     entrypoint: String,
     runtime: Option<i64>,
+    #[serde(default)]
+    runtime_ref: Option<String>,
+    #[serde(default)]
+    runtime_version_constraint: Option<String>,
+    #[serde(default)]
+    workflow_def: Option<i64>,
     created: String,
     updated: String,
 }
@@ -108,6 +130,12 @@ struct ActionDetail {
     description: Option<String>,
     entrypoint: String,
     runtime: Option<i64>,
+    #[serde(default)]
+    runtime_ref: Option<String>,
+    #[serde(default)]
+    runtime_version_constraint: Option<String>,
+    #[serde(default)]
+    workflow_def: Option<i64>,
     param_schema: Option<serde_json::Value>,
     out_schema: Option<serde_json::Value>,
     created: String,
@@ -239,20 +267,18 @@ async fn handle_list(
                 output::print_info("No actions found");
             } else {
                 let mut table = output::create_table();
-                output::add_header(
-                    &mut table,
-                    vec!["ID", "Pack", "Name", "Runner", "Description"],
-                );
+                output::add_header(&mut table, vec!["Ref", "Label", "Runtime", "Description"]);
 
                 for action in actions {
+                    let is_workflow = action.workflow_def.is_some();
                     table.add_row(vec![
-                        action.id.to_string(),
-                        action.pack_ref.clone(),
                         action.action_ref.clone(),
-                        action
-                            .runtime
-                            .map(|r| r.to_string())
-                            .unwrap_or_else(|| "none".to_string()),
+                        action.label.clone(),
+                        format_runtime(
+                            action.runtime_ref.as_deref(),
+                            action.runtime_version_constraint.as_deref(),
+                            is_workflow,
+                        ),
                         output::truncate(&action.description.unwrap_or_default(), 40),
                     ]);
                 }
@@ -283,8 +309,8 @@ async fn handle_show(
         }
         OutputFormat::Table => {
             output::print_section(&format!("Action: {}", action.action_ref));
+            let is_workflow = action.workflow_def.is_some();
             output::print_key_value_table(vec![
-                ("ID", action.id.to_string()),
                 ("Reference", action.action_ref.clone()),
                 ("Pack", action.pack_ref.clone()),
                 ("Label", action.label.clone()),
@@ -295,10 +321,11 @@ async fn handle_show(
                 ("Entry Point", action.entrypoint.clone()),
                 (
                     "Runtime",
-                    action
-                        .runtime
-                        .map(|r| r.to_string())
-                        .unwrap_or_else(|| "None".to_string()),
+                    format_runtime(
+                        action.runtime_ref.as_deref(),
+                        action.runtime_version_constraint.as_deref(),
+                        is_workflow,
+                    ),
                 ),
                 ("Created", output::format_timestamp(&action.created)),
                 ("Updated", output::format_timestamp(&action.updated)),
@@ -354,8 +381,8 @@ async fn handle_update(
                 "Action '{}' updated successfully",
                 action.action_ref
             ));
+            let is_workflow = action.workflow_def.is_some();
             output::print_key_value_table(vec![
-                ("ID", action.id.to_string()),
                 ("Ref", action.action_ref.clone()),
                 ("Pack", action.pack_ref.clone()),
                 ("Label", action.label.clone()),
@@ -366,10 +393,11 @@ async fn handle_update(
                 ("Entrypoint", action.entrypoint.clone()),
                 (
                     "Runtime",
-                    action
-                        .runtime
-                        .map(|r| r.to_string())
-                        .unwrap_or_else(|| "None".to_string()),
+                    format_runtime(
+                        action.runtime_ref.as_deref(),
+                        action.runtime_version_constraint.as_deref(),
+                        is_workflow,
+                    ),
                 ),
                 ("Updated", output::format_timestamp(&action.updated)),
             ]);

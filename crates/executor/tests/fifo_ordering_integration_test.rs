@@ -104,6 +104,7 @@ async fn create_test_action(pool: &PgPool, pack_id: i64, pack_ref: &str, suffix:
         entrypoint: "echo test".to_string(),
         runtime: None,
         runtime_version_constraint: None,
+        required_worker_runtimes: serde_json::json!({}),
         param_schema: None,
         out_schema: None,
         is_adhoc: false,

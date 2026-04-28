@@ -3,6 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::collections::BTreeMap;
 use utoipa::ToSchema;
 use validator::Validate;
 
@@ -42,6 +43,11 @@ pub struct CreateActionRequest {
     #[schema(example = ">=3.12", nullable = true)]
     pub runtime_version_constraint: Option<String>,
 
+    /// Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schema(value_type = Object, example = json!({"node": "*", "python": ">=3.12"}), default = json!({}))]
+    pub required_worker_runtimes: BTreeMap<String, String>,
+
     /// Parameter schema (StackStorm-style) defining expected inputs with inline required/secret
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Object, nullable = true, example = json!({"channel": {"type": "string", "description": "Slack channel", "required": true}, "message": {"type": "string", "description": "Message text", "required": true}}))]
@@ -76,6 +82,10 @@ pub struct UpdateActionRequest {
 
     /// Optional semver version constraint patch for the runtime.
     pub runtime_version_constraint: Option<RuntimeVersionConstraintPatch>,
+
+    /// Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
+    #[schema(value_type = Object, example = json!({"node": "*", "python": ">=3.12"}), nullable = true)]
+    pub required_worker_runtimes: Option<BTreeMap<String, String>>,
 
     /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
@@ -129,10 +139,20 @@ pub struct ActionResponse {
     #[schema(example = 1)]
     pub runtime: Option<i64>,
 
+    /// Runtime reference (stable identifier, e.g., "core.python")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "core.python", nullable = true)]
+    pub runtime_ref: Option<String>,
+
     /// Semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0")
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(example = ">=3.12", nullable = true)]
     pub runtime_version_constraint: Option<String>,
+
+    /// Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[schema(value_type = Object, example = json!({"node": "*", "python": ">=3.12"}))]
+    pub required_worker_runtimes: BTreeMap<String, String>,
 
     /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
@@ -191,10 +211,20 @@ pub struct ActionSummary {
     #[schema(example = 1)]
     pub runtime: Option<i64>,
 
+    /// Runtime reference (stable identifier, e.g., "core.python")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "core.python", nullable = true)]
+    pub runtime_ref: Option<String>,
+
     /// Semver version constraint for the runtime
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(example = ">=3.12", nullable = true)]
     pub runtime_version_constraint: Option<String>,
+
+    /// Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[schema(value_type = Object, example = json!({"node": "*", "python": ">=3.12"}))]
+    pub required_worker_runtimes: BTreeMap<String, String>,
 
     /// Workflow definition ID (non-null if this action is a workflow)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -213,6 +243,7 @@ pub struct ActionSummary {
 /// Convert from Action model to ActionResponse
 impl From<attune_common::models::action::Action> for ActionResponse {
     fn from(action: attune_common::models::action::Action) -> Self {
+        let required_worker_runtimes = action.required_worker_runtime_constraints();
         Self {
             id: action.id,
             r#ref: action.r#ref,
@@ -222,7 +253,9 @@ impl From<attune_common::models::action::Action> for ActionResponse {
             description: action.description,
             entrypoint: action.entrypoint,
             runtime: action.runtime,
+            runtime_ref: None,
             runtime_version_constraint: action.runtime_version_constraint,
+            required_worker_runtimes,
             param_schema: action.param_schema,
             out_schema: action.out_schema,
             workflow_def: action.workflow_def,
@@ -236,6 +269,7 @@ impl From<attune_common::models::action::Action> for ActionResponse {
 /// Convert from Action model to ActionSummary
 impl From<attune_common::models::action::Action> for ActionSummary {
     fn from(action: attune_common::models::action::Action) -> Self {
+        let required_worker_runtimes = action.required_worker_runtime_constraints();
         Self {
             id: action.id,
             r#ref: action.r#ref,
@@ -244,7 +278,9 @@ impl From<attune_common::models::action::Action> for ActionSummary {
             description: action.description,
             entrypoint: action.entrypoint,
             runtime: action.runtime,
+            runtime_ref: None,
             runtime_version_constraint: action.runtime_version_constraint,
+            required_worker_runtimes,
             workflow_def: action.workflow_def,
             created: action.created,
             updated: action.updated,
@@ -323,6 +359,7 @@ mod tests {
             entrypoint: "/actions/test.py".to_string(),
             runtime: None,
             runtime_version_constraint: None,
+            required_worker_runtimes: BTreeMap::new(),
             param_schema: None,
             out_schema: None,
         };
@@ -340,6 +377,7 @@ mod tests {
             entrypoint: "/actions/test.py".to_string(),
             runtime: None,
             runtime_version_constraint: None,
+            required_worker_runtimes: BTreeMap::new(),
             param_schema: None,
             out_schema: None,
         };
@@ -355,6 +393,7 @@ mod tests {
             entrypoint: None,
             runtime: None,
             runtime_version_constraint: None,
+            required_worker_runtimes: None,
             param_schema: None,
             out_schema: None,
         };

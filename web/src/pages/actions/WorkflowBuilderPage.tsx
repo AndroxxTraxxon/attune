@@ -64,6 +64,7 @@ const INITIAL_STATE: WorkflowBuilderState = {
   packRef: "",
   parameters: {},
   output: {},
+  outputMap: {},
   vars: {},
   tasks: [],
   tags: [],
@@ -1047,6 +1048,7 @@ export default function WorkflowBuilderPage() {
                   cancellationPolicy={state.cancellationPolicy}
                   parameters={state.parameters}
                   output={state.output}
+                  outputMap={state.outputMap}
                   onLabelChange={(label) => updateMetadata({ label })}
                   onVersionChange={(version) => updateMetadata({ version })}
                   onDescriptionChange={(description) =>
@@ -1061,6 +1063,9 @@ export default function WorkflowBuilderPage() {
                   }
                   onOutputChange={(output) =>
                     setState((prev) => ({ ...prev, output }))
+                  }
+                  onOutputMapChange={(outputMap) =>
+                    setState((prev) => ({ ...prev, outputMap }))
                   }
                 />
               )}

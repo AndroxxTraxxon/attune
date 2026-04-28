@@ -1,10 +1,15 @@
 use anyhow::Result;
 use clap::ValueEnum;
 use colored::Colorize;
-use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, Color, Table};
+use comfy_table::{
+    modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, Cell, Color, ContentArrangement, Table,
+};
 use serde::Serialize;
 use std::fmt::Display;
 use terminal_size::{terminal_size, Width};
+
+/// Minimum width to use for table layout, even if the terminal is narrower.
+const MIN_TABLE_WIDTH: u16 = 60;
 
 /// Output format for CLI commands
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
@@ -67,13 +72,27 @@ pub fn print_error(message: &str) {
     eprintln!("{} {}", "✗".red().bold(), message);
 }
 
-/// Create a new table with default styling
+/// Create a new table with default styling.
+///
+/// The table is configured to wrap cell content dynamically to fit the
+/// terminal width, falling back to a sensible minimum width when the
+/// terminal is very narrow or its size cannot be detected.
 pub fn create_table() -> Table {
     let mut table = Table::new();
     table
         .load_preset(UTF8_FULL)
-        .apply_modifier(UTF8_ROUND_CORNERS);
+        .apply_modifier(UTF8_ROUND_CORNERS)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_width(table_width());
     table
+}
+
+/// Width to use for table layout, clamped to the configured minimum.
+fn table_width() -> u16 {
+    let detected = terminal_size()
+        .map(|(Width(w), _)| w)
+        .unwrap_or(MIN_TABLE_WIDTH);
+    detected.max(MIN_TABLE_WIDTH)
 }
 
 /// Add a header row to a table with styling

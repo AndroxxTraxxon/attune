@@ -270,6 +270,7 @@ export default function EventsPage() {
       if (notification.notification_type === "event_created") {
         const payload = notification.payload as Partial<EventSummary> & {
           payload?: unknown;
+          has_payload?: boolean;
         };
 
         const newEvent: EventSummary = {
@@ -281,7 +282,8 @@ export default function EventsPage() {
           source: payload.source,
           source_ref: payload.source_ref,
           has_payload:
-            payload.payload !== null && payload.payload !== undefined,
+            payload.has_payload ??
+            (payload.payload !== null && payload.payload !== undefined),
           created: payload.created ?? new Date().toISOString(),
         };
 

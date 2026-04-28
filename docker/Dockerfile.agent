@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for the Attune injected agent binaries
 #
-# Builds statically-linked `attune-agent` and `attune-sensor-agent` binaries
-# using musl, suitable for injection into arbitrary runtime containers.
+# Builds statically-linked `attune-agent`, `attune-sensor-agent`, `attune-mcp`,
+# and `attune` using musl, suitable for injection into arbitrary runtime containers.
 #
 # Stages:
 #   builder      - Cross-compile with cargo-zigbuild + musl for a fully static binary
@@ -36,8 +36,8 @@
 #   #   volumes:
 #   #     - agent_binary:/shared
 #
-# Note: `attune-agent` lives in the worker crate and `attune-sensor-agent`
-# lives in the sensor crate.
+# Note: `attune-agent` lives in the worker crate, `attune-sensor-agent`
+# lives in the sensor crate, and `attune` / `attune-mcp` live in the CLI crate.
 
 ARG RUST_VERSION=1.92
 ARG DEBIAN_VERSION=bookworm
@@ -103,8 +103,8 @@ COPY crates/cli/Cargo.toml ./crates/cli/Cargo.toml
 
 # Create minimal stub sources so cargo can resolve the workspace and fetch deps.
 # These are ONLY used for `cargo fetch` — never compiled.
-# NOTE: The worker crate has TWO binary targets and the sensor crate now has
-# two binary targets as well, so we create stubs for all of them.
+# NOTE: The worker crate has two binary targets, the sensor crate has two binary
+# targets, and the CLI crate has `attune` and `attune-mcp` binary targets.
 RUN mkdir -p crates/common/src && echo "" > crates/common/src/lib.rs && \
     mkdir -p crates/api/src && echo "fn main(){}" > crates/api/src/main.rs && \
     mkdir -p crates/executor/src && echo "fn main(){}" > crates/executor/src/main.rs && \
@@ -115,7 +115,9 @@ RUN mkdir -p crates/common/src && echo "" > crates/common/src/lib.rs && \
     mkdir -p crates/worker/src && echo "fn main(){}" > crates/worker/src/main.rs && \
     echo "fn main(){}" > crates/worker/src/agent_main.rs && \
     mkdir -p crates/notifier/src && echo "fn main(){}" > crates/notifier/src/main.rs && \
-    mkdir -p crates/cli/src && echo "fn main(){}" > crates/cli/src/main.rs
+    mkdir -p crates/cli/src/bin && echo "" > crates/cli/src/lib.rs && \
+    echo "fn main(){}" > crates/cli/src/main.rs && \
+    echo "fn main(){}" > crates/cli/src/bin/attune-mcp.rs
 
 # Download all dependencies (cached unless Cargo.toml/Cargo.lock change)
 # registry/git use sharing=shared — cargo handles concurrent reads safely
@@ -130,6 +132,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
 COPY crates/common/ ./crates/common/
 COPY crates/worker/ ./crates/worker/
 COPY crates/sensor/ ./crates/sensor/
+COPY crates/cli/ ./crates/cli/
 
 # Build the injected agent binaries, statically linked with musl.
 # Uses cargo-zigbuild so that cross-compilation works regardless of host arch.
@@ -138,23 +141,31 @@ COPY crates/sensor/ ./crates/sensor/
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
     --mount=type=cache,id=agent-target,target=/build/target,sharing=locked \
-    cargo zigbuild --release --target ${RUST_TARGET} --bin attune-agent --bin attune-sensor-agent && \
+    cargo zigbuild --release --target ${RUST_TARGET} --bin attune --bin attune-agent --bin attune-sensor-agent --bin attune-mcp && \
+    cp /build/target/${RUST_TARGET}/release/attune /build/attune && \
     cp /build/target/${RUST_TARGET}/release/attune-agent /build/attune-agent && \
-    cp /build/target/${RUST_TARGET}/release/attune-sensor-agent /build/attune-sensor-agent
+    cp /build/target/${RUST_TARGET}/release/attune-sensor-agent /build/attune-sensor-agent && \
+    cp /build/target/${RUST_TARGET}/release/attune-mcp /build/attune-mcp
 
 # Strip the binaries to minimize size.
 # When cross-compiling for a different architecture, the host strip may not
 # understand the foreign binary format. In that case we skip stripping — the
 # binary is still functional, just slightly larger.
-RUN (strip /build/attune-agent 2>/dev/null && echo "stripped attune-agent" || echo "strip skipped for attune-agent (cross-arch binary)") && \
-    (strip /build/attune-sensor-agent 2>/dev/null && echo "stripped attune-sensor-agent" || echo "strip skipped for attune-sensor-agent (cross-arch binary)")
+RUN (strip /build/attune 2>/dev/null && echo "stripped attune" || echo "strip skipped for attune (cross-arch binary)") && \
+    (strip /build/attune-agent 2>/dev/null && echo "stripped attune-agent" || echo "strip skipped for attune-agent (cross-arch binary)") && \
+    (strip /build/attune-sensor-agent 2>/dev/null && echo "stripped attune-sensor-agent" || echo "strip skipped for attune-sensor-agent (cross-arch binary)") && \
+    (strip /build/attune-mcp 2>/dev/null && echo "stripped attune-mcp" || echo "strip skipped for attune-mcp (cross-arch binary)")
 
 # Verify the binaries exist and show their details
-RUN ls -lh /build/attune-agent /build/attune-sensor-agent && \
+RUN ls -lh /build/attune /build/attune-agent /build/attune-sensor-agent /build/attune-mcp && \
+    file /build/attune && \
     file /build/attune-agent && \
     file /build/attune-sensor-agent && \
+    file /build/attune-mcp && \
+    ldd /build/attune 2>&1 || true && \
     ldd /build/attune-agent 2>&1 || true && \
-    ldd /build/attune-sensor-agent 2>&1 || true
+    ldd /build/attune-sensor-agent 2>&1 || true && \
+    ldd /build/attune-mcp 2>&1 || true
 
 # ============================================================================
 # Stage 2: agent-binary - Minimal image with just the static binary
@@ -163,8 +174,10 @@ RUN ls -lh /build/attune-agent /build/attune-sensor-agent && \
 # Useful when you only need to extract the binary (e.g., via COPY --from).
 FROM scratch AS agent-binary
 
+COPY --from=builder /build/attune /usr/local/bin/attune
 COPY --from=builder /build/attune-agent /usr/local/bin/attune-agent
 COPY --from=builder /build/attune-sensor-agent /usr/local/bin/attune-sensor-agent
+COPY --from=builder /build/attune-mcp /usr/local/bin/attune-mcp
 
 ENTRYPOINT ["/usr/local/bin/attune-agent"]
 
@@ -191,7 +204,9 @@ ENTRYPOINT ["/usr/local/bin/attune-agent"]
 #         condition: service_completed_successfully
 FROM busybox:1.36 AS agent-init
 
+COPY --from=builder /build/attune /usr/local/bin/attune
 COPY --from=builder /build/attune-agent /usr/local/bin/attune-agent
 COPY --from=builder /build/attune-sensor-agent /usr/local/bin/attune-sensor-agent
+COPY --from=builder /build/attune-mcp /usr/local/bin/attune-mcp
 
 ENTRYPOINT ["/usr/local/bin/attune-agent"]

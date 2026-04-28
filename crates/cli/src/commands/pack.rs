@@ -278,6 +278,10 @@ struct PackDetail {
     rule_count: Option<i64>,
     #[serde(default)]
     sensor_count: Option<i64>,
+    #[serde(default)]
+    runtime_deps: Vec<String>,
+    #[serde(default)]
+    dependencies: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -641,11 +645,10 @@ async fn handle_list(
                 output::print_info("No packs found");
             } else {
                 let mut table = output::create_table();
-                output::add_header(&mut table, vec!["ID", "Name", "Version", "Description"]);
+                output::add_header(&mut table, vec!["Ref", "Version", "Description"]);
 
                 for pack in packs {
                     table.add_row(vec![
-                        pack.id.to_string(),
                         pack.pack_ref,
                         pack.version,
                         output::truncate(&pack.description.unwrap_or_default(), 50),
@@ -679,7 +682,6 @@ async fn handle_show(
         OutputFormat::Table => {
             output::print_section(&format!("Pack: {}", pack.label));
             output::print_key_value_table(vec![
-                ("ID", pack.id.to_string()),
                 ("Ref", pack.pack_ref.clone()),
                 ("Label", pack.label.clone()),
                 ("Version", pack.version),
@@ -704,6 +706,16 @@ async fn handle_show(
                     output::print_section("Keywords");
                     output::print_list(keywords);
                 }
+            }
+
+            if !pack.runtime_deps.is_empty() {
+                output::print_section("Runtime Dependencies");
+                output::print_list(pack.runtime_deps);
+            }
+
+            if !pack.dependencies.is_empty() {
+                output::print_section("Pack Dependencies");
+                output::print_list(pack.dependencies);
             }
         }
     }
@@ -1817,7 +1829,6 @@ async fn handle_update(
         OutputFormat::Table => {
             output::print_success(&format!("Pack '{}' updated successfully", pack.pack_ref));
             output::print_key_value_table(vec![
-                ("ID", pack.id.to_string()),
                 ("Ref", pack.pack_ref.clone()),
                 ("Label", pack.label.clone()),
                 ("Version", pack.version.clone()),

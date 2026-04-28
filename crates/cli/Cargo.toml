@@ -10,6 +10,10 @@ repository.workspace = true
 name = "attune"
 path = "src/main.rs"
 
+[[bin]]
+name = "attune-mcp"
+path = "src/bin/attune-mcp.rs"
+
 [dependencies]
 # Internal dependencies
 attune-common = { path = "../common" }
@@ -24,6 +28,8 @@ clap = { workspace = true, features = ["derive", "env", "string"] }
 # HTTP client
 reqwest = { workspace = true, features = ["multipart", "stream"] }
 eventsource-stream = { workspace = true }
+axum = { workspace = true }
+webpki-root-certs = "1.0"
 
 # Serialization
 serde = { workspace = true }

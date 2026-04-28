@@ -170,7 +170,7 @@ services:
       [
         "/bin/sh",
         "-c",
-        "cp /usr/local/bin/attune-agent /opt/attune/agent/attune-agent && cp /usr/local/bin/attune-sensor-agent /opt/attune/agent/attune-sensor-agent && chmod +x /opt/attune/agent/attune-agent /opt/attune/agent/attune-sensor-agent && /usr/local/bin/attune-agent --version > /opt/attune/agent/attune-agent.version && /usr/local/bin/attune-sensor-agent --version > /opt/attune/agent/attune-sensor-agent.version && echo 'Agent binaries copied successfully'",
+        "cp /usr/local/bin/attune /opt/attune/agent/attune && cp /usr/local/bin/attune-agent /opt/attune/agent/attune-agent && cp /usr/local/bin/attune-sensor-agent /opt/attune/agent/attune-sensor-agent && cp /usr/local/bin/attune-mcp /opt/attune/agent/attune-mcp && chmod +x /opt/attune/agent/attune /opt/attune/agent/attune-agent /opt/attune/agent/attune-sensor-agent /opt/attune/agent/attune-mcp && /usr/local/bin/attune --version > /opt/attune/agent/attune.version && /usr/local/bin/attune-agent --version > /opt/attune/agent/attune-agent.version && /usr/local/bin/attune-sensor-agent --version > /opt/attune/agent/attune-sensor-agent.version && /usr/local/bin/attune-mcp --version > /opt/attune/agent/attune-mcp.version && echo 'Agent binaries copied successfully'",
       ]
     restart: "no"
     networks:
@@ -376,7 +376,14 @@ services:
   worker-shell:
     image: debian:bookworm-slim
     container_name: attune-worker-shell
-    entrypoint: ["/opt/attune/agent/attune-agent"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if ! command -v curl >/dev/null 2>&1; then
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+        fi
+        exec /opt/attune/agent/attune-agent
     stop_grace_period: 45s
     environment:
       RUST_LOG: info
@@ -423,7 +430,14 @@ services:
   worker-python:
     image: python:3.12-slim
     container_name: attune-worker-python
-    entrypoint: ["/opt/attune/agent/attune-agent"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if ! command -v curl >/dev/null 2>&1; then
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+        fi
+        exec /opt/attune/agent/attune-agent
     stop_grace_period: 45s
     environment:
       RUST_LOG: info
@@ -470,7 +484,14 @@ services:
   worker-node:
     image: node:22-slim
     container_name: attune-worker-node
-    entrypoint: ["/opt/attune/agent/attune-agent"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if ! command -v curl >/dev/null 2>&1; then
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+        fi
+        exec /opt/attune/agent/attune-agent
     stop_grace_period: 45s
     environment:
       RUST_LOG: info
@@ -517,7 +538,14 @@ services:
   worker-full:
     image: nikolaik/python-nodejs:python3.12-nodejs22-slim
     container_name: attune-worker-full
-    entrypoint: ["/opt/attune/agent/attune-agent"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if ! command -v curl >/dev/null 2>&1; then
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+        fi
+        exec /opt/attune/agent/attune-agent
     stop_grace_period: 45s
     environment:
       RUST_LOG: info
@@ -644,6 +672,35 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - attune-network
+    restart: unless-stopped
+
+  mcp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mcp
+    container_name: attune-mcp
+    profiles:
+      - mcp
+    environment:
+      RUST_LOG: info
+      ATTUNE_API_URL: http://api:8080
+      ATTUNE_LOGIN: ${ATTUNE_MCP_LOGIN:-test@attune.local}
+      ATTUNE_PASSWORD: ${ATTUNE_MCP_PASSWORD:-TestPass123!}
+      ATTUNE_MCP_TRANSPORT: http
+      ATTUNE_MCP_LISTEN_ADDR: 0.0.0.0:8090
+    ports:
+      - "8090:8090"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
       interval: 30s
       timeout: 10s
       retries: 3

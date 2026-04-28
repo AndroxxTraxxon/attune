@@ -979,6 +979,10 @@ impl<'a> PackComponentLoader<'a> {
                 .get("runtime_version")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+            let required_worker_runtimes = data
+                .get("required_worker_runtimes")
+                .map(|value| serde_json::to_value(value).unwrap_or_else(|_| serde_json::json!({})))
+                .unwrap_or_else(|| serde_json::json!({}));
 
             // Check if action already exists — update in place if so
             if let Some(existing) = ActionRepository::find_by_ref(self.pool, &action_ref).await? {
@@ -994,6 +998,7 @@ impl<'a> PackComponentLoader<'a> {
                         Some(value) => Patch::Set(value),
                         None => Patch::Clear,
                     }),
+                    required_worker_runtimes: Some(required_worker_runtimes.clone()),
                     param_schema,
                     out_schema,
                     parameter_delivery: Some(parameter_delivery),
@@ -1035,10 +1040,11 @@ impl<'a> PackComponentLoader<'a> {
                 r#"
                 INSERT INTO action (
                     ref, pack, pack_ref, label, description, entrypoint,
-                    runtime, runtime_version_constraint, param_schema, out_schema, is_adhoc,
-                    parameter_delivery, parameter_format, output_format
+                    runtime, runtime_version_constraint, required_worker_runtimes,
+                    param_schema, out_schema, is_adhoc, parameter_delivery, parameter_format,
+                    output_format
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                 RETURNING id
                 "#,
             )
@@ -1050,6 +1056,7 @@ impl<'a> PackComponentLoader<'a> {
             .bind(&entrypoint)
             .bind(runtime_id)
             .bind(&runtime_version_constraint)
+            .bind(&required_worker_runtimes)
             .bind(&param_schema)
             .bind(&out_schema)
             .bind(false) // is_adhoc

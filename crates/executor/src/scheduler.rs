@@ -96,6 +96,90 @@ fn apply_param_defaults(params: JsonValue, param_schema: &Option<JsonValue>) -> 
     JsonValue::Object(obj)
 }
 
+/// Evaluate a workflow's `output_map` (if any) against the current
+/// `WorkflowContext`, producing a JSON object whose keys are the user-defined
+/// output names and whose values are the rendered template results.
+///
+/// Returns `None` if the definition cannot be parsed or has no `output_map`.
+/// Individual render errors are logged and the offending key is omitted.
+fn build_output_map_result(
+    definition_json: &JsonValue,
+    wf_ctx: &WorkflowContext,
+) -> Option<JsonValue> {
+    let definition: WorkflowDefinition = match serde_json::from_value(definition_json.clone()) {
+        Ok(d) => d,
+        Err(e) => {
+            warn!(
+                "Failed to parse workflow definition for output_map evaluation: {}",
+                e
+            );
+            return None;
+        }
+    };
+
+    let output_map = definition.output_map.as_ref()?;
+    if output_map.is_empty() {
+        return None;
+    }
+
+    let mut out = serde_json::Map::new();
+    for (key, expr) in output_map {
+        match wf_ctx.render_json(&JsonValue::String(expr.clone())) {
+            Ok(rendered) => {
+                out.insert(key.clone(), rendered);
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to render output_map[{}] (expr={:?}): {} — omitting key",
+                    key, expr, e
+                );
+            }
+        }
+    }
+
+    if out.is_empty() {
+        None
+    } else {
+        Some(JsonValue::Object(out))
+    }
+}
+
+/// Build the parent execution `result` payload for a completed workflow.
+///
+/// On success, if the workflow defined an `output_map`, the rendered outputs
+/// become the top-level fields of the result, with `succeeded: true` merged in
+/// (only if the user's output_map didn't already define a `succeeded` key). If
+/// no output_map is defined, the legacy `{"succeeded": true}` shape is used.
+///
+/// On failure, returns `{"error": ..., "succeeded": false}`.
+fn build_workflow_result_payload(
+    success: bool,
+    error_message: Option<&str>,
+    output_override: Option<JsonValue>,
+) -> JsonValue {
+    if !success {
+        return serde_json::json!({
+            "error": error_message.unwrap_or("Workflow failed"),
+            "succeeded": false,
+        });
+    }
+
+    match output_override {
+        Some(JsonValue::Object(mut map)) => {
+            map.entry("succeeded".to_string())
+                .or_insert(JsonValue::Bool(true));
+            JsonValue::Object(map)
+        }
+        Some(other) => serde_json::json!({
+            "succeeded": true,
+            "output": other,
+        }),
+        None => serde_json::json!({
+            "succeeded": true,
+        }),
+    }
+}
+
 fn reconcile_authoritative_non_item_task_statuses<I>(
     completed_tasks: &mut Vec<String>,
     failed_tasks: &mut Vec<String>,
@@ -788,7 +872,8 @@ impl ExecutionScheduler {
                 "Workflow '{}' has no entry-point tasks, completing immediately",
                 workflow_def.r#ref
             );
-            Self::complete_workflow(pool, execution.id, workflow_execution.id, true, None).await?;
+            Self::complete_workflow(pool, execution.id, workflow_execution.id, true, None, None)
+                .await?;
             return Ok(());
         }
 
@@ -2469,12 +2554,24 @@ impl ExecutionScheduler {
             } else {
                 None
             };
+
+            // Evaluate the workflow's `output_map` (if any) using the
+            // current WorkflowContext so the parent execution's `result`
+            // surfaces user-defined outputs (e.g., a markdown summary,
+            // structured fields composed from task results).
+            let output_map_result = if !has_failures {
+                build_output_map_result(&workflow_def.definition, &wf_ctx)
+            } else {
+                None
+            };
+
             Self::complete_workflow_with_conn(
                 &mut *conn,
                 parent_execution.id,
                 workflow_execution_id,
                 !has_failures,
                 error_msg.as_deref(),
+                output_map_result,
             )
             .await?;
         }
@@ -2610,6 +2707,7 @@ impl ExecutionScheduler {
         workflow_execution_id: i64,
         success: bool,
         error_message: Option<&str>,
+        result_override: Option<JsonValue>,
     ) -> Result<()> {
         let status = if success {
             ExecutionStatus::Completed
@@ -2644,16 +2742,11 @@ impl ExecutionScheduler {
         let parent = ExecutionRepository::find_by_id(pool, parent_execution_id).await?;
         if let Some(mut parent) = parent {
             parent.status = status;
-            parent.result = if !success {
-                Some(serde_json::json!({
-                    "error": error_message.unwrap_or("Workflow failed"),
-                    "succeeded": false,
-                }))
-            } else {
-                Some(serde_json::json!({
-                    "succeeded": true,
-                }))
-            };
+            parent.result = Some(build_workflow_result_payload(
+                success,
+                error_message,
+                result_override,
+            ));
             ExecutionRepository::update(pool, parent.id, parent.into()).await?;
         }
 
@@ -2666,6 +2759,7 @@ impl ExecutionScheduler {
         workflow_execution_id: i64,
         success: bool,
         error_message: Option<&str>,
+        result_override: Option<JsonValue>,
     ) -> Result<()> {
         let status = if success {
             ExecutionStatus::Completed
@@ -2698,16 +2792,11 @@ impl ExecutionScheduler {
         let parent = ExecutionRepository::find_by_id(&mut *conn, parent_execution_id).await?;
         if let Some(mut parent) = parent {
             parent.status = status;
-            parent.result = if !success {
-                Some(serde_json::json!({
-                    "error": error_message.unwrap_or("Workflow failed"),
-                    "succeeded": false,
-                }))
-            } else {
-                Some(serde_json::json!({
-                    "succeeded": true,
-                }))
-            };
+            parent.result = Some(build_workflow_result_payload(
+                success,
+                error_message,
+                result_override,
+            ));
             ExecutionRepository::update(&mut *conn, parent.id, parent.into()).await?;
         }
 
@@ -2768,9 +2857,17 @@ impl ExecutionScheduler {
                         action.runtime_version_constraint.as_deref(),
                     )
                 })
+                .filter(|w| {
+                    Self::worker_supports_required_runtimes(w, &action.required_worker_runtimes)
+                })
                 .collect()
         } else {
             workers
+                .into_iter()
+                .filter(|w| {
+                    Self::worker_supports_required_runtimes(w, &action.required_worker_runtimes)
+                })
+                .collect()
         };
 
         if compatible_workers.is_empty() {
@@ -2779,11 +2876,22 @@ impl ExecutionScheduler {
                 .runtime_version_constraint
                 .as_deref()
                 .unwrap_or("none");
+            let required_runtimes = if action.required_worker_runtime_constraints().is_empty() {
+                "none".to_string()
+            } else {
+                action
+                    .required_worker_runtime_constraints()
+                    .into_iter()
+                    .map(|(runtime, constraint)| format!("{} {}", runtime, constraint))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
             return Err(anyhow::anyhow!(
-                "No compatible workers found for action: {} (requires runtime: {}, version constraint: {})",
+                "No compatible workers found for action: {} (requires runtime: {}, version constraint: {}, required worker runtimes: {})",
                 action.r#ref,
                 runtime_name,
                 version_constraint,
+                required_runtimes,
             ));
         }
 
@@ -2864,6 +2972,91 @@ impl ExecutionScheduler {
             worker.name, runtime.name, runtime_names
         );
         false
+    }
+
+    fn worker_supports_required_runtimes(
+        worker: &attune_common::models::Worker,
+        required_runtimes: &JsonValue,
+    ) -> bool {
+        let constraints = required_runtimes.as_object().cloned().unwrap_or_default();
+
+        if constraints.is_empty() {
+            return true;
+        }
+
+        let advertised_runtimes: HashSet<String> = worker
+            .capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.get("runtimes"))
+            .and_then(|runtimes| runtimes.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|runtime| runtime.as_str())
+            .map(normalize_runtime_name)
+            .collect();
+
+        let Some(capabilities) = worker.capabilities.as_ref() else {
+            return false;
+        };
+
+        for (runtime_name, constraint) in constraints {
+            let Some(constraint) = constraint.as_str() else {
+                warn!(
+                    "Required worker runtime constraint for '{}' is not a string during scheduling",
+                    runtime_name
+                );
+                return false;
+            };
+
+            let normalized_runtime_name = normalize_runtime_name(&runtime_name);
+            if !advertised_runtimes.contains(&normalized_runtime_name) {
+                return false;
+            }
+
+            if constraint.trim() == "*" {
+                continue;
+            }
+
+            let advertised_versions = Self::worker_runtime_versions(
+                capabilities,
+                std::slice::from_ref(&normalized_runtime_name),
+            );
+
+            if advertised_versions.is_empty() {
+                debug!(
+                    "Worker {} does not advertise versions for required runtime '{}' and constraint '{}'",
+                    worker.name,
+                    runtime_name,
+                    constraint,
+                );
+                return false;
+            }
+
+            let matches = advertised_versions.iter().any(|version| match matches_constraint(version, constraint) {
+                Ok(result) => result,
+                Err(e) => {
+                    warn!(
+                        "Invalid required runtime version constraint '{}' for runtime '{}' against worker {} version '{}': {}",
+                        constraint,
+                        runtime_name,
+                        worker.name,
+                        version,
+                        e,
+                    );
+                    false
+                }
+            });
+
+            if !matches {
+                debug!(
+                    "Worker {} does not satisfy required runtime version '{}' for runtime '{}'",
+                    worker.name, constraint, runtime_name,
+                );
+                return false;
+            }
+        }
+
+        true
     }
 
     fn worker_supports_runtime_constraint(
@@ -3658,6 +3851,43 @@ mod tests {
             &worker,
             &runtime,
             Some(">=18"),
+        ));
+    }
+
+    #[test]
+    fn test_worker_supports_required_runtimes_with_alias_normalization() {
+        let mut worker = create_test_worker("test-worker", 5);
+        worker.capabilities = Some(serde_json::json!({
+            "runtimes": ["shell", "node"]
+        }));
+
+        assert!(ExecutionScheduler::worker_supports_required_runtimes(
+            &worker,
+            &serde_json::json!({ "nodejs": "*" })
+        ));
+        assert!(!ExecutionScheduler::worker_supports_required_runtimes(
+            &worker,
+            &serde_json::json!({ "ruby": "*" })
+        ));
+    }
+
+    #[test]
+    fn test_worker_supports_required_runtimes_with_version_constraints() {
+        let mut worker = create_test_worker("test-worker", 6);
+        worker.capabilities = Some(serde_json::json!({
+            "runtimes": ["shell", "node"],
+            "runtime_versions": {
+                "node": ["20.11.1"]
+            }
+        }));
+
+        assert!(ExecutionScheduler::worker_supports_required_runtimes(
+            &worker,
+            &serde_json::json!({ "node": ">=20" })
+        ));
+        assert!(!ExecutionScheduler::worker_supports_required_runtimes(
+            &worker,
+            &serde_json::json!({ "node": "<20" })
         ));
     }
 

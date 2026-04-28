@@ -155,11 +155,11 @@ async fn handle_list(
                 output::print_info("No triggers found");
             } else {
                 let mut table = output::create_table();
-                output::add_header(&mut table, vec!["ID", "Pack", "Name", "Description"]);
+                output::add_header(&mut table, vec!["Ref", "Pack", "Label", "Description"]);
 
                 for trigger in triggers {
                     table.add_row(vec![
-                        trigger.id.to_string(),
+                        trigger.trigger_ref.clone(),
                         trigger.pack_ref.as_deref().unwrap_or("").to_string(),
                         trigger.label.clone(),
                         output::truncate(&trigger.description.unwrap_or_default(), 50),
@@ -193,7 +193,6 @@ async fn handle_show(
         OutputFormat::Table => {
             output::print_section(&format!("Trigger: {}", trigger.trigger_ref));
             output::print_key_value_table(vec![
-                ("ID", trigger.id.to_string()),
                 ("Ref", trigger.trigger_ref.clone()),
                 (
                     "Pack",
@@ -289,7 +288,6 @@ async fn handle_update(
                 trigger.trigger_ref
             ));
             output::print_key_value_table(vec![
-                ("ID", trigger.id.to_string()),
                 ("Ref", trigger.trigger_ref.clone()),
                 (
                     "Pack",

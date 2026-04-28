@@ -6,6 +6,7 @@ import {
   LogIn,
   LogOut,
   SlidersHorizontal,
+  Trash2,
 } from "lucide-react";
 import SchemaBuilder from "@/components/common/SchemaBuilder";
 import type { CancellationPolicy, ParamDefinition } from "@/types/workflow";
@@ -19,6 +20,7 @@ interface WorkflowInputsPanelProps {
   cancellationPolicy: CancellationPolicy;
   parameters: Record<string, ParamDefinition>;
   output: Record<string, ParamDefinition>;
+  outputMap: Record<string, string>;
   onLabelChange: (label: string) => void;
   onVersionChange: (version: string) => void;
   onDescriptionChange: (description: string) => void;
@@ -26,9 +28,85 @@ interface WorkflowInputsPanelProps {
   onCancellationPolicyChange: (policy: CancellationPolicy) => void;
   onParametersChange: (parameters: Record<string, ParamDefinition>) => void;
   onOutputChange: (output: Record<string, ParamDefinition>) => void;
+  onOutputMapChange: (outputMap: Record<string, string>) => void;
 }
 
 type ModalTarget = "parameters" | "output" | null;
+
+interface OutputRow {
+  key: string;
+  type: string;
+  required: boolean;
+  secret: boolean;
+  description: string;
+  expression: string;
+}
+
+const OUTPUT_TYPES = [
+  "string",
+  "number",
+  "integer",
+  "boolean",
+  "object",
+  "array",
+  "any",
+];
+
+function buildOutputRows(
+  schema: Record<string, ParamDefinition>,
+  outputMap: Record<string, string>,
+): OutputRow[] {
+  const seen = new Set<string>();
+  const rows: OutputRow[] = [];
+
+  for (const [key, def] of Object.entries(schema)) {
+    seen.add(key);
+    rows.push({
+      key,
+      type: typeof def.type === "string" ? def.type : "string",
+      required: !!def.required,
+      secret: !!def.secret,
+      description:
+        typeof def.description === "string" ? def.description : "",
+      expression: outputMap[key] ?? "",
+    });
+  }
+  // Mapped fields without a schema entry still need to round-trip.
+  for (const [key, expr] of Object.entries(outputMap)) {
+    if (!seen.has(key)) {
+      rows.push({
+        key,
+        type: "string",
+        required: false,
+        secret: false,
+        description: "",
+        expression: expr,
+      });
+    }
+  }
+  return rows;
+}
+
+function rowsToSchemaAndMap(rows: OutputRow[]): {
+  schema: Record<string, ParamDefinition>;
+  outputMap: Record<string, string>;
+} {
+  const schema: Record<string, ParamDefinition> = {};
+  const outputMap: Record<string, string> = {};
+  for (const row of rows) {
+    const key = row.key.trim();
+    if (!key) continue;
+    const def: ParamDefinition = { type: row.type || "string" };
+    if (row.required) def.required = true;
+    if (row.secret) def.secret = true;
+    if (row.description.trim()) def.description = row.description.trim();
+    schema[key] = def;
+    if (row.expression.length > 0) {
+      outputMap[key] = row.expression;
+    }
+  }
+  return { schema, outputMap };
+}
 
 function ParamSummaryList({
   schema,
@@ -99,6 +177,248 @@ function ParamSummaryList({
   );
 }
 
+function CombinedOutputEditor({
+  rows,
+  onChange,
+}: {
+  rows: OutputRow[];
+  onChange: (rows: OutputRow[]) => void;
+}) {
+  const updateRow = (index: number, patch: Partial<OutputRow>) => {
+    onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  };
+
+  const removeRow = (index: number) => {
+    onChange(rows.filter((_, i) => i !== index));
+  };
+
+  const addRow = () => {
+    onChange([
+      ...rows,
+      {
+        key: "",
+        type: "string",
+        required: false,
+        secret: false,
+        description: "",
+        expression: "",
+      },
+    ]);
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="text-xs text-gray-500">
+        Each entry defines one field of the workflow's final{" "}
+        <code className="px-1 bg-gray-100 rounded">result</code> JSON: a name &amp;
+        type (the schema) plus a template expression evaluated on completion.
+        Expressions reference data via{" "}
+        <code className="px-1 bg-gray-100 rounded">{"{{ parameters.x }}"}</code>,{" "}
+        <code className="px-1 bg-gray-100 rounded">{"{{ workflow.var }}"}</code>, or{" "}
+        <code className="px-1 bg-gray-100 rounded">{"{{ task.NAME.result }}"}</code>.
+        Pure <code className="px-1 bg-gray-100 rounded">{"{{ … }}"}</code>{" "}
+        expressions preserve the underlying JSON type.
+      </div>
+      {rows.length === 0 ? (
+        <div className="text-xs text-gray-400 italic px-3 py-6 text-center border-2 border-dashed border-gray-200 rounded-lg">
+          No outputs yet.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {rows.map((row, index) => (
+            <div
+              key={index}
+              className="border border-gray-200 rounded-lg p-3 bg-gray-50/50"
+            >
+              <div className="flex items-start gap-2">
+                <div className="flex-1 space-y-2">
+                  <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 items-end">
+                    <div>
+                      <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">
+                        Name
+                      </label>
+                      <input
+                        type="text"
+                        value={row.key}
+                        onChange={(e) =>
+                          updateRow(index, { key: e.target.value })
+                        }
+                        placeholder="e.g. headline"
+                        className="w-full px-2 py-1.5 text-sm font-mono border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">
+                        Type
+                      </label>
+                      <select
+                        value={row.type}
+                        onChange={(e) =>
+                          updateRow(index, { type: e.target.value })
+                        }
+                        className="px-2 py-1.5 text-sm border border-gray-200 rounded bg-white focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+                      >
+                        {OUTPUT_TYPES.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <label className="flex items-center gap-1 text-[11px] text-gray-600 pb-1.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={row.required}
+                        onChange={(e) =>
+                          updateRow(index, { required: e.target.checked })
+                        }
+                        className="rounded border-gray-300"
+                      />
+                      required
+                    </label>
+                    <label className="flex items-center gap-1 text-[11px] text-gray-600 pb-1.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={row.secret}
+                        onChange={(e) =>
+                          updateRow(index, { secret: e.target.checked })
+                        }
+                        className="rounded border-gray-300"
+                      />
+                      secret
+                    </label>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">
+                      Description
+                    </label>
+                    <input
+                      type="text"
+                      value={row.description}
+                      onChange={(e) =>
+                        updateRow(index, { description: e.target.value })
+                      }
+                      placeholder="Optional description"
+                      className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">
+                      Expression
+                    </label>
+                    <textarea
+                      value={row.expression}
+                      onChange={(e) =>
+                        updateRow(index, { expression: e.target.value })
+                      }
+                      placeholder="{{ task.fetch.result.data.headline }}"
+                      rows={3}
+                      className="w-full px-2 py-1.5 text-xs font-mono border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent resize-y"
+                    />
+                  </div>
+                </div>
+                <button
+                  onClick={() => removeRow(index)}
+                  className="p-1.5 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                  title="Remove output"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <button
+        onClick={addRow}
+        className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-violet-600 hover:text-violet-700 hover:bg-violet-50 rounded-lg border border-dashed border-violet-300 transition-colors w-full justify-center"
+      >
+        <Plus className="w-3.5 h-3.5" />
+        Add output
+      </button>
+    </div>
+  );
+}
+
+function CombinedOutputSummaryList({
+  output,
+  outputMap,
+  emptyMessage,
+  onEdit,
+}: {
+  output: Record<string, ParamDefinition>;
+  outputMap: Record<string, string>;
+  emptyMessage: string;
+  onEdit: () => void;
+}) {
+  const keys = Array.from(
+    new Set([...Object.keys(output), ...Object.keys(outputMap)]),
+  );
+
+  if (keys.length === 0) {
+    return (
+      <button
+        onClick={onEdit}
+        className="w-full px-3 py-4 border-2 border-dashed border-gray-200 rounded-lg text-center hover:border-violet-300 hover:bg-violet-50/30 transition-colors group"
+      >
+        <Plus className="w-4 h-4 text-gray-300 group-hover:text-violet-400 mx-auto mb-1" />
+        <span className="text-[11px] text-gray-400 group-hover:text-violet-500">
+          {emptyMessage}
+        </span>
+      </button>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      {keys.map((key) => {
+        const def = output[key];
+        const expr = outputMap[key];
+        return (
+          <div
+            key={key}
+            className="px-2 py-1.5 bg-white border border-gray-150 rounded-md"
+          >
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono text-[11px] font-medium text-gray-800 truncate">
+                {key}
+              </span>
+              {def?.required && (
+                <span className="text-[9px] font-semibold text-red-500">*</span>
+              )}
+              {def?.type && (
+                <span className="text-[10px] text-violet-600/70">
+                  {def.type}
+                </span>
+              )}
+              {def?.secret && (
+                <span className="text-[9px] text-amber-500">secret</span>
+              )}
+            </div>
+            <div
+              className="font-mono text-[10px] text-violet-600/80 truncate"
+              title={expr}
+            >
+              {expr ? (
+                expr
+              ) : (
+                <span className="italic text-gray-300">(no expression)</span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+      <button
+        onClick={onEdit}
+        className="flex items-center gap-1 px-2 py-1 text-[11px] text-gray-400 hover:text-violet-600 transition-colors w-full"
+      >
+        <Pencil className="w-3 h-3" />
+        Edit
+      </button>
+    </div>
+  );
+}
+
 export default function WorkflowInputsPanel({
   label,
   version,
@@ -107,6 +427,7 @@ export default function WorkflowInputsPanel({
   cancellationPolicy,
   parameters,
   output,
+  outputMap,
   onLabelChange,
   onVersionChange,
   onDescriptionChange,
@@ -114,19 +435,37 @@ export default function WorkflowInputsPanel({
   onCancellationPolicyChange,
   onParametersChange,
   onOutputChange,
+  onOutputMapChange,
 }: WorkflowInputsPanelProps) {
   const [modalTarget, setModalTarget] = useState<ModalTarget>(null);
 
-  // Draft state for the modal so changes only apply on confirm
+  // Draft state for the schema modal so changes only apply on confirm
   const [draftSchema, setDraftSchema] = useState<
     Record<string, ParamDefinition>
   >({});
+
+  // Draft state for the combined Output editor (schema + expression).
+  const [draftOutputRows, setDraftOutputRows] = useState<OutputRow[]>([]);
 
   const openModal = (target: ModalTarget) => {
     if (target === "parameters") {
       setDraftSchema({ ...parameters });
     } else if (target === "output") {
-      setDraftSchema({ ...output });
+      const rows = buildOutputRows(output, outputMap);
+      setDraftOutputRows(
+        rows.length > 0
+          ? rows
+          : [
+              {
+                key: "",
+                type: "string",
+                required: false,
+                secret: false,
+                description: "",
+                expression: "",
+              },
+            ],
+      );
     }
     setModalTarget(target);
   };
@@ -135,7 +474,9 @@ export default function WorkflowInputsPanel({
     if (modalTarget === "parameters") {
       onParametersChange(draftSchema);
     } else if (modalTarget === "output") {
-      onOutputChange(draftSchema);
+      const { schema, outputMap: nextMap } = rowsToSchemaAndMap(draftOutputRows);
+      onOutputChange(schema);
+      onOutputMapChange(nextMap);
     }
     setModalTarget(null);
   };
@@ -274,7 +615,7 @@ export default function WorkflowInputsPanel({
             />
           </div>
 
-          {/* Output Schema */}
+          {/* Output (combined schema + expression) */}
           <div className="border-t border-gray-200 pt-3">
             <div className="flex items-center justify-between mb-1.5">
               <div className="flex items-center gap-1.5">
@@ -283,18 +624,26 @@ export default function WorkflowInputsPanel({
                   Output
                 </h4>
               </div>
-              {Object.keys(output).length > 0 && (
+              {Object.keys(output).length + Object.keys(outputMap).length >
+                0 && (
                 <span className="text-[10px] text-gray-400">
-                  {Object.keys(output).length}
+                  {
+                    new Set([
+                      ...Object.keys(output),
+                      ...Object.keys(outputMap),
+                    ]).size
+                  }
                 </span>
               )}
             </div>
             <p className="text-[10px] text-gray-400 mb-2">
-              Values this workflow produces on completion.
+              Fields the workflow produces on completion. Each has a type
+              (schema) and a template expression evaluated at completion.
             </p>
-            <ParamSummaryList
-              schema={output}
-              emptyMessage="Add output schema"
+            <CombinedOutputSummaryList
+              output={output}
+              outputMap={outputMap}
+              emptyMessage="Add output fields"
               onEdit={() => openModal("output")}
             />
           </div>
@@ -320,7 +669,7 @@ export default function WorkflowInputsPanel({
                 <p className="text-xs text-gray-500 mt-0.5">
                   {modalTarget === "parameters"
                     ? "Define the inputs this workflow accepts when executed."
-                    : "Define the outputs this workflow produces upon completion."}
+                    : "Define the fields this workflow produces on completion. Each entry has a name & type (the schema) plus a template expression."}
                 </p>
               </div>
               <button
@@ -333,19 +682,22 @@ export default function WorkflowInputsPanel({
 
             {/* Body */}
             <div className="flex-1 overflow-y-auto px-6 py-4">
-              <SchemaBuilder
-                value={draftSchema}
-                onChange={(schema) =>
-                  setDraftSchema(
-                    schema as unknown as Record<string, ParamDefinition>,
-                  )
-                }
-                placeholder={
-                  modalTarget === "parameters"
-                    ? '{"message": {"type": "string", "required": true}}'
-                    : '{"result": {"type": "string"}}'
-                }
-              />
+              {modalTarget === "output" ? (
+                <CombinedOutputEditor
+                  rows={draftOutputRows}
+                  onChange={setDraftOutputRows}
+                />
+              ) : (
+                <SchemaBuilder
+                  value={draftSchema}
+                  onChange={(schema) =>
+                    setDraftSchema(
+                      schema as unknown as Record<string, ParamDefinition>,
+                    )
+                  }
+                  placeholder='{"message": {"type": "string", "required": true}}'
+                />
+              )}
             </div>
 
             {/* Footer */}

@@ -33,7 +33,6 @@ BEGIN
         'rule_ref', enforcement_rule_ref,
         'trigger_ref', enforcement_trigger_ref,
         'parent', NEW.parent,
-        'result', NEW.result,
         'started_at', NEW.started_at,
         'workflow_task', NEW.workflow_task,
         'created', NEW.created,
@@ -76,7 +75,6 @@ BEGIN
             'rule_ref', enforcement_rule_ref,
             'trigger_ref', enforcement_trigger_ref,
             'parent', NEW.parent,
-            'result', NEW.result,
             'started_at', NEW.started_at,
             'workflow_task', NEW.workflow_task,
             'created', NEW.created,
@@ -125,7 +123,7 @@ BEGIN
         'source_ref', NEW.source_ref,
         'rule', NEW.rule,
         'rule_ref', NEW.rule_ref,
-        'payload', NEW.payload,
+        'has_payload', NEW.payload IS NOT NULL,
         'created', NEW.created
     );
 
@@ -163,9 +161,6 @@ BEGIN
         'event', NEW.event,
         'status', NEW.status,
         'condition', NEW.condition,
-        'conditions', NEW.conditions,
-        'config', NEW.config,
-        'payload', NEW.payload,
         'created', NEW.created,
         'resolved_at', NEW.resolved_at
     );
@@ -203,9 +198,6 @@ BEGIN
             'status', NEW.status,
             'old_status', OLD.status,
             'condition', NEW.condition,
-            'conditions', NEW.conditions,
-            'config', NEW.config,
-            'payload', NEW.payload,
             'created', NEW.created,
             'resolved_at', NEW.resolved_at
         );
@@ -265,7 +257,6 @@ BEGIN
             'id', NEW.id,
             'execution', NEW.execution,
             'status', NEW.status,
-            'response', NEW.response,
             'updated', NEW.updated
         );
 

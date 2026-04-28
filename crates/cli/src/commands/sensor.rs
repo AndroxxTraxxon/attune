@@ -105,12 +105,12 @@ async fn handle_list(
                 let mut table = output::create_table();
                 output::add_header(
                     &mut table,
-                    vec!["ID", "Pack", "Name", "Trigger", "Enabled", "Description"],
+                    vec!["Ref", "Pack", "Label", "Trigger", "Enabled", "Description"],
                 );
 
                 for sensor in sensors {
                     table.add_row(vec![
-                        sensor.id.to_string(),
+                        sensor.sensor_ref.clone(),
                         sensor.pack_ref.as_deref().unwrap_or("").to_string(),
                         sensor.label.clone(),
                         sensor.trigger_types.join(", "),
@@ -146,7 +146,6 @@ async fn handle_show(
         OutputFormat::Table => {
             output::print_section(&format!("Sensor: {}", sensor.sensor_ref));
             output::print_key_value_table(vec![
-                ("ID", sensor.id.to_string()),
                 ("Ref", sensor.sensor_ref.clone()),
                 (
                     "Pack",

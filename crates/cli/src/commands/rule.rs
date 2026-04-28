@@ -275,12 +275,11 @@ async fn handle_list(
                 let mut table = output::create_table();
                 output::add_header(
                     &mut table,
-                    vec!["ID", "Ref", "Pack", "Label", "Trigger", "Action", "Enabled"],
+                    vec!["Ref", "Pack", "Label", "Trigger", "Action", "Enabled"],
                 );
 
                 for rule in rules {
                     table.add_row(vec![
-                        rule.id.to_string(),
                         rule.rule_ref.clone(),
                         rule.pack_ref.clone(),
                         rule.label.clone(),
@@ -317,7 +316,6 @@ async fn handle_show(
         OutputFormat::Table => {
             output::print_section(&format!("Rule: {}", rule.rule_ref));
             output::print_key_value_table(vec![
-                ("ID", rule.id.to_string()),
                 ("Ref", rule.rule_ref.clone()),
                 ("Pack", rule.pack_ref.clone()),
                 ("Label", rule.label.clone()),
@@ -439,7 +437,6 @@ async fn handle_update(
         OutputFormat::Table => {
             output::print_success(&format!("Rule '{}' updated successfully", rule.rule_ref));
             output::print_key_value_table(vec![
-                ("ID", rule.id.to_string()),
                 ("Ref", rule.rule_ref.clone()),
                 ("Pack", rule.pack_ref.clone()),
                 ("Label", rule.label.clone()),

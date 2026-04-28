@@ -47,6 +47,10 @@ export type ActionResponse = {
    */
   param_schema: any | null;
   /**
+   * Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
+   */
+  required_worker_runtimes?: Record<string, string>;
+  /**
    * Unique reference identifier
    */
   ref: string;

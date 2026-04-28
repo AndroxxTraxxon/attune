@@ -9,6 +9,7 @@ The core pack is automatically installed with Attune and provides the building b
 - **Timer Triggers**: Interval-based, cron-based, and one-shot datetime timers
 - **HTTP Actions**: Make HTTP requests to external APIs
 - **Shell Actions**: Execute basic shell commands (echo, sleep, noop)
+- **Agent Actions**: Launch AI/agent harnesses with execution-scoped MCP access
 - **Built-in Sensors**: System sensors for monitoring time-based events
 
 ## Components
@@ -106,6 +107,27 @@ parameters:
     Content-Type: "application/json"
   auth_type: "bearer"
   auth_token: "${secret:api_token}"
+```
+
+---
+
+#### `core.run_agent_command`
+Run an AI/agent harness command with execution-scoped Attune MCP access.
+
+This action is designed for workflow tasks that launch agent-capable tools inside an Attune execution. The worker already provides `ATTUNE_API_TOKEN` and `ATTUNE_API_URL`; this action exports `ATTUNE_MCP_COMMAND` pointing at the local `attune-mcp` binary so the harness can spawn MCP as a child process and all tool calls stay bound to the current execution identity.
+
+**Parameters:**
+- `command` (string, required): Shell command to run for the agent harness
+- `working_dir` (string, optional): Working directory before launch
+- `mcp_command` (string, optional): Path to the MCP binary (default: `/opt/attune/agent/attune-mcp`)
+- `state_dir` (string, optional): Directory for transcript/state files
+- `require_mcp_binary` (boolean, optional): Fail if the MCP binary is unavailable
+
+**Example:**
+```yaml
+action: core.run_agent_command
+parameters:
+  command: "my-agent-harness --mcp-command \"$ATTUNE_MCP_COMMAND\""
 ```
 
 ---

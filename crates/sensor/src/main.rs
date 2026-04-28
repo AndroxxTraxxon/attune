@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
     config.validate()?;
 
     log_config_details(&config);
-    run_sensor_service(config, "Attune Sensor Service is ready").await?;
+    run_sensor_service(config, None, "Attune Sensor Service is ready").await?;
     info!("Attune Sensor Service shutdown complete");
 
     Ok(())

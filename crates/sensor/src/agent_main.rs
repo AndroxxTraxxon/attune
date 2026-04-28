@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use attune_common::agent_bootstrap::{bootstrap_runtime_env, print_detect_only_report};
+use attune_common::agent_runtime_detection::DetectedRuntime;
 use attune_common::config::Config;
 use attune_sensor::startup::{
     apply_sensor_name_override, init_tracing, log_config_details, run_sensor_service,
@@ -51,6 +52,7 @@ fn main() -> Result<()> {
     );
 
     let bootstrap = bootstrap_runtime_env("ATTUNE_SENSOR_RUNTIMES");
+    let agent_detected_runtimes = bootstrap.detected_runtimes.clone();
 
     if args.detect_only {
         print_detect_only_report("ATTUNE_SENSOR_RUNTIMES", &bootstrap);
@@ -60,10 +62,13 @@ fn main() -> Result<()> {
     set_config_path(args.config.as_deref());
 
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async_main(args))
+    runtime.block_on(async_main(args, agent_detected_runtimes))
 }
 
-async fn async_main(args: Args) -> Result<()> {
+async fn async_main(
+    args: Args,
+    agent_detected_runtimes: Option<Vec<DetectedRuntime>>,
+) -> Result<()> {
     let mut config = Config::load()?;
     config.validate()?;
 
@@ -72,7 +77,12 @@ async fn async_main(args: Args) -> Result<()> {
     }
 
     log_config_details(&config);
-    run_sensor_service(config, "Attune Sensor Agent is ready").await?;
+    run_sensor_service(
+        config,
+        agent_detected_runtimes,
+        "Attune Sensor Agent is ready",
+    )
+    .await?;
     info!("Attune Sensor Agent shutdown complete");
 
     Ok(())

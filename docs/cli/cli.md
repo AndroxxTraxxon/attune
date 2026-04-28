@@ -26,6 +26,7 @@ This will install the `attune` binary to your cargo bin directory (usually `~/.c
 ```bash
 cargo build -p attune-cli
 ./target/debug/attune --help
+./target/debug/attune-mcp --help
 ```
 
 ## Configuration
@@ -44,6 +45,7 @@ output_format: table
 ### Environment Variables
 
 - `ATTUNE_API_URL`: Override the API endpoint
+- `ATTUNE_PROFILE`: Select the saved profile to use
 - `XDG_CONFIG_HOME`: Change config directory location
 
 ### Global Options
@@ -56,6 +58,48 @@ All commands support:
 - `-v, --verbose`: Enable debug logging
 
 ## Command Reference
+
+### MCP Server
+
+The CLI package also ships an MCP server binary named `attune-mcp`.
+
+Use it when you want an MCP-capable agent or harness to interact with Attune through a curated tool surface backed by the existing API.
+
+```bash
+# Uses the active Attune CLI profile and auth tokens from ~/.config/attune/config.yaml
+./target/debug/attune-mcp
+
+# Override the API endpoint or profile explicitly
+./target/debug/attune-mcp --api-url http://localhost:8080
+./target/debug/attune-mcp --profile prod
+
+# Run as an HTTP service for containers or remote MCP clients
+./target/debug/attune-mcp --transport http --listen-addr 0.0.0.0:8090
+
+# Run with an execution-scoped token inside an Attune action/worker
+ATTUNE_API_URL=http://attune-api:8080 ATTUNE_API_TOKEN="$ATTUNE_API_TOKEN" ./target/debug/attune-mcp
+```
+
+Current MCP tool families:
+- actions: list, get, execute
+- workflows: list, get
+- executions: get, cancel
+- queues: list, get, enqueue
+- artifacts: list, get
+- events: list, get
+- inquiries: list, respond
+
+Notes:
+- `attune-mcp` defaults to **stdio transport** for MCP client launchers, but also supports **HTTP transport** at `POST /mcp` with `GET /health` for containerized deployment.
+- It reuses the same CLI config/profile/auth state as `attune`, and also supports non-interactive startup auth via `ATTUNE_AUTH_TOKEN` / `ATTUNE_REFRESH_TOKEN` or `ATTUNE_LOGIN` / `ATTUNE_PASSWORD`.
+- For Attune-managed executions, `ATTUNE_API_TOKEN` is supported as an **execution-scoped auth source** and takes precedence over saved profile tokens.
+- The main `attune` CLI uses the same token env precedence, so helper commands running inside worker containers can reuse execution-scoped tokens without creating a profile on disk.
+- When a container image does not provide a system CA bundle, the CLI falls back to bundled Mozilla root certificates so internal execution-token API calls do not panic during client initialization.
+- Direct event creation is intentionally not exposed in MCP because the Attune API restricts event emission to sensor/execution token flows.
+
+Container deployment surfaces:
+- Docker Compose includes an optional `mcp` profile-backed service on port `8090`.
+- The Helm chart includes an optional `mcp.enabled` deployment/service, disabled by default.
 
 ### Authentication
 

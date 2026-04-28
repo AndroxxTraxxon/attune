@@ -74,6 +74,7 @@ async fn setup_test_pack_and_action(pool: &PgPool) -> Result<(Pack, Action)> {
         entrypoint: "test.sh".to_string(),
         runtime: None,
         runtime_version_constraint: None,
+        required_worker_runtimes: serde_json::json!({}),
         param_schema: None,
         out_schema: None,
         is_adhoc: false,

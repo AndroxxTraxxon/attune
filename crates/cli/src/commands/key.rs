@@ -294,20 +294,11 @@ async fn handle_list(
                 let mut table = output::create_table();
                 output::add_header(
                     &mut table,
-                    vec![
-                        "ID",
-                        "Ref",
-                        "Name",
-                        "Owner Type",
-                        "Owner",
-                        "Encrypted",
-                        "Created",
-                    ],
+                    vec!["Ref", "Name", "Owner Type", "Owner", "Encrypted", "Created"],
                 );
 
                 for key in keys {
                     table.add_row(vec![
-                        key.id.to_string(),
                         key.key_ref.clone(),
                         key.name.clone(),
                         key.owner_type.clone(),
@@ -358,7 +349,6 @@ async fn handle_show(
             output::print_section(&format!("Key: {}", key.key_ref));
 
             let mut pairs = vec![
-                ("ID", key.id.to_string()),
                 ("Reference", key.key_ref.clone()),
                 ("Name", key.name.clone()),
                 ("Owner Type", key.owner_type.clone()),
@@ -444,7 +434,6 @@ async fn handle_create(
         OutputFormat::Table => {
             output::print_success(&format!("Key '{}' created successfully", key.key_ref));
             output::print_key_value_table(vec![
-                ("ID", key.id.to_string()),
                 ("Reference", key.key_ref.clone()),
                 ("Name", key.name.clone()),
                 ("Owner Type", key.owner_type.clone()),
@@ -497,7 +486,6 @@ async fn handle_update(
         OutputFormat::Table => {
             output::print_success(&format!("Key '{}' updated successfully", key.key_ref));
             output::print_key_value_table(vec![
-                ("ID", key.id.to_string()),
                 ("Reference", key.key_ref.clone()),
                 ("Name", key.name.clone()),
                 ("Owner Type", key.owner_type.clone()),

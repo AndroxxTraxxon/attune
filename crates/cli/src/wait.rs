@@ -128,6 +128,7 @@ struct RestExecution {
     id: i64,
     action_ref: String,
     status: String,
+    #[serde(default)]
     result: Option<serde_json::Value>,
     created: String,
     #[serde(default)]
@@ -1433,15 +1434,21 @@ async fn wait_via_websocket(
                                 }
 
                                 // Extract status from the notification payload.
-                                // The notifier broadcasts the full execution row in
-                                // `payload`, so we can read the status directly.
+                                // The notifier broadcasts a small subset of the
+                                // execution row (no `result` / large fields) so
+                                // we fetch the full record via REST once the
+                                // status is terminal.
                                 if let Some(status) =
                                     n.payload.get("status").and_then(|s| s.as_str())
                                 {
                                     if is_terminal(status) {
-                                        // Build a summary from the payload; fall
-                                        // back to a REST fetch for missing fields.
-                                        return build_summary_from_payload(execution_id, &n.payload);
+                                        return fetch_summary_or_fallback(
+                                            api_client,
+                                            execution_id,
+                                            &n.payload,
+                                            verbose,
+                                        )
+                                        .await;
                                     }
                                 }
                             }
@@ -1493,6 +1500,30 @@ async fn wait_via_websocket(
 
     graceful_close_split_websocket(&mut write, &mut read).await;
     wait_result
+}
+
+/// Fetch the full execution via REST once the notifier signals terminal status.
+/// Falls back to a partial summary built from the payload if the REST call fails
+/// (e.g. network error during shutdown).
+async fn fetch_summary_or_fallback(
+    client: &mut ApiClient,
+    execution_id: i64,
+    payload: &serde_json::Value,
+    verbose: bool,
+) -> Result<ExecutionSummary> {
+    let path = format!("/executions/{}", execution_id);
+    match client.get::<RestExecution>(&path).await {
+        Ok(exec) => Ok(exec.into()),
+        Err(e) => {
+            if verbose {
+                eprintln!(
+                    "  [notifier] terminal received but REST refetch failed ({}); using partial payload",
+                    e
+                );
+            }
+            build_summary_from_payload(execution_id, payload)
+        }
+    }
 }
 
 /// Build an [`ExecutionSummary`] from the notification payload.

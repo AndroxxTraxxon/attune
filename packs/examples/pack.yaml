@@ -38,6 +38,7 @@ meta:
     of Attune features including:
 
     - JSON Lines (JSONL) output format for streaming results
+    - GitHub Copilot CLI integration via execution-scoped Attune MCP
     - Various parameter delivery methods
     - Different output formats
     - Best practices for action development
@@ -48,5 +49,6 @@ tags:
   - demos
   - documentation
 
-# Runtime dependencies (none for examples)
-runtime_deps: []
+# Runtime dependencies
+runtime_deps:
+  - nodejs>=22

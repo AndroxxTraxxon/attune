@@ -1,12 +1,7 @@
 use clap::{Parser, Subcommand};
 use std::process;
 
-mod client;
-mod commands;
-mod config;
-mod output;
-mod wait;
-
+use attune_cli::{commands, config, output};
 use commands::{
     action::{handle_action_command, ActionCommands},
     artifact::ArtifactCommands,

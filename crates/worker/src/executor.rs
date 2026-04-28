@@ -54,6 +54,7 @@ pub struct ActionExecutor {
     max_stderr_bytes: usize,
     packs_base_dir: PathBuf,
     artifacts_dir: PathBuf,
+    runtime_envs_dir: PathBuf,
     api_url: String,
     jwt_config: JwtConfig,
 }
@@ -110,6 +111,7 @@ impl ActionExecutor {
         max_stderr_bytes: usize,
         packs_base_dir: PathBuf,
         artifacts_dir: PathBuf,
+        runtime_envs_dir: PathBuf,
         api_url: String,
         jwt_config: JwtConfig,
     ) -> Self {
@@ -123,6 +125,7 @@ impl ActionExecutor {
             max_stderr_bytes,
             packs_base_dir,
             artifacts_dir,
+            runtime_envs_dir,
             api_url,
             jwt_config,
         }
@@ -358,6 +361,19 @@ impl ActionExecutor {
         env.insert(
             "ATTUNE_ARTIFACTS_DIR".to_string(),
             self.artifacts_dir.to_string_lossy().to_string(),
+        );
+        env.insert(
+            "ATTUNE_RUNTIME_ENVS_DIR".to_string(),
+            self.runtime_envs_dir.to_string_lossy().to_string(),
+        );
+        env.insert(
+            "ATTUNE_PACK_REF".to_string(),
+            execution
+                .action_ref
+                .split('.')
+                .next()
+                .unwrap_or(&execution.action_ref)
+                .to_string(),
         );
 
         // Generate execution-scoped API token.

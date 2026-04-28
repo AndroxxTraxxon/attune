@@ -8,7 +8,8 @@
         build-agent docker-build-agent docker-build-agent-arm64 docker-build-agent-all \
         run-agent run-agent-release \
         docker-up-agent docker-down-agent \
-        docker-build-pack-binaries docker-build-pack-binaries-arm64 docker-build-pack-binaries-all
+        docker-build-pack-binaries docker-build-pack-binaries-arm64 docker-build-pack-binaries-all \
+        docker-build-mcp docker-up-mcp docker-down-mcp
 
 # Default target
 help:
@@ -63,6 +64,9 @@ help:
 	@echo "  make docker-build-worker-full    - Build full worker (all runtimes)"
 	@echo "  make docker-up                   - Start services with docker compose"
 	@echo "  make docker-down                 - Stop services"
+	@echo "  make docker-build-mcp            - Build MCP service image"
+	@echo "  make docker-up-mcp               - Start optional MCP service profile"
+	@echo "  make docker-down-mcp             - Stop optional MCP service profile"
 	@echo ""
 	@echo "Agent (Universal Worker):"
 	@echo "  make build-agent              - Build statically-linked agent binary (musl)"
@@ -245,6 +249,15 @@ docker-build-api:
 
 docker-build-web:
 	docker compose build web
+
+docker-build-mcp:
+	docker compose build mcp
+
+docker-up-mcp:
+	docker compose --profile mcp up -d mcp
+
+docker-down-mcp:
+	docker compose --profile mcp stop mcp
 
 # Agent binary (statically-linked for injection into any container)
 AGENT_RUST_TARGET ?= x86_64-unknown-linux-musl

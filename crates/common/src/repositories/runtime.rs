@@ -281,6 +281,25 @@ impl RuntimeRepository {
         Ok(runtimes)
     }
 
+    /// Bulk-fetch runtime refs for the given IDs. Returns a map from ID to ref.
+    pub async fn find_refs_by_ids<'e, E>(
+        executor: E,
+        ids: &[Id],
+    ) -> Result<std::collections::HashMap<Id, String>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        if ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let rows: Vec<(Id, String)> =
+            sqlx::query_as("SELECT id, ref FROM runtime WHERE id = ANY($1)")
+                .bind(ids)
+                .fetch_all(executor)
+                .await?;
+        Ok(rows.into_iter().collect())
+    }
+
     /// Find a runtime by name (case-insensitive)
     pub async fn find_by_name<'e, E>(executor: E, name: &str) -> Result<Option<Runtime>>
     where

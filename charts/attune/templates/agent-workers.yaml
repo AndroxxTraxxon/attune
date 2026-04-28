@@ -51,7 +51,9 @@ spec:
             - |
               cp /usr/local/bin/attune-agent /opt/attune/agent/attune-agent
               cp /usr/local/bin/attune-sensor-agent /opt/attune/agent/attune-sensor-agent
-              chmod +x /opt/attune/agent/attune-agent /opt/attune/agent/attune-sensor-agent
+              cp /usr/local/bin/attune-mcp /opt/attune/agent/attune-mcp
+              cp /usr/local/bin/attune /opt/attune/agent/attune
+              chmod +x /opt/attune/agent/attune /opt/attune/agent/attune-agent /opt/attune/agent/attune-sensor-agent /opt/attune/agent/attune-mcp
           volumeMounts:
             - name: agent-bin
               mountPath: /opt/attune/agent
@@ -190,7 +192,9 @@ spec:
             - |
               cp /usr/local/bin/attune-agent /opt/attune/agent/attune-agent
               cp /usr/local/bin/attune-sensor-agent /opt/attune/agent/attune-sensor-agent
-              chmod +x /opt/attune/agent/attune-agent /opt/attune/agent/attune-sensor-agent
+              cp /usr/local/bin/attune-mcp /opt/attune/agent/attune-mcp
+              cp /usr/local/bin/attune /opt/attune/agent/attune
+              chmod +x /opt/attune/agent/attune /opt/attune/agent/attune-agent /opt/attune/agent/attune-sensor-agent /opt/attune/agent/attune-mcp
           volumeMounts:
             - name: agent-bin
               mountPath: /opt/attune/agent

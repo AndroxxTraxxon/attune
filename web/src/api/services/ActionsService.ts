@@ -92,6 +92,10 @@ export class ActionsService {
              */
             param_schema: any | null;
             /**
+             * Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
+             */
+            required_worker_runtimes?: Record<string, string>;
+            /**
              * Unique reference identifier
              */
             ref: string;
@@ -186,6 +190,10 @@ export class ActionsService {
              * Parameter schema (StackStorm-style with inline required/secret)
              */
             param_schema: any | null;
+            /**
+             * Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
+             */
+            required_worker_runtimes?: Record<string, string>;
             /**
              * Unique reference identifier
              */
@@ -282,6 +290,10 @@ export class ActionsService {
              * Parameter schema (StackStorm-style with inline required/secret)
              */
             param_schema: any | null;
+            /**
+             * Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
+             */
+            required_worker_runtimes?: Record<string, string>;
             /**
              * Unique reference identifier
              */

@@ -31,6 +31,10 @@ export type CreateActionRequest = {
    */
   param_schema?: any | null;
   /**
+   * Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
+   */
+  required_worker_runtimes?: Record<string, string>;
+  /**
    * Unique reference identifier (e.g., "core.http", "aws.ec2.start_instance")
    */
   ref: string;

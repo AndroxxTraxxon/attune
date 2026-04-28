@@ -12,12 +12,17 @@
 
 use anyhow::{anyhow, Result};
 use attune_common::models::{runtime::RuntimeExecutionConfig, Id, Sensor, Trigger};
-use attune_common::repositories::{FindById, List, RuntimeRepository};
+use attune_common::repositories::{
+    FindById, List, RuntimeRepository, RuntimeVersionRepository, WorkerRepository,
+};
+use attune_common::runtime_detection::normalize_runtime_name;
+use attune_common::version_matching::select_best_version;
 
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use std::io;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -158,6 +163,10 @@ struct SensorManagerInner {
     api_client: ApiClient,
     api_url: String,
     mq_url: String,
+    /// Worker ID for this sensor service instance (set after registration).
+    /// Used to read locally-detected runtime versions from the worker row
+    /// when resolving `sensor.runtime_version_constraint`. Zero means unset.
+    worker_id: AtomicI64,
 }
 
 impl SensorManager {
@@ -192,8 +201,18 @@ impl SensorManager {
                 api_client,
                 api_url,
                 mq_url,
+                worker_id: AtomicI64::new(0),
             }),
         }
+    }
+
+    /// Record the worker ID assigned to this sensor service after
+    /// registration. Required for `runtime_version_constraint` resolution
+    /// (we read this worker's `capabilities.runtime_versions` to filter
+    /// candidate runtime versions to those locally available).
+    pub fn set_worker_id(&self, worker_id: Id) {
+        self.inner.worker_id.store(worker_id, Ordering::SeqCst);
+        info!("Sensor manager bound to worker {}", worker_id);
     }
 
     /// Start the sensor manager
@@ -466,18 +485,35 @@ impl SensorManager {
                 )
             })?;
 
-        let exec_config = runtime.parsed_execution_config();
+        // Resolve runtime version constraint. If the sensor declares one,
+        // pick the best locally-available version from the runtime_version
+        // table, filtered against this sensor worker's reported runtime_versions.
+        // If no compatible version is available locally, refuse to start the
+        // sensor so a sensor worker that does have it can pick it up.
+        let (version_config_override, version_env_suffix, selected_version) =
+            self.resolve_runtime_version(&runtime, &sensor).await?;
+
+        let exec_config = version_config_override
+            .clone()
+            .unwrap_or_else(|| runtime.parsed_execution_config());
         let rt_name = runtime.name.to_lowercase();
-        let runtime_env_suffix = runtime
+        let base_runtime_suffix = runtime
             .r#ref
             .rsplit('.')
             .next()
             .filter(|suffix| !suffix.is_empty())
-            .unwrap_or(&rt_name);
+            .unwrap_or(&rt_name)
+            .to_string();
+        let runtime_env_suffix = version_env_suffix.unwrap_or(base_runtime_suffix);
 
         info!(
-            "Sensor {} runtime details: id={}, ref='{}', name='{}', execution_config={}",
-            sensor.r#ref, runtime.id, runtime.r#ref, runtime.name, runtime.execution_config
+            "Sensor {} runtime details: id={}, ref='{}', name='{}', selected_version={:?}, env_suffix='{}'",
+            sensor.r#ref,
+            runtime.id,
+            runtime.r#ref,
+            runtime.name,
+            selected_version,
+            runtime_env_suffix,
         );
 
         // Resolve the interpreter: check for a virtualenv/node_modules first,
@@ -485,7 +521,7 @@ impl SensorManager {
         let pack_dir = std::path::PathBuf::from(&self.inner.packs_base_dir).join(pack_ref);
         let env_dir = std::path::PathBuf::from(&self.inner.runtime_envs_dir)
             .join(pack_ref)
-            .join(runtime_env_suffix);
+            .join(&runtime_env_suffix);
         if let Err(e) = self
             .ensure_runtime_environment(&exec_config, &pack_dir, &env_dir)
             .await
@@ -692,6 +728,252 @@ impl SensorManager {
         TriggerRepository::find_by_id(&self.inner.db, trigger_id)
             .await?
             .ok_or_else(|| anyhow!("Trigger {} not found", trigger_id))
+    }
+
+    /// Resolve a sensor's `runtime_version_constraint` against the locally
+    /// available runtime versions for this sensor service instance.
+    ///
+    /// Returns `(execution_config_override, env_dir_suffix, version_string)`:
+    /// - When the sensor declares no constraint AND the runtime has no
+    ///   registered versions, all three are `None` and the parent runtime's
+    ///   config is used as-is.
+    /// - When the sensor declares a constraint and a matching version is
+    ///   available locally, returns the version's config + per-version env
+    ///   suffix (e.g., `"python-3.12"`).
+    /// - When the sensor declares a constraint but no compatible version is
+    ///   available locally, returns an error so this sensor service refuses
+    ///   to start the sensor (allowing another sensor worker with a matching
+    ///   version to pick it up).
+    async fn resolve_runtime_version(
+        &self,
+        runtime: &attune_common::models::Runtime,
+        sensor: &Sensor,
+    ) -> Result<(
+        Option<RuntimeExecutionConfig>,
+        Option<String>,
+        Option<String>,
+    )> {
+        let constraint = sensor.runtime_version_constraint.as_deref();
+
+        // Load all registered versions for this runtime.
+        let versions = RuntimeVersionRepository::find_by_runtime(&self.inner.db, runtime.id)
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to load runtime versions for runtime '{}' (id {}): {}",
+                    runtime.name,
+                    runtime.id,
+                    e
+                )
+            })?;
+
+        if versions.is_empty() {
+            if constraint.is_some() {
+                return Err(anyhow!(
+                    "Sensor '{}' declares runtime_version_constraint '{}' but runtime '{}' \
+                     has no registered versions; refusing to start.",
+                    sensor.r#ref,
+                    constraint.unwrap_or(""),
+                    runtime.name,
+                ));
+            }
+            return Ok((None, None, None));
+        }
+
+        // Filter to versions actually available on THIS sensor worker.
+        let local_versions = self
+            .filter_versions_for_local_worker(runtime, versions)
+            .await;
+
+        match select_best_version(&local_versions, constraint) {
+            Some(selected) => {
+                let version_config = selected.parsed_execution_config();
+                let rt_name = runtime.name.to_lowercase();
+                let env_suffix = format!("{}-{}", rt_name, selected.version);
+                info!(
+                    "Selected runtime version '{}' (id {}) for sensor '{}' \
+                     (constraint: {}, runtime: '{}'). Env dir suffix: '{}'",
+                    selected.version,
+                    selected.id,
+                    sensor.r#ref,
+                    constraint.unwrap_or("none"),
+                    runtime.name,
+                    env_suffix,
+                );
+                Ok((
+                    Some(version_config),
+                    Some(env_suffix),
+                    Some(selected.version.clone()),
+                ))
+            }
+            None => {
+                if let Some(c) = constraint {
+                    Err(anyhow!(
+                        "No locally available runtime version matches constraint '{}' for \
+                         sensor '{}' (runtime: '{}'); refusing to start. Another sensor worker \
+                         with a matching version may pick it up.",
+                        c,
+                        sensor.r#ref,
+                        runtime.name,
+                    ))
+                } else {
+                    debug!(
+                        "No default or available version found for runtime '{}'. \
+                         Using parent runtime config for sensor '{}'.",
+                        runtime.name, sensor.r#ref,
+                    );
+                    Ok((None, None, None))
+                }
+            }
+        }
+    }
+
+    /// Filter a list of registered runtime versions down to the ones actually
+    /// present on this sensor worker, based on `worker.capabilities.runtime_versions`
+    /// (populated at registration time from agent runtime detection).
+    async fn filter_versions_for_local_worker(
+        &self,
+        runtime: &attune_common::models::Runtime,
+        versions: Vec<attune_common::models::RuntimeVersion>,
+    ) -> Vec<attune_common::models::RuntimeVersion> {
+        let worker_id = self.inner.worker_id.load(Ordering::SeqCst);
+        if worker_id == 0 {
+            warn!(
+                "Sensor manager has no worker_id assigned; cannot filter runtime versions for '{}'. \
+                 Falling back to all registered versions.",
+                runtime.name,
+            );
+            return versions;
+        }
+
+        let worker = match WorkerRepository::find_by_id(&self.inner.db, worker_id).await {
+            Ok(Some(w)) => w,
+            Ok(None) => {
+                warn!(
+                    "Sensor worker {} not found in DB while resolving runtime versions for '{}'; \
+                     using all registered versions as fallback.",
+                    worker_id, runtime.name,
+                );
+                return versions;
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to load sensor worker {} while resolving runtime versions for '{}': {}. \
+                     Using all registered versions as fallback.",
+                    worker_id, runtime.name, e,
+                );
+                return versions;
+            }
+        };
+
+        let advertised = Self::worker_runtime_versions_for_runtime(&worker, runtime);
+        if advertised.is_empty() {
+            warn!(
+                "Sensor worker {} does not advertise local runtime versions for '{}'; \
+                 using all registered versions as fallback.",
+                worker.name, runtime.name,
+            );
+            return versions;
+        }
+
+        versions
+            .into_iter()
+            .filter(|v| Self::version_matches_worker(v, &advertised))
+            .collect()
+    }
+
+    /// Extract the list of locally-detected version strings for `runtime`
+    /// from a worker's `capabilities.runtime_versions` (or fall back to
+    /// `capabilities.detected_interpreters`).
+    fn worker_runtime_versions_for_runtime(
+        worker: &attune_common::models::Worker,
+        runtime: &attune_common::models::Runtime,
+    ) -> Vec<String> {
+        let mut versions = Vec::new();
+        let candidate_runtime_names: Vec<String> = runtime
+            .aliases
+            .iter()
+            .map(|alias| normalize_runtime_name(alias))
+            .chain(std::iter::once(normalize_runtime_name(&runtime.name)))
+            .collect();
+
+        let Some(capabilities) = worker
+            .capabilities
+            .as_ref()
+            .and_then(|value| value.as_object())
+        else {
+            return versions;
+        };
+
+        if let Some(runtime_versions) = capabilities.get("runtime_versions") {
+            if let Some(map) = runtime_versions.as_object() {
+                for runtime_name in &candidate_runtime_names {
+                    if let Some(values) = map.get(runtime_name).and_then(|v| v.as_array()) {
+                        versions.extend(
+                            values
+                                .iter()
+                                .filter_map(|v| v.as_str().map(ToOwned::to_owned)),
+                        );
+                    }
+                }
+            }
+        }
+
+        if versions.is_empty() {
+            if let Some(detected) = capabilities
+                .get("detected_interpreters")
+                .and_then(|v| v.as_array())
+            {
+                for interp in detected {
+                    let Some(name) = interp.get("name").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    if !candidate_runtime_names
+                        .iter()
+                        .any(|c| c == &normalize_runtime_name(name))
+                    {
+                        continue;
+                    }
+                    if let Some(version) = interp.get("version").and_then(|v| v.as_str()) {
+                        versions.push(version.to_string());
+                    }
+                }
+            }
+        }
+
+        versions
+    }
+
+    /// True if the registered `RuntimeVersion` matches one of the worker's
+    /// advertised version strings (using the same lenient prefix match the
+    /// action worker uses).
+    fn version_matches_worker(
+        version: &attune_common::models::RuntimeVersion,
+        advertised: &[String],
+    ) -> bool {
+        use attune_common::version_matching::parse_version;
+
+        let registered = match parse_version(&version.version) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+
+        for adv in advertised {
+            if adv == &version.version {
+                return true;
+            }
+            if let Ok(adv_parsed) = parse_version(adv) {
+                if adv_parsed == registered {
+                    return true;
+                }
+                // Lenient: same major.minor counts as a match (worker reports
+                // "3.12.1" while DB might have "3.12").
+                if adv_parsed.major == registered.major && adv_parsed.minor == registered.minor {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Check if a trigger has any active/enabled rules

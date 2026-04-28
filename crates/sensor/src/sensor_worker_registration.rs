@@ -5,15 +5,22 @@
 //!
 //! Runtime detection uses the unified RuntimeDetector from common crate.
 
+use attune_common::agent_runtime_detection::DetectedRuntime;
 use attune_common::config::Config;
 use attune_common::error::Result;
 use attune_common::models::{Worker, WorkerRole, WorkerStatus, WorkerType};
-use attune_common::runtime_detection::RuntimeDetector;
+use attune_common::runtime_detection::{normalize_runtime_name, RuntimeDetector};
 use chrono::Utc;
 use serde_json::json;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use tracing::{debug, info};
+
+/// Capability key under which detected runtime versions are stored.
+///
+/// Mirrors `attune_worker::version_verify::RUNTIME_VERSIONS_CAPABILITY_KEY` so
+/// the API surfaces version info uniformly for both action and sensor workers.
+const RUNTIME_VERSIONS_CAPABILITY_KEY: &str = "runtime_versions";
 
 const ATTUNE_SENSOR_AGENT_MODE_ENV: &str = "ATTUNE_SENSOR_AGENT_MODE";
 const ATTUNE_SENSOR_AGENT_BINARY_NAME_ENV: &str = "ATTUNE_SENSOR_AGENT_BINARY_NAME";
@@ -54,6 +61,71 @@ impl SensorWorkerRegistration {
                 capabilities.insert("agent_binary_version".to_string(), json!(binary_version));
             }
         }
+    }
+
+    /// Store detected runtime interpreter metadata (paths + versions) in
+    /// capabilities. Mirrors `attune_worker::WorkerRegistration::set_detected_runtimes`.
+    ///
+    /// Writes three capability keys:
+    /// - `detected_interpreters`: array of {name, path, version} objects
+    /// - `runtime_versions`: map of normalized runtime name -> sorted versions
+    /// - `runtimes`: list of normalized runtime names (overrides DB-driven names)
+    pub fn set_detected_runtimes(&mut self, runtimes: Vec<DetectedRuntime>) {
+        let mut runtime_versions: HashMap<String, Vec<String>> = HashMap::new();
+        let interpreters: Vec<serde_json::Value> = runtimes
+            .iter()
+            .map(|rt| {
+                if let Some(version) = rt
+                    .version
+                    .as_ref()
+                    .filter(|version| !version.trim().is_empty())
+                {
+                    runtime_versions
+                        .entry(normalize_runtime_name(&rt.name))
+                        .or_default()
+                        .push(version.clone());
+                }
+                json!({
+                    "name": rt.name,
+                    "path": rt.path,
+                    "version": rt.version,
+                })
+            })
+            .collect();
+
+        for versions in runtime_versions.values_mut() {
+            versions.sort();
+            versions.dedup();
+        }
+
+        let mut runtime_names: Vec<String> = runtime_versions.keys().cloned().collect();
+        for rt in &runtimes {
+            let normalized = normalize_runtime_name(&rt.name);
+            if !runtime_names.contains(&normalized) {
+                runtime_names.push(normalized);
+            }
+        }
+        runtime_names.sort();
+
+        self.capabilities
+            .insert("detected_interpreters".to_string(), json!(interpreters));
+        self.capabilities.insert(
+            RUNTIME_VERSIONS_CAPABILITY_KEY.to_string(),
+            json!(runtime_versions),
+        );
+        self.capabilities
+            .insert("runtimes".to_string(), json!(runtime_names));
+
+        info!(
+            "Stored {} detected interpreter(s) in sensor capabilities",
+            runtimes.len()
+        );
+    }
+
+    /// Mark this sensor worker as running in agent mode.
+    pub fn set_agent_mode(&mut self, enabled: bool) {
+        self.capabilities
+            .insert("agent_mode".to_string(), json!(enabled));
     }
 
     /// Create a new sensor worker registration manager
@@ -284,6 +356,20 @@ impl SensorWorkerRegistration {
     /// The actual detection happens in `detect_capabilities_async`.
     /// Detect available runtimes using the unified runtime detector
     pub async fn detect_capabilities_async(&mut self, config: &Config) -> Result<()> {
+        // If the agent has already populated runtime_versions via
+        // `set_detected_runtimes`, skip DB-driven detection so we don't
+        // clobber the agent-provided interpreter metadata.
+        if self
+            .capabilities
+            .contains_key(RUNTIME_VERSIONS_CAPABILITY_KEY)
+        {
+            info!(
+                "Sensor capabilities already populated by agent detection; \
+                 skipping DB-driven detection"
+            );
+            return Ok(());
+        }
+
         info!("Detecting sensor worker capabilities...");
 
         let detector = RuntimeDetector::new(self.pool.clone());

@@ -218,6 +218,12 @@ export interface WorkflowBuilderState {
   parameters: Record<string, ParamDefinition>;
   /** Output schema (flat format) */
   output: Record<string, ParamDefinition>;
+  /**
+   * Output mapping — keys are output field names, values are template
+   * expressions evaluated against the WorkflowContext on completion. Maps
+   * directly to YAML `output_map`.
+   */
+  outputMap: Record<string, string>;
   /** Workflow-scoped variables */
   vars: Record<string, unknown>;
   /** Task nodes */
@@ -557,6 +563,10 @@ export function builderStateToGraph(
     graph.vars = state.vars;
   }
 
+  if (Object.keys(state.outputMap).length > 0) {
+    graph.output_map = { ...state.outputMap };
+  }
+
   if (state.cancellationPolicy !== "allow_finish") {
     graph.cancellation_policy = state.cancellationPolicy;
   }
@@ -742,6 +752,7 @@ export function definitionToBuilderState(
       ParamDefinition
     >,
     output: (definition.output || {}) as Record<string, ParamDefinition>,
+    outputMap: (definition.output_map || {}) as Record<string, string>,
     vars: definition.vars || {},
     tasks,
     tags: definition.tags || [],

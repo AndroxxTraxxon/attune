@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use reqwest::{header, multipart, Client as HttpClient, Method, RequestBuilder, StatusCode};
 use serde::{de::DeserializeOwned, Serialize};
+use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -34,19 +35,45 @@ pub struct ApiError {
     pub _details: Option<serde_json::Value>,
 }
 
+fn build_http_client() -> HttpClient {
+    let builder = HttpClient::builder().timeout(Duration::from_secs(300));
+    match builder.build() {
+        Ok(client) => client,
+        Err(err) => {
+            let certs = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+                .iter()
+                .map(|cert| reqwest::Certificate::from_der(cert.as_ref()))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .expect("Failed to load bundled root certificates");
+
+            HttpClient::builder()
+                .timeout(Duration::from_secs(300))
+                .tls_certs_only(certs)
+                .build()
+                .unwrap_or_else(|fallback_err| {
+                    panic!(
+                        "Failed to build HTTP client. default builder error: {err:?}; bundled-root fallback error: {fallback_err:?}"
+                    )
+                })
+        }
+    }
+}
+
 impl ApiClient {
     /// Create a new API client from configuration
     pub fn from_config(config: &CliConfig, api_url_override: &Option<String>) -> Self {
         let base_url = config.effective_api_url(api_url_override);
-        let auth_token = config.auth_token().ok().flatten();
-        let refresh_token = config.refresh_token().ok().flatten();
+        let auth_token = env::var("ATTUNE_API_TOKEN")
+            .ok()
+            .or_else(|| env::var("ATTUNE_AUTH_TOKEN").ok())
+            .or_else(|| config.auth_token().ok().flatten());
+        let refresh_token = env::var("ATTUNE_REFRESH_TOKEN")
+            .ok()
+            .or_else(|| config.refresh_token().ok().flatten());
         let config_path = CliConfig::config_path().ok();
 
         Self {
-            client: HttpClient::builder()
-                .timeout(Duration::from_secs(300)) // longer timeout for uploads
-                .build()
-                .expect("Failed to build HTTP client"),
+            client: build_http_client(),
             base_url,
             auth_token,
             refresh_token,
@@ -66,13 +93,8 @@ impl ApiClient {
 
     #[cfg(test)]
     pub fn new(base_url: String, auth_token: Option<String>) -> Self {
-        let client = HttpClient::builder()
-            .timeout(Duration::from_secs(300))
-            .build()
-            .expect("Failed to build HTTP client");
-
         Self {
-            client,
+            client: build_http_client(),
             base_url,
             auth_token,
             refresh_token: None,
