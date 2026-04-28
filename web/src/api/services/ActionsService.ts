@@ -52,6 +52,10 @@ export class ActionsService {
          */
         data: {
             /**
+             * Hint that this action may invoke the Attune MCP server and spawn child executions.
+             */
+            accesses_mcp?: boolean;
+            /**
              * Creation timestamp
              */
             created: string;
@@ -150,6 +154,10 @@ export class ActionsService {
          * Response DTO for action information
          */
         data: {
+            /**
+             * Hint that this action may invoke the Attune MCP server and spawn child executions.
+             */
+            accesses_mcp?: boolean;
             /**
              * Creation timestamp
              */
@@ -250,6 +258,10 @@ export class ActionsService {
          * Response DTO for action information
          */
         data: {
+            /**
+             * Hint that this action may invoke the Attune MCP server and spawn child executions.
+             */
+            accesses_mcp?: boolean;
             /**
              * Creation timestamp
              */

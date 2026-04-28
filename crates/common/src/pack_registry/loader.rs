@@ -984,6 +984,11 @@ impl<'a> PackComponentLoader<'a> {
                 .map(|value| serde_json::to_value(value).unwrap_or_else(|_| serde_json::json!({})))
                 .unwrap_or_else(|| serde_json::json!({}));
 
+            let accesses_mcp = data
+                .get("accesses_mcp")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
             // Check if action already exists — update in place if so
             if let Some(existing) = ActionRepository::find_by_ref(self.pool, &action_ref).await? {
                 let update_input = UpdateActionInput {
@@ -1004,6 +1009,7 @@ impl<'a> PackComponentLoader<'a> {
                     parameter_delivery: Some(parameter_delivery),
                     parameter_format: Some(parameter_format),
                     output_format: Some(output_format),
+                    accesses_mcp: Some(accesses_mcp),
                 };
 
                 match ActionRepository::update(self.pool, existing.id, update_input).await {
@@ -1042,9 +1048,9 @@ impl<'a> PackComponentLoader<'a> {
                     ref, pack, pack_ref, label, description, entrypoint,
                     runtime, runtime_version_constraint, required_worker_runtimes,
                     param_schema, out_schema, is_adhoc, parameter_delivery, parameter_format,
-                    output_format
+                    output_format, accesses_mcp
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                 RETURNING id
                 "#,
             )
@@ -1063,6 +1069,7 @@ impl<'a> PackComponentLoader<'a> {
             .bind(&parameter_delivery)
             .bind(&parameter_format)
             .bind(&output_format)
+            .bind(accesses_mcp)
             .fetch_one(self.pool)
             .await;
 

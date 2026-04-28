@@ -238,6 +238,7 @@ CREATE TABLE action (
     timeout_seconds INTEGER,
     max_retries INTEGER DEFAULT 0,
     runtime_version_constraint TEXT,
+    accesses_mcp BOOLEAN NOT NULL DEFAULT FALSE,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -254,6 +255,7 @@ CREATE INDEX idx_action_parameter_delivery ON action(parameter_delivery);
 CREATE INDEX idx_action_parameter_format ON action(parameter_format);
 CREATE INDEX idx_action_output_format ON action(output_format);
 CREATE INDEX idx_action_is_adhoc ON action(is_adhoc) WHERE is_adhoc = true;
+CREATE INDEX idx_action_accesses_mcp ON action(accesses_mcp) WHERE accesses_mcp = true;
 CREATE INDEX idx_action_created ON action(created DESC);
 
 -- Trigger
@@ -278,6 +280,7 @@ COMMENT ON COLUMN action.is_adhoc IS 'True if action was manually created (ad-ho
 COMMENT ON COLUMN action.timeout_seconds IS 'Worker queue TTL override in seconds. If NULL, uses global worker_queue_ttl_ms config. Allows per-action timeout tuning.';
 COMMENT ON COLUMN action.max_retries IS 'Maximum number of automatic retry attempts for failed executions. 0 = no retries (default).';
 COMMENT ON COLUMN action.runtime_version_constraint IS 'Semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0"). NULL means any version.';
+COMMENT ON COLUMN action.accesses_mcp IS 'Hint that this action may invoke the Attune MCP server (e.g., AI agent actions). When true, executions of this action may have child executions spawned via execution-scoped tokens; consumers (UI, CLI, timeline charts) can use this flag to optimistically render subtask views without waiting for children to appear.';
 
 -- ============================================================================
 

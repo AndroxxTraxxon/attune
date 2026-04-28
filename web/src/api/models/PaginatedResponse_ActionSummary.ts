@@ -11,6 +11,10 @@ export type PaginatedResponse_ActionSummary = {
    * The data items
    */
   data: Array<{
+  /**
+   * Hint that this action may invoke the Attune MCP server and spawn child executions.
+   */
+  accesses_mcp?: boolean;
     /**
      * Creation timestamp
      */

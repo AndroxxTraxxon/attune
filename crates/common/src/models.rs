@@ -1079,6 +1079,8 @@ pub mod action {
         pub workflow_def: Option<Id>,
         pub is_adhoc: bool,
         #[sqlx(default)]
+        pub accesses_mcp: bool,
+        #[sqlx(default)]
         pub parameter_delivery: ParameterDelivery,
         #[sqlx(default)]
         pub parameter_format: ParameterFormat,

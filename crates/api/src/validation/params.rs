@@ -354,6 +354,7 @@ mod tests {
             out_schema: None,
             workflow_def: None,
             is_adhoc: false,
+            accesses_mcp: false,
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
             output_format: attune_common::models::OutputFormat::default(),

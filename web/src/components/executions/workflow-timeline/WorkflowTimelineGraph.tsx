@@ -122,9 +122,11 @@ export default function WorkflowTimelineGraph({
 
   // ---- Data fetching ----
 
-  // Fetch child executions
+  // Fetch child executions, including descendants spawned via MCP so that
+  // calls into Attune from inside an action surface as nested timeline nodes.
   const { data: childData, isLoading: childrenLoading } = useChildExecutions(
     parentExecution.id,
+    { includeDescendants: true },
   );
 
   // Subscribe to real-time execution updates so child tasks update live

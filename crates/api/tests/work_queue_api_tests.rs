@@ -39,6 +39,7 @@ async fn create_pack_with_action(
             param_schema: None,
             out_schema: None,
             is_adhoc: false,
+            accesses_mcp: false,
         },
     )
     .await

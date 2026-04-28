@@ -17,6 +17,11 @@ required_worker_runtimes:
 parameter_delivery: stdin
 parameter_format: json
 
+# This action launches an AI agent that may invoke arbitrary Attune actions via
+# the MCP server using the execution's scoped API token. Hint to the UI that
+# child executions may exist so the workflow / subtask panels render.
+accesses_mcp: true
+
 # Action stdout is a JSON envelope produced by the entry point.
 output_format: json
 

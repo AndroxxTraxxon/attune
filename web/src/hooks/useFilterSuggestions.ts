@@ -61,10 +61,14 @@ export function useFilterSuggestions() {
     return [...new Set(refs)].sort();
   }, [actionsData]);
 
+  // Action refs whose executions can have children (and so are expandable in
+  // the tree view). Includes formal workflows AND any action flagged as
+  // potentially invoking the MCP server, since MCP-driven actions spawn
+  // child executions via the execution-scoped API token.
   const workflowActionRefs = useMemo(() => {
     const refs =
       actionsData?.data
-        ?.filter((a) => a.workflow_def != null)
+        ?.filter((a) => a.workflow_def != null || a.accesses_mcp)
         .map((a) => a.ref) || [];
     return new Set(refs);
   }, [actionsData]);

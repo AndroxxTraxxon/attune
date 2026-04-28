@@ -104,6 +104,21 @@ pub async fn create_execution(
             .await?;
     }
 
+    // When the request is authenticated with an execution-scoped token (e.g.,
+    // an MCP client invoked from inside a running execution), automatically
+    // attribute the new execution as a child of the originating execution.
+    // The execution_id is encoded in the JWT claims at token-mint time and
+    // cannot be forged or overridden by the caller.
+    let parent_from_token = if user.claims.token_type == TokenType::Execution {
+        user.claims
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("execution_id"))
+            .and_then(|v| v.as_i64())
+    } else {
+        None
+    };
+
     // Create execution input
     let execution_input = CreateExecutionInput {
         action: Some(action.id),
@@ -116,7 +131,7 @@ pub async fn create_execution(
             .env_vars
             .as_ref()
             .and_then(|e| serde_json::from_value(e.clone()).ok()),
-        parent: None,
+        parent: parent_from_token,
         enforcement: None,
         executor: None,
         worker: None,
@@ -133,7 +148,7 @@ pub async fn create_execution(
         execution_id: created_execution.id,
         action_id: Some(action.id),
         action_ref: action.r#ref.clone(),
-        parent_id: None,
+        parent_id: parent_from_token,
         enforcement_id: None,
         config: request.parameters,
     };

@@ -462,6 +462,7 @@ impl ActionFixture {
             param_schema: self.param_schema,
             out_schema: self.out_schema,
             is_adhoc: false,
+            accesses_mcp: false,
         };
 
         ActionRepository::create(pool, input).await

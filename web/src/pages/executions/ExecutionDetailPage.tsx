@@ -121,6 +121,9 @@ export default function ExecutionDetailPage() {
 
   // Determine if this execution is a workflow (action has workflow_def)
   const isWorkflow = !!actionData?.data?.workflow_def;
+  // Actions that may spawn child executions via the MCP server should also
+  // surface a child-execution panel even though they are not formal workflows.
+  const hasChildExecutions = isWorkflow || !!actionData?.data?.accesses_mcp;
 
   const [showRerunModal, setShowRerunModal] = useState(false);
   const cancelExecution = useCancelExecution();
@@ -222,6 +225,14 @@ export default function ExecutionDetailPage() {
                 Workflow
               </span>
             )}
+            {!isWorkflow && actionData?.data?.accesses_mcp && (
+              <span
+                className="px-3 py-1 text-sm rounded-full bg-purple-100 text-purple-800"
+                title="This action may invoke the Attune MCP server and spawn child executions"
+              >
+                MCP
+              </span>
+            )}
             <span
               className={`px-3 py-1 text-sm rounded-full ${getStatusColor(execution.status)}`}
             >
@@ -308,12 +319,15 @@ export default function ExecutionDetailPage() {
         )}
       </div>
 
-      {/* Workflow Details — combined timeline + tasks panel (top of page for workflows) */}
-      {isWorkflow && (
+      {/* Child execution details — combined timeline + tasks panel.
+          Shown for workflows and for actions flagged as accessing MCP. */}
+      {hasChildExecutions && (
         <div className="mb-6">
           <WorkflowDetailsPanel
             parentExecution={execution}
             actionRef={execution.action_ref}
+            title={isWorkflow ? "Workflow Details" : "Agent Session Details"}
+            tasksTabLabel={isWorkflow ? "Tasks" : "Attune MCP Tool Calls"}
           />
         </div>
       )}

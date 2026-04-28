@@ -108,6 +108,7 @@ async fn create_test_action(pool: &PgPool, pack_id: i64, pack_ref: &str, suffix:
         param_schema: None,
         out_schema: None,
         is_adhoc: false,
+        accesses_mcp: false,
     };
 
     ActionRepository::create(pool, action_input)

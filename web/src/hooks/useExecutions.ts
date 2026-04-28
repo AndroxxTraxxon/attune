@@ -151,42 +151,75 @@ export function useCancelExecution() {
   });
 }
 
-export function useChildExecutions(parentId: number | undefined) {
+export function useChildExecutions(
+  parentId: number | undefined,
+  options: { includeDescendants?: boolean } = {},
+) {
+  const { includeDescendants = false } = options;
   return useQuery({
-    queryKey: ["executions", { parent: parentId }],
+    queryKey: [
+      "executions",
+      { parent: parentId, descendants: includeDescendants },
+    ],
     queryFn: async () => {
-      // Fetch page 1 with max page size (API caps at 100)
-      const first = await ExecutionsService.listExecutions({
-        parent: parentId,
-        includeTotal: true,
-        perPage: 100,
-        page: 1,
-      });
+      const fetchAllChildren = async (pid: number) => {
+        const first = await ExecutionsService.listExecutions({
+          parent: pid,
+          includeTotal: true,
+          perPage: 100,
+          page: 1,
+        });
+        const totalPages = first.pagination.total_pages ?? 1;
+        if (totalPages > 1) {
+          const remaining = await Promise.all(
+            Array.from({ length: totalPages - 1 }, (_, i) =>
+              ExecutionsService.listExecutions({
+                parent: pid,
+                includeTotal: true,
+                perPage: 100,
+                page: i + 2,
+              }),
+            ),
+          );
+          for (const page of remaining) {
+            first.data.push(...page.data);
+          }
+        }
+        return first;
+      };
 
-      const totalPages = first.pagination.total_pages ?? 1;
-      if (totalPages <= 1) return first;
+      const root = await fetchAllChildren(parentId!);
 
-      // Fetch remaining pages in parallel
-      const remaining = await Promise.all(
-        Array.from({ length: totalPages - 1 }, (_, i) =>
-          ExecutionsService.listExecutions({
-            parent: parentId,
-            includeTotal: true,
-            perPage: 100,
-            page: i + 2,
-          }),
-        ),
-      );
+      if (includeDescendants) {
+        // BFS over descendants. Bounded by the actual tree.
+        const visited = new Set<number>([parentId!]);
+        const queue: number[] = root.data
+          .map((e) => e.id)
+          .filter((id) => !visited.has(id));
+        for (const id of queue) visited.add(id);
 
-      // Merge all pages into the first response
-      for (const page of remaining) {
-        first.data.push(...page.data);
+        while (queue.length > 0) {
+          const layer = queue.splice(0, queue.length);
+          const results = await Promise.all(
+            layer.map((id) => fetchAllChildren(id)),
+          );
+          for (const r of results) {
+            for (const e of r.data) {
+              if (!visited.has(e.id)) {
+                visited.add(e.id);
+                root.data.push(e);
+                queue.push(e.id);
+              }
+            }
+          }
+        }
       }
-      first.pagination.total_pages = 1;
-      first.pagination.page_size = first.data.length;
-      first.pagination.has_next = false;
-      first.pagination.has_previous = false;
-      return first;
+
+      root.pagination.total_pages = 1;
+      root.pagination.page_size = root.data.length;
+      root.pagination.has_next = false;
+      root.pagination.has_previous = false;
+      return root;
     },
     enabled: !!parentId,
     staleTime: 5000,
@@ -194,9 +227,7 @@ export function useChildExecutions(parentId: number | undefined) {
     refetchInterval: (query) => {
       const data = query.state.data;
       if (!data) return false;
-      const hasActive = data.data.some(
-        (e) => isExecutionActive(e.status),
-      );
+      const hasActive = data.data.some((e) => isExecutionActive(e.status));
       return hasActive ? 5000 : false;
     },
   });

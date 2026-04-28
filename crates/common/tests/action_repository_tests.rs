@@ -351,6 +351,7 @@ async fn test_action_foreign_key_constraint() {
         param_schema: None,
         out_schema: None,
         is_adhoc: false,
+        accesses_mcp: false,
     };
 
     let result = ActionRepository::create(&pool, input).await;

@@ -145,11 +145,7 @@ const ChildExecutionRow = memo(function ChildExecutionRow({
                   e.stopPropagation();
                   setExpanded((prev) => !prev);
                 }}
-                className={`flex-shrink-0 p-0.5 rounded hover:bg-gray-200 transition-colors ${
-                  expanded || isLoading
-                    ? "visible"
-                    : "invisible group-hover:visible"
-                }`}
+                className="flex-shrink-0 p-0.5 rounded hover:bg-gray-200 transition-colors"
                 title={expanded ? "Collapse" : "Expand"}
               >
                 {isLoading ? (

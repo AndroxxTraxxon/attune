@@ -57,6 +57,12 @@ pub struct CreateActionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Object, nullable = true, example = json!({"message_id": {"type": "string", "description": "ID of the sent message", "required": true}}))]
     pub out_schema: Option<JsonValue>,
+
+    /// Hint that this action may invoke the Attune MCP server and spawn child executions.
+    /// When true, consumers (UI, CLI, timeline charts) render subtask views eagerly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = false, default = false, nullable = true)]
+    pub accesses_mcp: Option<bool>,
 }
 
 /// Request DTO for updating an action
@@ -94,6 +100,11 @@ pub struct UpdateActionRequest {
     /// Output schema
     #[schema(value_type = Object, nullable = true)]
     pub out_schema: Option<JsonValue>,
+
+    /// Hint that this action may invoke the Attune MCP server and spawn child executions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = false, nullable = true)]
+    pub accesses_mcp: Option<bool>,
 }
 
 /// Explicit patch operation for a nullable runtime version constraint.
@@ -171,6 +182,10 @@ pub struct ActionResponse {
     #[schema(example = false)]
     pub is_adhoc: bool,
 
+    /// Hint that this action may invoke the Attune MCP server and spawn child executions.
+    #[schema(example = false, default = false)]
+    pub accesses_mcp: bool,
+
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
@@ -231,6 +246,10 @@ pub struct ActionSummary {
     #[schema(example = 42, nullable = true)]
     pub workflow_def: Option<i64>,
 
+    /// Hint that this action may invoke the Attune MCP server and spawn child executions.
+    #[schema(example = false, default = false)]
+    pub accesses_mcp: bool,
+
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
@@ -260,6 +279,7 @@ impl From<attune_common::models::action::Action> for ActionResponse {
             out_schema: action.out_schema,
             workflow_def: action.workflow_def,
             is_adhoc: action.is_adhoc,
+            accesses_mcp: action.accesses_mcp,
             created: action.created,
             updated: action.updated,
         }
@@ -282,6 +302,7 @@ impl From<attune_common::models::action::Action> for ActionSummary {
             runtime_version_constraint: action.runtime_version_constraint,
             required_worker_runtimes,
             workflow_def: action.workflow_def,
+            accesses_mcp: action.accesses_mcp,
             created: action.created,
             updated: action.updated,
         }
@@ -362,6 +383,7 @@ mod tests {
             required_worker_runtimes: BTreeMap::new(),
             param_schema: None,
             out_schema: None,
+            accesses_mcp: None,
         };
 
         assert!(req.validate().is_err());
@@ -380,6 +402,7 @@ mod tests {
             required_worker_runtimes: BTreeMap::new(),
             param_schema: None,
             out_schema: None,
+            accesses_mcp: None,
         };
 
         assert!(req.validate().is_ok());
@@ -396,6 +419,7 @@ mod tests {
             required_worker_runtimes: None,
             param_schema: None,
             out_schema: None,
+            accesses_mcp: None,
         };
 
         // Should be valid even with all None values

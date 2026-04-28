@@ -38,6 +38,10 @@ interface WorkflowDetailsPanelProps {
   defaultCollapsed?: boolean;
   /** Which tab to show initially (default: "timeline") */
   defaultTab?: TabId;
+  /** Heading shown on the panel (default: "Workflow Details") */
+  title?: string;
+  /** Label for the tabular child-list tab (default: "Tasks") */
+  tasksTabLabel?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,18 +123,58 @@ export default function WorkflowDetailsPanel({
   actionRef,
   defaultCollapsed = false,
   defaultTab = "timeline",
+  title = "Workflow Details",
+  tasksTabLabel = "Tasks",
 }: WorkflowDetailsPanelProps) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
   const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
 
   // Fetch child executions (shared between both tabs' summary badges)
-  const { data, isLoading, error } = useChildExecutions(parentExecution.id);
+  const { data, isLoading, error } = useChildExecutions(parentExecution.id, {
+    includeDescendants: true,
+  });
 
   // Subscribe to unfiltered execution stream so child execution WebSocket
   // notifications update the query cache in real-time.
   useExecutionStream({ enabled: true });
 
   const tasks = useMemo(() => data?.data ?? [], [data]);
+
+  // Order tasks so descendants appear nested under their parent. We sort by:
+  //   1. immediate children of the panel's root execution first (in id order)
+  //   2. for each non-root task, place it directly after its parent in the list
+  // This produces a stable, depth-first ordering that mirrors the call tree.
+  const orderedTasks = useMemo(() => {
+    if (tasks.length === 0) return tasks;
+    const byId = new Map(tasks.map((t) => [t.id, t] as const));
+    const childrenByParent = new Map<number, typeof tasks>();
+    for (const t of tasks) {
+      const p = t.parent ?? -1;
+      const arr = childrenByParent.get(p) ?? [];
+      arr.push(t);
+      childrenByParent.set(p, arr);
+    }
+    for (const arr of childrenByParent.values()) {
+      arr.sort((a, b) => a.id - b.id);
+    }
+    const out: typeof tasks = [];
+    const visit = (id: number) => {
+      const kids = childrenByParent.get(id) ?? [];
+      for (const k of kids) {
+        out.push(k);
+        visit(k.id);
+      }
+    };
+    visit(parentExecution.id);
+    // Anything still unreached (e.g. orphaned by a deleted intermediate) gets
+    // appended at the end so the user still sees it.
+    if (out.length < tasks.length) {
+      const seen = new Set(out.map((t) => t.id));
+      for (const t of tasks) if (!seen.has(t.id)) out.push(t);
+    }
+    void byId;
+    return out;
+  }, [tasks, parentExecution.id]);
 
   const summary = useMemo(() => {
     const total = tasks.length;
@@ -168,7 +212,7 @@ export default function WorkflowDetailsPanel({
             <ChevronDown className="h-5 w-5 text-gray-400" />
           )}
           <Workflow className="h-5 w-5 text-indigo-500" />
-          <h2 className="text-xl font-semibold">Workflow Details</h2>
+          <h2 className="text-xl font-semibold">{title}</h2>
           {!isLoading && (
             <span className="text-sm text-gray-500">
               ({summary.total} task{summary.total !== 1 ? "s" : ""})
@@ -221,7 +265,7 @@ export default function WorkflowDetailsPanel({
               active={activeTab === "tasks"}
               onClick={() => setActiveTab("tasks")}
               icon={<List className="h-4 w-4" />}
-              label="Tasks"
+              label={tasksTabLabel}
             />
           </div>
 
@@ -235,7 +279,12 @@ export default function WorkflowDetailsPanel({
             />
           </div>
           <div className={activeTab === "tasks" ? "" : "hidden"}>
-            <TasksTab tasks={tasks} isLoading={isLoading} error={error} />
+            <TasksTab
+              tasks={orderedTasks}
+              rootId={parentExecution.id}
+              isLoading={isLoading}
+              error={error}
+            />
           </div>
         </div>
       )}
@@ -286,13 +335,21 @@ function TabButton({
 
 function TasksTab({
   tasks,
+  rootId,
   isLoading,
   error,
 }: {
   tasks: ExecutionSummary[];
+  rootId: number;
   isLoading: boolean;
   error: unknown;
 }) {
+  // Build a depth map so we can indent rows that are nested below the root.
+  const depthById = new Map<number, number>([[rootId, 0]]);
+  for (const t of tasks) {
+    const parentDepth = t.parent != null ? depthById.get(t.parent) : undefined;
+    depthById.set(t.id, parentDepth != null ? parentDepth + 1 : 1);
+  }
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
@@ -337,7 +394,9 @@ function TasksTab({
         {/* Task rows */}
         {tasks.map((task, idx) => {
           const wt = task.workflow_task;
-          const taskName = wt?.task_name ?? `Task ${idx + 1}`;
+          const depth = Math.max(0, (depthById.get(task.id) ?? 1) - 1);
+          const isMcpChild = !wt && depth > 0;
+          const taskName = wt?.task_name ?? task.action_ref.split(".").pop() ?? `Task ${idx + 1}`;
           const retryCount = wt?.retry_count ?? 0;
           const maxRetries = wt?.max_retries ?? 0;
           const timedOut = wt?.timed_out ?? false;
@@ -368,7 +427,10 @@ function TasksTab({
               </div>
 
               {/* Task name */}
-              <div className="col-span-3 flex items-center gap-2 min-w-0">
+              <div
+                className="col-span-3 flex items-center gap-2 min-w-0"
+                style={{ paddingLeft: depth * 18 }}
+              >
                 {getStatusIcon(task.status)}
                 <span
                   className="text-sm font-medium text-gray-900 truncate group-hover:text-blue-600"
@@ -379,6 +441,14 @@ function TasksTab({
                 {wt?.task_index != null && (
                   <span className="text-xs text-gray-400 flex-shrink-0">
                     [{wt.task_index}]
+                  </span>
+                )}
+                {isMcpChild && (
+                  <span
+                    className="text-[10px] flex-shrink-0 px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 uppercase tracking-wide"
+                    title="Spawned via MCP from a parent execution"
+                  >
+                    MCP
                   </span>
                 )}
               </div>

@@ -240,6 +240,7 @@ pub async fn create_action(
         param_schema: request.param_schema,
         out_schema: request.out_schema,
         is_adhoc: true, // Actions created via API are ad-hoc (not from pack installation)
+        accesses_mcp: request.accesses_mcp.unwrap_or(false),
     };
 
     let action = ActionRepository::create(&state.db, action_input).await?;
@@ -320,6 +321,7 @@ pub async fn update_action(
         parameter_delivery: None,
         parameter_format: None,
         output_format: None,
+        accesses_mcp: request.accesses_mcp,
     };
 
     let action = ActionRepository::update(&state.db, existing_action.id, update_input).await?;

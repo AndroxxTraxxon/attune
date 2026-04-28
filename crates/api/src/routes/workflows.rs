@@ -721,6 +721,7 @@ async fn create_companion_action(
         param_schema: param_schema.cloned(),
         out_schema: out_schema.cloned(),
         is_adhoc: false,
+        accesses_mcp: false,
     };
 
     let action = ActionRepository::create(db, action_input)
@@ -798,6 +799,7 @@ async fn update_companion_action(
             parameter_delivery: None,
             parameter_format: None,
             output_format: None,
+            accesses_mcp: None,
         };
 
         ActionRepository::update(db, action.id, update_input)
@@ -868,6 +870,7 @@ async fn ensure_companion_action(
             parameter_delivery: None,
             parameter_format: None,
             output_format: None,
+            accesses_mcp: None,
         };
 
         ActionRepository::update(db, action.id, update_input)

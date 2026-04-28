@@ -12,7 +12,7 @@ use super::{Create, Delete, FindById, FindByRef, List, Patch, Repository, Update
 /// Columns selected in all Action queries. Must match the `Action` model's `FromRow` fields.
 pub const ACTION_COLUMNS: &str = "id, ref, pack, pack_ref, label, description, entrypoint, \
     runtime, runtime_version_constraint, required_worker_runtimes, \
-    param_schema, out_schema, workflow_def, is_adhoc, \
+    param_schema, out_schema, workflow_def, is_adhoc, accesses_mcp, \
     parameter_delivery, parameter_format, output_format, created, updated";
 
 /// Filters for [`ActionRepository::list_search`].
@@ -100,6 +100,8 @@ pub struct CreateActionInput {
     pub param_schema: Option<JsonSchema>,
     pub out_schema: Option<JsonSchema>,
     pub is_adhoc: bool,
+    #[doc = "Hint that this action may invoke the MCP server and spawn child executions."]
+    pub accesses_mcp: bool,
 }
 
 /// Input for updating an action
@@ -116,6 +118,7 @@ pub struct UpdateActionInput {
     pub parameter_delivery: Option<String>,
     pub parameter_format: Option<String>,
     pub output_format: Option<String>,
+    pub accesses_mcp: Option<bool>,
 }
 
 #[async_trait::async_trait]
@@ -200,8 +203,8 @@ impl Create for ActionRepository {
             r#"
             INSERT INTO action (ref, pack, pack_ref, label, description, entrypoint,
                                 runtime, runtime_version_constraint, required_worker_runtimes,
-                                param_schema, out_schema, is_adhoc)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                                param_schema, out_schema, is_adhoc, accesses_mcp)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             RETURNING {}
             "#,
             ACTION_COLUMNS
@@ -218,6 +221,7 @@ impl Create for ActionRepository {
         .bind(&input.param_schema)
         .bind(&input.out_schema)
         .bind(input.is_adhoc)
+        .bind(input.accesses_mcp)
         .fetch_one(executor)
         .await
         .map_err(|e| {
@@ -355,6 +359,15 @@ impl Update for ActionRepository {
             }
             query.push("output_format = ");
             query.push_bind(output_format);
+            has_updates = true;
+        }
+
+        if let Some(accesses_mcp) = input.accesses_mcp {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("accesses_mcp = ");
+            query.push_bind(accesses_mcp);
             has_updates = true;
         }
 

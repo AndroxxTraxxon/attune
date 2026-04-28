@@ -279,6 +279,7 @@ impl WorkflowRegistrar {
             param_schema: workflow.parameters.clone(),
             out_schema: workflow.output.clone(),
             is_adhoc: false,
+            accesses_mcp: false,
         };
 
         let action = ActionRepository::create(&self.pool, action_input).await?;
@@ -332,6 +333,7 @@ impl WorkflowRegistrar {
                 parameter_delivery: None,
                 parameter_format: None,
                 output_format: None,
+                accesses_mcp: None,
             };
 
             ActionRepository::update(&self.pool, action.id, update_input).await?;

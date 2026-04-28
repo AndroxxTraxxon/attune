@@ -78,6 +78,7 @@ async fn setup_test_pack_and_action(pool: &PgPool) -> Result<(Pack, Action)> {
         param_schema: None,
         out_schema: None,
         is_adhoc: false,
+        accesses_mcp: false,
     };
     let action = ActionRepository::create(pool, action_input).await?;
 
