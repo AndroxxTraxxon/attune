@@ -162,6 +162,7 @@ impl McpServer {
     async fn call_tool(&mut self, tool_name: &str, args: &Map<String, Value>) -> Result<Value> {
         match tool_name {
             "actions_list" => self.list_path("/actions", args).await,
+            "actions_search" => self.actions_search(args).await,
             "actions_get" => {
                 let action_ref = required_string(args, "ref")?;
                 self.client
@@ -266,6 +267,48 @@ impl McpServer {
             .await
             .map(Value::Array)
     }
+
+    async fn actions_search(&mut self, args: &Map<String, Value>) -> Result<Value> {
+        let mut params: Vec<(&str, String)> = Vec::new();
+        if let Some(q) = optional_string(args, "q") {
+            if !q.trim().is_empty() {
+                params.push(("q", q));
+            }
+        }
+        // packs: accept a JSON array of strings or a comma-separated string.
+        if let Some(value) = args.get("packs") {
+            let packs_csv =
+                match value {
+                    Value::Array(items) => items
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    Value::String(s) => s.clone(),
+                    Value::Null => String::new(),
+                    _ => return Err(anyhow!(
+                        "Argument 'packs' must be an array of strings or a comma-separated string"
+                    )),
+                };
+            if !packs_csv.is_empty() {
+                params.push(("packs", packs_csv));
+            }
+        }
+        let limit = optional_i64(args, "limit")?.unwrap_or(50).clamp(1, 100);
+        params.push(("page", "1".to_string()));
+        params.push(("page_size", limit.to_string()));
+
+        let qs = params
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, urlencoding::encode(v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        self.client
+            .get_paginated::<Value>(&format!("/actions/search?{qs}"))
+            .await
+            .map(Value::Array)
+    }
 }
 
 fn tool_defs() -> &'static [ToolDef] {
@@ -275,6 +318,15 @@ fn tool_defs() -> &'static [ToolDef] {
             title: "List actions",
             description: "List Attune actions visible to the authenticated user.",
             input_schema: pagination_schema,
+        },
+        ToolDef {
+            name: "actions_search",
+            title: "Search actions",
+            description:
+                "Search Attune actions by keyword (whitespace-separated tokens AND-matched against \
+                 ref, label, description, and pack ref). Optionally restrict to one or more pack \
+                 refs. Returns lean hits to keep agent context light.",
+            input_schema: actions_search_schema,
         },
         ToolDef {
             name: "actions_get",
@@ -413,6 +465,24 @@ fn action_execute_schema() -> Value {
             "env_vars": { "type": "object", "description": "Optional execution environment variables", "additionalProperties": { "type": "string" } }
         },
         "required": ["action_ref"],
+        "additionalProperties": false
+    })
+}
+
+fn actions_search_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "q": { "type": "string", "description": "Keyword query. Whitespace-separated tokens are AND-matched against ref, label, description, and pack ref (case-insensitive substring)." },
+            "packs": {
+                "description": "Optional pack ref filter. Either an array of pack refs (e.g. [\"core\", \"slack\"]) or a comma-separated string (\"core,slack\").",
+                "oneOf": [
+                    { "type": "array", "items": { "type": "string" } },
+                    { "type": "string" }
+                ]
+            },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Max number of hits to return (default 50)." }
+        },
         "additionalProperties": false
     })
 }

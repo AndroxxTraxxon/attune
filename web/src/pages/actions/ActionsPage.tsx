@@ -352,6 +352,9 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
   const paramSchema = action.data?.param_schema || {};
   const properties = extractProperties(paramSchema);
   const paramEntries = Object.entries(properties);
+  const outSchema = action.data?.out_schema || {};
+  const outProperties = extractProperties(outSchema);
+  const outEntries = Object.entries(outProperties);
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -564,17 +567,67 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
               </div>
             )}
 
-            {action.data?.out_schema &&
-              Object.keys(action.data.out_schema).length > 0 && (
-                <div className="mt-6">
-                  <h3 className="text-sm font-medium text-gray-500 mb-2">
-                    Output Schema
-                  </h3>
-                  <pre className="bg-gray-50 p-3 rounded text-xs overflow-x-auto">
-                    {JSON.stringify(action.data.out_schema, null, 2)}
-                  </pre>
+            {outEntries.length > 0 && (
+              <div className="mt-6">
+                <h3 className="text-sm font-medium text-gray-900 mb-3">
+                  Output Schema
+                </h3>
+                <div className="space-y-3">
+                  {outEntries.map(
+                    ([key, param]: [string, ParamSchemaProperty]) => (
+                      <div
+                        key={key}
+                        className="border border-gray-200 rounded p-3"
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono font-semibold text-sm">
+                                {key}
+                              </span>
+                              {param?.required && (
+                                <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded">
+                                  Required
+                                </span>
+                              )}
+                              {param?.secret && (
+                                <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded">
+                                  Secret
+                                </span>
+                              )}
+                              <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded">
+                                {param?.type || "any"}
+                              </span>
+                            </div>
+                            {param?.description && (
+                              <p className="text-sm text-gray-600 mt-1">
+                                {param.description}
+                              </p>
+                            )}
+                            {param?.default !== undefined && (
+                              <p className="text-xs text-gray-500 mt-1">
+                                Default:{" "}
+                                <code className="bg-gray-100 px-1 rounded">
+                                  {JSON.stringify(param.default)}
+                                </code>
+                              </p>
+                            )}
+                            {param?.enum && param.enum.length > 0 && (
+                              <p className="text-xs text-gray-500 mt-1">
+                                Values:{" "}
+                                {param.enum
+                                  .map((v: string) => `"${v}"`)
+                                  .join(", ")}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ),
+                  )}
                 </div>
-              )}
+              </div>
+            )}
           </div>
 
           {/* Recent Executions */}

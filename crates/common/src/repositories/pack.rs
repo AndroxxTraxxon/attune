@@ -363,6 +363,27 @@ impl PackRepository {
         Ok(packs)
     }
 
+    /// Resolve a list of pack refs to their IDs in a single query.
+    /// Returns a map from ref → id; missing refs are simply absent from the map.
+    pub async fn find_ids_by_refs<'e, E>(
+        executor: E,
+        refs: &[&str],
+    ) -> Result<std::collections::HashMap<String, i64>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        if refs.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let owned: Vec<String> = refs.iter().map(|s| (*s).to_string()).collect();
+        let rows: Vec<(String, i64)> =
+            sqlx::query_as("SELECT ref, id FROM pack WHERE ref = ANY($1)")
+                .bind(&owned)
+                .fetch_all(executor)
+                .await?;
+        Ok(rows.into_iter().collect())
+    }
+
     /// Find standard packs
     pub async fn find_standard<'e, E>(executor: E) -> Result<Vec<Pack>>
     where

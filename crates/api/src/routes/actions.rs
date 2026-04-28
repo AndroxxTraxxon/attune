@@ -25,8 +25,9 @@ use crate::{
     authz::{AuthorizationCheck, AuthorizationService},
     dto::{
         action::{
-            ActionResponse, ActionSummary, CreateActionRequest, QueueStatsResponse,
-            RuntimeVersionConstraintPatch, UpdateActionRequest,
+            ActionResponse, ActionSearchHit, ActionSearchParams, ActionSummary,
+            CreateActionRequest, QueueStatsResponse, RuntimeVersionConstraintPatch,
+            UpdateActionRequest,
         },
         common::{PaginatedResponse, PaginationParams},
         ApiResponse, SuccessResponse,
@@ -54,6 +55,7 @@ pub async fn list_actions(
     // All filtering and pagination happen in a single SQL query.
     let filters = ActionSearchFilters {
         pack: None,
+        packs: Vec::new(),
         query: None,
         limit: pagination.limit(),
         offset: pagination.offset(),
@@ -109,6 +111,7 @@ pub async fn list_actions_by_pack(
     // All filtering and pagination happen in a single SQL query.
     let filters = ActionSearchFilters {
         pack: Some(pack.id),
+        packs: Vec::new(),
         query: None,
         limit: pagination.limit(),
         offset: pagination.offset(),
@@ -440,12 +443,96 @@ pub async fn get_queue_stats(
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/actions", get(list_actions).post(create_action))
+        .route("/actions/search", get(search_actions))
         .route(
             "/actions/{ref}",
             get(get_action).put(update_action).delete(delete_action),
         )
         .route("/actions/{ref}/queue-stats", get(get_queue_stats))
         .route("/packs/{pack_ref}/actions", get(list_actions_by_pack))
+}
+
+/// Search for actions by keyword and pack filter.
+///
+/// Returns lean `ActionSearchHit` rows optimized for action discovery — useful
+/// for AI agents and human browsing of large action catalogs. Whitespace-separated
+/// tokens in `q` are AND-matched (each token must appear in at least one of
+/// `ref`, `label`, `description`, or `pack_ref`).
+#[utoipa::path(
+    get,
+    path = "/api/v1/actions/search",
+    tag = "actions",
+    params(ActionSearchParams, PaginationParams),
+    responses(
+        (status = 200, description = "Matching actions", body = PaginatedResponse<ActionSearchHit>),
+        (status = 404, description = "One or more pack refs not found")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn search_actions(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(_user): RequireAuth,
+    Query(search): Query<ActionSearchParams>,
+    Query(pagination): Query<PaginationParams>,
+) -> ApiResult<impl IntoResponse> {
+    // Resolve pack refs (comma-separated) to IDs in a single batched query.
+    // Unknown packs return 404 so callers don't get silently empty results
+    // from typos.
+    let pack_ids: Vec<i64> = if let Some(ref packs_str) = search.packs {
+        let refs: Vec<&str> = packs_str
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if refs.is_empty() {
+            Vec::new()
+        } else {
+            let id_map = PackRepository::find_ids_by_refs(&state.db, &refs).await?;
+            let mut ids = Vec::with_capacity(refs.len());
+            for pack_ref in &refs {
+                let id = id_map
+                    .get(*pack_ref)
+                    .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", pack_ref)))?;
+                ids.push(*id);
+            }
+            ids
+        }
+    } else {
+        Vec::new()
+    };
+
+    let query = search
+        .q
+        .as_ref()
+        .map(|q| q.trim().to_string())
+        .filter(|q| !q.is_empty());
+
+    let filters = ActionSearchFilters {
+        pack: None,
+        packs: pack_ids,
+        query,
+        limit: pagination.limit(),
+        offset: pagination.offset(),
+    };
+
+    let result = ActionRepository::list_search(&state.db, &filters).await?;
+
+    let runtime_refs =
+        fetch_runtime_refs(&state, result.rows.iter().filter_map(|a| a.runtime)).await?;
+    let hits: Vec<ActionSearchHit> = result
+        .rows
+        .into_iter()
+        .map(|a| {
+            let runtime_id = a.runtime;
+            let mut hit = ActionSearchHit::from(a);
+            hit.runtime_ref = runtime_id.and_then(|id| runtime_refs.get(&id).cloned());
+            hit
+        })
+        .collect();
+
+    let response = PaginatedResponse::new(hits, &pagination, result.total);
+
+    Ok((StatusCode::OK, Json(response)))
 }
 
 /// Bulk-resolve runtime IDs to refs.

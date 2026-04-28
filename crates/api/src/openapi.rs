@@ -7,7 +7,8 @@ use utoipa::{
 
 use crate::dto::{
     action::{
-        ActionResponse, ActionSummary, CreateActionRequest, QueueStatsResponse, UpdateActionRequest,
+        ActionResponse, ActionSearchHit, ActionSummary, CreateActionRequest, QueueStatsResponse,
+        UpdateActionRequest,
     },
     auth::{
         AuthSettingsResponse, ChangePasswordRequest, CurrentUserResponse, LoginRequest,
@@ -101,6 +102,7 @@ use crate::dto::{
         // Actions
         crate::routes::actions::list_actions,
         crate::routes::actions::list_actions_by_pack,
+        crate::routes::actions::search_actions,
         crate::routes::actions::get_action,
         crate::routes::actions::create_action,
         crate::routes::actions::update_action,
@@ -336,6 +338,8 @@ use crate::dto::{
             UpdateActionRequest,
             ActionResponse,
             ActionSummary,
+            ActionSearchHit,
+            PaginatedResponse<ActionSearchHit>,
             QueueStatsResponse,
 
             // Trigger DTOs

@@ -14,10 +14,11 @@ tasks:
         You are an automation agent running inside an Attune workflow. You
         have EXACTLY ONE tool: an MCP server named "attune". You MUST NOT
         use bash, shell, curl, file system access, or any other built-in
-        tool. Do not run any commands. Use ONLY the attune MCP tools listed
-        when you call actions_list. Steps you must follow exactly: (1) Call
-        the attune MCP tool actions_list to verify the action
-        "core.http_request" is visible. (2) Call the attune MCP tool
+        tool. Do not run any commands. Use ONLY the attune MCP tools.
+        Steps you must follow exactly: (1) Call the attune MCP tool
+        actions_search with arguments {"q":"http request","packs":["core"]}
+        to verify the action "core.http_request" is visible in the
+        results. (2) Call the attune MCP tool
         actions_execute with arguments
         {"action_ref":"core.http_request","parameters":{"url":"{{ parameters.news_endpoint }}","method":"GET"}}
         and wait for the result. (3) Inspect the returned execution result.

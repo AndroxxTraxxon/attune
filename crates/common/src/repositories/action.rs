@@ -20,9 +20,12 @@ pub const ACTION_COLUMNS: &str = "id, ref, pack, pack_ref, label, description, e
 /// All fields are optional and combinable (AND). Pagination is always applied.
 #[derive(Debug, Clone, Default)]
 pub struct ActionSearchFilters {
-    /// Filter by pack ID
+    /// Filter by single pack ID
     pub pack: Option<Id>,
-    /// Text search across ref, label, description (case-insensitive)
+    /// Filter by multiple pack IDs (action.pack IN (...)). Combined with `pack` via AND.
+    pub packs: Vec<Id>,
+    /// Text search across ref, label, description, pack_ref (case-insensitive).
+    /// Whitespace-separated tokens are AND-matched (each token must appear in at least one field).
     pub query: Option<String>,
     pub limit: u32,
     pub offset: u32,
@@ -37,6 +40,24 @@ pub struct ActionSearchResult {
 
 /// Repository for Action operations
 pub struct ActionRepository;
+
+/// Escape PostgreSQL `LIKE` wildcards (`%`, `_`) and the escape char itself
+/// in user-supplied search input. Without this, a search for `%` would match
+/// every row (and `_` nearly every row), enabling cheap full-table scans.
+/// Used in conjunction with `LIKE ... ESCAPE '\'`.
+fn escape_like_wildcards(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '\\' | '%' | '_' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
 
 fn validate_version_constraint(field_name: &str, constraint: &str) -> Result<()> {
     parse_constraint(constraint).map_err(|e| {
@@ -428,29 +449,16 @@ impl ActionRepository {
 
         let mut has_where = false;
 
-        macro_rules! push_condition {
-            ($cond_prefix:expr, $value:expr) => {{
-                if !has_where {
-                    qb.push(" WHERE ");
-                    count_qb.push(" WHERE ");
-                    has_where = true;
-                } else {
-                    qb.push(" AND ");
-                    count_qb.push(" AND ");
-                }
-                qb.push($cond_prefix);
-                qb.push_bind($value.clone());
-                count_qb.push($cond_prefix);
-                count_qb.push_bind($value);
-            }};
-        }
-
+        // Combine the single-pack shorthand and the multi-pack filter into one
+        // `pack = ANY($N)` clause. Treating them as conjunctive (AND) creates
+        // an impossible-constraint footgun if both are set with disjoint values.
+        let mut combined_pack_ids: Vec<Id> = filters.packs.clone();
         if let Some(pack_id) = filters.pack {
-            push_condition!("pack = ", pack_id);
+            if !combined_pack_ids.contains(&pack_id) {
+                combined_pack_ids.push(pack_id);
+            }
         }
-        if let Some(ref query) = filters.query {
-            let pattern = format!("%{}%", query.to_lowercase());
-            // Search needs an OR across multiple columns, wrapped in parens
+        if !combined_pack_ids.is_empty() {
             if !has_where {
                 qb.push(" WHERE ");
                 count_qb.push(" WHERE ");
@@ -459,21 +467,69 @@ impl ActionRepository {
                 qb.push(" AND ");
                 count_qb.push(" AND ");
             }
-            qb.push("(LOWER(ref) LIKE ");
-            qb.push_bind(pattern.clone());
-            qb.push(" OR LOWER(label) LIKE ");
-            qb.push_bind(pattern.clone());
-            qb.push(" OR LOWER(description) LIKE ");
-            qb.push_bind(pattern.clone());
+            qb.push("pack = ANY(");
+            qb.push_bind(combined_pack_ids.clone());
             qb.push(")");
-
-            count_qb.push("(LOWER(ref) LIKE ");
-            count_qb.push_bind(pattern.clone());
-            count_qb.push(" OR LOWER(label) LIKE ");
-            count_qb.push_bind(pattern.clone());
-            count_qb.push(" OR LOWER(description) LIKE ");
-            count_qb.push_bind(pattern);
+            count_qb.push("pack = ANY(");
+            count_qb.push_bind(combined_pack_ids);
             count_qb.push(")");
+        }
+        if let Some(ref query) = filters.query {
+            // Tokenize the query: each whitespace-separated token must match
+            // at least one of (ref, label, description, pack_ref). This lets
+            // callers find an action with multi-keyword searches like
+            // "slack post message" without caring about field ordering.
+            //
+            // Cap token count to bound query cost and prevent pathological
+            // inputs from generating huge OR/AND trees.
+            const MAX_TOKENS: usize = 16;
+            let tokens: Vec<String> = query
+                .split_whitespace()
+                .map(|t| t.to_lowercase())
+                .filter(|t| !t.is_empty())
+                .take(MAX_TOKENS)
+                .collect();
+            for token in &tokens {
+                // Escape LIKE wildcards in user input so `%` / `_` are matched
+                // literally instead of acting as wildcards (avoids accidental
+                // full-table scans and surprising matches).
+                let pattern = format!("%{}%", escape_like_wildcards(token));
+                if !has_where {
+                    qb.push(" WHERE ");
+                    count_qb.push(" WHERE ");
+                    has_where = true;
+                } else {
+                    qb.push(" AND ");
+                    count_qb.push(" AND ");
+                }
+                qb.push("(LOWER(ref) LIKE ");
+                qb.push_bind(pattern.clone());
+                qb.push(" ESCAPE '\\'");
+                qb.push(" OR LOWER(label) LIKE ");
+                qb.push_bind(pattern.clone());
+                qb.push(" ESCAPE '\\'");
+                qb.push(" OR LOWER(COALESCE(description, '')) LIKE ");
+                qb.push_bind(pattern.clone());
+                qb.push(" ESCAPE '\\'");
+                qb.push(" OR LOWER(pack_ref) LIKE ");
+                qb.push_bind(pattern.clone());
+                qb.push(" ESCAPE '\\'");
+                qb.push(")");
+
+                count_qb.push("(LOWER(ref) LIKE ");
+                count_qb.push_bind(pattern.clone());
+                count_qb.push(" ESCAPE '\\'");
+                count_qb.push(" OR LOWER(label) LIKE ");
+                count_qb.push_bind(pattern.clone());
+                count_qb.push(" ESCAPE '\\'");
+                count_qb.push(" OR LOWER(COALESCE(description, '')) LIKE ");
+                count_qb.push_bind(pattern.clone());
+                count_qb.push(" ESCAPE '\\'");
+                count_qb.push(" OR LOWER(pack_ref) LIKE ");
+                count_qb.push_bind(pattern);
+                count_qb.push(" ESCAPE '\\'");
+                count_qb.push(")");
+            }
         }
 
         // Suppress unused-assignment warning from the macro's last expansion.

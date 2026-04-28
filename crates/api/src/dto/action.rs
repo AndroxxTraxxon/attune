@@ -309,6 +309,71 @@ impl From<attune_common::models::action::Action> for ActionSummary {
     }
 }
 
+/// Lean search hit for action discovery — designed to minimize context bloat
+/// for AI agents and humans browsing large action catalogs. Excludes ID,
+/// timestamps, schemas, and runtime internals.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ActionSearchHit {
+    /// Action reference (globally unique identifier, e.g., "slack.post_message")
+    #[schema(example = "slack.post_message")]
+    pub r#ref: String,
+
+    /// Pack reference
+    #[schema(example = "slack")]
+    pub pack_ref: String,
+
+    /// Human-readable label
+    #[schema(example = "Post Message to Slack")]
+    pub label: String,
+
+    /// Action description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "Posts a message to a Slack channel", nullable = true)]
+    pub description: Option<String>,
+
+    /// Runtime reference (e.g., "core.python"). None for workflow actions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "core.python", nullable = true)]
+    pub runtime_ref: Option<String>,
+
+    /// True when this action is a workflow (orchestrates child executions)
+    #[schema(example = false)]
+    pub is_workflow: bool,
+
+    /// Hint that this action may invoke the Attune MCP server and spawn child executions.
+    #[schema(example = false)]
+    pub accesses_mcp: bool,
+}
+
+/// Convert from Action model to ActionSearchHit (runtime_ref populated by handler)
+impl From<attune_common::models::action::Action> for ActionSearchHit {
+    fn from(action: attune_common::models::action::Action) -> Self {
+        Self {
+            r#ref: action.r#ref,
+            pack_ref: action.pack_ref,
+            label: action.label,
+            description: action.description,
+            runtime_ref: None,
+            is_workflow: action.workflow_def.is_some(),
+            accesses_mcp: action.accesses_mcp,
+        }
+    }
+}
+
+/// Query parameters for `GET /api/v1/actions/search`.
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+pub struct ActionSearchParams {
+    /// Keyword query. Whitespace-separated tokens are AND-matched against
+    /// `ref`, `label`, `description`, and `pack_ref` (case-insensitive substring).
+    #[param(example = "slack post message")]
+    pub q: Option<String>,
+
+    /// Restrict to one or more pack refs. Comma-separated (e.g., `core,slack,jira`)
+    /// or repeated query params (e.g., `?packs=core&packs=slack`).
+    #[param(example = "core,slack")]
+    pub packs: Option<String>,
+}
+
 /// Response DTO for queue statistics
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct QueueStatsResponse {

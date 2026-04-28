@@ -20,6 +20,20 @@ pub enum ActionCommands {
         #[arg(short, long)]
         name: Option<String>,
     },
+    /// Search for actions by keyword across ref, label, description, and pack ref.
+    /// Whitespace-separated tokens are AND-matched.
+    Search {
+        /// Keyword query (e.g., "slack post message")
+        query: Option<String>,
+
+        /// Restrict to one or more pack refs (repeat flag for multiple packs).
+        #[arg(long = "pack", short = 'p')]
+        packs: Vec<String>,
+
+        /// Maximum number of results to return
+        #[arg(long, default_value = "50")]
+        limit: u32,
+    },
     /// Show details of a specific action
     Show {
         /// Action reference (pack.action or ID)
@@ -185,6 +199,11 @@ pub async fn handle_action_command(
         ActionCommands::List { pack, name } => {
             handle_list(pack, name, profile, api_url, output_format).await
         }
+        ActionCommands::Search {
+            query,
+            packs,
+            limit,
+        } => handle_search(query, packs, limit, profile, api_url, output_format).await,
         ActionCommands::Show { action_ref } => {
             handle_show(action_ref, profile, api_url, output_format).await
         }
@@ -283,6 +302,84 @@ async fn handle_list(
                     ]);
                 }
 
+                println!("{}", table);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ActionSearchHit {
+    #[serde(rename = "ref")]
+    action_ref: String,
+    pack_ref: String,
+    label: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    runtime_ref: Option<String>,
+    #[serde(default)]
+    is_workflow: bool,
+    #[serde(default)]
+    accesses_mcp: bool,
+}
+
+async fn handle_search(
+    query: Option<String>,
+    packs: Vec<String>,
+    limit: u32,
+    profile: &Option<String>,
+    api_url: &Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let config = CliConfig::load_with_profile(profile.as_deref())?;
+    let mut client = ApiClient::from_config(&config, api_url);
+
+    let mut params: Vec<(&str, String)> = Vec::new();
+    if let Some(q) = query.as_ref().map(|q| q.trim()).filter(|q| !q.is_empty()) {
+        params.push(("q", q.to_string()));
+    }
+    if !packs.is_empty() {
+        params.push(("packs", packs.join(",")));
+    }
+    let limit = limit.min(100).max(1);
+    params.push(("page_size", limit.to_string()));
+    params.push(("page", "1".to_string()));
+
+    let qs = params
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, urlencoding::encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    let path = format!("/actions/search?{}", qs);
+
+    let hits: Vec<ActionSearchHit> = client.get_paginated(&path).await?;
+
+    match output_format {
+        OutputFormat::Json | OutputFormat::Yaml => {
+            output::print_output(&hits, output_format)?;
+        }
+        OutputFormat::Table => {
+            if hits.is_empty() {
+                output::print_info("No actions matched the search query");
+            } else {
+                let mut table = output::create_table();
+                output::add_header(
+                    &mut table,
+                    vec!["Ref", "Pack", "Label", "Runtime", "MCP", "Description"],
+                );
+                for hit in &hits {
+                    table.add_row(vec![
+                        hit.action_ref.clone(),
+                        hit.pack_ref.clone(),
+                        hit.label.clone(),
+                        format_runtime(hit.runtime_ref.as_deref(), None, hit.is_workflow),
+                        if hit.accesses_mcp { "yes" } else { "" }.to_string(),
+                        output::truncate(hit.description.as_deref().unwrap_or(""), 50),
+                    ]);
+                }
                 println!("{}", table);
             }
         }
