@@ -277,20 +277,21 @@ impl McpServer {
         }
         // packs: accept a JSON array of strings or a comma-separated string.
         if let Some(value) = args.get("packs") {
-            let packs_csv =
-                match value {
-                    Value::Array(items) => items
-                        .iter()
-                        .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
-                        .filter(|s| !s.is_empty())
-                        .collect::<Vec<_>>()
-                        .join(","),
-                    Value::String(s) => s.clone(),
-                    Value::Null => String::new(),
-                    _ => return Err(anyhow!(
+            let packs_csv = match value {
+                Value::Array(items) => items
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(","),
+                Value::String(s) => s.clone(),
+                Value::Null => String::new(),
+                _ => {
+                    return Err(anyhow!(
                         "Argument 'packs' must be an array of strings or a comma-separated string"
-                    )),
-                };
+                    ))
+                }
+            };
             if !packs_csv.is_empty() {
                 params.push(("packs", packs_csv));
             }

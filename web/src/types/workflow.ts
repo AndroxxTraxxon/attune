@@ -693,53 +693,215 @@ function legacyTransitionsToNext(task: LegacyYamlTask): TaskTransition[] {
  * Convert a YAML definition back to builder state (for editing existing workflows).
  * Supports both new `next` format and legacy `on_success`/`on_failure` format.
  */
+// ---------------------------------------------------------------------------
+// Auto-layout
+// ---------------------------------------------------------------------------
+
+/** Approximate node bounding box used for layout spacing. Mirrors TaskNode. */
+const AUTO_LAYOUT_NODE_WIDTH = 240;
+const AUTO_LAYOUT_NODE_HEIGHT = 140;
+/** Vertical gap between adjacent layers. */
+const AUTO_LAYOUT_LAYER_GAP_Y = 80;
+/** Horizontal gap between sibling nodes within the same layer. */
+const AUTO_LAYOUT_NODE_GAP_X = 60;
+/** Top-left origin for the laid-out graph. */
+const AUTO_LAYOUT_ORIGIN_X = 80;
+const AUTO_LAYOUT_ORIGIN_Y = 80;
+
+/**
+ * Compute a connection-aware layered layout for a set of workflow tasks.
+ *
+ * Implements a Sugiyama-style algorithm:
+ *   1. Build a directed graph from `task.next[*].do[*]` references.
+ *   2. Assign each task to a layer via longest-path relaxation from sources.
+ *      Cycles are tolerated by capping iterations and ignoring back edges
+ *      during crossing reduction.
+ *   3. Reorder nodes within each layer using the barycentric heuristic with
+ *      alternating down/up sweeps to minimize edge crossings between layers.
+ *   4. Translate (layer, slot) coordinates into pixel positions, centering
+ *      each layer around the widest layer for a balanced look.
+ *
+ * Mutates each task's `position` field and returns the same array.
+ */
+export function autoLayoutTasks(tasks: WorkflowTask[]): WorkflowTask[] {
+  if (tasks.length === 0) return tasks;
+
+  const n = tasks.length;
+  const indexByName = new Map<string, number>();
+  tasks.forEach((t, i) => indexByName.set(t.name, i));
+
+  // Adjacency lists (deduped).
+  const succs: number[][] = Array.from({ length: n }, () => []);
+  const preds: number[][] = Array.from({ length: n }, () => []);
+  for (let i = 0; i < n; i++) {
+    const seen = new Set<number>();
+    for (const tr of tasks[i].next || []) {
+      for (const targetName of tr.do || []) {
+        const j = indexByName.get(targetName);
+        if (j === undefined || j === i || seen.has(j)) continue;
+        seen.add(j);
+        succs[i].push(j);
+        preds[j].push(i);
+      }
+    }
+  }
+
+  // Layer assignment via longest-path relaxation. Bounded iterations make
+  // this safe for cyclic graphs (back edges simply stop contributing once
+  // layers stabilize at the iteration cap).
+  const layer = new Array<number>(n).fill(0);
+  const maxRelaxIters = n + 1;
+  for (let iter = 0; iter < maxRelaxIters; iter++) {
+    let changed = false;
+    for (let i = 0; i < n; i++) {
+      for (const j of succs[i]) {
+        if (layer[j] < layer[i] + 1) {
+          layer[j] = layer[i] + 1;
+          changed = true;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+
+  const maxLayer = layer.reduce((m, v) => Math.max(m, v), 0);
+  const layers: number[][] = Array.from({ length: maxLayer + 1 }, () => []);
+  for (let i = 0; i < n; i++) layers[layer[i]].push(i);
+
+  // Track each node's slot index within its layer.
+  const slotOf = new Array<number>(n).fill(0);
+  const refreshSlots = () => {
+    for (const arr of layers) {
+      arr.forEach((idx, slot) => (slotOf[idx] = slot));
+    }
+  };
+  refreshSlots();
+
+  // Barycentric crossing reduction with alternating down/up sweeps.
+  const SWEEPS = 24;
+  for (let s = 0; s < SWEEPS; s++) {
+    // Down sweep: order each non-source layer by mean predecessor slot.
+    for (let l = 1; l < layers.length; l++) {
+      const arr = layers[l];
+      const bary = (idx: number) => {
+        const ps = preds[idx].filter((p) => layer[p] === l - 1);
+        if (ps.length === 0) return slotOf[idx];
+        let sum = 0;
+        for (const p of ps) sum += slotOf[p];
+        return sum / ps.length;
+      };
+      arr.sort((a, b) => {
+        const diff = bary(a) - bary(b);
+        if (diff !== 0) return diff;
+        return slotOf[a] - slotOf[b];
+      });
+    }
+    refreshSlots();
+
+    // Up sweep: order each non-sink layer by mean successor slot.
+    for (let l = layers.length - 2; l >= 0; l--) {
+      const arr = layers[l];
+      const bary = (idx: number) => {
+        const ss = succs[idx].filter((q) => layer[q] === l + 1);
+        if (ss.length === 0) return slotOf[idx];
+        let sum = 0;
+        for (const q of ss) sum += slotOf[q];
+        return sum / ss.length;
+      };
+      arr.sort((a, b) => {
+        const diff = bary(a) - bary(b);
+        if (diff !== 0) return diff;
+        return slotOf[a] - slotOf[b];
+      });
+    }
+    refreshSlots();
+  }
+
+  // Assign pixel coordinates. Each layer is centered horizontally against
+  // the widest layer so the graph reads as a balanced top-down hierarchy.
+  const stepX = AUTO_LAYOUT_NODE_WIDTH + AUTO_LAYOUT_NODE_GAP_X;
+  const stepY = AUTO_LAYOUT_NODE_HEIGHT + AUTO_LAYOUT_LAYER_GAP_Y;
+  const widest = layers.reduce((m, l) => Math.max(m, l.length), 1);
+  const totalWidth = (widest - 1) * stepX;
+
+  for (let l = 0; l < layers.length; l++) {
+    const arr = layers[l];
+    const layerWidth = (arr.length - 1) * stepX;
+    const xOffset = AUTO_LAYOUT_ORIGIN_X + (totalWidth - layerWidth) / 2;
+    for (let slot = 0; slot < arr.length; slot++) {
+      const idx = arr[slot];
+      tasks[idx] = {
+        ...tasks[idx],
+        position: {
+          x: xOffset + slot * stepX,
+          y: AUTO_LAYOUT_ORIGIN_Y + l * stepY,
+        },
+      };
+    }
+  }
+
+  return tasks;
+}
+
 export function definitionToBuilderState(
   definition: WorkflowYamlDefinition,
   packRef: string,
   name: string,
 ): WorkflowBuilderState {
-  const tasks: WorkflowTask[] = (definition.tasks || []).map(
-    (rawTask, index) => {
-      const task = rawTask as LegacyYamlTask;
-
-      // Determine transitions: prefer `next` if present, otherwise convert legacy fields
-      let next: TaskTransition[] | undefined;
-      if (task.next && task.next.length > 0) {
-        next = task.next.map((t) => ({
-          when: t.when,
-          publish: t.publish,
-          do: t.do,
-          label: t.__chart_meta__?.label,
-          color: t.__chart_meta__?.color,
-          line_style: t.__chart_meta__?.line_style,
-          edge_waypoints: t.__chart_meta__?.edge_waypoints,
-          label_positions: t.__chart_meta__?.label_positions,
-        }));
-      } else {
-        const converted = legacyTransitionsToNext(task);
-        next = converted.length > 0 ? converted : undefined;
-      }
-
-      return {
-        id: `task-${index}-${Date.now()}`,
-        name: task.name,
-        action: task.action || "",
-        input: task.input || {},
-        next,
-        delay: task.delay,
-        retry: task.retry,
-        timeout: task.timeout,
-        with_items: task.with_items,
-        batch_size: task.batch_size,
-        concurrency: task.concurrency,
-        join: task.join,
-        position: task.__chart_meta__?.position ?? {
-          x: 300,
-          y: 80 + index * 160,
-        },
-      };
-    },
+  const rawTasks = definition.tasks || [];
+  const missingPositionFlags: boolean[] = rawTasks.map(
+    (t) => !(t as LegacyYamlTask).__chart_meta__?.position,
   );
+
+  const tasks: WorkflowTask[] = rawTasks.map((rawTask, index) => {
+    const task = rawTask as LegacyYamlTask;
+
+    // Determine transitions: prefer `next` if present, otherwise convert legacy fields
+    let next: TaskTransition[] | undefined;
+    if (task.next && task.next.length > 0) {
+      next = task.next.map((t) => ({
+        when: t.when,
+        publish: t.publish,
+        do: t.do,
+        label: t.__chart_meta__?.label,
+        color: t.__chart_meta__?.color,
+        line_style: t.__chart_meta__?.line_style,
+        edge_waypoints: t.__chart_meta__?.edge_waypoints,
+        label_positions: t.__chart_meta__?.label_positions,
+      }));
+    } else {
+      const converted = legacyTransitionsToNext(task);
+      next = converted.length > 0 ? converted : undefined;
+    }
+
+    return {
+      id: `task-${index}-${Date.now()}`,
+      name: task.name,
+      action: task.action || "",
+      input: task.input || {},
+      next,
+      delay: task.delay,
+      retry: task.retry,
+      timeout: task.timeout,
+      with_items: task.with_items,
+      batch_size: task.batch_size,
+      concurrency: task.concurrency,
+      join: task.join,
+      // Placeholder; overwritten below if the workflow needs auto-layout.
+      position: task.__chart_meta__?.position ?? {
+        x: 300,
+        y: 80 + index * 160,
+      },
+    };
+  });
+
+  // If any task lacks persisted position metadata, run a connection-aware
+  // auto-layout for the whole graph so the chart presents cleanly with
+  // minimal edge crossings. Saved positions are preserved when every task
+  // has them.
+  if (missingPositionFlags.some(Boolean) && tasks.length > 0) {
+    autoLayoutTasks(tasks);
+  }
 
   return {
     name,
