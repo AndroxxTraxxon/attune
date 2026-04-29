@@ -496,13 +496,13 @@ mod tests {
         permissions.set_mode(0o755);
         fs::set_permissions(&binary_path, permissions).unwrap();
 
-        let runtime = NativeRuntime::new();
+        let runtime = NativeRuntime::with_work_dir(temp_dir.path().to_path_buf());
         let mut context = ExecutionContext::test_context("test.native".to_string(), None);
         context.code_path = Some(binary_path);
         context.runtime_name = Some("native".to_string());
 
         let result = runtime.execute(context).await;
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "execute failed: {:?}", result.err());
 
         let exec_result = result.unwrap();
         assert_eq!(exec_result.exit_code, 0);

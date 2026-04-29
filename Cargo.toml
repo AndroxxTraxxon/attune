@@ -135,3 +135,8 @@ strip = true
 
 [profile.test]
 opt-level = 1
+# Reduced debuginfo for tests: rustc 1.95 + rust-lld segfaults during link
+# with "Broken module / All nodes should be resolved! / DILexicalBlock"
+# when full debuginfo is combined with opt-level=1 in this workspace.
+# Line tables are enough for panic backtraces; full debuginfo not needed.
+debug = "line-tables-only"

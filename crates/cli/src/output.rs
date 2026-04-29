@@ -87,12 +87,18 @@ pub fn create_table() -> Table {
     table
 }
 
-/// Width to use for table layout, clamped to the configured minimum.
+/// Width to use for table layout.
+///
+/// When attached to a terminal, the detected width is used (clamped to a
+/// sensible minimum). When there is no terminal (non-interactive use such as
+/// CI, piped output, or test harnesses), we deliberately return a very large
+/// value so dynamic content arrangement does not wrap cells — wrapping in
+/// non-interactive output makes downstream parsing brittle.
 fn table_width() -> u16 {
-    let detected = terminal_size()
-        .map(|(Width(w), _)| w)
-        .unwrap_or(MIN_TABLE_WIDTH);
-    detected.max(MIN_TABLE_WIDTH)
+    match terminal_size() {
+        Some((Width(w), _)) => w.max(MIN_TABLE_WIDTH),
+        None => u16::MAX,
+    }
 }
 
 /// Add a header row to a table with styling
