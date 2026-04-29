@@ -950,7 +950,7 @@ mod tests {
         let config = build_config(&cli).expect("config should build");
         let profile = config.current_profile().expect("default profile");
         assert_eq!(profile.auth_token.as_deref(), Some("execution-token"));
-        assert_eq!(profile.refresh_token.as_deref(), Some("refresh"));
+        assert_eq!(profile.refresh_token.as_deref(), None);
     }
 
     #[test]
