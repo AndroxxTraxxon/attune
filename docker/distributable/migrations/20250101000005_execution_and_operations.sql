@@ -157,6 +157,7 @@ CREATE TABLE rule (
     trigger_params JSONB DEFAULT '{}'::jsonb,
     enabled BOOLEAN NOT NULL,
     is_adhoc BOOLEAN NOT NULL DEFAULT FALSE,
+    owner_identity BIGINT REFERENCES identity(id) ON DELETE SET NULL,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -178,6 +179,7 @@ CREATE INDEX idx_rule_action_enabled ON rule(action, enabled);
 CREATE INDEX idx_rule_pack_enabled ON rule(pack, enabled);
 CREATE INDEX idx_rule_action_params_gin ON rule USING GIN (action_params);
 CREATE INDEX idx_rule_trigger_params_gin ON rule USING GIN (trigger_params);
+CREATE INDEX idx_rule_owner_identity ON rule(owner_identity);
 
 -- Trigger
 CREATE TRIGGER update_rule_updated
@@ -196,6 +198,7 @@ COMMENT ON COLUMN rule.action_params IS 'Parameter overrides for the action';
 COMMENT ON COLUMN rule.trigger_params IS 'Parameter overrides for the trigger';
 COMMENT ON COLUMN rule.enabled IS 'Whether this rule is active';
 COMMENT ON COLUMN rule.is_adhoc IS 'True if rule was manually created (ad-hoc), false if installed from pack';
+COMMENT ON COLUMN rule.owner_identity IS 'Identity that registered the rule. Used to attribute rule-triggered executions. NULL for system-loaded rules (init pack loader).';
 
 -- ============================================================================
 
