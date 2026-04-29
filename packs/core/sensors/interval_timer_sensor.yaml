@@ -17,6 +17,7 @@ trigger_types:
   - core.intervaltimer
   - core.crontimer
   - core.datetimetimer
+  - core.rruletimer
 
 # Sensor configuration schema (StackStorm-style flat format)
 parameters:
@@ -49,6 +50,9 @@ meta:
     1. Interval timers: Fire at regular intervals (seconds, minutes, hours, days)
     2. Cron timers: Fire based on cron schedule expressions (e.g., "0 0 * * * *")
     3. DateTime timers: Fire once at a specific date and time (one-shot)
+    4. RRULE timers: Fire based on iCalendar (RFC 5545) recurrence rules,
+       supporting schedules cron can't express like "every other Monday" or
+       "the 2nd Tuesday of each month"
 
     This sensor uses tokio-cron-scheduler for efficient async scheduling and
     runs continuously as part of the Attune sensor service.
@@ -83,3 +87,12 @@ examples:
     trigger_config:
       fire_at: "2024-12-31T23:59:59Z"
       timezone: "UTC"
+
+  - description: "RRULE timer - every other Monday at 9am Eastern"
+    trigger_type: core.rruletimer
+    trigger_config:
+      freq: WEEKLY
+      interval: 2
+      by_day: [MO]
+      dtstart: "2026-05-04T13:00:00Z"
+      timezone: "America/New_York"

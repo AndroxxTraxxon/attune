@@ -1,8 +1,0 @@
-{
-  "name": "@attune/examples-pack",
-  "private": true,
-  "description": "Pack-scoped Node.js dependencies for Attune examples",
-  "dependencies": {
-    "@github/copilot": "1.0.16"
-  }
-}

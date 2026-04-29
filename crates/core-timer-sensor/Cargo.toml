@@ -40,6 +40,10 @@ chrono = { workspace = true }
 # Cron scheduling
 tokio-cron-scheduler = "0.15"
 
+# Recurrence rules (RFC 5545 RRULE) for the rruletimer trigger
+rrule = "0.14"
+chrono-tz = "0.10"
+
 # CLI
 clap = { workspace = true, features = ["derive"] }
 

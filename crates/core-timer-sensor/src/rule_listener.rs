@@ -118,29 +118,50 @@ impl RuleLifecycleListener {
             );
         }
 
-        // Load existing active rules from API
-        info!("Fetching existing active rules for trigger 'core.intervaltimer'");
-        match self.api_client.fetch_rules("core.intervaltimer").await {
-            Ok(rules) => {
-                info!("Found {} existing rules", rules.len());
-                for rule in rules {
-                    if rule.enabled {
-                        if let Err(e) = self
-                            .start_timer_from_params(
-                                rule.id,
-                                "core.intervaltimer",
-                                Some(rule.trigger_params),
-                            )
-                            .await
-                        {
-                            error!("Failed to start timer for rule {}: {}", rule.id, e);
+        // Load existing active rules from API. The timer sensor handles all
+        // four timer trigger types, so fetch each one separately and start
+        // any rules that are enabled.
+        const TIMER_TRIGGER_REFS: &[&str] = &[
+            "core.intervaltimer",
+            "core.crontimer",
+            "core.datetimetimer",
+            "core.rruletimer",
+        ];
+
+        for trigger_ref in TIMER_TRIGGER_REFS {
+            info!(
+                "Fetching existing active rules for trigger '{}'",
+                trigger_ref
+            );
+            match self.api_client.fetch_rules(trigger_ref).await {
+                Ok(rules) => {
+                    info!(
+                        "Found {} existing rules for trigger '{}'",
+                        rules.len(),
+                        trigger_ref
+                    );
+                    for rule in rules {
+                        if rule.enabled {
+                            if let Err(e) = self
+                                .start_timer_from_params(
+                                    rule.id,
+                                    trigger_ref,
+                                    Some(rule.trigger_params),
+                                )
+                                .await
+                            {
+                                error!("Failed to start timer for rule {}: {}", rule.id, e);
+                            }
                         }
                     }
                 }
-            }
-            Err(e) => {
-                warn!("Failed to fetch existing rules: {}", e);
-                // Continue anyway - we'll handle new rules via messages
+                Err(e) => {
+                    warn!(
+                        "Failed to fetch existing rules for trigger '{}': {}",
+                        trigger_ref, e
+                    );
+                    // Continue anyway - we'll handle new rules via messages
+                }
             }
         }
 
@@ -178,11 +199,16 @@ impl RuleLifecycleListener {
                             // Try to parse as RuleLifecycleEvent
                             match serde_json::from_value::<RuleLifecycleEvent>(json_value.clone()) {
                                 Ok(event) => {
-                                    // Filter by trigger type - only process timer events (core.timer or core.intervaltimer)
+                                    // Filter by trigger type - only process timer events
                                     let trigger_type = event.trigger_type();
-                                    if trigger_type == "core.timer"
-                                        || trigger_type == "core.intervaltimer"
-                                    {
+                                    if matches!(
+                                        trigger_type,
+                                        "core.timer"
+                                            | "core.intervaltimer"
+                                            | "core.crontimer"
+                                            | "core.datetimetimer"
+                                            | "core.rruletimer"
+                                    ) {
                                         if let Err(e) = self.handle_event(event).await {
                                             error!("Failed to handle event: {}", e);
                                         }

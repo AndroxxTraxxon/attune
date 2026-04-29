@@ -24,6 +24,7 @@ pub enum Resource {
     Artifacts,
     Identities,
     Permissions,
+    AuditLog,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]

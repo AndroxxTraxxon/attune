@@ -8,6 +8,7 @@
 
 pub mod agent_bootstrap;
 pub mod agent_runtime_detection;
+pub mod audit;
 pub mod auth;
 pub mod config;
 pub mod crypto;

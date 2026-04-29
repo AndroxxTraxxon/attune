@@ -4,12 +4,15 @@
 //! - Interval-based timers (fires every N seconds/minutes/hours/days)
 //! - Cron-based timers (fires based on cron expressions)
 //! - DateTime-based timers (fires once at a specific time)
+//! - RRULE-based timers (RFC 5545 recurrence rules; biweekly, nth-weekday-of-month, etc.)
 
 use crate::api_client::{ApiClient, CreateEventRequest};
 use crate::types::{TimeUnit, TimerConfig};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
+use rrule::RRuleSet;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
@@ -66,6 +69,18 @@ impl TimerManager {
             }
             TimerConfig::DateTime { fire_at } => {
                 self.create_datetime_job(rule_id, *fire_at).await?
+            }
+            TimerConfig::RRule {
+                rule,
+                dtstart,
+                timezone,
+            } => {
+                // RRULE timers reschedule themselves and manage their own job
+                // UUIDs in the active_jobs map. We return early to skip the
+                // generic add+insert path below.
+                self.start_rrule_timer(rule_id, rule.clone(), *dtstart, timezone.clone())
+                    .await?;
+                return Ok(());
             }
         };
 
@@ -348,6 +363,190 @@ impl TimerManager {
 
         Ok(job)
     }
+
+    /// Start an RRULE-based timer.
+    ///
+    /// Validates the recurrence rule up front, then schedules a one-shot job
+    /// for the next future occurrence. Each fire reschedules itself for the
+    /// occurrence after that, so a long-running RRULE timer is implemented as
+    /// a chain of one-shots rather than a single repeating job.
+    async fn start_rrule_timer(
+        &self,
+        rule_id: i64,
+        rule: String,
+        dtstart: chrono::DateTime<Utc>,
+        timezone: Option<String>,
+    ) -> Result<()> {
+        // Validate timezone if provided.
+        if let Some(tz_name) = timezone.as_deref() {
+            chrono_tz::Tz::from_str(tz_name)
+                .map_err(|e| anyhow::anyhow!("Invalid timezone '{}': {}", tz_name, e))?;
+        }
+
+        let ical = build_ical_input(&rule, dtstart, timezone.as_deref());
+
+        // Parse once to surface syntax errors immediately rather than on first fire.
+        RRuleSet::from_str(&ical).with_context(|| {
+            format!(
+                "Failed to parse RRULE for rule {}: {} (input: {})",
+                rule_id, rule, ical
+            )
+        })?;
+
+        info!(
+            "Starting RRULE timer for rule {}: rule='{}', dtstart={}, tz={:?}",
+            rule_id,
+            rule,
+            dtstart.to_rfc3339(),
+            timezone
+        );
+
+        self.schedule_next_rrule(rule_id, ical, 0).await
+    }
+
+    /// Compute the next RRULE occurrence after now and schedule a one-shot for it.
+    ///
+    /// On fire, the closure publishes an event and recursively reschedules
+    /// itself for the subsequent occurrence. `execution_count` is threaded
+    /// through so the emitted event payload can report a meaningful count.
+    ///
+    /// Returns a boxed future to break the recursive `async fn` type so the
+    /// resulting future remains `Send` (required by tokio's scheduler tasks).
+    fn schedule_next_rrule(
+        &self,
+        rule_id: i64,
+        ical: String,
+        execution_count: u64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'static>> {
+        let this = self.clone();
+        Box::pin(async move {
+            let set = RRuleSet::from_str(&ical)
+                .with_context(|| format!("Failed to parse RRULE for rule {}", rule_id))?;
+
+            let now = Utc::now();
+            let next = set
+                .into_iter()
+                .map(|d| d.with_timezone(&Utc))
+                .find(|d| *d > now);
+
+            let Some(next) = next else {
+                info!(
+                    "RRULE for rule {} has no future occurrences; timer is complete",
+                    rule_id
+                );
+                this.inner.active_jobs.write().await.remove(&rule_id);
+                return Ok(());
+            };
+
+            let duration = (next - now)
+                .to_std()
+                .map_err(|e| anyhow::anyhow!("Invalid duration to next RRULE occurrence: {}", e))?;
+
+            info!(
+                "Next RRULE fire for rule {} at {} (in {}s)",
+                rule_id,
+                next.to_rfc3339(),
+                duration.as_secs()
+            );
+
+            let manager = this.clone();
+            let api_client = this.inner.api_client.clone();
+            let scheduled_time = next.to_rfc3339();
+            let ical_for_reschedule = ical.clone();
+
+            let job = Job::new_one_shot_async(duration, move |_uuid, _lock| {
+                let api_client = api_client.clone();
+                let manager = manager.clone();
+                let scheduled_time = scheduled_time.clone();
+                let ical_for_reschedule = ical_for_reschedule.clone();
+                let count = execution_count + 1;
+
+                Box::pin(async move {
+                    let now = Utc::now();
+                    let delay_ms = (now.timestamp_millis() - next.timestamp_millis()).max(0);
+
+                    let payload = serde_json::json!({
+                        "type": "rrule",
+                        "fired_at": now.to_rfc3339(),
+                        "scheduled_at": scheduled_time,
+                        "delay_ms": delay_ms,
+                        "execution_count": count,
+                        "sensor_ref": "core.interval_timer_sensor",
+                    });
+
+                    let request = CreateEventRequest::new("core.rruletimer".to_string(), payload)
+                        .with_trigger_instance_id(format!("rule_{}", rule_id));
+
+                    match api_client.create_event_with_retry(request).await {
+                        Ok(event_id) => {
+                            info!(
+                                "RRULE timer fired for rule {} (count: {}), created event {}",
+                                rule_id, count, event_id
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to create event for rule {} RRULE timer: {}",
+                                rule_id, e
+                            );
+                        }
+                    }
+
+                    if let Err(e) = manager
+                        .schedule_next_rrule(rule_id, ical_for_reschedule, count)
+                        .await
+                    {
+                        error!(
+                            "Failed to reschedule next RRULE occurrence for rule {}: {}",
+                            rule_id, e
+                        );
+                    }
+                })
+            })?;
+
+            let job_uuid = this.inner.scheduler.lock().await.add(job).await?;
+            this.inner
+                .active_jobs
+                .write()
+                .await
+                .insert(rule_id, job_uuid);
+
+            Ok(())
+        })
+    }
+}
+
+/// Build an iCalendar input suitable for `RRuleSet::from_str`.
+///
+/// When `tz` is provided, `dtstart` is rendered in that timezone using the
+/// `DTSTART;TZID=...` form so wall-clock semantics (e.g., "9am New York time")
+/// survive daylight-saving transitions. Otherwise it is emitted as a UTC
+/// instant via the `DTSTART:...Z` form.
+fn build_ical_input(rule: &str, dtstart: chrono::DateTime<Utc>, tz: Option<&str>) -> String {
+    let rule_body = rule.trim().trim_start_matches("RRULE:");
+    match tz {
+        Some(tz_name) => match chrono_tz::Tz::from_str(tz_name) {
+            Ok(tz_parsed) => {
+                let local = dtstart.with_timezone(&tz_parsed);
+                format!(
+                    "DTSTART;TZID={}:{}\nRRULE:{}",
+                    tz_name,
+                    local.format("%Y%m%dT%H%M%S"),
+                    rule_body
+                )
+            }
+            Err(_) => format!(
+                "DTSTART:{}\nRRULE:{}",
+                dtstart.format("%Y%m%dT%H%M%SZ"),
+                rule_body
+            ),
+        },
+        None => format!(
+            "DTSTART:{}\nRRULE:{}",
+            dtstart.format("%Y%m%dT%H%M%SZ"),
+            rule_body
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -438,6 +637,97 @@ mod tests {
         assert!(result.is_err());
 
         manager.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_rrule_timer_creation() {
+        let api_client = ApiClient::new("http://localhost:8080".to_string(), "token".to_string());
+        let manager = TimerManager::new(api_client).await.unwrap();
+
+        // Anchor in the past so the iterator must skip ahead, exercising the
+        // catch-up branch of schedule_next_rrule.
+        let dtstart = Utc::now() - chrono::Duration::days(30);
+        let config = TimerConfig::RRule {
+            rule: "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO".to_string(),
+            dtstart,
+            timezone: Some("UTC".to_string()),
+        };
+
+        manager.start_timer(700, config).await.unwrap();
+        assert_eq!(manager.timer_count().await, 1);
+
+        manager.stop_timer(700).await;
+        assert_eq!(manager.timer_count().await, 0);
+
+        manager.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_rrule_timer_invalid_rule() {
+        let api_client = ApiClient::new("http://localhost:8080".to_string(), "token".to_string());
+        let manager = TimerManager::new(api_client).await.unwrap();
+
+        let config = TimerConfig::RRule {
+            rule: "this is not a valid rrule".to_string(),
+            dtstart: Utc::now(),
+            timezone: None,
+        };
+
+        let result = manager.start_timer(701, config).await;
+        assert!(result.is_err());
+
+        manager.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_rrule_timer_invalid_timezone() {
+        let api_client = ApiClient::new("http://localhost:8080".to_string(), "token".to_string());
+        let manager = TimerManager::new(api_client).await.unwrap();
+
+        let config = TimerConfig::RRule {
+            rule: "FREQ=DAILY".to_string(),
+            dtstart: Utc::now(),
+            timezone: Some("Mars/Olympus_Mons".to_string()),
+        };
+
+        let result = manager.start_timer(702, config).await;
+        assert!(result.is_err());
+
+        manager.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn test_build_ical_input_utc() {
+        let dt = chrono::DateTime::parse_from_rfc3339("2026-05-04T13:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let ical = build_ical_input("FREQ=WEEKLY;INTERVAL=2;BYDAY=MO", dt, None);
+        assert_eq!(
+            ical,
+            "DTSTART:20260504T130000Z\nRRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO"
+        );
+    }
+
+    #[test]
+    fn test_build_ical_input_tz() {
+        let dt = chrono::DateTime::parse_from_rfc3339("2026-05-04T13:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let ical = build_ical_input("FREQ=WEEKLY", dt, Some("America/New_York"));
+        // 13:00Z = 09:00 EDT on 2026-05-04
+        assert_eq!(
+            ical,
+            "DTSTART;TZID=America/New_York:20260504T090000\nRRULE:FREQ=WEEKLY"
+        );
+    }
+
+    #[test]
+    fn test_build_ical_input_strips_prefix() {
+        let dt = chrono::DateTime::parse_from_rfc3339("2026-05-04T13:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let ical = build_ical_input("RRULE:FREQ=DAILY", dt, None);
+        assert!(ical.ends_with("\nRRULE:FREQ=DAILY"));
     }
 
     #[tokio::test]
