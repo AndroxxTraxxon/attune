@@ -2,7 +2,7 @@
 
 use crate::models::{identity::*, Id, JsonDict};
 use crate::Result;
-use sqlx::{Executor, Postgres, QueryBuilder};
+use sqlx::{Executor, PgPool, Postgres, QueryBuilder};
 
 use super::{Create, Delete, FindById, FindByRef, List, Repository, Update};
 
@@ -168,7 +168,44 @@ impl IdentityRepository {
         ).bind(login).fetch_optional(executor).await.map_err(Into::into)
     }
 
+    /// Strict OIDC identity lookup keyed by `(issuer, sub, client_id)`.
+    ///
+    /// The `client_id` is included in the match key as defense-in-depth so that
+    /// two configured OIDC clients sharing an issuer cannot collide on a single
+    /// identity record. Rows that predate the introduction of `client_id`
+    /// (where the JSON attribute is missing/NULL) will not be returned by this
+    /// query — use [`find_legacy_oidc_subject`](Self::find_legacy_oidc_subject)
+    /// for the upgrade fallback.
     pub async fn find_by_oidc_subject<'e, E>(
+        executor: E,
+        issuer: &str,
+        subject: &str,
+        client_id: &str,
+    ) -> Result<Option<Identity>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, Identity>(
+            "SELECT id, login, display_name, password_hash, attributes, frozen, created, updated
+             FROM identity
+             WHERE attributes->'oidc'->>'issuer' = $1
+               AND attributes->'oidc'->>'sub' = $2
+               AND attributes->'oidc'->>'client_id' = $3",
+        )
+        .bind(issuer)
+        .bind(subject)
+        .bind(client_id)
+        .fetch_optional(executor)
+        .await
+        .map_err(Into::into)
+    }
+
+    /// Legacy OIDC identity lookup for rows that do not yet have a
+    /// `client_id` recorded in `attributes->'oidc'`. Matches only on
+    /// `(issuer, sub)` AND requires `client_id` to be NULL/absent. Used by the
+    /// graceful upgrade path in the OIDC callback so that pre-existing users
+    /// can still log in and have their record stamped with a `client_id`.
+    pub async fn find_legacy_oidc_subject<'e, E>(
         executor: E,
         issuer: &str,
         subject: &str,
@@ -180,7 +217,8 @@ impl IdentityRepository {
             "SELECT id, login, display_name, password_hash, attributes, frozen, created, updated
              FROM identity
              WHERE attributes->'oidc'->>'issuer' = $1
-               AND attributes->'oidc'->>'sub' = $2",
+               AND attributes->'oidc'->>'sub' = $2
+               AND attributes->'oidc'->>'client_id' IS NULL",
         )
         .bind(issuer)
         .bind(subject)
@@ -209,6 +247,228 @@ impl IdentityRepository {
         .await
         .map_err(Into::into)
     }
+
+    /// Lookup any OIDC identity row for the given `(issuer, sub)`, regardless
+    /// of whether `client_id` is recorded. Used as the ultimate fallback in
+    /// the race-safe upsert path when a unique-constraint violation indicates
+    /// a concurrent insert won.
+    pub async fn find_oidc_by_issuer_sub<'e, E>(
+        executor: E,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<Option<Identity>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, Identity>(
+            "SELECT id, login, display_name, password_hash, attributes, frozen, created, updated
+             FROM identity
+             WHERE attributes->'oidc'->>'issuer' = $1
+               AND attributes->'oidc'->>'sub' = $2",
+        )
+        .bind(issuer)
+        .bind(subject)
+        .fetch_optional(executor)
+        .await
+        .map_err(Into::into)
+    }
+
+    /// Race-safe OIDC identity upsert.
+    ///
+    /// Resolves an OIDC identity from `(issuer, sub, client_id)` and creates
+    /// or updates the underlying row atomically. Three concurrent logins for
+    /// the same user can race here; the implementation guarantees that
+    /// exactly one `identity` row exists for `(issuer, sub)` afterwards.
+    ///
+    /// The race-safety strategy combines:
+    /// 1. A per-attempt transaction so each lookup→write step is atomic.
+    /// 2. A guarded UPDATE on the legacy upgrade path
+    ///    (`WHERE … client_id IS NULL`) so only one concurrent caller can
+    ///    stamp the legacy row with a `client_id`. The loser sees 0 rows
+    ///    affected and retries from the top.
+    /// 3. The `uq_identity_oidc_issuer_sub` partial unique index, which
+    ///    catches the (rare) case where two concurrent callers both fall
+    ///    through to INSERT. The loser receives a 23505 violation, rolls
+    ///    back, and reads the winner's row from the database.
+    ///
+    /// Roles are deliberately *not* synchronized here — that lives in the
+    /// caller (the API service) since it depends on infrastructure outside
+    /// the common crate.
+    pub async fn upsert_oidc_identity(pool: &PgPool, input: OidcUpsertInput) -> Result<Identity> {
+        // Cap retries to avoid pathological loops if the database is in an
+        // unexpected state. In practice 1–2 iterations are sufficient.
+        const MAX_ATTEMPTS: u32 = 5;
+
+        for _attempt in 0..MAX_ATTEMPTS {
+            let mut tx = pool.begin().await?;
+
+            // Stage 1: strict (issuer, sub, client_id) match — the canonical
+            // lookup for any row already stamped with our client_id.
+            if let Some(existing) =
+                Self::find_by_oidc_subject(&mut *tx, &input.issuer, &input.sub, &input.client_id)
+                    .await?
+            {
+                let updated = Self::update_oidc_row(
+                    &mut *tx,
+                    existing.id,
+                    input.display_name.as_deref(),
+                    &input.attributes,
+                )
+                .await?;
+                tx.commit().await?;
+                return Ok(updated);
+            }
+
+            // Stage 2: legacy fallback — adopt a row that pre-dates the
+            // client_id-aware code path. The guarded UPDATE ensures only one
+            // concurrent caller can win the upgrade.
+            if let Some(legacy) =
+                Self::find_legacy_oidc_subject(&mut *tx, &input.issuer, &input.sub).await?
+            {
+                let result = sqlx::query(
+                    "UPDATE identity
+                       SET display_name = COALESCE($2, display_name),
+                           attributes = $3,
+                           updated = NOW()
+                     WHERE id = $1
+                       AND attributes->'oidc'->>'client_id' IS NULL",
+                )
+                .bind(legacy.id)
+                .bind(input.display_name.as_deref())
+                .bind(&input.attributes)
+                .execute(&mut *tx)
+                .await?;
+
+                if result.rows_affected() == 1 {
+                    let updated = sqlx::query_as::<_, Identity>(
+                        "SELECT id, login, display_name, password_hash, attributes, frozen, created, updated
+                         FROM identity WHERE id = $1",
+                    )
+                    .bind(legacy.id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                    tx.commit().await?;
+                    return Ok(updated);
+                }
+
+                // 0 rows affected → another caller already upgraded the
+                // legacy row. Roll back and retry: the strict lookup at the
+                // top of the next attempt will succeed (if our client_id
+                // matches) or fall through to INSERT (which the unique
+                // index will resolve).
+                tx.rollback().await?;
+                continue;
+            }
+
+            // Stage 3: INSERT. Login uniqueness is handled by the existing
+            // `identity_login_key` constraint; OIDC (issuer, sub) uniqueness
+            // is handled by `uq_identity_oidc_issuer_sub`.
+            let login = if Self::find_by_login(&mut *tx, &input.desired_login)
+                .await?
+                .is_some()
+            {
+                input.fallback_login.clone()
+            } else {
+                input.desired_login.clone()
+            };
+
+            let insert_result = sqlx::query_as::<_, Identity>(
+                "INSERT INTO identity (login, display_name, password_hash, attributes)
+                 VALUES ($1, $2, NULL, $3)
+                 RETURNING id, login, display_name, password_hash, attributes, frozen, created, updated",
+            )
+            .bind(&login)
+            .bind(input.display_name.as_deref())
+            .bind(&input.attributes)
+            .fetch_one(&mut *tx)
+            .await;
+
+            match insert_result {
+                Ok(identity) => {
+                    tx.commit().await?;
+                    return Ok(identity);
+                }
+                Err(sqlx::Error::Database(db_err)) if db_err.code().as_deref() == Some("23505") => {
+                    // Roll back so we can read freshly-committed state.
+                    tx.rollback().await?;
+
+                    let constraint = db_err.constraint().map(|c| c.to_string());
+                    if constraint.as_deref() == Some("uq_identity_oidc_issuer_sub") {
+                        // Concurrent OIDC insert won. Read the winning row
+                        // by (issuer, sub) and return it as-is. We do *not*
+                        // overwrite the winner's attributes here because
+                        // their client_id may legitimately differ from
+                        // ours; if it matches, a subsequent login will take
+                        // the strict-match path and update normally.
+                        if let Some(winner) =
+                            Self::find_oidc_by_issuer_sub(pool, &input.issuer, &input.sub).await?
+                        {
+                            return Ok(winner);
+                        }
+                        // Extremely unlikely: row vanished between the
+                        // 23505 violation and our follow-up read. Retry.
+                        continue;
+                    }
+
+                    // Some other unique violation (e.g. login race after
+                    // we picked a fallback). Fail loudly — this should not
+                    // happen during normal OIDC operation.
+                    return Err(sqlx::Error::Database(db_err).into());
+                }
+                Err(other) => {
+                    tx.rollback().await?;
+                    return Err(other.into());
+                }
+            }
+        }
+
+        Err(crate::Error::internal(
+            "OIDC identity upsert exceeded retry limit",
+        ))
+    }
+
+    async fn update_oidc_row<'e, E>(
+        executor: E,
+        id: Id,
+        display_name: Option<&str>,
+        attributes: &JsonDict,
+    ) -> Result<Identity>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, Identity>(
+            "UPDATE identity
+                SET display_name = COALESCE($2, display_name),
+                    attributes = $3,
+                    updated = NOW()
+              WHERE id = $1
+              RETURNING id, login, display_name, password_hash, attributes, frozen, created, updated",
+        )
+        .bind(id)
+        .bind(display_name)
+        .bind(attributes)
+        .fetch_one(executor)
+        .await
+        .map_err(Into::into)
+    }
+}
+
+/// Input bundle for the race-safe OIDC identity upsert.
+#[derive(Debug, Clone)]
+pub struct OidcUpsertInput {
+    pub issuer: String,
+    pub sub: String,
+    pub client_id: String,
+    /// Preferred login for newly-created identities (typically email).
+    pub desired_login: String,
+    /// Fallback login used when `desired_login` collides with an existing
+    /// identity (typically `oidc:<issuer>:<sub>`-derived).
+    pub fallback_login: String,
+    pub display_name: Option<String>,
+    /// Full attributes payload — must contain an `"oidc"` object with at
+    /// least `issuer`, `sub`, and `client_id` for the partial unique index
+    /// to match correctly.
+    pub attributes: JsonDict,
 }
 
 // Permission Set Repository

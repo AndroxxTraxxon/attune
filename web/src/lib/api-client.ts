@@ -85,6 +85,11 @@ apiClient.interceptors.response.use(
         if (newRefreshToken) {
           localStorage.setItem("refresh_token", newRefreshToken);
         }
+        try {
+          window.dispatchEvent(new CustomEvent("auth:token-changed"));
+        } catch {
+          // Older browsers — best-effort.
+        }
 
         // Retry original request with new token
         if (originalRequest.headers) {

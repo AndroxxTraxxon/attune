@@ -72,6 +72,30 @@ fn normalize_api_url(raw_url: &str) -> String {
         .replace("://[::]", "://127.0.0.1")
 }
 
+/// System identity used as a security fallback when an execution has no
+/// recorded triggering identity.
+const SYSTEM_IDENTITY_ID: i64 = 1;
+
+/// Resolve the identity to embed in the execution-scoped API token (`sub`
+/// claim).
+///
+/// Returns `executor` when set; otherwise logs a warning and falls back to
+/// the system identity (1). A missing executor indicates a bug in one of the
+/// execution-creation paths and is treated as a serious regression.
+fn resolve_execution_identity(executor: Option<i64>, execution_id: i64) -> i64 {
+    match executor {
+        Some(id) => id,
+        None => {
+            warn!(
+                "Execution {} has no executor identity set; falling back to system identity. \
+                 This indicates a bug in an execution-creation path.",
+                execution_id
+            );
+            SYSTEM_IDENTITY_ID
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum ExecutionLogArtifactStream {
     Stdout,
@@ -377,13 +401,22 @@ impl ActionExecutor {
         );
 
         // Generate execution-scoped API token.
-        // The identity that triggered the execution is derived from the `sub` claim
-        // of the original token; for rule-triggered executions we use identity 1
-        // (the system identity) as a reasonable default.
-        let identity_id: i64 = 1; // System identity fallback
-                                  // Default timeout is 300s; add 60s grace period for cleanup.
-                                  // The actual `timeout` variable is computed later in this function,
-                                  // but the token TTL just needs a reasonable upper bound.
+        //
+        // SECURITY: The token's `sub` claim MUST reflect the identity that
+        // triggered the execution. Otherwise actions executed on behalf of a
+        // low-privilege user could call back into the API with system-level
+        // privileges (privilege escalation).
+        //
+        // The triggering identity is recorded in `execution.executor` at
+        // creation time by every execution-creation path (manual API,
+        // enforcement processor, scheduler, queue dispatcher, retry manager,
+        // workflow children). If `executor` is unset, that indicates a bug in
+        // one of those paths; we fall back to the system identity (1) and log
+        // a warning so the regression is visible.
+        let identity_id = resolve_execution_identity(execution.executor, execution.id);
+        // Default timeout is 300s; add 60s grace period for cleanup.
+        // The actual `timeout` variable is computed later in this function,
+        // but the token TTL just needs a reasonable upper bound.
         let token_ttl = Some(360_i64);
         match generate_execution_token(
             identity_id,
@@ -1341,7 +1374,53 @@ impl ActionExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use attune_common::auth::jwt::{generate_execution_token, validate_token, JwtConfig};
     use chrono::Utc;
+
+    #[test]
+    fn test_resolve_execution_identity_uses_executor() {
+        // SECURITY regression test: when an execution has its `executor`
+        // populated, the resolved identity for the API token must be that
+        // user — never the system identity.
+        let user_id = 4242;
+        let resolved = resolve_execution_identity(Some(user_id), 100);
+        assert_eq!(
+            resolved, user_id,
+            "resolve_execution_identity must return the execution's executor verbatim"
+        );
+        assert_ne!(
+            resolved, SYSTEM_IDENTITY_ID,
+            "must not silently elevate to the system identity"
+        );
+    }
+
+    #[test]
+    fn test_resolve_execution_identity_falls_back_when_missing() {
+        // When an execution-creation path forgets to populate `executor` we
+        // fall back to the system identity; this is logged as a warning.
+        let resolved = resolve_execution_identity(None, 100);
+        assert_eq!(resolved, SYSTEM_IDENTITY_ID);
+    }
+
+    #[test]
+    fn test_execution_token_carries_resolved_identity() {
+        // End-to-end check: the minted execution token's `sub` claim matches
+        // the resolved identity. This is the property that downstream RBAC
+        // relies on.
+        attune_common::auth::crypto_provider::install();
+        let config = JwtConfig {
+            secret: "test_secret_for_executor_unit".to_string(),
+            access_token_expiration: 3600,
+            refresh_token_expiration: 86400,
+        };
+        let user_id = 7;
+        let resolved = resolve_execution_identity(Some(user_id), 555);
+        let token = generate_execution_token(resolved, 555, "core.echo", &config, Some(60))
+            .expect("token generation must succeed");
+        let claims = validate_token(&token, &config).expect("token must validate");
+        assert_eq!(claims.sub, user_id.to_string());
+        assert_ne!(claims.sub, SYSTEM_IDENTITY_ID.to_string());
+    }
 
     #[test]
     fn test_parse_action_reference() {

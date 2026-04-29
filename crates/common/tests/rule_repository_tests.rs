@@ -58,6 +58,7 @@ async fn test_create_rule() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let rule = RuleRepository::create(&pool, input).await.unwrap();
@@ -115,6 +116,7 @@ async fn test_create_rule_disabled() {
         trigger_params: json!({}),
         enabled: false,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let rule = RuleRepository::create(&pool, input).await.unwrap();
@@ -165,6 +167,7 @@ async fn test_create_rule_with_complex_conditions() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let rule = RuleRepository::create(&pool, input).await.unwrap();
@@ -210,6 +213,7 @@ async fn test_create_rule_duplicate_ref() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     RuleRepository::create(&pool, input1).await.unwrap();
@@ -230,6 +234,7 @@ async fn test_create_rule_duplicate_ref() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let result = RuleRepository::create(&pool, input2).await;
@@ -284,6 +289,7 @@ async fn test_create_rule_invalid_ref_format_uppercase() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let result = RuleRepository::create(&pool, input).await;
@@ -326,6 +332,7 @@ async fn test_create_rule_invalid_ref_format_no_dot() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let result = RuleRepository::create(&pool, input).await;
@@ -372,6 +379,7 @@ async fn test_find_rule_by_id() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let created = RuleRepository::create(&pool, input).await.unwrap();
@@ -432,6 +440,7 @@ async fn test_find_rule_by_ref() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let created = RuleRepository::create(&pool, input).await.unwrap();
@@ -494,6 +503,7 @@ async fn test_list_rules() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         };
 
         RuleRepository::create(&pool, input).await.unwrap();
@@ -548,6 +558,7 @@ async fn test_list_rules_ordered_by_ref() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         };
 
         RuleRepository::create(&pool, input).await.unwrap();
@@ -604,6 +615,7 @@ async fn test_update_rule_label() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let created = RuleRepository::create(&pool, input).await.unwrap();
@@ -657,6 +669,7 @@ async fn test_update_rule_description() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let created = RuleRepository::create(&pool, input).await.unwrap();
@@ -708,6 +721,7 @@ async fn test_update_rule_conditions() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let created = RuleRepository::create(&pool, input).await.unwrap();
@@ -760,6 +774,7 @@ async fn test_update_rule_enabled() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let created = RuleRepository::create(&pool, input).await.unwrap();
@@ -813,6 +828,7 @@ async fn test_update_rule_multiple_fields() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let created = RuleRepository::create(&pool, input).await.unwrap();
@@ -828,6 +844,7 @@ async fn test_update_rule_multiple_fields() {
         action_params: None,
         trigger_params: None,
         enabled: Some(false),
+        owner_identity: None,
     };
 
     let updated = RuleRepository::update(&pool, created.id, update)
@@ -885,6 +902,7 @@ async fn test_update_rule_action_and_trigger_refs() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let created = RuleRepository::create(&pool, input).await.unwrap();
@@ -942,6 +960,7 @@ async fn test_update_rule_no_changes() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let created = RuleRepository::create(&pool, input).await.unwrap();
@@ -995,6 +1014,7 @@ async fn test_delete_rule() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let created = RuleRepository::create(&pool, input).await.unwrap();
@@ -1076,6 +1096,7 @@ async fn test_find_rules_by_pack() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         };
 
         RuleRepository::create(&pool, input).await.unwrap();
@@ -1097,6 +1118,7 @@ async fn test_find_rules_by_pack() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     RuleRepository::create(&pool, input).await.unwrap();
@@ -1154,6 +1176,7 @@ async fn test_find_rules_by_action() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         };
 
         RuleRepository::create(&pool, input).await.unwrap();
@@ -1175,6 +1198,7 @@ async fn test_find_rules_by_action() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     RuleRepository::create(&pool, input).await.unwrap();
@@ -1236,6 +1260,7 @@ async fn test_find_rules_by_trigger() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         };
 
         RuleRepository::create(&pool, input).await.unwrap();
@@ -1257,6 +1282,7 @@ async fn test_find_rules_by_trigger() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     RuleRepository::create(&pool, input).await.unwrap();
@@ -1315,6 +1341,7 @@ async fn test_find_enabled_rules() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         };
 
         RuleRepository::create(&pool, input).await.unwrap();
@@ -1337,6 +1364,7 @@ async fn test_find_enabled_rules() {
             trigger_params: json!({}),
             enabled: false,
             is_adhoc: false,
+            owner_identity: None,
         };
 
         RuleRepository::create(&pool, input).await.unwrap();
@@ -1393,6 +1421,7 @@ async fn test_cascade_delete_pack_deletes_rules() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let rule = RuleRepository::create(&pool, input).await.unwrap();
@@ -1449,6 +1478,7 @@ async fn test_rule_timestamps() {
         trigger_params: json!({}),
         enabled: true,
         is_adhoc: false,
+        owner_identity: None,
     };
 
     let created = RuleRepository::create(&pool, input).await.unwrap();
@@ -1471,4 +1501,169 @@ async fn test_rule_timestamps() {
 
     assert_eq!(updated.created, created.created); // created unchanged
     assert!(updated.updated > created.updated); // updated changed
+}
+
+// ============================================================================
+// owner_identity Tests
+// ============================================================================
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_create_rule_with_owner_identity() {
+    let pool = create_test_pool().await.unwrap();
+
+    let identity = IdentityFixture::new_unique("rule_owner")
+        .create(&pool)
+        .await
+        .unwrap();
+
+    let pack = PackFixture::new_unique("test_pack")
+        .create(&pool)
+        .await
+        .unwrap();
+    let action = ActionFixture::new_unique(pack.id, &pack.r#ref, "test_action")
+        .create(&pool)
+        .await
+        .unwrap();
+    let trigger =
+        TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "test_trigger")
+            .create(&pool)
+            .await
+            .unwrap();
+
+    let rule_ref = format!("{}.test_rule_owner", pack.r#ref);
+    let input = CreateRuleInput {
+        r#ref: rule_ref.clone(),
+        pack: pack.id,
+        pack_ref: pack.r#ref.clone(),
+        label: "Owned Rule".to_string(),
+        description: None,
+        action: action.id,
+        action_ref: action.r#ref.clone(),
+        trigger: trigger.id,
+        trigger_ref: trigger.r#ref.clone(),
+        conditions: json!({}),
+        action_params: json!({}),
+        trigger_params: json!({}),
+        enabled: true,
+        is_adhoc: true,
+        owner_identity: Some(identity.id),
+    };
+
+    let created = RuleRepository::create(&pool, input).await.unwrap();
+    assert_eq!(created.owner_identity, Some(identity.id));
+
+    let fetched = RuleRepository::find_by_id(&pool, created.id)
+        .await
+        .unwrap()
+        .expect("rule should exist");
+    assert_eq!(fetched.owner_identity, Some(identity.id));
+}
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_create_rule_without_owner_identity_defaults_null() {
+    let pool = create_test_pool().await.unwrap();
+
+    let pack = PackFixture::new_unique("test_pack")
+        .create(&pool)
+        .await
+        .unwrap();
+    let action = ActionFixture::new_unique(pack.id, &pack.r#ref, "test_action")
+        .create(&pool)
+        .await
+        .unwrap();
+    let trigger =
+        TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "test_trigger")
+            .create(&pool)
+            .await
+            .unwrap();
+
+    let rule_ref = format!("{}.test_rule_no_owner", pack.r#ref);
+    let input = CreateRuleInput {
+        r#ref: rule_ref.clone(),
+        pack: pack.id,
+        pack_ref: pack.r#ref.clone(),
+        label: "Unowned Rule".to_string(),
+        description: None,
+        action: action.id,
+        action_ref: action.r#ref.clone(),
+        trigger: trigger.id,
+        trigger_ref: trigger.r#ref.clone(),
+        conditions: json!({}),
+        action_params: json!({}),
+        trigger_params: json!({}),
+        enabled: true,
+        is_adhoc: false,
+        owner_identity: None,
+    };
+
+    let created = RuleRepository::create(&pool, input).await.unwrap();
+    assert_eq!(created.owner_identity, None);
+}
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_update_rule_owner_identity_set_and_clear() {
+    let pool = create_test_pool().await.unwrap();
+
+    let identity = IdentityFixture::new_unique("rule_owner_upd")
+        .create(&pool)
+        .await
+        .unwrap();
+
+    let pack = PackFixture::new_unique("test_pack")
+        .create(&pool)
+        .await
+        .unwrap();
+    let action = ActionFixture::new_unique(pack.id, &pack.r#ref, "test_action")
+        .create(&pool)
+        .await
+        .unwrap();
+    let trigger =
+        TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "test_trigger")
+            .create(&pool)
+            .await
+            .unwrap();
+
+    let rule_ref = format!("{}.test_rule_upd_owner", pack.r#ref);
+    let input = CreateRuleInput {
+        r#ref: rule_ref.clone(),
+        pack: pack.id,
+        pack_ref: pack.r#ref.clone(),
+        label: "Rule".to_string(),
+        description: None,
+        action: action.id,
+        action_ref: action.r#ref.clone(),
+        trigger: trigger.id,
+        trigger_ref: trigger.r#ref.clone(),
+        conditions: json!({}),
+        action_params: json!({}),
+        trigger_params: json!({}),
+        enabled: true,
+        is_adhoc: true,
+        owner_identity: None,
+    };
+    let created = RuleRepository::create(&pool, input).await.unwrap();
+    assert_eq!(created.owner_identity, None);
+
+    // Set owner_identity via update
+    let update = UpdateRuleInput {
+        owner_identity: Some(Patch::Set(identity.id)),
+        ..Default::default()
+    };
+    let updated = RuleRepository::update(&pool, created.id, update)
+        .await
+        .unwrap();
+    assert_eq!(updated.owner_identity, Some(identity.id));
+
+    // Clear owner_identity via update
+    let update = UpdateRuleInput {
+        owner_identity: Some(Patch::Clear),
+        ..Default::default()
+    };
+    let cleared = RuleRepository::update(&pool, created.id, update)
+        .await
+        .unwrap();
+    assert_eq!(cleared.owner_identity, None);
 }

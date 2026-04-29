@@ -544,6 +544,33 @@ impl WorkQueueDispatcher {
             &context.pack_config,
             &items,
         )?;
+        // SECURITY: Inherit the triggering identity from the queue items'
+        // `requested_by_identity` field if all leased items share the same
+        // initiator. Otherwise fall back to the system identity so the worker
+        // still mints a callback token with a known `sub` claim.
+        //
+        // SECURITY: This precedence is now sound end-to-end. Rule-driven
+        // executions run as `rule.owner_identity` (see enforcement_processor),
+        // and when those executions enqueue items via the API, the queue item
+        // is stamped with `requested_by_identity` = current identity. So the
+        // per-item identity already captures the rule owner — no separate
+        // rule lookup is needed here. The system fallback only fires for
+        // legacy items with NULL `requested_by_identity` (e.g. items enqueued
+        // before this column existed) and for queues fed by anonymous sources.
+        const SYSTEM_IDENTITY_ID: i64 = 1;
+        let executor_identity = {
+            let mut iter = items.iter().map(|item| item.requested_by_identity);
+            let first = iter.next().flatten();
+            if let Some(id) = first {
+                if iter.all(|other| other == Some(id)) {
+                    Some(id)
+                } else {
+                    Some(SYSTEM_IDENTITY_ID)
+                }
+            } else {
+                Some(SYSTEM_IDENTITY_ID)
+            }
+        };
         let execution = ExecutionRepository::create(
             &mut *tx,
             CreateExecutionInput {
@@ -553,7 +580,7 @@ impl WorkQueueDispatcher {
                 env_vars: None,
                 parent: None,
                 enforcement: None,
-                executor: None,
+                executor: executor_identity,
                 worker: None,
                 status: ExecutionStatus::Requested,
                 result: None,

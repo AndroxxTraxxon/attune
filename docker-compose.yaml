@@ -232,6 +232,10 @@ services:
       # Security - MUST set these in production via .env file
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+      # Agent binary download bootstrap token (REQUIRED whenever agent.binary_dir is set
+      # in config.yaml; the API will refuse to start without it). Generate with:
+      # openssl rand -hex 32
+      ATTUNE__AGENT__BOOTSTRAP_TOKEN: ${AGENT_BOOTSTRAP_TOKEN:-docker-dev-agent-token-change-in-production}
       # Database
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
       # Message Queue

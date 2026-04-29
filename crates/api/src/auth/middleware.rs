@@ -44,6 +44,22 @@ impl AuthenticatedUser {
     pub fn login(&self) -> &str {
         &self.claims.login
     }
+
+    /// Returns the execution ID this token is scoped to, if any.
+    ///
+    /// Only `Execution` tokens carry an execution scope. The execution ID is
+    /// stored in the `metadata.execution_id` claim. Returns `None` for all
+    /// other token types or when the metadata is missing/malformed.
+    pub fn execution_id(&self) -> Option<i64> {
+        if self.claims.token_type != TokenType::Execution {
+            return None;
+        }
+        self.claims
+            .metadata
+            .as_ref()?
+            .get("execution_id")
+            .and_then(|v| v.as_i64())
+    }
 }
 
 /// Middleware function that validates JWT tokens

@@ -118,7 +118,14 @@ security:
     user_search_base: "ou=users,dc=example,dc=com"
     user_filter: "(uid={login})"
     search_bind_dn: "cn=readonly,dc=example,dc=com"
-    search_bind_password: "readonly-password"
+    # SECURITY: Do NOT commit a real password to version control.
+    # Inject this value via the environment variable
+    #   ATTUNE__SECURITY__LDAP__SEARCH_BIND_PASSWORD
+    # using Docker secrets, Kubernetes Secrets, systemd credentials, your
+    # platform's secrets manager, or a `.env` file outside source control.
+    # The literal value below is a placeholder that will trigger a startup WARN.
+    # See docs/authentication/ldap-secrets.md for details.
+    search_bind_password: "REPLACE_VIA_ENV_VAR"
     login_attr: uid
     email_attr: mail
     display_name_attr: cn
@@ -145,6 +152,22 @@ security:
 # Pattern: {runtime_envs_dir}/{pack_ref}/{runtime_name}
 # Example: /opt/attune/runtime_envs/python_example/python
 # runtime_envs_dir: /opt/attune/runtime_envs
+
+# Agent binary distribution (optional)
+# ====================================
+# When configured, the API exposes GET /api/v1/agent/binary so that
+# universal worker agents can bootstrap themselves by downloading the
+# statically-linked agent binary at startup.
+#
+# SECURITY: `bootstrap_token` is REQUIRED whenever `binary_dir` is set.
+# Without it, the API will refuse to start. The token must be sent by
+# clients via the `X-Agent-Token` header (or `?token=` query parameter).
+# Generate a strong shared secret with: openssl rand -hex 32
+#
+# To disable agent binary downloads entirely, leave this section commented out.
+# agent:
+#   binary_dir: /opt/attune/agent
+#   bootstrap_token: "${AGENT_BOOTSTRAP_TOKEN}"
 
 # Environment Variable Overrides
 # ==============================

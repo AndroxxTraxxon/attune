@@ -18,7 +18,11 @@
 #   ATTUNE_AGENT_DIR   - Directory for the agent binary (default: /opt/attune/agent)
 #   ATTUNE_AGENT_URL   - URL to download the agent binary from
 #                        (default: http://attune-api:8080/api/v1/agent/binary)
-#   ATTUNE_AGENT_TOKEN - Optional bootstrap token for authenticated downloads
+#   ATTUNE_AGENT_TOKEN - Bootstrap token for authenticated downloads. REQUIRED
+#                        unless the agent binary is already volume-mounted at
+#                        $ATTUNE_AGENT_DIR/attune-agent. The Attune API
+#                        refuses anonymous downloads (returns HTTP 503) and
+#                        rejects invalid tokens (HTTP 401).
 #   ATTUNE_AGENT_ARCH  - Target architecture (default: auto-detected via uname -m)
 #
 set -e
@@ -54,6 +58,17 @@ fi
 echo "[attune] Agent binary not found at $AGENT_BIN, downloading..."
 echo "[attune]   URL: $AGENT_URL"
 echo "[attune]   Architecture: $ATTUNE_AGENT_ARCH"
+
+# SECURITY: The API requires a bootstrap token for the binary download
+# endpoint (see agent.bootstrap_token in the API config). Without one,
+# the API returns 503 and the download below will fail. Warn early so
+# the operator can see the cause in the logs.
+if [ -z "$AGENT_TOKEN" ]; then
+    echo "[attune] WARNING: ATTUNE_AGENT_TOKEN is not set." >&2
+    echo "[attune]   The Attune API refuses anonymous agent binary downloads." >&2
+    echo "[attune]   Set ATTUNE_AGENT_TOKEN to the value of agent.bootstrap_token" >&2
+    echo "[attune]   configured on the API, or volume-mount the binary at $AGENT_BIN." >&2
+fi
 
 DOWNLOAD_URL="${AGENT_URL}?arch=${ATTUNE_AGENT_ARCH}"
 mkdir -p "$AGENT_DIR"

@@ -422,7 +422,9 @@ impl ExecutionManager {
                 env_vars: parent.env_vars.clone(), // Pass parent env vars to child
                 parent: Some(parent.id),       // Link to parent execution
                 enforcement: parent.enforcement,
-                executor: None, // Will be assigned during scheduling
+                // Inherit triggering identity from parent so the callback
+                // token has the same security context.
+                executor: parent.executor,
                 worker: None,
                 status: ExecutionStatus::Requested,
                 result: None,

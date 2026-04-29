@@ -137,6 +137,22 @@ async fn main() -> Result<()> {
 
     let config = Config::load()?;
     config.validate()?;
+    config.warn_about_insecure_secrets();
+
+    // SECURITY: Fail-closed check for the agent binary download endpoint.
+    // If `agent.binary_dir` is configured but `agent.bootstrap_token` is not,
+    // the download route would otherwise be reachable without authentication.
+    // We require the operator to either set a token or remove the agent
+    // section entirely.
+    if let Some(ref agent_cfg) = config.agent {
+        if agent_cfg.bootstrap_token.is_none() {
+            anyhow::bail!(
+                "agent.bootstrap_token is required when agent.binary_dir is configured. \
+                 Set the token (e.g. `openssl rand -hex 32`) via ATTUNE__AGENT__BOOTSTRAP_TOKEN. \
+                 To disable agent binary distribution entirely, remove the [agent] section from config."
+            );
+        }
+    }
 
     info!("Configuration loaded successfully");
     info!("Environment: {}", config.environment);

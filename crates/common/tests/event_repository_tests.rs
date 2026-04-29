@@ -459,6 +459,7 @@ async fn test_delete_event_enforcement_retains_event_id() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await

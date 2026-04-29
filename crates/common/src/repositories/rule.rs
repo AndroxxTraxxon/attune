@@ -8,6 +8,10 @@ use sqlx::{Executor, Postgres, QueryBuilder};
 
 use super::{Create, Delete, FindById, FindByRef, List, Patch, Repository, Update};
 
+/// Columns selected when reading `rule` rows. Keep in sync with the `Rule`
+/// model struct in `crates/common/src/models.rs`.
+pub const SELECT_COLUMNS: &str = "id, ref, pack, pack_ref, label, description, action, action_ref, trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, owner_identity, created, updated";
+
 /// Filters for [`RuleRepository::list_search`].
 ///
 /// All fields are optional and combinable (AND). Pagination is always applied.
@@ -50,6 +54,7 @@ pub struct RestoreRuleInput {
     pub action_params: serde_json::Value,
     pub trigger_params: serde_json::Value,
     pub enabled: bool,
+    pub owner_identity: Option<Id>,
 }
 
 /// Repository for Rule operations
@@ -80,6 +85,7 @@ pub struct CreateRuleInput {
     pub trigger_params: serde_json::Value,
     pub enabled: bool,
     pub is_adhoc: bool,
+    pub owner_identity: Option<Id>,
 }
 
 /// Input for updating a rule
@@ -95,6 +101,7 @@ pub struct UpdateRuleInput {
     pub action_params: Option<serde_json::Value>,
     pub trigger_params: Option<serde_json::Value>,
     pub enabled: Option<bool>,
+    pub owner_identity: Option<Patch<Id>>,
 }
 
 #[async_trait::async_trait]
@@ -106,7 +113,7 @@ impl FindById for RuleRepository {
         let rule = sqlx::query_as::<_, Rule>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, action, action_ref,
-                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, created, updated
+                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, owner_identity, created, updated
             FROM rule
             WHERE id = $1
             "#,
@@ -128,7 +135,7 @@ impl FindByRef for RuleRepository {
         let rule = sqlx::query_as::<_, Rule>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, action, action_ref,
-                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, created, updated
+                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, owner_identity, created, updated
             FROM rule
             WHERE ref = $1
             "#,
@@ -150,7 +157,7 @@ impl List for RuleRepository {
         let rules = sqlx::query_as::<_, Rule>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, action, action_ref,
-                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, created, updated
+                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, owner_identity, created, updated
             FROM rule
             ORDER BY ref ASC
             "#,
@@ -173,10 +180,10 @@ impl Create for RuleRepository {
         let rule = sqlx::query_as::<_, Rule>(
             r#"
             INSERT INTO rule (ref, pack, pack_ref, label, description, action, action_ref,
-                              trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                              trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, owner_identity)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             RETURNING id, ref, pack, pack_ref, label, description, action, action_ref,
-                      trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, created, updated
+                      trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, owner_identity, created, updated
             "#,
         )
         .bind(&input.r#ref)
@@ -193,6 +200,7 @@ impl Create for RuleRepository {
         .bind(&input.trigger_params)
         .bind(input.enabled)
         .bind(input.is_adhoc)
+        .bind(input.owner_identity)
         .fetch_one(executor)
         .await
         .map_err(|e| {
@@ -311,6 +319,18 @@ impl Update for RuleRepository {
             has_updates = true;
         }
 
+        if let Some(owner_identity) = &input.owner_identity {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("owner_identity = ");
+            match owner_identity {
+                Patch::Set(value) => query.push_bind(Some(*value)),
+                Patch::Clear => query.push_bind(Option::<Id>::None),
+            };
+            has_updates = true;
+        }
+
         if !has_updates {
             // No updates requested, fetch and return existing entity
             return Self::get_by_id(executor, id).await;
@@ -318,7 +338,7 @@ impl Update for RuleRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(" RETURNING id, ref, pack, pack_ref, label, description, action, action_ref, trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, created, updated");
+        query.push(" RETURNING id, ref, pack, pack_ref, label, description, action, action_ref, trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, owner_identity, created, updated");
 
         let rule = query.build_query_as::<Rule>().fetch_one(executor).await?;
 
@@ -349,7 +369,7 @@ impl RuleRepository {
     where
         E: Executor<'e, Database = Postgres> + Copy + 'e,
     {
-        let select_cols = "id, ref, pack, pack_ref, label, description, action, action_ref, trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, created, updated";
+        let select_cols = "id, ref, pack, pack_ref, label, description, action, action_ref, trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, owner_identity, created, updated";
 
         let mut qb: QueryBuilder<'_, Postgres> =
             QueryBuilder::new(format!("SELECT {select_cols} FROM rule"));
@@ -415,7 +435,7 @@ impl RuleRepository {
         let rules = sqlx::query_as::<_, Rule>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, action, action_ref,
-                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, created, updated
+                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, owner_identity, created, updated
             FROM rule
             WHERE pack = $1
             ORDER BY ref ASC
@@ -436,7 +456,7 @@ impl RuleRepository {
         let rules = sqlx::query_as::<_, Rule>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, action, action_ref,
-                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, created, updated
+                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, owner_identity, created, updated
             FROM rule
             WHERE action = $1
             ORDER BY ref ASC
@@ -457,7 +477,7 @@ impl RuleRepository {
         let rules = sqlx::query_as::<_, Rule>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, action, action_ref,
-                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, created, updated
+                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, owner_identity, created, updated
             FROM rule
             WHERE trigger = $1
             ORDER BY ref ASC
@@ -478,7 +498,7 @@ impl RuleRepository {
         let rules = sqlx::query_as::<_, Rule>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, action, action_ref,
-                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, created, updated
+                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, owner_identity, created, updated
             FROM rule
             WHERE enabled = true
             ORDER BY ref ASC
@@ -499,7 +519,7 @@ impl RuleRepository {
         let rules = sqlx::query_as::<_, Rule>(
             r#"
             SELECT id, ref, pack, pack_ref, label, description, action, action_ref,
-                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, created, updated
+                   trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, owner_identity, created, updated
             FROM rule
             WHERE pack = $1 AND is_adhoc = true
             ORDER BY ref ASC
@@ -522,10 +542,10 @@ impl RuleRepository {
         let rule = sqlx::query_as::<_, Rule>(
             r#"
             INSERT INTO rule (ref, pack, pack_ref, label, description, action, action_ref,
-                              trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, true)
+                              trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, owner_identity)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, true, $14)
             RETURNING id, ref, pack, pack_ref, label, description, action, action_ref,
-                      trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, created, updated
+                      trigger, trigger_ref, conditions, action_params, trigger_params, enabled, is_adhoc, owner_identity, created, updated
             "#,
         )
         .bind(&input.r#ref)
@@ -541,6 +561,7 @@ impl RuleRepository {
         .bind(&input.action_params)
         .bind(&input.trigger_params)
         .bind(input.enabled)
+        .bind(input.owner_identity)
         .fetch_one(executor)
         .await
         .map_err(|e| {

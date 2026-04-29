@@ -620,12 +620,18 @@ pub async fn upload_pack(
         let cursor = Cursor::new(&pack_data[..]);
         let gz = flate2::read::GzDecoder::new(cursor);
         let mut archive = tar::Archive::new(gz);
-        archive.unpack(temp_extract_dir.path()).map_err(|e| {
-            ApiError::BadRequest(format!(
-                "Failed to extract pack archive (must be a valid .tar.gz): {}",
-                e
-            ))
-        })?;
+        // Disable destructive / privileged extraction defaults.
+        archive.set_overwrite(false);
+        archive.set_unpack_xattrs(false);
+        archive.set_preserve_permissions(false);
+        archive.set_preserve_mtime(false);
+
+        safe_unpack(
+            &mut archive,
+            temp_extract_dir.path(),
+            &state.config.pack_upload,
+        )
+        .map_err(|e| ApiError::BadRequest(format!("Failed to extract pack archive: {}", e)))?;
     }
 
     // Find pack.yaml — it may be at the root or inside a single subdirectory
@@ -694,6 +700,209 @@ pub async fn upload_pack(
     );
 
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+/// Safely extract a tar archive into `dest`, enforcing pack-upload safety limits.
+///
+/// Guards applied (see [`attune_common::config::PackUploadConfig`]):
+/// * Rejects entries whose path is absolute or contains `..` / non-normal components.
+/// * Rejects symlinks, hardlinks, character/block devices, and FIFOs.
+/// * Aborts when cumulative file count or extracted byte total exceeds configured limits.
+/// * Aborts on a single entry whose declared size exceeds the per-entry limit.
+///
+/// The destination directory must already exist.
+fn safe_unpack<R: std::io::Read>(
+    archive: &mut tar::Archive<R>,
+    dest: &std::path::Path,
+    cfg: &attune_common::config::PackUploadConfig,
+) -> Result<(), String> {
+    use std::path::Component;
+    use tar::EntryType;
+
+    let max_total = cfg.max_extracted_size_bytes();
+    let max_files = cfg.max_file_count();
+    let max_entry = cfg.max_per_entry_size_bytes();
+    let allow_symlinks = cfg.allow_symlinks();
+
+    let dest_canon = std::fs::canonicalize(dest)
+        .map_err(|e| format!("Failed to canonicalize destination: {}", e))?;
+
+    let mut total_bytes: u64 = 0;
+    let mut file_count: u32 = 0;
+
+    let entries = archive
+        .entries()
+        .map_err(|e| format!("Failed to read tar entries: {}", e))?;
+
+    for entry in entries {
+        let mut entry = entry.map_err(|e| format!("Corrupt tar entry: {}", e))?;
+
+        file_count = file_count.saturating_add(1);
+        if file_count > max_files {
+            return Err(format!(
+                "Archive contains too many entries (limit: {})",
+                max_files
+            ));
+        }
+
+        let header = entry.header().clone();
+        let etype = header.entry_type();
+
+        match etype {
+            EntryType::Regular | EntryType::Directory => {}
+            EntryType::Symlink | EntryType::Link if allow_symlinks => {}
+            EntryType::Symlink => {
+                return Err("Archive contains a symbolic link, which is not allowed".to_string());
+            }
+            EntryType::Link => {
+                return Err("Archive contains a hard link, which is not allowed".to_string());
+            }
+            EntryType::Char | EntryType::Block | EntryType::Fifo => {
+                return Err(format!(
+                    "Archive contains a forbidden device/FIFO entry (type: {:?})",
+                    etype
+                ));
+            }
+            other => {
+                return Err(format!(
+                    "Archive contains unsupported entry type: {:?}",
+                    other
+                ));
+            }
+        }
+
+        let declared_size = header
+            .size()
+            .map_err(|e| format!("Invalid entry size header: {}", e))?;
+        if declared_size > max_entry {
+            return Err(format!(
+                "Archive entry exceeds per-entry size limit ({} > {} bytes)",
+                declared_size, max_entry
+            ));
+        }
+        let projected = total_bytes.saturating_add(declared_size);
+        if projected > max_total {
+            return Err(format!(
+                "Archive total extracted size exceeds limit ({} > {} bytes)",
+                projected, max_total
+            ));
+        }
+
+        let raw_path = entry
+            .path()
+            .map_err(|e| format!("Invalid entry path: {}", e))?
+            .into_owned();
+        if raw_path.is_absolute() {
+            return Err(format!(
+                "Archive entry has an absolute path (forbidden): {}",
+                raw_path.display()
+            ));
+        }
+        for comp in raw_path.components() {
+            match comp {
+                Component::Normal(_) | Component::CurDir => {}
+                Component::ParentDir => {
+                    return Err(format!(
+                        "Archive entry contains '..' path traversal: {}",
+                        raw_path.display()
+                    ));
+                }
+                Component::RootDir | Component::Prefix(_) => {
+                    return Err(format!(
+                        "Archive entry has a non-relative path: {}",
+                        raw_path.display()
+                    ));
+                }
+            }
+        }
+
+        let target = dest_canon.join(&raw_path);
+        if !target.starts_with(&dest_canon) {
+            return Err(format!(
+                "Archive entry escapes destination directory: {}",
+                raw_path.display()
+            ));
+        }
+
+        match etype {
+            EntryType::Directory => {
+                std::fs::create_dir_all(&target).map_err(|e| {
+                    format!("Failed to create directory {}: {}", raw_path.display(), e)
+                })?;
+            }
+            EntryType::Regular => {
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        format!(
+                            "Failed to create parent directory for {}: {}",
+                            raw_path.display(),
+                            e
+                        )
+                    })?;
+                }
+                // Defense-in-depth: bound the bytes we write via the entry's
+                // Read impl, rather than trusting the declared header size.
+                // `take(max_entry + 1)` lets us detect any over-read (one extra
+                // byte signals the limit was exceeded). The `+1` is saturating
+                // so a configured `u64::MAX` limit doesn't wrap.
+                let read_cap = max_entry.saturating_add(1);
+                let file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&target)
+                    .map_err(|e| format!("Failed to create {}: {}", raw_path.display(), e))?;
+                let mut writer = std::io::BufWriter::new(file);
+                let mut limited = std::io::Read::take(&mut entry, read_cap);
+                let written = std::io::copy(&mut limited, &mut writer).map_err(|e| {
+                    let _ = std::fs::remove_file(&target);
+                    format!("Failed to write entry {}: {}", raw_path.display(), e)
+                })?;
+                std::io::Write::flush(&mut writer).map_err(|e| {
+                    let _ = std::fs::remove_file(&target);
+                    format!("Failed to flush entry {}: {}", raw_path.display(), e)
+                })?;
+                drop(writer);
+
+                if written > max_entry {
+                    let _ = std::fs::remove_file(&target);
+                    return Err(format!(
+                        "Archive entry exceeds per-entry size limit (actual bytes \
+                         written exceeded {} bytes for {})",
+                        max_entry,
+                        raw_path.display()
+                    ));
+                }
+                let projected_actual = total_bytes.saturating_add(written);
+                if projected_actual > max_total {
+                    let _ = std::fs::remove_file(&target);
+                    return Err(format!(
+                        "Archive total extracted size exceeds limit ({} > {} bytes)",
+                        projected_actual, max_total
+                    ));
+                }
+                total_bytes = projected_actual;
+            }
+            EntryType::Symlink | EntryType::Link if allow_symlinks => {
+                // Link targets carry no payload, so unpack_in is fine here and
+                // it preserves the existing path-validation semantics.
+                let unpacked = entry
+                    .unpack_in(&dest_canon)
+                    .map_err(|e| format!("Failed to unpack entry {}: {}", raw_path.display(), e))?;
+                if !unpacked {
+                    return Err(format!(
+                        "Tar refused to unpack entry (unsafe path): {}",
+                        raw_path.display()
+                    ));
+                }
+            }
+            _ => {
+                // All other entry types were rejected by the type-check above.
+                unreachable!("entry type already validated");
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Walk the extracted directory and find the directory that contains `pack.yaml`.
@@ -2499,10 +2708,291 @@ pub fn routes() -> Router<Arc<AppState>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use attune_common::config::PackUploadConfig;
+    use std::io::Write;
 
     #[test]
     fn test_pack_routes_structure() {
         // Just verify the router can be constructed
         let _router = routes();
+    }
+
+    // ---- safe_unpack tests --------------------------------------------------
+
+    fn build_tar<F>(build: F) -> Vec<u8>
+    where
+        F: FnOnce(&mut tar::Builder<Vec<u8>>),
+    {
+        let mut b = tar::Builder::new(Vec::new());
+        build(&mut b);
+        b.into_inner().expect("tar finalize")
+    }
+
+    fn append_file(b: &mut tar::Builder<Vec<u8>>, path: &str, data: &[u8]) {
+        let mut h = tar::Header::new_gnu();
+        h.set_path(path).unwrap();
+        h.set_size(data.len() as u64);
+        h.set_mode(0o644);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        b.append(&h, data).unwrap();
+    }
+
+    fn append_raw_path_file(b: &mut tar::Builder<Vec<u8>>, raw_path: &str, data: &[u8]) {
+        // Bypass `set_path` validation to construct malicious entries (absolute /
+        // traversal). We append a normal entry then patch the name field of the
+        // 512-byte header in-place. tar headers store the name at offset 0..100
+        // (NUL-padded). We must also recompute the checksum (offset 148..156).
+        let placeholder = format!("__placeholder_{}__", raw_path.len());
+        let mut h = tar::Header::new_gnu();
+        h.set_path(&placeholder).unwrap();
+        h.set_size(data.len() as u64);
+        h.set_mode(0o644);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        b.append(&h, data).unwrap();
+
+        // Patch the most recently written header (the previous 512-byte block
+        // before the data block(s)).
+        let buf = b.get_mut();
+        let data_blocks = data.len().div_ceil(512);
+        let header_start = buf.len() - 512 - data_blocks * 512;
+        // Zero the old name region.
+        for byte in &mut buf[header_start..header_start + 100] {
+            *byte = 0;
+        }
+        let bytes = raw_path.as_bytes();
+        let n = bytes.len().min(100);
+        buf[header_start..header_start + n].copy_from_slice(&bytes[..n]);
+
+        // Recompute checksum: zero the checksum field, sum all 512 header bytes
+        // (treating cksum field as spaces), then write octal+NUL+space.
+        for byte in &mut buf[header_start + 148..header_start + 156] {
+            *byte = b' ';
+        }
+        let sum: u32 = buf[header_start..header_start + 512]
+            .iter()
+            .map(|&b| b as u32)
+            .sum();
+        let cksum_str = format!("{:06o}\0 ", sum);
+        buf[header_start + 148..header_start + 156].copy_from_slice(cksum_str.as_bytes());
+    }
+
+    fn unpack_bytes(bytes: &[u8], cfg: &PackUploadConfig) -> Result<tempfile::TempDir, String> {
+        let dir = tempfile::tempdir().unwrap();
+        let mut archive = tar::Archive::new(std::io::Cursor::new(bytes));
+        archive.set_overwrite(false);
+        archive.set_unpack_xattrs(false);
+        archive.set_preserve_permissions(false);
+        archive.set_preserve_mtime(false);
+        safe_unpack(&mut archive, dir.path(), cfg)?;
+        Ok(dir)
+    }
+
+    #[test]
+    fn safe_unpack_accepts_normal_archive() {
+        let bytes = build_tar(|b| {
+            append_file(b, "pack.yaml", b"ref: test\nlabel: Test\n");
+            append_file(b, "actions/echo.sh", b"#!/bin/sh\necho hi\n");
+        });
+        let dir = unpack_bytes(&bytes, &PackUploadConfig::default()).unwrap();
+        assert!(dir.path().join("pack.yaml").exists());
+        assert!(dir.path().join("actions/echo.sh").exists());
+    }
+
+    #[test]
+    fn safe_unpack_rejects_path_traversal() {
+        let bytes = build_tar(|b| {
+            append_raw_path_file(b, "../escape.txt", b"pwn");
+        });
+        let err = unpack_bytes(&bytes, &PackUploadConfig::default()).unwrap_err();
+        assert!(
+            err.contains("path traversal") || err.contains("non-relative"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn safe_unpack_rejects_absolute_path() {
+        let bytes = build_tar(|b| {
+            append_raw_path_file(b, "/etc/passwd", b"root:x:0:0::/root:/bin/sh\n");
+        });
+        let err = unpack_bytes(&bytes, &PackUploadConfig::default()).unwrap_err();
+        assert!(
+            err.contains("absolute") || err.contains("non-relative"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn safe_unpack_rejects_symlink() {
+        let bytes = build_tar(|b| {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(0);
+            h.set_entry_type(tar::EntryType::Symlink);
+            h.set_mode(0o777);
+            b.append_link(&mut h, "evil-link", "/etc/passwd").unwrap();
+        });
+        let err = unpack_bytes(&bytes, &PackUploadConfig::default()).unwrap_err();
+        assert!(err.contains("symbolic link"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn safe_unpack_rejects_hardlink() {
+        let bytes = build_tar(|b| {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(0);
+            h.set_entry_type(tar::EntryType::Link);
+            h.set_mode(0o644);
+            b.append_link(&mut h, "evil-hard", "pack.yaml").unwrap();
+        });
+        let err = unpack_bytes(&bytes, &PackUploadConfig::default()).unwrap_err();
+        assert!(err.contains("hard link"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn safe_unpack_rejects_when_total_size_exceeded() {
+        let bytes = build_tar(|b| {
+            append_file(b, "a.bin", &vec![0u8; 600]);
+            append_file(b, "b.bin", &vec![0u8; 600]);
+        });
+        let cfg = PackUploadConfig {
+            max_extracted_size_bytes: Some(1000),
+            max_per_entry_size_bytes: Some(800),
+            ..Default::default()
+        };
+        let err = unpack_bytes(&bytes, &cfg).unwrap_err();
+        assert!(
+            err.contains("total extracted size"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn safe_unpack_rejects_when_per_entry_size_exceeded() {
+        let bytes = build_tar(|b| {
+            append_file(b, "huge.bin", &vec![0u8; 5000]);
+        });
+        let cfg = PackUploadConfig {
+            max_per_entry_size_bytes: Some(1000),
+            ..Default::default()
+        };
+        let err = unpack_bytes(&bytes, &cfg).unwrap_err();
+        assert!(
+            err.contains("per-entry size limit"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn safe_unpack_rejects_too_many_files() {
+        let bytes = build_tar(|b| {
+            for i in 0..6 {
+                append_file(b, &format!("f{}.txt", i), b"x");
+            }
+        });
+        let cfg = PackUploadConfig {
+            max_file_count: Some(5),
+            ..Default::default()
+        };
+        let err = unpack_bytes(&bytes, &cfg).unwrap_err();
+        assert!(
+            err.contains("too many entries"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn safe_unpack_rejects_gz_bomb_via_total_size() {
+        let bytes = build_tar(|b| {
+            append_file(b, "big.bin", &vec![0u8; 10 * 1024]);
+        });
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        gz.write_all(&bytes).unwrap();
+        let gz_bytes = gz.finish().unwrap();
+        assert!(gz_bytes.len() < bytes.len());
+
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = PackUploadConfig {
+            max_extracted_size_bytes: Some(4 * 1024),
+            max_per_entry_size_bytes: Some(64 * 1024),
+            ..Default::default()
+        };
+        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(std::io::Cursor::new(
+            &gz_bytes[..],
+        )));
+        archive.set_overwrite(false);
+        let err = safe_unpack(&mut archive, dir.path(), &cfg).unwrap_err();
+        assert!(
+            err.contains("total extracted size") || err.contains("per-entry size limit"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    /// Defense-in-depth: even if a crafted tar header lies about its size,
+    /// extraction must fail rather than write unbounded data. We construct a
+    /// tar where the header advertises `size=10` but the payload is much
+    /// larger, with the trailing bytes being non-zero garbage so the tar
+    /// reader cannot mistake them for an end-of-archive zero block.
+    #[test]
+    fn safe_unpack_rejects_tar_with_size_header_mismatch() {
+        // Build one valid 50KB entry, then patch its size header to claim
+        // the entry is only 10 bytes long. The tar reader will read 10 bytes,
+        // skip to the next 512 boundary, and try to parse the trailing
+        // 0xAA-filled garbage as a subsequent header (which fails checksum).
+        let payload_len: usize = 50 * 1024;
+        let payload = vec![0xAAu8; payload_len];
+
+        let mut b = tar::Builder::new(Vec::new());
+        let mut h = tar::Header::new_gnu();
+        h.set_path("evil.bin").unwrap();
+        h.set_size(payload_len as u64);
+        h.set_mode(0o644);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        b.append(&h, &payload[..]).unwrap();
+        let mut bytes = b.into_inner().expect("tar finalize");
+
+        // Locate the most recently written header: its block precedes the
+        // payload blocks (rounded up to 512). Then patch the size field
+        // (offset 124..136) and recompute the checksum (offset 148..156).
+        let data_blocks = payload_len.div_ceil(512);
+        // The Builder also appends two trailing zero blocks on `into_inner`.
+        let trailing_zero = 2 * 512;
+        let header_start = bytes.len() - trailing_zero - data_blocks * 512 - 512;
+
+        // Octal "10" with NUL terminator, padded to 12 bytes.
+        let new_size = b"00000000012\0";
+        bytes[header_start + 124..header_start + 136].copy_from_slice(new_size);
+
+        // Recompute checksum over the 512-byte header (cksum field as spaces).
+        for byte in &mut bytes[header_start + 148..header_start + 156] {
+            *byte = b' ';
+        }
+        let sum: u32 = bytes[header_start..header_start + 512]
+            .iter()
+            .map(|&x| x as u32)
+            .sum();
+        let cksum_str = format!("{:06o}\0 ", sum);
+        bytes[header_start + 148..header_start + 156].copy_from_slice(cksum_str.as_bytes());
+
+        // Use generous limits so the only possible failure mode is the
+        // header/payload mismatch itself (per-entry / corrupt-tar).
+        let cfg = PackUploadConfig::default();
+        let err = unpack_bytes(&bytes, &cfg).unwrap_err();
+        assert!(
+            err.contains("Corrupt tar entry")
+                || err.contains("per-entry size limit")
+                || err.contains("Failed to write entry")
+                || err.contains("Failed to read tar entries"),
+            "expected extraction to fail on header/payload mismatch, got: {}",
+            err
+        );
     }
 }

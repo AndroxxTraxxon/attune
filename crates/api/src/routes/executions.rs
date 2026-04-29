@@ -119,6 +119,34 @@ pub async fn create_execution(
         None
     };
 
+    // SECURITY: Record the triggering identity on the execution so that the
+    // worker mints the execution-scoped API token (`ATTUNE_API_TOKEN`) with
+    // that identity's `sub` claim. This ensures callbacks from the action are
+    // subject to the same RBAC as the user who triggered them.
+    //
+    // For execution-token callers (e.g., the MCP server inside a running
+    // action), inherit the executor of the originating execution rather than
+    // using the token's `sub` directly — this preserves the security context
+    // across nested calls.
+    let executor_identity = match user.claims.token_type {
+        TokenType::Access => user.identity_id().ok(),
+        TokenType::Execution => {
+            if let Some(parent_id) = parent_from_token {
+                ExecutionRepository::find_by_id(&state.db, parent_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|p| p.executor)
+                    .or_else(|| user.identity_id().ok())
+            } else {
+                user.identity_id().ok()
+            }
+        }
+        // Sensor / refresh tokens are not expected here; fall back to the
+        // claimed identity if present.
+        _ => user.identity_id().ok(),
+    };
+
     // Create execution input
     let execution_input = CreateExecutionInput {
         action: Some(action.id),
@@ -133,7 +161,7 @@ pub async fn create_execution(
             .and_then(|e| serde_json::from_value(e.clone()).ok()),
         parent: parent_from_token,
         enforcement: None,
-        executor: None,
+        executor: executor_identity,
         worker: None,
         status: ExecutionStatus::Requested,
         result: None,

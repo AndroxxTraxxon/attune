@@ -67,11 +67,15 @@ fn validate_arch(arch: &str) -> Result<&str, (StatusCode, Json<serde_json::Value
     }
 }
 
-/// Validate bootstrap token if configured.
+/// Validate bootstrap token.
 ///
-/// If the agent config has a `bootstrap_token` set, the request must provide it
-/// via the `X-Agent-Token` header or the `token` query parameter. If no token
-/// is configured, access is unrestricted.
+/// The agent config MUST have a `bootstrap_token` set; if not, this endpoint
+/// is treated as disabled and returns `503 Service Unavailable`. This
+/// fail-closed behavior prevents anonymous downloads of the agent binary
+/// when the operator has not explicitly opted in to token authentication.
+///
+/// When configured, the request must provide the matching token via the
+/// `X-Agent-Token` header or the `token` query parameter.
 fn validate_token(
     config: &attune_common::config::Config,
     headers: &HeaderMap,
@@ -85,16 +89,13 @@ fn validate_token(
     let expected_token = match expected_token {
         Some(t) => t,
         None => {
-            use std::sync::Once;
-            static WARN_ONCE: Once = Once::new();
-            WARN_ONCE.call_once(|| {
-                tracing::warn!(
-                    "Agent binary download endpoint has no bootstrap_token configured. \
-                     Anyone with network access to the API can download the agent binary. \
-                     Set agent.bootstrap_token in config to restrict access."
-                );
-            });
-            return Ok(());
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "Agent downloads disabled",
+                    "message": "Agent binary distribution requires authentication. Set agent.bootstrap_token in config to enable."
+                })),
+            ));
         }
     };
 
@@ -374,19 +375,24 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_token_no_config() {
-        // When no agent config is set at all, no token is required.
+    fn test_validate_token_no_config_returns_503() {
+        // When no agent config is set at all, the endpoint is disabled.
+        // SECURITY: This must fail closed (503) rather than fail open (Ok).
         let config = test_config(None);
         let headers = HeaderMap::new();
         let query_token = None;
 
         let result = validate_token(&config, &headers, &query_token);
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        let (status, body) = result.unwrap_err();
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.0["error"], "Agent downloads disabled");
     }
 
     #[test]
-    fn test_validate_token_no_bootstrap_token_configured() {
-        // Agent config exists but bootstrap_token is None → no token required.
+    fn test_validate_token_no_bootstrap_token_configured_returns_503() {
+        // Agent config exists but bootstrap_token is None → endpoint disabled.
+        // SECURITY: This must fail closed (503) rather than fail open (Ok).
         let config = test_config(Some(AgentConfig {
             binary_dir: "/tmp/test".to_string(),
             bootstrap_token: None,
@@ -395,7 +401,29 @@ mod tests {
         let query_token = None;
 
         let result = validate_token(&config, &headers, &query_token);
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        let (status, body) = result.unwrap_err();
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.0["error"], "Agent downloads disabled");
+    }
+
+    #[test]
+    fn test_validate_token_no_bootstrap_token_ignores_provided_token() {
+        // Even if the caller provides a token, an unconfigured endpoint
+        // must still return 503 — never accept a caller-supplied token
+        // as authoritative when no expected token is configured.
+        let config = test_config(Some(AgentConfig {
+            binary_dir: "/tmp/test".to_string(),
+            bootstrap_token: None,
+        }));
+        let mut headers = HeaderMap::new();
+        headers.insert("x-agent-token", HeaderValue::from_static("anything"));
+        let query_token = Some("anything".to_string());
+
+        let result = validate_token(&config, &headers, &query_token);
+        assert!(result.is_err());
+        let (status, _body) = result.unwrap_err();
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[test]

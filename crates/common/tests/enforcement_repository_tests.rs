@@ -59,6 +59,7 @@ async fn test_create_enforcement_minimal() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -131,6 +132,7 @@ async fn test_create_enforcement_with_event() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -199,6 +201,7 @@ async fn test_create_enforcement_with_conditions() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -265,6 +268,7 @@ async fn test_create_enforcement_with_any_condition() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -407,6 +411,7 @@ async fn test_find_enforcement_by_id() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -481,6 +486,7 @@ async fn test_get_enforcement_by_id() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -562,6 +568,7 @@ async fn test_list_enforcements() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -634,6 +641,7 @@ async fn test_update_enforcement_status() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -700,6 +708,7 @@ async fn test_update_enforcement_status_transitions() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -779,6 +788,7 @@ async fn test_update_enforcement_payload() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -842,6 +852,7 @@ async fn test_update_enforcement_both_fields() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -906,6 +917,7 @@ async fn test_update_enforcement_no_changes() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -991,6 +1003,7 @@ async fn test_delete_enforcement() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -1066,6 +1079,7 @@ async fn test_find_enforcements_by_rule() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -1088,6 +1102,7 @@ async fn test_find_enforcements_by_rule() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -1159,6 +1174,7 @@ async fn test_find_enforcements_by_status() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -1249,6 +1265,7 @@ async fn test_find_enforcements_by_event() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -1334,6 +1351,7 @@ async fn test_delete_rule_sets_enforcement_rule_to_null() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -1400,6 +1418,7 @@ async fn test_enforcement_resolved_at_lifecycle() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -1469,6 +1488,7 @@ async fn test_update_loaded_enforcement_uses_loaded_locator() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await

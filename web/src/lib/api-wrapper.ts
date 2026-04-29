@@ -110,6 +110,13 @@ async function attemptTokenRefresh(): Promise<boolean> {
     if (newRefreshToken) {
       localStorage.setItem("refresh_token", newRefreshToken);
     }
+    // Notify subscribers (e.g. WebSocketProvider) that the token has changed
+    // in-tab so they can reconnect with the fresh credential.
+    try {
+      window.dispatchEvent(new CustomEvent("auth:token-changed"));
+    } catch {
+      // Older browsers — best-effort.
+    }
 
     return true;
   } catch {

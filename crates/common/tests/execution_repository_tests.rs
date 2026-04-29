@@ -1325,6 +1325,7 @@ async fn test_search_supports_pack_wildcards_for_action_rule_and_trigger_refs() 
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -1347,6 +1348,7 @@ async fn test_search_supports_pack_wildcards_for_action_rule_and_trigger_refs() 
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -1543,6 +1545,7 @@ async fn test_search_escapes_literal_like_characters_in_ref_filters() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await
@@ -1564,6 +1567,7 @@ async fn test_search_escapes_literal_like_characters_in_ref_filters() {
             trigger_params: json!({}),
             enabled: true,
             is_adhoc: false,
+            owner_identity: None,
         },
     )
     .await

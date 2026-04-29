@@ -281,6 +281,16 @@ impl EnforcementProcessor {
 
         // Create the execution row first; scheduler-side policy enforcement
         // now handles both rule-triggered and manual executions uniformly.
+        //
+        // SECURITY: Attribute the execution to the rule's owner identity (the
+        // user who registered/authored the rule). Legacy or system-loaded
+        // rules with NULL `owner_identity` fall back to the system identity
+        // (id 1) so the worker still mints a callback token with a known
+        // `sub` claim. This is intentionally permissive for the init-pack
+        // loader path; new rules created via the API always carry the
+        // authenticated user's identity.
+        const SYSTEM_IDENTITY_ID: i64 = 1;
+        let executor_identity = rule.owner_identity.unwrap_or(SYSTEM_IDENTITY_ID);
         let execution_input = CreateExecutionInput {
             action: Some(action_id),
             action_ref: action_ref.clone(),
@@ -288,7 +298,7 @@ impl EnforcementProcessor {
             env_vars: None, // No custom env vars for rule-triggered executions
             parent: None,   // TODO: Handle workflow parent-child relationships
             enforcement: Some(enforcement.id),
-            executor: None, // Will be assigned during scheduling
+            executor: Some(executor_identity),
             worker: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,
@@ -391,6 +401,7 @@ mod tests {
             action_params: json!({}),
             trigger_params: json!({}),
             is_adhoc: false,
+            owner_identity: None,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
         };

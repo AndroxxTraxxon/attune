@@ -796,6 +796,50 @@ pub struct Config {
 
     /// Agent configuration (optional, for agent binary distribution)
     pub agent: Option<AgentConfig>,
+
+    /// Pack upload safety limits (optional; sensible defaults are used when absent).
+    #[serde(default)]
+    pub pack_upload: PackUploadConfig,
+}
+
+/// Safety limits applied during `POST /api/v1/packs/upload` archive extraction.
+///
+/// Defaults (used when the field is `None`):
+/// * `max_extracted_size_bytes`: 100 MB
+/// * `max_file_count`:           10_000 entries
+/// * `max_per_entry_size_bytes`: 50 MB
+/// * `allow_symlinks`:           false (symlinks/hardlinks are rejected)
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct PackUploadConfig {
+    pub max_extracted_size_bytes: Option<u64>,
+    pub max_file_count: Option<u32>,
+    pub max_per_entry_size_bytes: Option<u64>,
+    pub allow_symlinks: Option<bool>,
+}
+
+impl PackUploadConfig {
+    pub const DEFAULT_MAX_EXTRACTED_SIZE_BYTES: u64 = 100 * 1024 * 1024;
+    pub const DEFAULT_MAX_FILE_COUNT: u32 = 10_000;
+    pub const DEFAULT_MAX_PER_ENTRY_SIZE_BYTES: u64 = 50 * 1024 * 1024;
+    pub const DEFAULT_ALLOW_SYMLINKS: bool = false;
+
+    pub fn max_extracted_size_bytes(&self) -> u64 {
+        self.max_extracted_size_bytes
+            .unwrap_or(Self::DEFAULT_MAX_EXTRACTED_SIZE_BYTES)
+    }
+
+    pub fn max_file_count(&self) -> u32 {
+        self.max_file_count.unwrap_or(Self::DEFAULT_MAX_FILE_COUNT)
+    }
+
+    pub fn max_per_entry_size_bytes(&self) -> u64 {
+        self.max_per_entry_size_bytes
+            .unwrap_or(Self::DEFAULT_MAX_PER_ENTRY_SIZE_BYTES)
+    }
+
+    pub fn allow_symlinks(&self) -> bool {
+        self.allow_symlinks.unwrap_or(Self::DEFAULT_ALLOW_SYMLINKS)
+    }
 }
 
 fn default_service_name() -> String {
@@ -1081,6 +1125,104 @@ impl Config {
     pub fn is_development(&self) -> bool {
         self.environment == "development"
     }
+
+    /// Emit non-fatal warnings about insecure secret-management practices.
+    ///
+    /// This is a best-effort heuristic check intended to nudge operators toward
+    /// injecting secrets via environment variables (e.g.
+    /// `ATTUNE__SECURITY__LDAP__SEARCH_BIND_PASSWORD`) or a secrets manager
+    /// rather than committing literal values to YAML files.
+    ///
+    /// The function never fails startup — it only logs `WARN` messages.
+    pub fn warn_about_insecure_secrets(&self) {
+        if let Some(ldap) = &self.security.ldap {
+            if ldap.enabled {
+                if let Some(password) = ldap.search_bind_password.as_deref() {
+                    if let Some(reason) = looks_like_literal_secret(password) {
+                        tracing::warn!(
+                            field = "security.ldap.search_bind_password",
+                            reason = reason,
+                            "LDAP search-bind password appears to be a literal value in config. \
+                             Inject it via the environment variable \
+                             ATTUNE__SECURITY__LDAP__SEARCH_BIND_PASSWORD or your platform's \
+                             secrets manager (Docker secrets, Kubernetes Secrets, systemd \
+                             credentials, etc.) instead of committing it to YAML. \
+                             See docs/authentication/ldap-secrets.md."
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Heuristic that returns `Some(reason)` when a string looks like a literal
+/// placeholder or weak secret committed to a config file.
+///
+/// Returns `None` when the value looks like a real, env-injected secret.
+fn looks_like_literal_secret(value: &str) -> Option<&'static str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Unresolved `${VAR}` placeholder — the `config` crate does not expand
+    // these natively, so the application would attempt to bind with the
+    // literal `${VAR}` string. Flag it as a clear configuration mistake.
+    if trimmed.starts_with("${") && trimmed.ends_with('}') {
+        return Some("unresolved ${VAR} placeholder; env-var override likely missing");
+    }
+
+    if trimmed.len() < 8 {
+        return Some("value is shorter than 8 characters");
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let placeholder_markers = [
+        "password",
+        "change-me",
+        "changeme",
+        "change_me",
+        "placeholder",
+        "example",
+        "secret",
+        "todo",
+    ];
+    for marker in placeholder_markers {
+        if lower.contains(marker) {
+            return Some("value contains a placeholder-looking substring");
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod __secret_heuristic_tests {
+    use super::looks_like_literal_secret;
+
+    #[test]
+    fn flags_short_values() {
+        assert!(looks_like_literal_secret("short").is_some());
+    }
+
+    #[test]
+    fn flags_placeholder_substrings() {
+        assert!(looks_like_literal_secret("readonly-password").is_some());
+        assert!(looks_like_literal_secret("change-me-please").is_some());
+        assert!(looks_like_literal_secret("my-example-value-x").is_some());
+    }
+
+    #[test]
+    fn flags_unresolved_env_placeholder() {
+        assert!(looks_like_literal_secret("${LDAP_PASSWORD}").is_some());
+    }
+
+    #[test]
+    fn passes_realistic_secret() {
+        // High-entropy-looking value with no placeholder markers.
+        assert!(looks_like_literal_secret("p9k2qX7vBn4mZ8tL").is_none());
+    }
 }
 
 #[cfg(test)]
@@ -1107,6 +1249,7 @@ mod tests {
             pack_registry: PackRegistryConfig::default(),
             executor: None,
             agent: None,
+            pack_upload: PackUploadConfig::default(),
         };
 
         assert_eq!(config.service_name, "attune");
@@ -1186,6 +1329,7 @@ mod tests {
             pack_registry: PackRegistryConfig::default(),
             executor: None,
             agent: None,
+            pack_upload: PackUploadConfig::default(),
         };
 
         assert!(config.validate().is_ok());

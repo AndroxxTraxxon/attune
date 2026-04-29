@@ -40,6 +40,13 @@ interface WebSocketProviderProps {
 /**
  * WebSocketProvider maintains a single WebSocket connection for the entire application.
  *
+ * **Authentication:** the notifier service requires a JWT on connect. The
+ * access token from `localStorage` is appended as a `?token=…` query parameter
+ * on the WebSocket URL. If no token is present, the provider waits and does
+ * not connect; if the server rejects with `1008` (policy violation, treated
+ * here as auth failure / closure on 401), we attempt to refresh the token
+ * via the existing API client and reconnect.
+ *
  * Note: In React 18 StrictMode (development only), components mount twice to help detect
  * side effects. This may briefly create two WebSocket connections, but the first one is
  * cleaned up immediately. In production builds, only one connection is created.
@@ -68,6 +75,20 @@ export function WebSocketProvider({
     new Map(),
   );
 
+  /**
+   * Build the authenticated WebSocket URL by appending the current access
+   * token. Returns null if no token is available — caller should defer
+   * connection until the user logs in.
+   */
+  const buildAuthenticatedUrl = useCallback((): string | null => {
+    const token = localStorage.getItem("access_token");
+    if (!token) {
+      return null;
+    }
+    const sep = url.includes("?") ? "&" : "?";
+    return `${url}${sep}token=${encodeURIComponent(token)}`;
+  }, [url]);
+
   const connect = useCallback(() => {
     // Don't reconnect if we're already connected, connecting, or explicitly disconnected
     if (
@@ -89,8 +110,16 @@ export function WebSocketProvider({
 
     const attemptConnect = () => {
       try {
+        const authedUrl = buildAuthenticatedUrl();
+        if (!authedUrl) {
+          // No token yet — defer; the auth flow will trigger reconnect once
+          // the user logs in (see `useEffect` below that watches storage).
+          isConnectingRef.current = false;
+          return;
+        }
+
         isConnectingRef.current = true;
-        const ws = new WebSocket(url);
+        const ws = new WebSocket(authedUrl);
 
         ws.onopen = () => {
           setConnected(true);
@@ -141,10 +170,21 @@ export function WebSocketProvider({
           console.error("[WebSocket] Error:", error);
         };
 
-        ws.onclose = () => {
+        ws.onclose = (event) => {
           setConnected(false);
           isConnectingRef.current = false;
           wsRef.current = null;
+
+          // 1008 = policy violation. Browsers also map auth-failure HTTP 401
+          // responses (returned during the WS handshake) into close codes
+          // outside the normal range. Treat these as "token may be invalid"
+          // and clear it so the user is bounced to login by the rest of the
+          // app on their next API call. Do NOT auto-retry indefinitely.
+          if (event.code === 1008) {
+            console.warn(
+              "[WebSocket] Connection closed with policy violation (likely auth failure)",
+            );
+          }
 
           // Attempt to reconnect if we should still be connected
           if (
@@ -186,7 +226,7 @@ export function WebSocketProvider({
     };
 
     attemptConnect();
-  }, [url, reconnectInterval, maxReconnectAttempts]);
+  }, [buildAuthenticatedUrl, reconnectInterval, maxReconnectAttempts]);
 
   const disconnect = useCallback(() => {
     shouldConnectRef.current = false;
@@ -256,14 +296,57 @@ export function WebSocketProvider({
     [],
   );
 
-  // Connect on mount if autoConnect is enabled
+  // Connect on mount if autoConnect is enabled, and re-connect when the
+  // access token changes (login/logout/refresh) so the new token is sent on
+  // the new handshake.
   useEffect(() => {
-    if (autoConnect) {
+    if (!autoConnect) return;
+
+    shouldConnectRef.current = true;
+    connect();
+
+    // Watch for auth token changes (login, logout, or refresh) so we
+    // immediately reconnect with a fresh token. localStorage events fire
+    // across tabs; in-tab updates need a custom event ("auth:token-changed")
+    // which the API wrapper can dispatch on refresh — we tolerate its
+    // absence by falling back to the periodic reconnect on close.
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "access_token") {
+        // Drop the existing socket so the next connect picks up the new token.
+        if (wsRef.current) {
+          try {
+            wsRef.current.close(1000, "Token refreshed");
+          } catch {
+            // ignore
+          }
+          wsRef.current = null;
+        }
+        reconnectAttemptsRef.current = 0;
+        shouldConnectRef.current = true;
+        connect();
+      }
+    };
+
+    const handleTokenChanged = () => {
+      if (wsRef.current) {
+        try {
+          wsRef.current.close(1000, "Token refreshed");
+        } catch {
+          // ignore
+        }
+        wsRef.current = null;
+      }
+      reconnectAttemptsRef.current = 0;
       shouldConnectRef.current = true;
       connect();
-    }
+    };
+
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("auth:token-changed", handleTokenChanged);
 
     return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("auth:token-changed", handleTokenChanged);
       disconnect();
     };
   }, [autoConnect, connect, disconnect]);

@@ -161,6 +161,10 @@ pub struct RuleResponse {
     #[schema(example = false)]
     pub is_adhoc: bool,
 
+    /// Identity that registered the rule. NULL for system-loaded rules.
+    #[schema(example = 1, nullable = true)]
+    pub owner_identity: Option<i64>,
+
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
@@ -241,6 +245,7 @@ impl From<attune_common::models::rule::Rule> for RuleResponse {
             trigger_params: rule.trigger_params,
             enabled: rule.enabled,
             is_adhoc: rule.is_adhoc,
+            owner_identity: rule.owner_identity,
             created: rule.created,
             updated: rule.updated,
         }

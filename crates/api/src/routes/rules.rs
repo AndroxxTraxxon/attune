@@ -345,6 +345,12 @@ pub async fn create_rule(
     // Validate action parameters against schema
     validate_action_params(&action, &request.action_params)?;
 
+    // Capture the authenticated identity to attribute rule-triggered
+    // executions back to the user who registered the rule. For service-account
+    // / token flows where `identity_id()` is not available we fall back to
+    // None, which defers to the system identity at execution-creation time.
+    let owner_identity = user.identity_id().ok();
+
     // Create rule input
     let rule_input = CreateRuleInput {
         r#ref: request.r#ref,
@@ -361,6 +367,7 @@ pub async fn create_rule(
         trigger_params: request.trigger_params,
         enabled: request.enabled,
         is_adhoc: true, // Rules created via API are ad-hoc (not from pack installation)
+        owner_identity,
     };
 
     let rule = RuleRepository::create(&state.db, rule_input).await?;
@@ -509,6 +516,7 @@ pub async fn update_rule(
         action_params: request.action_params,
         trigger_params: request.trigger_params,
         enabled: request.enabled,
+        owner_identity: None,
     };
 
     let rule = RuleRepository::update(&state.db, existing_rule.id, update_input).await?;
@@ -664,6 +672,7 @@ pub async fn enable_rule(
         action_params: None,
         trigger_params: None,
         enabled: Some(true),
+        owner_identity: None,
     };
 
     let rule = RuleRepository::update(&state.db, existing_rule.id, update_input).await?;
@@ -731,6 +740,7 @@ pub async fn disable_rule(
         action_params: None,
         trigger_params: None,
         enabled: Some(false),
+        owner_identity: None,
     };
 
     let rule = RuleRepository::update(&state.db, existing_rule.id, update_input).await?;

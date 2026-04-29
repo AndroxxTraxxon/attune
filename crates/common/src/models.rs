@@ -1145,6 +1145,10 @@ pub mod rule {
         pub trigger_params: JsonValue,
         pub enabled: bool,
         pub is_adhoc: bool,
+        /// Identity that registered the rule. Used to attribute rule-triggered
+        /// executions. NULL for system-loaded rules (init pack loader); those
+        /// fall back to the system identity at execution-creation time.
+        pub owner_identity: Option<Id>,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
     }

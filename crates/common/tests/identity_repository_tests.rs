@@ -7,7 +7,7 @@ mod helpers;
 
 use attune_common::{
     repositories::{
-        identity::{CreateIdentityInput, IdentityRepository, UpdateIdentityInput},
+        identity::{CreateIdentityInput, IdentityRepository, OidcUpsertInput, UpdateIdentityInput},
         Create, Delete, FindById, List, Update,
     },
     Error,
@@ -652,4 +652,216 @@ async fn test_find_by_ldap_dn_ignores_oidc_attributes() {
         .unwrap();
 
     assert!(found.is_none());
+}
+
+// ── OIDC-specific tests ─────────────────────────────────────────────────────
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_find_by_oidc_subject_strict_three_way_match() {
+    let pool = create_test_pool().await.unwrap();
+
+    let issuer = "https://auth.example.com";
+    let sub = "user-strict-1";
+    let client_id = "client-a";
+
+    let input = CreateIdentityInput {
+        login: unique_pack_ref("oidc_strict"),
+        display_name: Some("OIDC User".to_string()),
+        attributes: json!({
+            "oidc": {
+                "issuer": issuer,
+                "sub": sub,
+                "client_id": client_id,
+                "email": "user@example.com"
+            }
+        }),
+        password_hash: None,
+    };
+
+    let created = IdentityRepository::create(&pool, input).await.unwrap();
+
+    // Strict match succeeds for the same client_id.
+    let found = IdentityRepository::find_by_oidc_subject(&pool, issuer, sub, client_id)
+        .await
+        .unwrap()
+        .expect("strict OIDC identity not found");
+    assert_eq!(found.id, created.id);
+
+    // A different client_id with the same (issuer, sub) must NOT match — this
+    // is the defense-in-depth invariant the strict lookup enforces.
+    let other = IdentityRepository::find_by_oidc_subject(&pool, issuer, sub, "client-b")
+        .await
+        .unwrap();
+    assert!(other.is_none());
+
+    // The legacy lookup must also reject this row because client_id is set.
+    let legacy = IdentityRepository::find_legacy_oidc_subject(&pool, issuer, sub)
+        .await
+        .unwrap();
+    assert!(legacy.is_none());
+}
+
+#[tokio::test]
+#[ignore = "integration test — requires database"]
+async fn test_find_legacy_oidc_subject_matches_rows_without_client_id() {
+    let pool = create_test_pool().await.unwrap();
+
+    let issuer = "https://auth.example.com";
+    let sub = "user-legacy-1";
+
+    // Simulate a pre-upgrade row: oidc attributes without client_id.
+    let input = CreateIdentityInput {
+        login: unique_pack_ref("oidc_legacy"),
+        display_name: Some("Legacy OIDC User".to_string()),
+        attributes: json!({
+            "oidc": {
+                "issuer": issuer,
+                "sub": sub,
+                "email": "legacy@example.com"
+            }
+        }),
+        password_hash: None,
+    };
+
+    let created = IdentityRepository::create(&pool, input).await.unwrap();
+
+    // Strict lookup must NOT find the legacy row regardless of which
+    // client_id the caller supplies.
+    let strict = IdentityRepository::find_by_oidc_subject(&pool, issuer, sub, "client-a")
+        .await
+        .unwrap();
+    assert!(strict.is_none());
+
+    // The legacy lookup, however, finds it so the upsert path can upgrade it.
+    let legacy = IdentityRepository::find_legacy_oidc_subject(&pool, issuer, sub)
+        .await
+        .unwrap()
+        .expect("legacy OIDC identity not found");
+    assert_eq!(legacy.id, created.id);
+
+    // Upgrade the row: stamp client_id onto the attributes and verify that
+    // strict lookup now finds it and legacy lookup no longer does.
+    let upgraded_attrs = json!({
+        "oidc": {
+            "issuer": issuer,
+            "sub": sub,
+            "client_id": "client-a",
+            "email": "legacy@example.com"
+        }
+    });
+    IdentityRepository::update(
+        &pool,
+        created.id,
+        UpdateIdentityInput {
+            display_name: None,
+            password_hash: None,
+            attributes: Some(upgraded_attrs),
+            frozen: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let strict_after = IdentityRepository::find_by_oidc_subject(&pool, issuer, sub, "client-a")
+        .await
+        .unwrap()
+        .expect("strict lookup must find upgraded row");
+    assert_eq!(strict_after.id, created.id);
+
+    let legacy_after = IdentityRepository::find_legacy_oidc_subject(&pool, issuer, sub)
+        .await
+        .unwrap();
+    assert!(legacy_after.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "integration test — requires database"]
+async fn test_upsert_oidc_identity_is_race_safe() {
+    // Two concurrent OIDC logins for the same (issuer, sub) but with
+    // different client_ids must not produce two identity rows. The partial
+    // unique index `uq_identity_oidc_issuer_sub` (added in migration
+    // 20250101000013) plus the in-repository transactional retry loop
+    // collapse the race to a single winning row.
+
+    let pool = create_test_pool().await.unwrap();
+
+    let issuer = format!("https://auth.example.com/{}", unique_pack_ref("race"));
+    let sub = unique_pack_ref("subject");
+    let issuer_a = issuer.clone();
+    let sub_a = sub.clone();
+    let issuer_b = issuer.clone();
+    let sub_b = sub.clone();
+    let pool_a = pool.clone();
+    let pool_b = pool.clone();
+
+    let make_input = |client_id: &str, login_suffix: &str| OidcUpsertInput {
+        issuer: issuer.clone(),
+        sub: sub.clone(),
+        client_id: client_id.to_string(),
+        desired_login: format!("{}@example.com", unique_pack_ref(login_suffix)),
+        fallback_login: format!("oidc:{}:{}:{}", issuer, sub, client_id),
+        display_name: Some(format!("OIDC User ({client_id})")),
+        attributes: json!({
+            "oidc": {
+                "issuer": issuer.clone(),
+                "sub": sub.clone(),
+                "client_id": client_id,
+            }
+        }),
+    };
+
+    let input_a = make_input("client-a", "race_a");
+    let input_b = make_input("client-b", "race_b");
+
+    let task_a =
+        tokio::spawn(
+            async move { IdentityRepository::upsert_oidc_identity(&pool_a, input_a).await },
+        );
+    let task_b =
+        tokio::spawn(
+            async move { IdentityRepository::upsert_oidc_identity(&pool_b, input_b).await },
+        );
+
+    let result_a = task_a.await.expect("task_a panicked");
+    let result_b = task_b.await.expect("task_b panicked");
+
+    let identity_a = result_a.expect("upsert A failed");
+    let identity_b = result_b.expect("upsert B failed");
+
+    // Both calls must observe the same row id — that's the whole point.
+    assert_eq!(
+        identity_a.id, identity_b.id,
+        "concurrent upserts for the same (issuer, sub) must converge on one row"
+    );
+
+    // Verify exactly one row exists in the database for this (issuer, sub).
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM identity
+         WHERE attributes->'oidc'->>'issuer' = $1
+           AND attributes->'oidc'->>'sub' = $2",
+    )
+    .bind(&issuer_a)
+    .bind(&sub_a)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1, "expected exactly one identity row, got {count}");
+
+    // The single row's client_id must be one of the two contenders — not
+    // null, not garbage. We don't care which one wins.
+    let client_id: Option<String> = sqlx::query_scalar(
+        "SELECT attributes->'oidc'->>'client_id' FROM identity
+         WHERE attributes->'oidc'->>'issuer' = $1
+           AND attributes->'oidc'->>'sub' = $2",
+    )
+    .bind(&issuer_b)
+    .bind(&sub_b)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        matches!(client_id.as_deref(), Some("client-a") | Some("client-b")),
+        "row's client_id should be one of the two contenders, got {client_id:?}"
+    );
 }

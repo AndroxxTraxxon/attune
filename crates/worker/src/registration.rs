@@ -550,6 +550,7 @@ mod tests {
             pack_registry: attune_common::config::PackRegistryConfig::default(),
             executor: None,
             agent: None,
+            pack_upload: attune_common::config::PackUploadConfig::default(),
         };
         let mut registration = WorkerRegistration::new(pool, &config);
 

@@ -91,14 +91,7 @@ pub async fn list_artifacts(
     };
 
     let result = ArtifactRepository::search(&state.db, &filters).await?;
-    let mut rows = result.rows;
-
-    if let Some((identity_id, grants)) = ensure_can_read_any_artifact(&state, &user).await? {
-        rows.retain(|artifact| {
-            let ctx = artifact_authorization_context(identity_id, artifact);
-            AuthorizationService::is_allowed(&grants, Resource::Artifacts, Action::Read, &ctx)
-        });
-    }
+    let rows = filter_artifacts_for_read(&state, &user, result.rows).await?;
 
     let items: Vec<ArtifactSummary> = rows.into_iter().map(ArtifactSummary::from).collect();
 
@@ -393,12 +386,7 @@ pub async fn list_artifacts_by_execution(
     Path(execution_id): Path<i64>,
 ) -> ApiResult<impl IntoResponse> {
     let mut artifacts = ArtifactRepository::find_by_execution(&state.db, execution_id).await?;
-    if let Some((identity_id, grants)) = ensure_can_read_any_artifact(&state, &user).await? {
-        artifacts.retain(|artifact| {
-            let ctx = artifact_authorization_context(identity_id, artifact);
-            AuthorizationService::is_allowed(&grants, Resource::Artifacts, Action::Read, &ctx)
-        });
-    }
+    artifacts = filter_artifacts_for_read(&state, &user, artifacts).await?;
     let items: Vec<ArtifactSummary> = artifacts.into_iter().map(ArtifactSummary::from).collect();
 
     Ok((StatusCode::OK, Json(ApiResponse::new(items))))
@@ -1498,30 +1486,232 @@ pub async fn allocate_file_version_by_ref(
 // Helpers
 // ============================================================================
 
+/// Derive the parent pack ref for an artifact whose scope is Pack/Action/Sensor.
+///
+/// - `OwnerType::Pack`: owner _is_ the pack ref.
+/// - `OwnerType::Action`/`OwnerType::Sensor`: owner is `<pack_ref>.<entity_name>`,
+///   so the pack is the segment before the first `.`.
+/// - Any other scope (Identity, System, Rule, …) returns `None`.
+fn derive_pack_ref(scope: OwnerType, owner: &str) -> Option<&str> {
+    match scope {
+        OwnerType::Pack => {
+            if owner.is_empty() {
+                None
+            } else {
+                Some(owner)
+            }
+        }
+        OwnerType::Action | OwnerType::Sensor => {
+            // Require `<pack>.<entity>` form: at least one dot, non-empty pack
+            // segment. A dotless owner like `"action"` is malformed and must
+            // not be silently treated as a pack ref.
+            let mut parts = owner.splitn(2, '.');
+            let pack = parts.next()?;
+            parts.next()?;
+            if pack.is_empty() {
+                None
+            } else {
+                Some(pack)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// True when `scope` is one for which `derive_pack_ref` is expected to yield
+/// a pack — i.e., a `None` return for these scopes indicates a malformed
+/// owner ref rather than a scope that simply has no pack.
+fn scope_requires_pack(scope: OwnerType) -> bool {
+    matches!(
+        scope,
+        OwnerType::Pack | OwnerType::Action | OwnerType::Sensor
+    )
+}
+
+/// Read the executing action ref out of an Execution-token's metadata.
+fn execution_token_action_ref(user: &AuthenticatedUser) -> Option<&str> {
+    user.claims
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("action_ref"))
+        .and_then(|v| v.as_str())
+}
+
+/// Derive the pack ref from an Execution token's `action_ref` metadata.
+/// Returns `None` if the token has no `action_ref`, or if the `action_ref`
+/// is malformed (empty or with an empty leading segment).
+fn execution_token_pack_ref(user: &AuthenticatedUser) -> Option<&str> {
+    execution_token_action_ref(user)
+        .and_then(|s| s.split('.').next())
+        .filter(|s| !s.is_empty())
+}
+
+/// Reject Execution tokens that try to mutate an artifact owned by a different
+/// pack than the executing action's own pack. Identity-scoped artifacts are
+/// not subject to this guard (they fall through to the standard owner check).
+fn execution_token_cross_pack_guard(
+    user: &AuthenticatedUser,
+    artifact: &attune_common::models::artifact::Artifact,
+) -> Result<(), ApiError> {
+    if user.claims.token_type != TokenType::Execution {
+        return Ok(());
+    }
+    let artifact_pack = match derive_pack_ref(artifact.scope, &artifact.owner) {
+        Some(p) => p,
+        None => {
+            // Pack-derivable scope (Pack/Action/Sensor) with a malformed owner
+            // — refuse rather than silently bypass the cross-pack guard.
+            if scope_requires_pack(artifact.scope) {
+                return Err(ApiError::Forbidden(
+                    "Artifact has malformed pack-scoped owner; mutation refused".to_string(),
+                ));
+            }
+            // Identity/system-scoped artifact — no pack to compare against.
+            return Ok(());
+        }
+    };
+    let token_pack = execution_token_pack_ref(user).ok_or_else(|| {
+        ApiError::Forbidden(
+            "Execution token missing or malformed action_ref; cross-pack artifact mutation refused"
+                .to_string(),
+        )
+    })?;
+    if token_pack != artifact_pack {
+        return Err(ApiError::Forbidden(format!(
+            "Execution token from pack '{}' cannot mutate artifact owned by pack '{}'",
+            token_pack, artifact_pack
+        )));
+    }
+    Ok(())
+}
+
+/// Resolve a read/write of `artifact` against the calling user.
+///
+/// Visibility × scope policy:
+///
+/// - `visibility = public`: any identity holding `artifacts:<action>` (subject
+///   to that grant's own constraints) is allowed.
+/// - `visibility = private`:
+///   - **Constrained** `artifacts:<action>` grants — i.e., grants whose
+///     `constraints` field is set — apply normally. This lets operators
+///     explicitly delegate access (e.g. `owner_refs: ["pack_x"]`).
+///   - **Unconstrained** `artifacts:<action>` grants do *not* unlock private
+///     artifacts on their own; they only cover public artifacts.
+///   - Identity-scoped private artifacts: only the owning identity may act.
+///   - Pack/Action/Sensor-scoped private artifacts: a `packs:<read|update>`
+///     grant covering the derived pack ref also unlocks the artifact.
+///
+/// Execution-token writes are additionally subject to the cross-pack guard:
+/// the token's `action_ref` must live in the same pack as the artifact.
 async fn authorize_artifact_action(
     state: &Arc<AppState>,
     user: &AuthenticatedUser,
     action: Action,
     artifact: &attune_common::models::artifact::Artifact,
 ) -> Result<(), ApiError> {
-    if user.claims.token_type != TokenType::Access {
+    // Sensor / Refresh tokens are not subject to identity-RBAC artifact checks
+    // (they have dedicated scope checks at their entry points).
+    if !matches!(
+        user.claims.token_type,
+        TokenType::Access | TokenType::Execution
+    ) {
         return Ok(());
+    }
+
+    // Cross-pack write guard for execution tokens (writes only).
+    if action != Action::Read {
+        execution_token_cross_pack_guard(user, artifact)?;
+    }
+
+    // Execution tokens carry implicit authority within their executing pack:
+    // an in-flight `pack_x.deploy` action may freely read & write artifacts
+    // owned by `pack_x` regardless of the operator's grants. Cross-pack writes
+    // are already blocked by the guard above; cross-pack reads still fall
+    // through to the standard logic so public artifacts remain accessible.
+    if user.claims.token_type == TokenType::Execution {
+        if let (Some(artifact_pack), Some(token_pack)) = (
+            derive_pack_ref(artifact.scope, &artifact.owner),
+            execution_token_pack_ref(user),
+        ) {
+            if token_pack == artifact_pack {
+                return Ok(());
+            }
+        }
     }
 
     let identity_id = user
         .identity_id()
         .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
     let authz = AuthorizationService::new(state.db.clone());
-    authz
-        .authorize(
-            user,
-            AuthorizationCheck {
-                resource: Resource::Artifacts,
-                action,
-                context: artifact_authorization_context(identity_id, artifact),
-            },
-        )
-        .await
+
+    let ctx = artifact_authorization_context(identity_id, artifact);
+
+    // Public artifacts: any matching `artifacts:<action>` grant suffices.
+    if artifact.visibility == ArtifactVisibility::Public {
+        return authz
+            .authorize(
+                user,
+                AuthorizationCheck {
+                    resource: Resource::Artifacts,
+                    action,
+                    context: ctx,
+                },
+            )
+            .await;
+    }
+
+    // Private artifacts: load the caller's effective grants once and try the
+    // permitted paths in order.
+    let grants = authz.effective_grants(user).await?;
+    let denied = || {
+        ApiError::Forbidden(format!(
+            "Insufficient permissions: artifacts:{}",
+            action_name_lower(action)
+        ))
+    };
+
+    // (a) Constrained `artifacts:<action>` grant. Only grants with explicit
+    //     `constraints` count — an unconstrained grant is treated as a
+    //     "public-only" baseline and does not unlock private artifacts.
+    let constrained_match = grants.iter().any(|g| {
+        g.resource == Resource::Artifacts
+            && g.actions.contains(&action)
+            && g.constraints.is_some()
+            && g.allows(Resource::Artifacts, action, &ctx)
+    });
+    if constrained_match {
+        return Ok(());
+    }
+
+    // (b) Identity-scoped private artifact: owner-only.
+    if artifact.scope == OwnerType::Identity {
+        if let Ok(owner_id) = artifact.owner.parse::<i64>() {
+            if owner_id == identity_id {
+                return Ok(());
+            }
+        }
+        return Err(denied());
+    }
+
+    // (c) Pack/Action/Sensor-scoped: defer to parent-pack permissions. Reads
+    //     require `packs:read`; writes require `packs:update`.
+    if let Some(pack_ref) = derive_pack_ref(artifact.scope, &artifact.owner) {
+        let pack_action = match action {
+            Action::Read => Action::Read,
+            _ => Action::Update,
+        };
+        let mut pack_ctx = AuthorizationContext::new(identity_id);
+        pack_ctx.pack_ref = Some(pack_ref.to_string());
+        pack_ctx.target_ref = Some(pack_ref.to_string());
+        if grants
+            .iter()
+            .any(|g| g.allows(Resource::Packs, pack_action, &pack_ctx))
+        {
+            return Ok(());
+        }
+    }
+
+    Err(denied())
 }
 
 async fn authorize_artifact_create(
@@ -1532,8 +1722,39 @@ async fn authorize_artifact_create(
     owner: &str,
     visibility: ArtifactVisibility,
 ) -> Result<(), ApiError> {
-    if user.claims.token_type != TokenType::Access {
+    if !matches!(
+        user.claims.token_type,
+        TokenType::Access | TokenType::Execution
+    ) {
         return Ok(());
+    }
+
+    // Execution-token cross-pack guard for new artifacts. Tokens may freely
+    // create artifacts owned by their executing pack; cross-pack creation is
+    // forbidden up front.
+    if user.claims.token_type == TokenType::Execution {
+        if let Some(target_pack) = derive_pack_ref(scope, owner) {
+            let token_pack = execution_token_pack_ref(user).ok_or_else(|| {
+                ApiError::Forbidden(
+                    "Execution token missing or malformed action_ref; cannot create pack-scoped artifact"
+                        .to_string(),
+                )
+            })?;
+            if token_pack != target_pack {
+                return Err(ApiError::Forbidden(format!(
+                    "Execution token from pack '{}' cannot create artifact owned by pack '{}'",
+                    token_pack, target_pack
+                )));
+            }
+            // Same-pack: implicit authority.
+            return Ok(());
+        } else if scope_requires_pack(scope) {
+            // Pack-derivable scope with malformed owner — refuse rather than
+            // fall through to the standard RBAC path.
+            return Err(ApiError::Forbidden(
+                "Artifact owner is malformed for pack-scoped create; refused".to_string(),
+            ));
+        }
     }
 
     let identity_id = user
@@ -1545,43 +1766,105 @@ async fn authorize_artifact_create(
     ctx.owner_type = Some(scope);
     ctx.owner_ref = Some(owner.to_string());
     ctx.visibility = Some(visibility);
-
-    authz
-        .authorize(
-            user,
-            AuthorizationCheck {
-                resource: Resource::Artifacts,
-                action: Action::Create,
-                context: ctx,
-            },
-        )
-        .await
-}
-
-async fn ensure_can_read_any_artifact(
-    state: &Arc<AppState>,
-    user: &AuthenticatedUser,
-) -> Result<Option<(i64, Vec<attune_common::rbac::Grant>)>, ApiError> {
-    if user.claims.token_type != TokenType::Access {
-        return Ok(None);
+    if let Some(pack_ref) = derive_pack_ref(scope, owner) {
+        ctx.pack_ref = Some(pack_ref.to_string());
+    }
+    if scope == OwnerType::Identity {
+        if let Ok(owner_id) = owner.parse::<i64>() {
+            ctx.owner_identity_id = Some(owner_id);
+        }
     }
 
-    let identity_id = user
-        .identity_id()
-        .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
-    let authz = AuthorizationService::new(state.db.clone());
+    let denied = || {
+        ApiError::Forbidden(format!(
+            "Insufficient permissions: artifacts:create on owner '{}'",
+            owner
+        ))
+    };
+
+    // Public artifact creation: any matching `artifacts:create` grant suffices.
+    if visibility == ArtifactVisibility::Public {
+        return authz
+            .authorize(
+                user,
+                AuthorizationCheck {
+                    resource: Resource::Artifacts,
+                    action: Action::Create,
+                    context: ctx,
+                },
+            )
+            .await;
+    }
+
+    // Private artifact creation: same constrained-grant rule as reads.
     let grants = authz.effective_grants(user).await?;
 
-    let can_read_any_artifact = grants
-        .iter()
-        .any(|g| g.resource == Resource::Artifacts && g.actions.contains(&Action::Read));
-    if !can_read_any_artifact {
-        return Err(ApiError::Forbidden(
-            "Insufficient permissions: artifacts:read".to_string(),
-        ));
+    let constrained_match = grants.iter().any(|g| {
+        g.resource == Resource::Artifacts
+            && g.actions.contains(&Action::Create)
+            && g.constraints.is_some()
+            && g.allows(Resource::Artifacts, Action::Create, &ctx)
+    });
+    if constrained_match {
+        return Ok(());
     }
 
-    Ok(Some((identity_id, grants)))
+    // Identity-scoped self-create.
+    if scope == OwnerType::Identity {
+        if let Ok(owner_id) = owner.parse::<i64>() {
+            if owner_id == identity_id {
+                return Ok(());
+            }
+        }
+        return Err(denied());
+    }
+
+    // Pack-derived fallback: `packs:update` on the parent pack.
+    if let Some(pack_ref) = derive_pack_ref(scope, owner) {
+        let mut pack_ctx = AuthorizationContext::new(identity_id);
+        pack_ctx.pack_ref = Some(pack_ref.to_string());
+        pack_ctx.target_ref = Some(pack_ref.to_string());
+        if grants
+            .iter()
+            .any(|g| g.allows(Resource::Packs, Action::Update, &pack_ctx))
+        {
+            return Ok(());
+        }
+    }
+
+    Err(denied())
+}
+
+/// Filter a list of artifacts to those the calling user is authorized to read.
+///
+/// Returns the filtered list. For non-Access/Execution tokens (sensor, refresh,
+/// …) the list is returned unchanged because those tokens are not subject to
+/// identity-RBAC artifact checks.
+async fn filter_artifacts_for_read(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    artifacts: Vec<attune_common::models::artifact::Artifact>,
+) -> Result<Vec<attune_common::models::artifact::Artifact>, ApiError> {
+    if !matches!(
+        user.claims.token_type,
+        TokenType::Access | TokenType::Execution
+    ) {
+        return Ok(artifacts);
+    }
+
+    // Per-row authorization. This is O(N) checks per page, which is acceptable
+    // at typical page sizes (≤100). A SQL-level filter is a future optimization
+    // (see AGENTS.md for the artifact RBAC design notes).
+    let mut allowed = Vec::with_capacity(artifacts.len());
+    for artifact in artifacts {
+        if authorize_artifact_action(state, user, Action::Read, &artifact)
+            .await
+            .is_ok()
+        {
+            allowed.push(artifact);
+        }
+    }
+    Ok(allowed)
 }
 
 fn artifact_authorization_context(
@@ -1594,7 +1877,29 @@ fn artifact_authorization_context(
     ctx.owner_type = Some(artifact.scope);
     ctx.owner_ref = Some(artifact.owner.clone());
     ctx.visibility = Some(artifact.visibility);
+    if let Some(pack_ref) = derive_pack_ref(artifact.scope, &artifact.owner) {
+        ctx.pack_ref = Some(pack_ref.to_string());
+    }
+    if artifact.scope == OwnerType::Identity {
+        if let Ok(owner_id) = artifact.owner.parse::<i64>() {
+            ctx.owner_identity_id = Some(owner_id);
+        }
+    }
     ctx
+}
+
+fn action_name_lower(action: Action) -> &'static str {
+    match action {
+        Action::Read => "read",
+        Action::Create => "create",
+        Action::Update => "update",
+        Action::Delete => "delete",
+        Action::Execute => "execute",
+        Action::Cancel => "cancel",
+        Action::Respond => "respond",
+        Action::Manage => "manage",
+        Action::Decrypt => "decrypt",
+    }
 }
 
 /// Serve a file-backed artifact version from disk.

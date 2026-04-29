@@ -233,7 +233,7 @@ BEGIN
         'id', NEW.id,
         'execution', NEW.execution,
         'status', NEW.status,
-        'ttl', NEW.ttl,
+        'timeout_at', NEW.timeout_at,
         'created', NEW.created
     );
 

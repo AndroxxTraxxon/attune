@@ -223,7 +223,8 @@ pub fn generate_execution_token(
 
 /// Validate and decode a JWT token
 pub fn validate_token(token: &str, config: &JwtConfig) -> Result<Claims, JwtError> {
-    let validation = Validation::default();
+    let mut validation = Validation::default();
+    validation.algorithms = vec![jsonwebtoken::Algorithm::HS256];
 
     decode::<Claims>(
         token,

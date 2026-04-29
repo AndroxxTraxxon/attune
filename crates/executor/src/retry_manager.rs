@@ -297,7 +297,10 @@ impl RetryManager {
             env_vars: original.env_vars.clone(),
             parent: original.parent,
             enforcement: original.enforcement,
-            executor: None, // Will be assigned by scheduler
+            // Preserve the original triggering identity so the retried
+            // execution is minted a callback token with the same security
+            // context as the original.
+            executor: original.executor,
             worker: None,
             status: ExecutionStatus::Requested,
             result: None,

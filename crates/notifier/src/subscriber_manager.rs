@@ -58,6 +58,22 @@ pub struct Subscriber {
     #[allow(dead_code)]
     pub user_id: Option<i64>,
 
+    /// Role names assigned to the connecting identity, captured at connect
+    /// time. Used by the filter ACL to grant admin bypass.
+    ///
+    /// TODO: Roles are not refreshed mid-connection. This is a UX/perf
+    /// tradeoff (avoids per-message DB lookups) — clients that gain or lose
+    /// admin must reconnect to pick up the change. Mid-connection JWT
+    /// expiration enforcement (see `websocket_server.rs`) bounds the staleness
+    /// window to at most one access-token lifetime.
+    #[allow(dead_code)]
+    pub roles: Vec<String>,
+
+    /// JWT `exp` claim (Unix seconds) for the token used at connect. The
+    /// per-connection task tears down the connection once `now > token_exp`.
+    #[allow(dead_code)]
+    pub token_exp: i64,
+
     /// Channel to send notifications to this client
     pub tx: mpsc::UnboundedSender<Notification>,
 
@@ -109,11 +125,15 @@ impl SubscriberManager {
         &self,
         client_id: ClientId,
         user_id: Option<i64>,
+        roles: Vec<String>,
+        token_exp: i64,
         tx: mpsc::UnboundedSender<Notification>,
     ) {
         let subscriber = Subscriber {
             client_id: client_id.clone(),
             user_id,
+            roles,
+            token_exp,
             tx,
             filters: vec![],
         };
@@ -366,7 +386,7 @@ mod tests {
         assert_eq!(manager.client_count(), 0);
 
         let (tx, _rx) = mpsc::unbounded_channel();
-        manager.register(client_id.clone(), Some(123), tx);
+        manager.register(client_id.clone(), Some(123), vec![], 0, tx);
 
         assert_eq!(manager.client_count(), 1);
 
@@ -381,7 +401,7 @@ mod tests {
         let client_id = manager.generate_client_id();
 
         let (tx, _rx) = mpsc::unbounded_channel();
-        manager.register(client_id.clone(), None, tx);
+        manager.register(client_id.clone(), None, vec![], 0, tx);
 
         // Subscribe to all notifications
         let result = manager.subscribe(&client_id, SubscriptionFilter::All);
@@ -402,6 +422,8 @@ mod tests {
         let subscriber = Subscriber {
             client_id: "test".to_string(),
             user_id: Some(456),
+            roles: vec![],
+            token_exp: 0,
             tx,
             filters: vec![SubscriptionFilter::EntityType("execution".to_string())],
         };
@@ -434,7 +456,7 @@ mod tests {
 
         let client1_id = manager.generate_client_id();
         let (tx1, mut rx1) = mpsc::unbounded_channel();
-        manager.register(client1_id.clone(), None, tx1);
+        manager.register(client1_id.clone(), None, vec![], 0, tx1);
         manager.subscribe(
             &client1_id,
             SubscriptionFilter::EntityType("execution".to_string()),
@@ -442,7 +464,7 @@ mod tests {
 
         let client2_id = manager.generate_client_id();
         let (tx2, mut rx2) = mpsc::unbounded_channel();
-        manager.register(client2_id.clone(), None, tx2);
+        manager.register(client2_id.clone(), None, vec![], 0, tx2);
         manager.subscribe(
             &client2_id,
             SubscriptionFilter::EntityType("inquiry".to_string()),

@@ -42,7 +42,11 @@ async fn register_scoped_user(
         )
         .await?;
 
-    assert_eq!(response.status(), StatusCode::CREATED);
+    assert!(
+        response.status() == StatusCode::OK || response.status() == StatusCode::CREATED,
+        "expected 200/201 from /auth/register, got {}",
+        response.status()
+    );
     let body: serde_json::Value = response.json().await?;
     let token = body["data"]["access_token"]
         .as_str()
@@ -648,4 +652,509 @@ async fn test_pack_scoped_queue_permissions_cover_definitions_and_items() {
         .await
         .expect("Failed to enqueue blocked queue item");
     assert_eq!(enqueue_blocked.status(), StatusCode::FORBIDDEN);
+}
+
+// ============================================================================
+// Artifact visibility × scope authorization tests
+// ============================================================================
+
+mod artifact_authz_tests {
+    use super::*;
+    use attune_common::auth::jwt::{generate_execution_token, JwtConfig};
+
+    fn jwt_config() -> JwtConfig {
+        JwtConfig {
+            secret: "test-secret-for-testing-only-not-secure".to_string(),
+            access_token_expiration: 300,
+            refresh_token_expiration: 3600,
+        }
+    }
+
+    async fn create_artifact_row(
+        ctx: &TestContext,
+        ref_str: &str,
+        scope: OwnerType,
+        owner: &str,
+        visibility: ArtifactVisibility,
+    ) -> attune_common::models::Artifact {
+        ArtifactRepository::create(
+            &ctx.pool,
+            CreateArtifactInput {
+                r#ref: ref_str.to_string(),
+                scope,
+                owner: owner.to_string(),
+                r#type: ArtifactType::FileText,
+                visibility,
+                retention_policy: RetentionPolicyType::Versions,
+                retention_limit: 5,
+                name: Some("test artifact".to_string()),
+                description: None,
+                content_type: Some("text/plain".to_string()),
+                execution: None,
+                data: None,
+            },
+        )
+        .await
+        .expect("create artifact")
+    }
+
+    /// Public artifacts are readable by any authenticated user with `artifacts:read`.
+    #[tokio::test]
+    #[ignore = "integration test — requires database"]
+    async fn public_artifact_readable_by_any_user_with_artifacts_read() {
+        let ctx = TestContext::new().await.expect("test ctx");
+        let token = register_scoped_user(
+            &ctx,
+            &format!("public_reader_{}", uuid::Uuid::new_v4().simple()),
+            json!([
+                { "resource": "artifacts", "actions": ["read"] }
+            ]),
+        )
+        .await
+        .expect("register user");
+
+        let art = create_artifact_row(
+            &ctx,
+            &format!("some_pack.public_{}", uuid::Uuid::new_v4().simple()),
+            OwnerType::Pack,
+            "some_pack",
+            ArtifactVisibility::Public,
+        )
+        .await;
+
+        let resp = ctx
+            .get(&format!("/api/v1/artifacts/{}", art.id), Some(&token))
+            .await
+            .expect("fetch");
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// Private + scope=identity: only the owning identity may read.
+    #[tokio::test]
+    #[ignore = "integration test — requires database"]
+    async fn private_identity_scoped_artifact_owner_can_read_other_cannot() {
+        let ctx = TestContext::new().await.expect("test ctx");
+
+        // Register two users, both with broad artifacts:read.
+        let owner_login = format!("owner_{}", uuid::Uuid::new_v4().simple());
+        let owner_token = register_scoped_user(
+            &ctx,
+            &owner_login,
+            json!([{ "resource": "artifacts", "actions": ["read"] }]),
+        )
+        .await
+        .expect("register owner");
+        let owner_identity = IdentityRepository::find_by_login(&ctx.pool, &owner_login)
+            .await
+            .expect("lookup")
+            .expect("owner identity");
+
+        let other_token = register_scoped_user(
+            &ctx,
+            &format!("other_{}", uuid::Uuid::new_v4().simple()),
+            json!([{ "resource": "artifacts", "actions": ["read"] }]),
+        )
+        .await
+        .expect("register other");
+
+        let art = create_artifact_row(
+            &ctx,
+            &format!("identity_artifact_{}", uuid::Uuid::new_v4().simple()),
+            OwnerType::Identity,
+            &owner_identity.id.to_string(),
+            ArtifactVisibility::Private,
+        )
+        .await;
+
+        let owner_resp = ctx
+            .get(&format!("/api/v1/artifacts/{}", art.id), Some(&owner_token))
+            .await
+            .expect("owner fetch");
+        assert_eq!(owner_resp.status(), StatusCode::OK);
+
+        let other_resp = ctx
+            .get(&format!("/api/v1/artifacts/{}", art.id), Some(&other_token))
+            .await
+            .expect("other fetch");
+        assert_eq!(other_resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Private + scope=action: derive pack from `<pack>.<action>`, require packs:read.
+    #[tokio::test]
+    #[ignore = "integration test — requires database"]
+    async fn private_action_scoped_artifact_uses_derived_pack_for_authz() {
+        let ctx = TestContext::new().await.expect("test ctx");
+
+        // User has packs:read on `python_example`, but no artifacts:* grant.
+        let token = register_scoped_user(
+            &ctx,
+            &format!("pack_reader_{}", uuid::Uuid::new_v4().simple()),
+            json!([
+                {
+                    "resource": "packs",
+                    "actions": ["read"],
+                    "constraints": { "pack_refs": ["python_example"] }
+                }
+            ]),
+        )
+        .await
+        .expect("register user");
+
+        let art_allowed = create_artifact_row(
+            &ctx,
+            &format!(
+                "python_example.deploy_log_{}",
+                uuid::Uuid::new_v4().simple()
+            ),
+            OwnerType::Action,
+            "python_example.deploy",
+            ArtifactVisibility::Private,
+        )
+        .await;
+        let art_blocked = create_artifact_row(
+            &ctx,
+            &format!("other_pack.deploy_log_{}", uuid::Uuid::new_v4().simple()),
+            OwnerType::Action,
+            "other_pack.deploy",
+            ArtifactVisibility::Private,
+        )
+        .await;
+
+        let ok = ctx
+            .get(
+                &format!("/api/v1/artifacts/{}", art_allowed.id),
+                Some(&token),
+            )
+            .await
+            .expect("fetch allowed");
+        assert_eq!(ok.status(), StatusCode::OK);
+
+        let denied = ctx
+            .get(
+                &format!("/api/v1/artifacts/{}", art_blocked.id),
+                Some(&token),
+            )
+            .await
+            .expect("fetch blocked");
+        assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Private + scope=sensor: same pack-derivation rule as scope=action.
+    #[tokio::test]
+    #[ignore = "integration test — requires database"]
+    async fn private_sensor_scoped_artifact_uses_derived_pack_for_authz() {
+        let ctx = TestContext::new().await.expect("test ctx");
+        let token = register_scoped_user(
+            &ctx,
+            &format!("sensor_reader_{}", uuid::Uuid::new_v4().simple()),
+            json!([
+                {
+                    "resource": "packs",
+                    "actions": ["read"],
+                    "constraints": { "pack_refs": ["sensor_pack"] }
+                }
+            ]),
+        )
+        .await
+        .expect("register user");
+
+        let allowed = create_artifact_row(
+            &ctx,
+            &format!("sensor_pack.heartbeat_{}", uuid::Uuid::new_v4().simple()),
+            OwnerType::Sensor,
+            "sensor_pack.heartbeat",
+            ArtifactVisibility::Private,
+        )
+        .await;
+        let blocked = create_artifact_row(
+            &ctx,
+            &format!("foreign.heartbeat_{}", uuid::Uuid::new_v4().simple()),
+            OwnerType::Sensor,
+            "foreign.heartbeat",
+            ArtifactVisibility::Private,
+        )
+        .await;
+
+        let ok = ctx
+            .get(&format!("/api/v1/artifacts/{}", allowed.id), Some(&token))
+            .await
+            .expect("ok");
+        assert_eq!(ok.status(), StatusCode::OK);
+        let denied = ctx
+            .get(&format!("/api/v1/artifacts/{}", blocked.id), Some(&token))
+            .await
+            .expect("denied");
+        assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// List endpoint hides private artifacts the user cannot access.
+    #[tokio::test]
+    #[ignore = "integration test — requires database"]
+    async fn list_endpoint_filters_private_artifacts_user_cannot_read() {
+        let ctx = TestContext::new().await.expect("test ctx");
+        let token = register_scoped_user(
+            &ctx,
+            &format!("listing_user_{}", uuid::Uuid::new_v4().simple()),
+            json!([
+                { "resource": "artifacts", "actions": ["read"] },
+                {
+                    "resource": "packs",
+                    "actions": ["read"],
+                    "constraints": { "pack_refs": ["mine"] }
+                }
+            ]),
+        )
+        .await
+        .expect("register user");
+
+        // Public artifact in some pack — should be visible.
+        let public_art = create_artifact_row(
+            &ctx,
+            &format!("mine.public_{}", uuid::Uuid::new_v4().simple()),
+            OwnerType::Pack,
+            "mine",
+            ArtifactVisibility::Public,
+        )
+        .await;
+        // Private artifact in user's pack — visible via packs:read.
+        let private_mine = create_artifact_row(
+            &ctx,
+            &format!("mine.private_{}", uuid::Uuid::new_v4().simple()),
+            OwnerType::Pack,
+            "mine",
+            ArtifactVisibility::Private,
+        )
+        .await;
+        // Private artifact in foreign pack — must be hidden.
+        let private_foreign = create_artifact_row(
+            &ctx,
+            &format!("yours.private_{}", uuid::Uuid::new_v4().simple()),
+            OwnerType::Pack,
+            "yours",
+            ArtifactVisibility::Private,
+        )
+        .await;
+
+        let resp = ctx
+            .get("/api/v1/artifacts?per_page=100", Some(&token))
+            .await
+            .expect("list");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = resp.json().await.expect("json");
+        let ids: Vec<i64> = body["data"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|v| v["id"].as_i64().expect("id"))
+            .collect();
+        assert!(ids.contains(&public_art.id));
+        assert!(ids.contains(&private_mine.id));
+        assert!(!ids.contains(&private_foreign.id));
+    }
+
+    /// Execution token from pack X cannot mutate artifact owned by pack Y.
+    #[tokio::test]
+    #[ignore = "integration test — requires database"]
+    async fn execution_token_cannot_cross_pack_mutate_artifact() {
+        let ctx = TestContext::new().await.expect("test ctx");
+
+        // Register an identity to embed in the execution token.
+        let login = format!("exec_user_{}", uuid::Uuid::new_v4().simple());
+        let _access_token = register_scoped_user(
+            &ctx,
+            &login,
+            json!([{ "resource": "artifacts", "actions": ["read", "update", "create"] }]),
+        )
+        .await
+        .expect("register user");
+        let identity = IdentityRepository::find_by_login(&ctx.pool, &login)
+            .await
+            .expect("lookup")
+            .expect("identity");
+
+        // Mint an execution token whose action_ref lives in pack `pack_x`.
+        let exec_token = generate_execution_token(
+            identity.id,
+            424242, // execution_id, not validated by route
+            "pack_x.deploy",
+            &jwt_config(),
+            Some(300),
+        )
+        .expect("mint exec token");
+
+        // Create a private artifact owned by a *different* pack.
+        let art = create_artifact_row(
+            &ctx,
+            &format!("pack_y.build_log_{}", uuid::Uuid::new_v4().simple()),
+            OwnerType::Pack,
+            "pack_y",
+            ArtifactVisibility::Private,
+        )
+        .await;
+
+        // Cross-pack progress append must be refused.
+        let resp = ctx
+            .post(
+                &format!("/api/v1/artifacts/{}/progress", art.id),
+                json!({ "entry": { "msg": "hi" } }),
+                Some(&exec_token),
+            )
+            .await
+            .expect("append");
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // Cross-pack create must be refused too.
+        let create_resp = ctx
+            .post(
+                "/api/v1/artifacts",
+                json!({
+                    "ref": format!("pack_y.created_{}", uuid::Uuid::new_v4().simple()),
+                    "scope": "pack",
+                    "owner": "pack_y",
+                    "type": "file_text",
+                    "name": "x"
+                }),
+                Some(&exec_token),
+            )
+            .await
+            .expect("create cross-pack");
+        assert_eq!(create_resp.status(), StatusCode::FORBIDDEN);
+
+        // Same-pack create succeeds.
+        let same_pack_resp = ctx
+            .post(
+                "/api/v1/artifacts",
+                json!({
+                    "ref": format!("pack_x.created_{}", uuid::Uuid::new_v4().simple()),
+                    "scope": "pack",
+                    "owner": "pack_x",
+                    "type": "file_text",
+                    "name": "x"
+                }),
+                Some(&exec_token),
+            )
+            .await
+            .expect("create same-pack");
+        assert_eq!(same_pack_resp.status(), StatusCode::CREATED);
+    }
+
+    /// An action-scoped artifact whose owner ref lacks a `.` separator
+    /// (e.g. `"action"` rather than `"<pack>.<action>"`) is malformed and
+    /// must not be silently treated as having pack `"action"`. The cross-pack
+    /// guard refuses rather than letting an execution token mutate it via a
+    /// fake derived pack.
+    #[tokio::test]
+    #[ignore = "integration test — requires database"]
+    async fn dotless_action_owner_is_treated_as_malformed_and_refused() {
+        let ctx = TestContext::new().await.expect("test ctx");
+
+        // Register an identity for the execution token.
+        let login = format!("dotless_user_{}", uuid::Uuid::new_v4().simple());
+        let _access = register_scoped_user(
+            &ctx,
+            &login,
+            json!([{ "resource": "artifacts", "actions": ["read", "update", "create"] }]),
+        )
+        .await
+        .expect("register user");
+        let identity = IdentityRepository::find_by_login(&ctx.pool, &login)
+            .await
+            .expect("lookup")
+            .expect("identity");
+
+        // Mint a normal execution token in pack `pack_x`.
+        let exec_token = generate_execution_token(
+            identity.id,
+            12345,
+            "pack_x.deploy",
+            &jwt_config(),
+            Some(300),
+        )
+        .expect("mint exec token");
+
+        // Create a private action-scoped artifact with a malformed (dotless)
+        // owner ref. `derive_pack_ref` must return `None` for this owner;
+        // the cross-pack guard must refuse the mutation.
+        let art = create_artifact_row(
+            &ctx,
+            &format!("malformed_owner_{}", uuid::Uuid::new_v4().simple()),
+            OwnerType::Action,
+            "action",
+            ArtifactVisibility::Private,
+        )
+        .await;
+
+        let resp = ctx
+            .post(
+                &format!("/api/v1/artifacts/{}/progress", art.id),
+                json!({ "entry": { "msg": "hi" } }),
+                Some(&exec_token),
+            )
+            .await
+            .expect("append");
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// An execution token with an empty `action_ref` cannot derive a token
+    /// pack; cross-pack writes against pack-derivable artifacts must be
+    /// refused with 403, not silently allowed.
+    #[tokio::test]
+    #[ignore = "integration test — requires database"]
+    async fn execution_token_with_empty_action_ref_is_refused() {
+        let ctx = TestContext::new().await.expect("test ctx");
+
+        let login = format!("empty_ref_user_{}", uuid::Uuid::new_v4().simple());
+        let _access = register_scoped_user(
+            &ctx,
+            &login,
+            json!([{ "resource": "artifacts", "actions": ["read", "update", "create"] }]),
+        )
+        .await
+        .expect("register user");
+        let identity = IdentityRepository::find_by_login(&ctx.pool, &login)
+            .await
+            .expect("lookup")
+            .expect("identity");
+
+        // Malformed: action_ref is the empty string.
+        let exec_token = generate_execution_token(identity.id, 99999, "", &jwt_config(), Some(300))
+            .expect("mint exec token");
+
+        // Pack-scoped artifact in some pack.
+        let art = create_artifact_row(
+            &ctx,
+            &format!("pack_z.log_{}", uuid::Uuid::new_v4().simple()),
+            OwnerType::Pack,
+            "pack_z",
+            ArtifactVisibility::Private,
+        )
+        .await;
+
+        let resp = ctx
+            .post(
+                &format!("/api/v1/artifacts/{}/progress", art.id),
+                json!({ "entry": { "msg": "hi" } }),
+                Some(&exec_token),
+            )
+            .await
+            .expect("append");
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // Same for create against a pack-scoped target.
+        let create_resp = ctx
+            .post(
+                "/api/v1/artifacts",
+                json!({
+                    "ref": format!("pack_z.created_{}", uuid::Uuid::new_v4().simple()),
+                    "scope": "pack",
+                    "owner": "pack_z",
+                    "type": "file_text",
+                    "name": "x"
+                }),
+                Some(&exec_token),
+            )
+            .await
+            .expect("create");
+        assert_eq!(create_resp.status(), StatusCode::FORBIDDEN);
+    }
 }

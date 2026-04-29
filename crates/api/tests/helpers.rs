@@ -117,7 +117,7 @@ async fn create_schema_pool(schema_name: &str) -> Result<PgPool> {
             move |conn, _meta| {
                 let schema = schema.clone();
                 Box::pin(async move {
-                    sqlx::query(&format!("SET search_path TO {}", schema))
+                    sqlx::query(&format!("SET search_path TO {}, public", schema))
                         .execute(&mut *conn)
                         .await?;
                     Ok(())
@@ -143,8 +143,9 @@ async fn create_schema_pool(schema_name: &str) -> Result<PgPool> {
         let sql = std::fs::read_to_string(&migration_path)?;
 
         // Execute search_path setting and migration in sequence
-        // First set the search_path
-        sqlx::query(&format!("SET search_path TO {}", schema_name))
+        // First set the search_path (including public so TimescaleDB extension
+        // functions like create_hypertable resolve)
+        sqlx::query(&format!("SET search_path TO {}, public", schema_name))
             .execute(&migration_pool)
             .await?;
 

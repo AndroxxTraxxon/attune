@@ -38,14 +38,24 @@ impl AuthorizationService {
         user: &AuthenticatedUser,
         mut check: AuthorizationCheck,
     ) -> Result<(), ApiError> {
-        // Non-access tokens are governed by dedicated scope checks in route logic.
-        // They are not evaluated through identity RBAC grants.
-        if user.claims.token_type != TokenType::Access {
-            return Ok(());
+        // Sensor and Refresh tokens have dedicated scope checks elsewhere and
+        // are not subject to identity-based RBAC.
+        //
+        // Access and Execution tokens both carry an identity in `sub` and are
+        // evaluated through identity RBAC: Access = "user logged in via the
+        // UI/CLI"; Execution = "callback from a running action, scoped to the
+        // identity that triggered it". Execution-scoped tokens are additionally
+        // restricted by the execution scope itself (e.g., the worker's writes
+        // to `/api/v1/executions/{id}/...` validate the token's execution_id
+        // matches the path), but at the resource/action level they get the
+        // permissions of the triggering identity — never more.
+        match user.claims.token_type {
+            TokenType::Access | TokenType::Execution => {}
+            _ => return Ok(()),
         }
 
         let identity_id = user.identity_id().map_err(|_| {
-            ApiError::Unauthorized("Invalid authentication subject in access token".to_string())
+            ApiError::Unauthorized("Invalid authentication subject in token".to_string())
         })?;
 
         // Ensure identity exists and load identity attributes used by attribute constraints.
@@ -75,12 +85,13 @@ impl AuthorizationService {
     }
 
     pub async fn effective_grants(&self, user: &AuthenticatedUser) -> Result<Vec<Grant>, ApiError> {
-        if user.claims.token_type != TokenType::Access {
-            return Ok(Vec::new());
+        match user.claims.token_type {
+            TokenType::Access | TokenType::Execution => {}
+            _ => return Ok(Vec::new()),
         }
 
         let identity_id = user.identity_id().map_err(|_| {
-            ApiError::Unauthorized("Invalid authentication subject in access token".to_string())
+            ApiError::Unauthorized("Invalid authentication subject in token".to_string())
         })?;
         self.load_effective_grants(identity_id).await
     }

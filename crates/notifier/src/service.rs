@@ -1,7 +1,9 @@
 //! Notifier Service - Real-time notification orchestration
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
@@ -61,12 +63,27 @@ impl NotifierService {
             PostgresListener::new(config.database.url.clone(), notification_tx.clone()).await?,
         );
 
+        // Create a small connection pool for ad-hoc queries (role lookups on
+        // WebSocket connect). The notifier is not a heavy DB consumer — its
+        // primary DB workload is the dedicated LISTEN/NOTIFY connection in
+        // `PostgresListener`. A 4-connection cap is plenty for occasional
+        // role lookups while keeping the pool lightweight.
+        let db_pool = PgPoolOptions::new()
+            .max_connections(4)
+            .min_connections(0)
+            .acquire_timeout(Duration::from_secs(5))
+            .idle_timeout(Duration::from_secs(60))
+            .connect(&config.database.url)
+            .await
+            .context("Failed to create notifier database pool")?;
+
         // Create WebSocket server
         let websocket_server = WebSocketServer::new(
             config.clone(),
             notification_tx.clone(),
             subscriber_manager.clone(),
             shutdown_tx.clone(),
+            db_pool,
         );
 
         Ok(Self {

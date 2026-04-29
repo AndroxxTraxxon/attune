@@ -109,6 +109,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }) => {
     localStorage.setItem("access_token", accessToken);
     localStorage.setItem("refresh_token", refreshToken);
+    try {
+      window.dispatchEvent(new CustomEvent("auth:token-changed"));
+    } catch {
+      // Older browsers — best-effort.
+    }
     await loadUser();
   };
 

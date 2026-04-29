@@ -2,6 +2,20 @@
 
 Agent-based workers let you run Attune actions inside **any container image** by injecting a statically-linked `attune-agent` binary via a Kubernetes init container. No custom Dockerfile required — just point at an image that has your runtime installed.
 
+## ⚠️ Required: Bootstrap Token
+
+The API endpoint that serves the agent binary (`GET /api/v1/agent/binary`) **requires** a bootstrap token (`agent.bootstrap_token` in API config). The API will refuse to start without it, and download requests without a valid `X-Agent-Token` header are rejected with HTTP 503/401.
+
+```bash
+# Generate a strong token and store it as a Kubernetes secret
+openssl rand -hex 32 | kubectl create secret generic attune-agent-token \
+  --from-file=token=/dev/stdin
+```
+
+Reference the token from your API Helm values (e.g., `api.env.ATTUNE__AGENT__BOOTSTRAP_TOKEN`) and from each agent worker's environment (`ATTUNE_AGENT_TOKEN`) so the bootstrap script can authenticate.
+
+When agent workers use the standard Kubernetes init-container pattern below, the binary is copied directly from the `attune-agent` image into an `emptyDir` volume — no HTTP download is performed, so the token is only required for agents bootstrapping over the network.
+
 ## How It Works
 
 1. An **init container** (`agent-loader`) copies the `attune-agent` binary from the `attune-agent` image into an `emptyDir` volume

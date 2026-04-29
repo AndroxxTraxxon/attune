@@ -2,12 +2,8 @@
 
 use attune_common::{
     config::OidcConfig,
-    repositories::{
-        identity::{
-            CreateIdentityInput, IdentityRepository, IdentityRoleAssignmentRepository,
-            UpdateIdentityInput,
-        },
-        Create, Update,
+    repositories::identity::{
+        IdentityRepository, IdentityRoleAssignmentRepository, OidcUpsertInput,
     },
 };
 use axum::{
@@ -72,6 +68,7 @@ pub struct OidcDiscoveryDocument {
 pub struct OidcIdentityClaims {
     pub issuer: String,
     pub sub: String,
+    pub client_id: String,
     pub email: Option<String>,
     pub email_verified: Option<bool>,
     pub name: Option<String>,
@@ -273,6 +270,7 @@ pub async fn handle_callback(
     let mut oidc_claims = OidcIdentityClaims {
         issuer: claims.iss,
         sub: claims.sub,
+        client_id: oidc.client_id.clone().unwrap_or_default(),
         email: claims.email,
         email_verified: claims.email_verified,
         name: claims.name,
@@ -547,50 +545,35 @@ async fn upsert_identity(
     state: &SharedState,
     oidc_claims: &OidcIdentityClaims,
 ) -> Result<attune_common::models::identity::Identity, ApiError> {
-    let existing_by_subject =
-        IdentityRepository::find_by_oidc_subject(&state.db, &oidc_claims.issuer, &oidc_claims.sub)
-            .await?;
     let desired_login = derive_login(oidc_claims);
+    let fallback_login = fallback_subject_login(oidc_claims);
     let display_name = derive_display_name(oidc_claims);
     let attributes = json!({
         "oidc": oidc_claims,
     });
 
-    match existing_by_subject {
-        Some(identity) => {
-            let updated = UpdateIdentityInput {
-                display_name,
-                password_hash: None,
-                attributes: Some(attributes.clone()),
-                frozen: None,
-            };
-            let identity = IdentityRepository::update(&state.db, identity.id, updated)
-                .await
-                .map_err(ApiError::from)?;
-            sync_roles(&state.db, identity.id, "oidc", &oidc_claims.groups).await?;
-            Ok(identity)
-        }
-        None => {
-            let login = match IdentityRepository::find_by_login(&state.db, &desired_login).await? {
-                Some(_) => fallback_subject_login(oidc_claims),
-                None => desired_login,
-            };
+    // Race-safe upsert keyed by (issuer, sub) with strict three-way match
+    // on (issuer, sub, client_id). Concurrency is handled inside the
+    // repository: the partial unique index `uq_identity_oidc_issuer_sub`
+    // guarantees one identity per (issuer, sub), and the legacy upgrade
+    // path uses a guarded UPDATE so only one concurrent caller wins.
+    let identity = IdentityRepository::upsert_oidc_identity(
+        &state.db,
+        OidcUpsertInput {
+            issuer: oidc_claims.issuer.clone(),
+            sub: oidc_claims.sub.clone(),
+            client_id: oidc_claims.client_id.clone(),
+            desired_login,
+            fallback_login,
+            display_name,
+            attributes,
+        },
+    )
+    .await
+    .map_err(ApiError::from)?;
 
-            let identity = IdentityRepository::create(
-                &state.db,
-                CreateIdentityInput {
-                    login,
-                    display_name,
-                    password_hash: None,
-                    attributes,
-                },
-            )
-            .await
-            .map_err(ApiError::from)?;
-            sync_roles(&state.db, identity.id, "oidc", &oidc_claims.groups).await?;
-            Ok(identity)
-        }
-    }
+    sync_roles(&state.db, identity.id, "oidc", &oidc_claims.groups).await?;
+    Ok(identity)
 }
 
 async fn sync_roles(

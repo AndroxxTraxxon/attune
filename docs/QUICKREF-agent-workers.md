@@ -2,6 +2,29 @@
 
 > **TL;DR**: Inject the `attune-agent` binary into _any_ container image to turn it into an Attune worker. No Dockerfiles. No Rust compilation. ~12 lines of YAML.
 
+## ⚠️ Required: Bootstrap Token
+
+The API endpoint that serves the agent binary (`GET /api/v1/agent/binary`) **requires** a bootstrap token. The API will refuse to start if `agent.binary_dir` is configured without a corresponding `agent.bootstrap_token`, and any download request without (or with an invalid) token is rejected with HTTP 503/401.
+
+```bash
+# 1. Generate a strong token
+openssl rand -hex 32
+
+# 2. Pass it to the API (config.docker.yaml or env)
+#    config.docker.yaml:
+#      agent:
+#        binary_dir: /opt/attune/agent
+#        bootstrap_token: "${AGENT_BOOTSTRAP_TOKEN}"
+#
+#    .env (or shell):
+export AGENT_BOOTSTRAP_TOKEN=<paste-token-here>
+
+# 3. Pass the same token to every agent worker as ATTUNE_AGENT_TOKEN
+#    so attune-agent-wrapper.sh can authenticate when downloading the binary.
+```
+
+If your agent workers mount the `agent_bin` volume directly (the default in `docker-compose.agent.yaml`), they don't need the token — the volume mount bypasses the API endpoint. The token is only required when bootstrapping over HTTP via `attune-agent-wrapper.sh`.
+
 ## How It Works
 
 1. The `init-agent` service (in `docker-compose.yaml`) builds the statically-linked `attune-agent` binary and copies it into the `agent_bin` volume

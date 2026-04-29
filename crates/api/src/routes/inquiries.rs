@@ -358,16 +358,69 @@ pub async fn respond_to_inquiry(
         )));
     }
 
-    // Check if inquiry is assigned to this user (optional enforcement)
-    if let Some(assigned_to) = inquiry.assigned_to {
-        let user_id = user
-            .0
-            .identity_id()
-            .map_err(|_| ApiError::InternalServerError("Invalid user identity".to_string()))?;
-        if assigned_to != user_id {
+    // Privilege-loop guard: an execution that created an inquiry (e.g., via
+    // `core.ask`) must not be allowed to respond to it using its own
+    // execution-scoped token. The triggering identity may still respond from
+    // a separate session (their normal access token), but a callback bearing
+    // the *same* execution scope as the one that created the inquiry would
+    // create a self-approval loop.
+    //
+    // This guard also blocks any *descendant* execution of the creating
+    // execution: a child action spawned by the inquiry-creating workflow
+    // cannot respond to its ancestor's inquiry, since that would still
+    // amount to a self-approval loop. We walk the `execution.parent` chain
+    // from the token's execution upward, capped at depth 100 to bound work
+    // and tolerate any corrupted chain (cycles).
+    if let Some(token_exec_id) = user.0.execution_id() {
+        let creating_exec_id = inquiry.execution;
+        if token_exec_id == creating_exec_id {
             return Err(ApiError::Forbidden(
-                "You are not authorized to respond to this inquiry".to_string(),
+                "An execution cannot respond to an inquiry it created (privilege loop)".to_string(),
             ));
+        }
+
+        let mut current: Option<i64> = Some(token_exec_id);
+        let mut depth = 0u32;
+        let mut is_descendant = false;
+        while let Some(cur) = current {
+            if depth >= 100 {
+                break;
+            }
+            if cur == creating_exec_id {
+                is_descendant = true;
+                break;
+            }
+            let parent: Option<Option<i64>> =
+                sqlx::query_scalar("SELECT parent FROM execution WHERE id = $1")
+                    .bind(cur)
+                    .fetch_optional(&state.db)
+                    .await
+                    .map_err(|e| ApiError::InternalServerError(format!("ancestry check: {e}")))?;
+            current = parent.flatten();
+            depth += 1;
+        }
+        if is_descendant {
+            return Err(ApiError::Forbidden(
+                "A descendant execution cannot respond to an ancestor's inquiry (privilege loop)"
+                    .to_string(),
+            ));
+        }
+    }
+
+    // Resolve the responding identity strictly. Tokens without a parseable
+    // identity in `sub` cannot produce a usable audit record, so reject up
+    // front rather than silently writing `responded_by = NULL` later.
+    let responded_by = user.0.identity_id().map_err(|_| {
+        ApiError::Forbidden("Cannot record response: caller has no resolvable identity".to_string())
+    })?;
+
+    // Enforce assigned_to: only the assignee may respond.
+    if let Some(assigned_to) = inquiry.assigned_to {
+        if assigned_to != responded_by {
+            return Err(ApiError::Forbidden(format!(
+                "Inquiry {} is assigned to identity {} and can only be answered by them",
+                id, assigned_to
+            )));
         }
     }
 
@@ -404,16 +457,11 @@ pub async fn respond_to_inquiry(
 
     // Publish InquiryResponded message if publisher is available
     if let Some(publisher) = state.get_publisher().await {
-        let user_id = user
-            .0
-            .identity_id()
-            .map_err(|_| ApiError::InternalServerError("Invalid user identity".to_string()))?;
-
         let payload = InquiryRespondedPayload {
             inquiry_id: id,
             execution_id: inquiry.execution,
             response: request.response.clone(),
-            responded_by: Some(user_id),
+            responded_by: Some(responded_by),
             responded_at: chrono::Utc::now(),
         };
 
