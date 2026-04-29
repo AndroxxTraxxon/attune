@@ -601,7 +601,7 @@ fn interactively_edit_parameters(
             value.clone()
         } else {
             serde_json::from_str::<serde_json::Value>(&input)
-                .unwrap_or_else(|_| serde_json::Value::String(input))
+                .unwrap_or(serde_json::Value::String(input))
         };
         result.insert(key.clone(), new_value);
     }
@@ -625,7 +625,7 @@ fn interactively_edit_parameters(
             .allow_empty(true)
             .interact_text()?;
         let value = serde_json::from_str::<serde_json::Value>(&value_input)
-            .unwrap_or_else(|_| serde_json::Value::String(value_input));
+            .unwrap_or(serde_json::Value::String(value_input));
         result.insert(key, value);
     }
 

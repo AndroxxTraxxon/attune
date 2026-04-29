@@ -344,7 +344,7 @@ async fn handle_search(
     if !packs.is_empty() {
         params.push(("packs", packs.join(",")));
     }
-    let limit = limit.min(100).max(1);
+    let limit = limit.clamp(1, 100);
     params.push(("page_size", limit.to_string()));
     params.push(("page", "1".to_string()));
 
