@@ -624,6 +624,7 @@ pub async fn create_version_json(
 
     let input = CreateArtifactVersionInput {
         artifact: id,
+        execution: request.execution,
         content_type: Some(
             request
                 .content_type
@@ -698,6 +699,7 @@ pub async fn create_version_file(
         id,
         &artifact.r#ref,
         content_type.clone(),
+        request.execution,
         request.meta,
         request.created_by,
     )
@@ -846,6 +848,7 @@ pub async fn upload_version(
 
     let input = CreateArtifactVersionInput {
         artifact: id,
+        execution: None,
         content_type: Some(resolved_ct),
         content: Some(file_bytes),
         content_json: None,
@@ -1307,6 +1310,7 @@ pub async fn upload_version_by_ref(
 
     let version_input = CreateArtifactVersionInput {
         artifact: artifact.id,
+        execution: None,
         content_type: Some(resolved_ct),
         content: Some(file_bytes),
         content_json: None,
@@ -1447,6 +1451,7 @@ pub async fn allocate_file_version_by_ref(
         artifact.id,
         &artifact.r#ref,
         content_type.clone(),
+        request.execution,
         request.meta,
         request.created_by,
     )

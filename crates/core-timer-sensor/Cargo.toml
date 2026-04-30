@@ -3,8 +3,14 @@ name = "core-timer-sensor"
 version = "0.1.0"
 edition = "2021"
 authors = ["Attune Contributors"]
-license.workspace = true
+license = "Apache-2.0"
 description = "Standalone timer sensor runtime for Attune core pack"
+
+# This crate is intentionally NOT a workspace member of the Attune root
+# workspace (see the `exclude` list in /Cargo.toml). It is built solely by
+# docker/Dockerfile.pack-binaries and produces a static musl binary that ships
+# in the packs_data volume. Keeping it out of the workspace means service
+# Dockerfiles don't need to know about it.
 
 [[bin]]
 name = "attune-core-timer-sensor"
@@ -12,30 +18,30 @@ path = "src/main.rs"
 
 [dependencies]
 # Async runtime
-tokio = { workspace = true }
-async-trait = { workspace = true }
+tokio = { version = "1.52", features = ["full"] }
+async-trait = "0.1"
 
 # Serialization
-serde = { workspace = true }
-serde_json = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 # HTTP client
-reqwest = { workspace = true, features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 
 # Message queue
-lapin = { workspace = true }
-futures = { workspace = true }
+lapin = "4.5"
+futures = "0.3"
 
 # Logging
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Error handling
-anyhow = { workspace = true }
-thiserror = { workspace = true }
+anyhow = "1.0"
+thiserror = "2.0"
 
 # Time handling
-chrono = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
 
 # Cron scheduling
 tokio-cron-scheduler = "0.15"
@@ -45,13 +51,13 @@ rrule = "0.14"
 chrono-tz = "0.10"
 
 # CLI
-clap = { workspace = true, features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 
 # Utilities
-uuid = { workspace = true }
+uuid = { version = "1.23", features = ["v4", "serde"] }
 urlencoding = "2.1"
 base64 = "0.22"
 
 [dev-dependencies]
-mockall = { workspace = true }
-tempfile = { workspace = true }
+mockall = "0.14"
+tempfile = "3.27"

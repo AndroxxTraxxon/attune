@@ -44,6 +44,7 @@ use tracing::{debug, error, info, warn};
 use crate::policy_enforcer::{PolicyEnforcer, SchedulingPolicyOutcome};
 use crate::workflow::context::{TaskOutcome, WorkflowContext};
 use crate::workflow::graph::TaskGraph;
+use crate::workflow::log::WorkflowLogger;
 
 /// Extract workflow parameters from an execution's `config` field.
 ///
@@ -247,6 +248,8 @@ pub struct ExecutionScheduler {
     policy_enforcer: Arc<PolicyEnforcer>,
     /// Round-robin counter for distributing executions across workers
     round_robin_counter: AtomicUsize,
+    /// Root directory for file-backed artifacts (workflow logs, etc.)
+    artifacts_dir: Arc<String>,
 }
 
 /// Default heartbeat interval in seconds (should match worker config default)
@@ -297,6 +300,7 @@ impl ExecutionScheduler {
         publisher: Arc<Publisher>,
         consumer: Arc<Consumer>,
         policy_enforcer: Arc<PolicyEnforcer>,
+        artifacts_dir: impl Into<String>,
     ) -> Self {
         Self {
             pool,
@@ -304,6 +308,7 @@ impl ExecutionScheduler {
             consumer,
             policy_enforcer,
             round_robin_counter: AtomicUsize::new(0),
+            artifacts_dir: Arc::new(artifacts_dir.into()),
         }
     }
 
@@ -314,6 +319,7 @@ impl ExecutionScheduler {
         let pool = self.pool.clone();
         let publisher = self.publisher.clone();
         let policy_enforcer = self.policy_enforcer.clone();
+        let artifacts_dir = self.artifacts_dir.clone();
         // Share the counter with the handler closure via Arc.
         // We wrap &self's AtomicUsize in a new Arc<AtomicUsize> by copying the
         // current value so the closure is 'static.
@@ -329,6 +335,7 @@ impl ExecutionScheduler {
                     let publisher = publisher.clone();
                     let policy_enforcer = policy_enforcer.clone();
                     let counter = counter.clone();
+                    let artifacts_dir = artifacts_dir.clone();
 
                     async move {
                         if let Err(e) = Self::process_execution_requested(
@@ -336,6 +343,7 @@ impl ExecutionScheduler {
                             &publisher,
                             &policy_enforcer,
                             &counter,
+                            artifacts_dir.as_str(),
                             &envelope,
                         )
                         .await
@@ -362,6 +370,7 @@ impl ExecutionScheduler {
         publisher: &Publisher,
         policy_enforcer: &PolicyEnforcer,
         round_robin_counter: &AtomicUsize,
+        artifacts_dir: &str,
         envelope: &MessageEnvelope<ExecutionRequestedPayload>,
     ) -> Result<()> {
         debug!("Processing execution requested message: {:?}", envelope);
@@ -404,6 +413,7 @@ impl ExecutionScheduler {
                     publisher,
                     policy_enforcer,
                     round_robin_counter,
+                    artifacts_dir,
                     envelope,
                     execution,
                 )
@@ -436,6 +446,7 @@ impl ExecutionScheduler {
                         publisher,
                         policy_enforcer,
                         round_robin_counter,
+                        artifacts_dir,
                         envelope,
                         execution_id,
                     )
@@ -448,6 +459,7 @@ impl ExecutionScheduler {
             publisher,
             policy_enforcer,
             round_robin_counter,
+            artifacts_dir,
             envelope,
             execution,
         )
@@ -459,6 +471,7 @@ impl ExecutionScheduler {
         publisher: &Publisher,
         policy_enforcer: &PolicyEnforcer,
         round_robin_counter: &AtomicUsize,
+        artifacts_dir: &str,
         envelope: &MessageEnvelope<ExecutionRequestedPayload>,
         execution: Execution,
     ) -> Result<()> {
@@ -477,6 +490,7 @@ impl ExecutionScheduler {
                 pool,
                 publisher,
                 round_robin_counter,
+                artifacts_dir,
                 &execution,
                 &action,
             )
@@ -713,6 +727,7 @@ impl ExecutionScheduler {
         publisher: &Publisher,
         policy_enforcer: &PolicyEnforcer,
         round_robin_counter: &AtomicUsize,
+        artifacts_dir: &str,
         envelope: &MessageEnvelope<ExecutionRequestedPayload>,
         execution_id: i64,
     ) -> Result<()> {
@@ -762,6 +777,7 @@ impl ExecutionScheduler {
                         publisher,
                         policy_enforcer,
                         round_robin_counter,
+                        artifacts_dir,
                         envelope,
                         execution,
                     )
@@ -799,9 +815,17 @@ impl ExecutionScheduler {
         pool: &PgPool,
         publisher: &Publisher,
         round_robin_counter: &AtomicUsize,
+        artifacts_dir: &str,
         execution: &Execution,
         action: &Action,
     ) -> Result<()> {
+        let logger = WorkflowLogger::new(
+            pool.clone(),
+            artifacts_dir,
+            action.r#ref.as_str(),
+            execution.id,
+        );
+
         let workflow_def_id = action
             .workflow_def
             .ok_or_else(|| anyhow::anyhow!("Action '{}' has no workflow_def", action.r#ref))?;
@@ -860,11 +884,23 @@ impl ExecutionScheduler {
                 "Created workflow_execution {} for workflow '{}' (parent execution {})",
                 workflow_execution.id, workflow_def.r#ref, execution.id
             );
+            logger
+                .info(format!(
+                    "Workflow '{}' started (workflow_execution {})",
+                    workflow_def.r#ref, workflow_execution.id
+                ))
+                .await;
         } else {
             info!(
                 "Reusing existing workflow_execution {} for workflow '{}' (parent execution {})",
                 workflow_execution.id, workflow_def.r#ref, execution.id
             );
+            logger
+                .info(format!(
+                    "Workflow '{}' resumed (workflow_execution {})",
+                    workflow_def.r#ref, workflow_execution.id
+                ))
+                .await;
         }
 
         if graph.entry_points.is_empty() {
@@ -872,8 +908,12 @@ impl ExecutionScheduler {
                 "Workflow '{}' has no entry-point tasks, completing immediately",
                 workflow_def.r#ref
             );
+            logger
+                .warn("Workflow has no entry-point tasks; completing immediately")
+                .await;
             Self::complete_workflow(pool, execution.id, workflow_execution.id, true, None, None)
                 .await?;
+            logger.info("Workflow completed").await;
             return Ok(());
         }
 
@@ -925,6 +965,13 @@ impl ExecutionScheduler {
         // For each entry-point task, create a child execution and dispatch it
         for entry_task_name in &graph.entry_points {
             if let Some(task_node) = graph.get_task(entry_task_name) {
+                logger
+                    .info(format!(
+                        "Dispatching entry task '{}' (action '{}')",
+                        task_node.name,
+                        task_node.action.as_deref().unwrap_or("(none)")
+                    ))
+                    .await;
                 Self::dispatch_or_resume_entry_workflow_task(
                     pool,
                     publisher,
@@ -941,6 +988,12 @@ impl ExecutionScheduler {
                     "Entry-point task '{}' not found in graph for workflow '{}'",
                     entry_task_name, workflow_def.r#ref
                 );
+                logger
+                    .warn(format!(
+                        "Entry-point task '{}' not found in workflow graph",
+                        entry_task_name
+                    ))
+                    .await;
             }
         }
 
@@ -1987,12 +2040,49 @@ impl ExecutionScheduler {
         pool: &PgPool,
         publisher: &Publisher,
         round_robin_counter: &AtomicUsize,
+        artifacts_dir: &str,
         execution: &Execution,
     ) -> Result<()> {
-        let workflow_execution_id = match execution.workflow_task.as_ref() {
-            Some(workflow_task) => workflow_task.workflow_execution,
+        let workflow_task = match execution.workflow_task.as_ref() {
+            Some(workflow_task) => workflow_task.clone(),
             None => return Ok(()),
         };
+        let workflow_execution_id = workflow_task.workflow_execution;
+
+        // Look up the parent execution id and its action_ref so we can write
+        // to the per-action workflow log.
+        let parent_info: Option<(i64, String)> = sqlx::query_as(
+            "SELECT we.execution, e.action_ref \
+             FROM workflow_execution we \
+             JOIN execution e ON e.id = we.execution \
+             WHERE we.id = $1",
+        )
+        .bind(workflow_execution_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        let logger = parent_info.as_ref().map(|(pid, action_ref)| {
+            WorkflowLogger::new(pool.clone(), artifacts_dir, action_ref.as_str(), *pid)
+        });
+
+        let task_outcome_label = match execution.status {
+            ExecutionStatus::Completed => "Succeeded",
+            ExecutionStatus::Timeout => "TimedOut",
+            ExecutionStatus::Cancelled => "Cancelled",
+            _ => "Failed",
+        };
+        if let Some(l) = logger.as_ref() {
+            let item_suffix = workflow_task
+                .task_index
+                .map(|idx| format!(" (item {})", idx))
+                .unwrap_or_default();
+            l.info(format!(
+                "Task '{}'{} {}",
+                workflow_task.task_name, item_suffix, task_outcome_label
+            ))
+            .await;
+        }
 
         let mut lock_conn = pool.acquire().await?;
         sqlx::query("SELECT pg_advisory_lock($1)")
@@ -2010,6 +2100,34 @@ impl ExecutionScheduler {
             match advance_result {
                 Ok(pending_messages) => {
                     sqlx::query("COMMIT").execute(&mut *lock_conn).await?;
+
+                    if let Some(l) = logger.as_ref() {
+                        for pending in &pending_messages {
+                            // We avoid logging task inputs; only metadata.
+                            // The pending message references a child execution
+                            // we just created — fetch its workflow_task name.
+                            if let Ok(Some(child)) =
+                                ExecutionRepository::find_by_id(pool, pending.execution_id).await
+                            {
+                                if let Some(child_wt) = child.workflow_task.as_ref() {
+                                    let item_suffix = child_wt
+                                        .task_index
+                                        .map(|idx| format!(" (item {})", idx))
+                                        .unwrap_or_default();
+                                    let trigger_suffix = child_wt
+                                        .triggered_by
+                                        .as_deref()
+                                        .map(|t| format!(", triggered by '{}'", t))
+                                        .unwrap_or_default();
+                                    l.info(format!(
+                                        "Dispatched task '{}'{}{}",
+                                        child_wt.task_name, item_suffix, trigger_suffix
+                                    ))
+                                    .await;
+                                }
+                            }
+                        }
+                    }
 
                     for pending in pending_messages {
                         Self::publish_execution_requested_payload(publisher, pending).await?;
@@ -2037,6 +2155,21 @@ impl ExecutionScheduler {
 
         result?;
         unlock_result?;
+
+        // After successful advancement, check whether the workflow
+        // transitioned to a terminal state and log it.
+        if let Some(l) = logger.as_ref() {
+            if let Ok(Some(wf_exec)) =
+                WorkflowExecutionRepository::find_by_id(pool, workflow_execution_id).await
+            {
+                match wf_exec.status {
+                    ExecutionStatus::Completed => l.info("Workflow Completed").await,
+                    ExecutionStatus::Failed => l.error("Workflow Failed").await,
+                    ExecutionStatus::Cancelled => l.warn("Workflow Cancelled").await,
+                    _ => {}
+                }
+            }
+        }
         Ok(())
     }
 

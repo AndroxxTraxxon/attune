@@ -23,13 +23,13 @@ use attune_common::models::{
 };
 use attune_common::repositories::artifact::{
     default_content_type_for_artifact, ArtifactRepository, ArtifactVersionRepository,
-    CreateArtifactInput, UpdateArtifactInput,
+    CreateArtifactInput,
 };
 use attune_common::repositories::execution::{ExecutionRepository, UpdateExecutionInput};
 use attune_common::repositories::runtime::WorkerRepository;
 use attune_common::repositories::runtime::SELECT_COLUMNS as RUNTIME_SELECT_COLUMNS;
 use attune_common::repositories::runtime_version::RuntimeVersionRepository;
-use attune_common::repositories::{Create, FindById, FindByRef, Patch, Update};
+use attune_common::repositories::{Create, FindById, FindByRef, Update};
 use attune_common::runtime_detection::normalize_runtime_name;
 use attune_common::version_matching::{matches_constraint, select_best_version};
 use std::path::PathBuf as StdPathBuf;
@@ -107,13 +107,6 @@ impl ExecutionLogArtifactStream {
         match self {
             Self::Stdout => "stdout",
             Self::Stderr => "stderr",
-        }
-    }
-
-    fn file_name(self) -> &'static str {
-        match self {
-            Self::Stdout => "stdout.log",
-            Self::Stderr => "stderr.log",
         }
     }
 }
@@ -904,8 +897,8 @@ impl ActionExecutor {
         Ok(())
     }
 
-    fn execution_log_artifact_ref(execution_id: i64, stream: ExecutionLogArtifactStream) -> String {
-        format!("execution.{}.{}", execution_id, stream.as_str())
+    fn execution_log_artifact_ref(action_ref: &str, stream: ExecutionLogArtifactStream) -> String {
+        format!("{}.{}.log", action_ref, stream.as_str())
     }
 
     async fn allocate_execution_log_artifacts(
@@ -930,25 +923,11 @@ impl ActionExecutor {
         execution: &Execution,
         stream: ExecutionLogArtifactStream,
     ) -> Result<PathBuf> {
-        let artifact_ref = Self::execution_log_artifact_ref(execution.id, stream);
+        let artifact_ref = Self::execution_log_artifact_ref(&execution.action_ref, stream);
         let content_type = default_content_type_for_artifact(ArtifactType::FileText);
 
         let artifact = match ArtifactRepository::find_by_ref(&self.pool, &artifact_ref).await? {
-            Some(existing) => {
-                if existing.execution != Some(execution.id) {
-                    ArtifactRepository::update(
-                        &self.pool,
-                        existing.id,
-                        UpdateArtifactInput {
-                            execution: Some(Patch::Set(execution.id)),
-                            ..Default::default()
-                        },
-                    )
-                    .await?
-                } else {
-                    existing
-                }
-            }
+            Some(existing) => existing,
             None => {
                 ArtifactRepository::create(
                     &self.pool,
@@ -959,12 +938,12 @@ impl ActionExecutor {
                         r#type: ArtifactType::FileText,
                         visibility: ArtifactVisibility::Private,
                         retention_policy: RetentionPolicyType::Versions,
-                        retention_limit: 1,
-                        name: Some(stream.file_name().to_string()),
+                        retention_limit: 50,
+                        name: Some(format!("{} {}", execution.action_ref, stream.as_str())),
                         description: Some(format!(
-                            "Captured {} for execution {}",
+                            "Captured {} for action '{}' (one version per execution)",
                             stream.as_str(),
-                            execution.id
+                            execution.action_ref
                         )),
                         content_type: Some(content_type.clone()),
                         execution: Some(execution.id),
@@ -980,7 +959,11 @@ impl ActionExecutor {
             artifact.id,
             &artifact.r#ref,
             content_type,
-            Some(serde_json::json!({ "stream": stream.as_str() })),
+            Some(execution.id),
+            Some(serde_json::json!({
+                "stream": stream.as_str(),
+                "execution_id": execution.id,
+            })),
             Some("worker".to_string()),
         )
         .await?;
@@ -1010,12 +993,25 @@ impl ActionExecutor {
         execution_id: i64,
         stream: ExecutionLogArtifactStream,
     ) -> Result<Option<PathBuf>> {
-        let artifact_ref = Self::execution_log_artifact_ref(execution_id, stream);
+        // Resolve action_ref by loading the execution row.
+        let Some(execution) = ExecutionRepository::find_by_id(&self.pool, execution_id).await?
+        else {
+            return Ok(None);
+        };
+        let artifact_ref = Self::execution_log_artifact_ref(&execution.action_ref, stream);
         let Some(artifact) = ArtifactRepository::find_by_ref(&self.pool, &artifact_ref).await?
         else {
             return Ok(None);
         };
-        let Some(version) = ArtifactVersionRepository::find_latest(&self.pool, artifact.id).await?
+        // Find the version that was written by this specific execution (not just
+        // the latest version of the artifact, since concurrent executions of the
+        // same action would otherwise race for the "latest" slot).
+        let Some(version) = ArtifactVersionRepository::find_by_artifact_and_execution(
+            &self.pool,
+            artifact.id,
+            execution_id,
+        )
+        .await?
         else {
             return Ok(None);
         };
@@ -1441,12 +1437,18 @@ mod tests {
     #[test]
     fn test_execution_log_artifact_ref() {
         assert_eq!(
-            ActionExecutor::execution_log_artifact_ref(42, ExecutionLogArtifactStream::Stdout),
-            "execution.42.stdout"
+            ActionExecutor::execution_log_artifact_ref(
+                "mypack.deploy",
+                ExecutionLogArtifactStream::Stdout
+            ),
+            "mypack.deploy.stdout.log"
         );
         assert_eq!(
-            ActionExecutor::execution_log_artifact_ref(42, ExecutionLogArtifactStream::Stderr),
-            "execution.42.stderr"
+            ActionExecutor::execution_log_artifact_ref(
+                "mypack.deploy",
+                ExecutionLogArtifactStream::Stderr
+            ),
+            "mypack.deploy.stderr.log"
         );
     }
 

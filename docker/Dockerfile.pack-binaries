@@ -74,65 +74,53 @@ ENV SQLX_OFFLINE=true
 
 # ---------------------------------------------------------------------------
 # Dependency caching layer
-# Copy only Cargo metadata first so `cargo fetch` is cached when only source
-# code changes. This follows the same selective-copy optimization pattern as
-# the other active Dockerfiles in this directory.
+# Each pack-binary crate is a standalone (non-workspace) package with its own
+# Cargo.lock. Copy only the manifests first so `cargo fetch` is cached when
+# only source code changes.
 # ---------------------------------------------------------------------------
-COPY Cargo.toml Cargo.lock ./
-
-# Copy all workspace member manifests (required for workspace resolution)
-COPY crates/common/Cargo.toml ./crates/common/Cargo.toml
-COPY crates/api/Cargo.toml ./crates/api/Cargo.toml
-COPY crates/executor/Cargo.toml ./crates/executor/Cargo.toml
-COPY crates/sensor/Cargo.toml ./crates/sensor/Cargo.toml
 COPY crates/core-timer-sensor/Cargo.toml ./crates/core-timer-sensor/Cargo.toml
-COPY crates/worker/Cargo.toml ./crates/worker/Cargo.toml
-COPY crates/notifier/Cargo.toml ./crates/notifier/Cargo.toml
-COPY crates/cli/Cargo.toml ./crates/cli/Cargo.toml
+COPY crates/core-enqueue-action/Cargo.toml ./crates/core-enqueue-action/Cargo.toml
 
-# Create minimal stub sources so cargo can resolve the workspace and fetch deps.
+# Create minimal stub sources so cargo can resolve each crate and fetch deps.
 # These are ONLY used for `cargo fetch` — never compiled.
-# NOTE: The worker crate has TWO binary targets (main + agent_main) and the
-# sensor crate also has two binary targets (main + agent_main), so we create
-# stubs for all of them.
-RUN mkdir -p crates/common/src && echo "" > crates/common/src/lib.rs && \
-    mkdir -p crates/api/src && echo "fn main(){}" > crates/api/src/main.rs && \
-    mkdir -p crates/executor/src && echo "fn main(){}" > crates/executor/src/main.rs && \
-    mkdir -p crates/executor/benches && echo "fn main(){}" > crates/executor/benches/context_clone.rs && \
-    mkdir -p crates/sensor/src && echo "fn main(){}" > crates/sensor/src/main.rs && \
-    echo "fn main(){}" > crates/sensor/src/agent_main.rs && \
-    mkdir -p crates/core-timer-sensor/src && echo "fn main(){}" > crates/core-timer-sensor/src/main.rs && \
-    mkdir -p crates/worker/src && echo "fn main(){}" > crates/worker/src/main.rs && \
-    echo "fn main(){}" > crates/worker/src/agent_main.rs && \
-    mkdir -p crates/notifier/src && echo "fn main(){}" > crates/notifier/src/main.rs && \
-    mkdir -p crates/cli/src && echo "fn main(){}" > crates/cli/src/main.rs
+RUN mkdir -p crates/core-timer-sensor/src && echo "fn main(){}" > crates/core-timer-sensor/src/main.rs && \
+    mkdir -p crates/core-enqueue-action/src/bin && \
+        echo "" > crates/core-enqueue-action/src/lib.rs && \
+        echo "fn main(){}" > crates/core-enqueue-action/src/bin/enqueue.rs && \
+        echo "fn main(){}" > crates/core-enqueue-action/src/bin/enqueue_batch.rs
 
-# Download all dependencies (cached unless Cargo.toml/Cargo.lock change)
+# Download all dependencies (cached unless Cargo.toml changes)
 # registry/git use sharing=shared — cargo handles concurrent reads safely
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
-    cargo fetch
+    cd crates/core-timer-sensor && cargo fetch && \
+    cd ../core-enqueue-action && cargo fetch
 
 # ---------------------------------------------------------------------------
 # Build layer
-# Copy only the source needed for the timer sensor pack binary with musl
+# Copy real sources for the pack-binary crates and build with musl.
 # ---------------------------------------------------------------------------
-COPY crates/common/ ./crates/common/
 COPY crates/core-timer-sensor/ ./crates/core-timer-sensor/
+COPY crates/core-enqueue-action/ ./crates/core-enqueue-action/
 
 # Build pack binaries with BuildKit cache mounts, statically linked with musl.
 # Uses cargo-zigbuild so that cross-compilation works regardless of host arch.
 # - registry/git use sharing=shared (cargo handles concurrent access safely)
-# - target uses sharing=locked because zigbuild cross-compilation needs
+# - target dirs use sharing=locked because zigbuild cross-compilation needs
 #   exclusive access to the target directory
-# - dedicated cache ID (target-pack-binaries-static) to avoid collisions with
-#   other Dockerfiles' target caches
+# - dedicated cache IDs per crate to keep their target dirs isolated
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
-    --mount=type=cache,id=target-pack-binaries-static,target=/build/target,sharing=locked \
+    --mount=type=cache,id=target-core-timer-sensor-static,target=/build/crates/core-timer-sensor/target,sharing=locked \
+    --mount=type=cache,id=target-core-enqueue-action-static,target=/build/crates/core-enqueue-action/target,sharing=locked \
     mkdir -p /build/pack-binaries && \
+    cd /build/crates/core-timer-sensor && \
     cargo zigbuild --release --target ${RUST_TARGET} --bin attune-core-timer-sensor && \
-    cp /build/target/${RUST_TARGET}/release/attune-core-timer-sensor /build/pack-binaries/attune-core-timer-sensor
+    cp target/${RUST_TARGET}/release/attune-core-timer-sensor /build/pack-binaries/attune-core-timer-sensor && \
+    cd /build/crates/core-enqueue-action && \
+    cargo zigbuild --release --target ${RUST_TARGET} --bin attune-core-enqueue --bin attune-core-enqueue-batch && \
+    cp target/${RUST_TARGET}/release/attune-core-enqueue /build/pack-binaries/attune-core-enqueue && \
+    cp target/${RUST_TARGET}/release/attune-core-enqueue-batch /build/pack-binaries/attune-core-enqueue-batch
 
 # Strip the binary to minimize size.
 # When cross-compiling for a different architecture, the host strip may not
@@ -140,11 +128,19 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
 # binary is still functional, just slightly larger.
 RUN (strip /build/pack-binaries/attune-core-timer-sensor 2>/dev/null && \
     echo "stripped attune-core-timer-sensor" || \
-    echo "strip skipped for attune-core-timer-sensor (cross-arch binary)")
+    echo "strip skipped for attune-core-timer-sensor (cross-arch binary)") && \
+    (strip /build/pack-binaries/attune-core-enqueue 2>/dev/null && \
+    echo "stripped attune-core-enqueue" || \
+    echo "strip skipped for attune-core-enqueue (cross-arch binary)") && \
+    (strip /build/pack-binaries/attune-core-enqueue-batch 2>/dev/null && \
+    echo "stripped attune-core-enqueue-batch" || \
+    echo "strip skipped for attune-core-enqueue-batch (cross-arch binary)")
 
 # Verify binaries were built successfully and are statically linked
-RUN ls -lh /build/pack-binaries/attune-core-timer-sensor && \
+RUN ls -lh /build/pack-binaries/ && \
     file /build/pack-binaries/attune-core-timer-sensor && \
+    file /build/pack-binaries/attune-core-enqueue && \
+    file /build/pack-binaries/attune-core-enqueue-batch && \
     (ldd /build/pack-binaries/attune-core-timer-sensor 2>&1 || echo "statically linked (no dynamic dependencies)") && \
     /build/pack-binaries/attune-core-timer-sensor --version || echo "Built successfully"
 

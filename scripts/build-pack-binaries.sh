@@ -75,6 +75,7 @@ echo -e "${YELLOW}Step 3/4: Extracting pack binaries...${NC}"
 
 # Create target directories
 mkdir -p packs/core/sensors
+mkdir -p packs/core/actions
 
 # Copy timer sensor binary
 if docker cp "${CONTAINER_NAME}:/pack-binaries/attune-core-timer-sensor" "packs/core/sensors/attune-core-timer-sensor" ; then
@@ -85,15 +86,30 @@ else
     exit 1
 fi
 
+# Copy enqueue action binaries
+for bin in attune-core-enqueue attune-core-enqueue-batch ; do
+    if docker cp "${CONTAINER_NAME}:/pack-binaries/${bin}" "packs/core/actions/${bin}" ; then
+        echo -e "${GREEN}✓ Extracted ${bin}${NC}"
+    else
+        echo -e "${RED}✗ Failed to extract ${bin}${NC}"
+        docker rm "${CONTAINER_NAME}" 2>/dev/null || true
+        exit 1
+    fi
+done
+
 # Make binaries executable
 chmod +x packs/core/sensors/attune-core-timer-sensor
+chmod +x packs/core/actions/attune-core-enqueue
+chmod +x packs/core/actions/attune-core-enqueue-batch
 
 # Verify binaries
 echo ""
 echo -e "${YELLOW}Verifying binaries:${NC}"
 file packs/core/sensors/attune-core-timer-sensor
+file packs/core/actions/attune-core-enqueue
+file packs/core/actions/attune-core-enqueue-batch
 (ldd packs/core/sensors/attune-core-timer-sensor 2>&1 || echo "statically linked (no dynamic dependencies)")
-ls -lh packs/core/sensors/attune-core-timer-sensor
+ls -lh packs/core/sensors/attune-core-timer-sensor packs/core/actions/attune-core-enqueue packs/core/actions/attune-core-enqueue-batch
 
 # Clean up temporary container
 echo ""
@@ -113,6 +129,8 @@ echo ""
 echo "Target architecture: ${RUST_TARGET}"
 echo "Binaries location:"
 echo "  • packs/core/sensors/attune-core-timer-sensor"
+echo "  • packs/core/actions/attune-core-enqueue"
+echo "  • packs/core/actions/attune-core-enqueue-batch"
 echo ""
 echo "These are statically-linked musl binaries with zero runtime dependencies."
 echo "They are now ready to be used by the init-packs service when starting"

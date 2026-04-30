@@ -1534,6 +1534,8 @@ pub mod artifact_version {
         pub artifact: Id,
         /// Version number (1-based, monotonically increasing per artifact)
         pub version: i32,
+        /// Optional execution that produced this version (no FK — execution is a hypertable)
+        pub execution: Option<Id>,
         /// MIME content type for this version
         pub content_type: Option<String>,
         /// Size of content in bytes
@@ -1556,12 +1558,12 @@ pub mod artifact_version {
 
     /// Select columns WITHOUT the potentially large `content` BYTEA column.
     /// Use `SELECT_COLUMNS_WITH_CONTENT` when you need the binary payload.
-    pub const SELECT_COLUMNS: &str = "id, artifact, version, content_type, size_bytes, \
+    pub const SELECT_COLUMNS: &str = "id, artifact, version, execution, content_type, size_bytes, \
          NULL::bytea AS content, content_json, file_path, meta, created_by, created";
 
     /// Select columns INCLUDING the binary `content` column.
     pub const SELECT_COLUMNS_WITH_CONTENT: &str =
-        "id, artifact, version, content_type, size_bytes, \
+        "id, artifact, version, execution, content_type, size_bytes, \
          content, content_json, file_path, meta, created_by, created";
 }
 

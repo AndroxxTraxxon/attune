@@ -125,30 +125,36 @@ for pack_dir in "$SOURCE_PACKS_DIR"/*; do
                 # the host's copy, which may be dynamically linked or the wrong arch.
                 echo -e "${YELLOW}  ⟳${NC} Pack exists at: $target_pack_dir, updating files..."
 
-                # Detect ELF binaries already in the target sensors/ dir by
-                # checking for the 4-byte ELF magic number (\x7fELF) at the
-                # start of the file.  The `file` command is unavailable on
-                # python:3.11-slim, so we read the magic bytes with `od`.
-                _skip_bins=""
-                if [ -d "$target_pack_dir/sensors" ]; then
-                    for _bin in "$target_pack_dir/sensors"/*; do
-                        [ -f "$_bin" ] || continue
-                        _magic=$(od -A n -t x1 -N 4 "$_bin" 2>/dev/null | tr -d ' ')
-                        if [ "$_magic" = "7f454c46" ]; then
-                            _skip_bins="$_skip_bins $(basename "$_bin")"
-                        fi
-                    done
-                fi
+                # Detect ELF binaries already in the target sensors/ and
+                # actions/ dirs by checking for the 4-byte ELF magic number
+                # (\x7fELF) at the start of the file.  The `file` command is
+                # unavailable on python:3.11-slim, so we read the magic
+                # bytes with `od`. We track each preserved binary by its
+                # path relative to the pack directory so the restore step
+                # writes it back to the correct subdirectory.
+                _skip_paths=""
+                for _bin_dir in sensors actions ; do
+                    if [ -d "$target_pack_dir/$_bin_dir" ]; then
+                        for _bin in "$target_pack_dir/$_bin_dir"/* ; do
+                            [ -f "$_bin" ] || continue
+                            _magic=$(od -A n -t x1 -N 4 "$_bin" 2>/dev/null | tr -d ' ')
+                            if [ "$_magic" = "7f454c46" ]; then
+                                _skip_paths="$_skip_paths ${_bin_dir}/$(basename "$_bin")"
+                            fi
+                        done
+                    fi
+                done
 
                 # Copy everything from source, then restore any skipped binaries
                 # that were overwritten. We do it this way (copy-then-restore)
                 # rather than exclude-during-copy because busybox cp and POSIX cp
                 # have no --exclude flag.
-                if [ -n "$_skip_bins" ]; then
+                if [ -n "$_skip_paths" ]; then
                     # Back up existing static binaries
                     _tmpdir=$(mktemp -d)
-                    for _b in $_skip_bins; do
-                        cp "$target_pack_dir/sensors/$_b" "$_tmpdir/$_b"
+                    for _p in $_skip_paths; do
+                        mkdir -p "$_tmpdir/$(dirname "$_p")"
+                        cp "$target_pack_dir/$_p" "$_tmpdir/$_p"
                     done
                 fi
 
@@ -160,10 +166,11 @@ for pack_dir in "$SOURCE_PACKS_DIR"/*; do
                 fi
 
                 # Restore static binaries that were overwritten
-                if [ -n "$_skip_bins" ]; then
-                    for _b in $_skip_bins; do
-                        cp "$_tmpdir/$_b" "$target_pack_dir/sensors/$_b"
-                        echo -e "${GREEN}  ✓${NC} Preserved static binary: sensors/$_b"
+                if [ -n "$_skip_paths" ]; then
+                    for _p in $_skip_paths; do
+                        cp "$_tmpdir/$_p" "$target_pack_dir/$_p"
+                        chmod +x "$target_pack_dir/$_p"
+                        echo -e "${GREEN}  ✓${NC} Preserved static binary: $_p"
                     done
                     rm -rf "$_tmpdir"
                 fi

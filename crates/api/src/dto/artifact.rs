@@ -314,6 +314,10 @@ pub struct CreateVersionJsonRequest {
     /// MIME content type override (defaults to "application/json")
     pub content_type: Option<String>,
 
+    /// Execution that produced this version (optional)
+    #[schema(example = 42)]
+    pub execution: Option<i64>,
+
     /// Free-form metadata about this version
     #[schema(value_type = Option<Object>)]
     pub meta: Option<JsonValue>,
@@ -330,6 +334,10 @@ pub struct CreateFileVersionRequest {
     /// MIME content type (e.g. "text/plain", "application/octet-stream")
     #[schema(example = "text/plain")]
     pub content_type: Option<String>,
+
+    /// Execution that produced this version (optional)
+    #[schema(example = 42)]
+    pub execution: Option<i64>,
 
     /// Free-form metadata about this version
     #[schema(value_type = Option<Object>)]
@@ -407,6 +415,12 @@ pub struct ArtifactVersionResponse {
     /// Version number (1-based)
     pub version: i32,
 
+    /// Execution that produced this version (e.g., the execution that wrote
+    /// this log version). Per-version association — the parent artifact may
+    /// be linked to many executions across versions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution: Option<i64>,
+
     /// MIME content type
     pub content_type: Option<String>,
 
@@ -441,6 +455,10 @@ pub struct ArtifactVersionSummary {
 
     /// Version number
     pub version: i32,
+
+    /// Execution that produced this version
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution: Option<i64>,
 
     /// MIME content type
     pub content_type: Option<String>,
@@ -511,6 +529,7 @@ impl From<attune_common::models::artifact_version::ArtifactVersion> for Artifact
             id: v.id,
             artifact: v.artifact,
             version: v.version,
+            execution: v.execution,
             content_type: v.content_type,
             size_bytes: v.size_bytes,
             content_json: v.content_json,
@@ -527,6 +546,7 @@ impl From<attune_common::models::artifact_version::ArtifactVersion> for Artifact
         Self {
             id: v.id,
             version: v.version,
+            execution: v.execution,
             content_type: v.content_type,
             size_bytes: v.size_bytes,
             file_path: v.file_path,

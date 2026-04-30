@@ -568,6 +568,9 @@ impl Repository for ArtifactVersionRepository {
 #[derive(Debug, Clone)]
 pub struct CreateArtifactVersionInput {
     pub artifact: i64,
+    /// Optional execution that produced this version. Used for per-version
+    /// linkage to the originating execution (e.g., per-execution log versions).
+    pub execution: Option<i64>,
     pub content_type: Option<String>,
     pub content: Option<Vec<u8>>,
     pub content_json: Option<serde_json::Value>,
@@ -632,9 +635,10 @@ fn extension_from_content_type(ct: &str) -> &str {
 impl ArtifactVersionRepository {
     fn select_columns_with_alias(alias: &str) -> String {
         format!(
-            "{alias}.id, {alias}.artifact, {alias}.version, {alias}.content_type, \
-             {alias}.size_bytes, NULL::bytea AS content, {alias}.content_json, \
-             {alias}.file_path, {alias}.meta, {alias}.created_by, {alias}.created"
+            "{alias}.id, {alias}.artifact, {alias}.version, {alias}.execution, \
+             {alias}.content_type, {alias}.size_bytes, NULL::bytea AS content, \
+             {alias}.content_json, {alias}.file_path, {alias}.meta, \
+             {alias}.created_by, {alias}.created"
         )
     }
 
@@ -790,13 +794,14 @@ impl ArtifactVersionRepository {
 
         let query = format!(
             "INSERT INTO artifact_version \
-                 (artifact, version, content_type, size_bytes, content, content_json, file_path, meta, created_by) \
-             VALUES ($1, next_artifact_version($1), $2, $3, $4, $5, $6, $7, $8) \
+                 (artifact, version, execution, content_type, size_bytes, content, content_json, file_path, meta, created_by) \
+             VALUES ($1, next_artifact_version($1), $2, $3, $4, $5, $6, $7, $8, $9) \
              RETURNING {}",
             artifact_version::SELECT_COLUMNS_WITH_CONTENT
         );
         sqlx::query_as::<_, ArtifactVersion>(&query)
             .bind(input.artifact)
+            .bind(input.execution)
             .bind(&input.content_type)
             .bind(size_bytes)
             .bind(&input.content)
@@ -826,12 +831,37 @@ impl ArtifactVersionRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Find a file-backed version for a specific (artifact, execution) pair.
+    /// Used to look up the version emitted by a particular execution.
+    pub async fn find_by_artifact_and_execution<'e, E>(
+        executor: E,
+        artifact_id: i64,
+        execution_id: i64,
+    ) -> Result<Option<ArtifactVersion>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "SELECT {} FROM artifact_version \
+             WHERE artifact = $1 AND execution = $2 \
+             ORDER BY version DESC LIMIT 1",
+            artifact_version::SELECT_COLUMNS
+        );
+        sqlx::query_as::<_, ArtifactVersion>(&query)
+            .bind(artifact_id)
+            .bind(execution_id)
+            .fetch_optional(executor)
+            .await
+            .map_err(Into::into)
+    }
+
     /// Create a file-backed version and populate its computed relative file path.
     pub async fn create_file_backed<'e, E>(
         executor: E,
         artifact_id: i64,
         artifact_ref: &str,
         content_type: String,
+        execution: Option<i64>,
         meta: Option<serde_json::Value>,
         created_by: Option<String>,
     ) -> Result<ArtifactVersion>
@@ -840,6 +870,7 @@ impl ArtifactVersionRepository {
     {
         let input = CreateArtifactVersionInput {
             artifact: artifact_id,
+            execution,
             content_type: Some(content_type.clone()),
             content: None,
             content_json: None,
@@ -918,11 +949,15 @@ impl ArtifactVersionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
+        // Prefer the per-version `execution` column. Fall back to the parent
+        // artifact's `execution` column to keep older one-artifact-per-execution
+        // rows reachable.
         let query = format!(
             "SELECT {} \
              FROM artifact_version av \
-             JOIN artifact a ON av.artifact = a.id \
-             WHERE a.execution = $1 AND av.file_path IS NOT NULL",
+             LEFT JOIN artifact a ON av.artifact = a.id \
+             WHERE av.file_path IS NOT NULL \
+               AND (av.execution = $1 OR (av.execution IS NULL AND a.execution = $1))",
             Self::select_columns_with_alias("av")
         );
         sqlx::query_as::<_, ArtifactVersion>(&query)

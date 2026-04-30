@@ -5,10 +5,17 @@ members = [
     "crates/api",
     "crates/executor",
     "crates/sensor",
-    "crates/core-timer-sensor",
     "crates/worker",
     "crates/notifier",
     "crates/cli",
+]
+# Pack-binary crates are intentionally excluded from the workspace. They are
+# built only by docker/Dockerfile.pack-binaries and shipped as static binaries
+# in the packs_data volume — no service image links against them. Excluding
+# them keeps service Dockerfiles from having to know about them.
+exclude = [
+    "crates/core-timer-sensor",
+    "crates/core-enqueue-action",
 ]
 
 [workspace.package]

@@ -73,6 +73,12 @@ CREATE TABLE artifact_version (
     -- Monotonically increasing version number within the artifact (1-based)
     version INTEGER NOT NULL,
 
+    -- Optional execution that produced this version. Plain BIGINT (no FK)
+    -- because `execution` is a TimescaleDB hypertable. This is the canonical
+    -- per-version association used for cleanup, "show me the log version
+    -- emitted by execution N", and finalize_file_artifacts scans.
+    execution BIGINT,
+
     -- MIME content type for this specific version (may differ from parent)
     content_type TEXT,
 
@@ -110,6 +116,8 @@ CREATE INDEX idx_artifact_version_artifact ON artifact_version(artifact);
 CREATE INDEX idx_artifact_version_artifact_version ON artifact_version(artifact, version DESC);
 CREATE INDEX idx_artifact_version_created ON artifact_version(created DESC);
 CREATE INDEX idx_artifact_version_file_path ON artifact_version(file_path) WHERE file_path IS NOT NULL;
+CREATE INDEX idx_artifact_version_execution ON artifact_version(execution) WHERE execution IS NOT NULL;
+CREATE INDEX idx_artifact_version_artifact_execution ON artifact_version(artifact, execution) WHERE execution IS NOT NULL;
 
 -- Comments
 COMMENT ON TABLE artifact_version IS 'Immutable content snapshots for artifacts (file uploads, structured data)';

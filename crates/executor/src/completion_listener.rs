@@ -48,6 +48,8 @@ pub struct CompletionListener {
     /// Round-robin counter shared with the scheduler for dispatching workflow
     /// successor tasks to workers.
     round_robin_counter: Arc<AtomicUsize>,
+    /// Root directory for file-backed artifacts (workflow logs).
+    artifacts_dir: Arc<String>,
 }
 
 impl CompletionListener {
@@ -70,6 +72,7 @@ impl CompletionListener {
         consumer: Arc<Consumer>,
         publisher: Arc<Publisher>,
         queue_manager: Arc<ExecutionQueueManager>,
+        artifacts_dir: impl Into<String>,
     ) -> Self {
         Self {
             pool,
@@ -77,6 +80,7 @@ impl CompletionListener {
             publisher,
             queue_manager,
             round_robin_counter: Arc::new(AtomicUsize::new(0)),
+            artifacts_dir: Arc::new(artifacts_dir.into()),
         }
     }
 
@@ -88,6 +92,7 @@ impl CompletionListener {
         let publisher = self.publisher.clone();
         let queue_manager = self.queue_manager.clone();
         let round_robin_counter = self.round_robin_counter.clone();
+        let artifacts_dir = self.artifacts_dir.clone();
 
         // Use the handler pattern to consume messages
         self.consumer
@@ -97,6 +102,7 @@ impl CompletionListener {
                     let publisher = publisher.clone();
                     let queue_manager = queue_manager.clone();
                     let round_robin_counter = round_robin_counter.clone();
+                    let artifacts_dir = artifacts_dir.clone();
 
                     async move {
                         if let Err(e) = Self::process_execution_completed(
@@ -104,6 +110,7 @@ impl CompletionListener {
                             &publisher,
                             &queue_manager,
                             &round_robin_counter,
+                            artifacts_dir.as_str(),
                             &envelope,
                         )
                         .await
@@ -132,6 +139,7 @@ impl CompletionListener {
         publisher: &Publisher,
         queue_manager: &ExecutionQueueManager,
         round_robin_counter: &AtomicUsize,
+        artifacts_dir: &str,
         envelope: &MessageEnvelope<ExecutionCompletedPayload>,
     ) -> Result<()> {
         debug!("Processing execution completed message: {:?}", envelope);
@@ -165,9 +173,14 @@ impl CompletionListener {
                     "Execution {} is a workflow task, advancing workflow",
                     execution_id
                 );
-                if let Err(e) =
-                    ExecutionScheduler::advance_workflow(pool, publisher, round_robin_counter, exec)
-                        .await
+                if let Err(e) = ExecutionScheduler::advance_workflow(
+                    pool,
+                    publisher,
+                    round_robin_counter,
+                    artifacts_dir,
+                    exec,
+                )
+                .await
                 {
                     error!(
                         "Failed to advance workflow for execution {}: {}",

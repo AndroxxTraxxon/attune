@@ -148,6 +148,7 @@ fn resource_name(resource: Resource) -> &'static str {
         Resource::Artifacts => "artifacts",
         Resource::Identities => "identities",
         Resource::Permissions => "permissions",
+        Resource::AuditLog => "audit_log",
     }
 }
 

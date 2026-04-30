@@ -10,3 +10,4 @@
 
 pub mod context;
 pub mod graph;
+pub mod log;

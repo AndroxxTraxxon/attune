@@ -236,6 +236,7 @@ impl ExecutorService {
             Arc::new(completion_consumer),
             self.inner.publisher.clone(),
             self.inner.queue_manager.clone(),
+            self.inner.config.artifacts_dir.clone(),
         );
         handles.push(tokio::spawn(
             async move { completion_listener.start().await },
@@ -299,6 +300,7 @@ impl ExecutorService {
             self.inner.publisher.clone(),
             Arc::new(scheduler_consumer),
             self.inner.policy_enforcer.clone(),
+            self.inner.config.artifacts_dir.clone(),
         );
         handles.push(tokio::spawn(async move { scheduler.start().await }));
 

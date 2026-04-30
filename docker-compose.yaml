@@ -109,7 +109,7 @@ services:
       [
         "/bin/sh",
         "-c",
-        "mkdir -p /opt/attune/packs/core/sensors && cp /pack-binaries/attune-core-timer-sensor /opt/attune/packs/core/sensors/attune-core-timer-sensor && chmod +x /opt/attune/packs/core/sensors/attune-core-timer-sensor && echo 'Pack binaries copied successfully'",
+        "mkdir -p /opt/attune/packs/core/sensors /opt/attune/packs/core/actions && cp /pack-binaries/attune-core-timer-sensor /opt/attune/packs/core/sensors/attune-core-timer-sensor && cp /pack-binaries/attune-core-enqueue /opt/attune/packs/core/actions/attune-core-enqueue && cp /pack-binaries/attune-core-enqueue-batch /opt/attune/packs/core/actions/attune-core-enqueue-batch && chmod +x /opt/attune/packs/core/sensors/attune-core-timer-sensor /opt/attune/packs/core/actions/attune-core-enqueue /opt/attune/packs/core/actions/attune-core-enqueue-batch && echo 'Pack binaries copied successfully'",
       ]
     restart: "no"
     networks:

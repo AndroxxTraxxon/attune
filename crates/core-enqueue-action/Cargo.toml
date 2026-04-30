@@ -1,0 +1,34 @@
+[package]
+name = "core-enqueue-action"
+version = "0.1.0"
+edition = "2021"
+authors = ["Attune Contributors"]
+license = "Apache-2.0"
+description = "Standalone enqueue action binaries for the Attune core pack"
+
+# This crate is intentionally NOT a workspace member of the Attune root
+# workspace (see the `exclude` list in /Cargo.toml). It is built solely by
+# docker/Dockerfile.pack-binaries and produces static musl binaries that ship
+# in the packs_data volume. Keeping it out of the workspace means service
+# Dockerfiles don't need to know about it.
+
+[[bin]]
+name = "attune-core-enqueue"
+path = "src/bin/enqueue.rs"
+
+[[bin]]
+name = "attune-core-enqueue-batch"
+path = "src/bin/enqueue_batch.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { version = "1.52", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
