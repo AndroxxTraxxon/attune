@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
 use crate::auth::jwt::JwtConfig;
-use attune_common::{config::Config, mq::Publisher};
+use attune_common::{audit::AuditEmitter, config::Config, mq::Publisher};
 
 /// Shared application state
 #[derive(Clone)]
@@ -22,11 +22,18 @@ pub struct AppState {
     pub publisher: Arc<RwLock<Option<Arc<Publisher>>>>,
     /// Broadcast channel for SSE notifications
     pub broadcast_tx: broadcast::Sender<String>,
+    /// Audit event emitter (non-blocking; no-op if not configured)
+    pub audit_emitter: AuditEmitter,
 }
 
 impl AppState {
     /// Create new application state
     pub fn new(db: PgPool, config: Config) -> Self {
+        Self::new_with_audit(db, config, AuditEmitter::noop())
+    }
+
+    /// Create new application state with a configured audit emitter.
+    pub fn new_with_audit(db: PgPool, config: Config, audit_emitter: AuditEmitter) -> Self {
         let jwt_secret = config.security.jwt_secret.clone().unwrap_or_else(|| {
             tracing::warn!(
                 "JWT_SECRET not set in config, using default (INSECURE for production!)"
@@ -52,6 +59,7 @@ impl AppState {
             config: Arc::new(config),
             publisher: Arc::new(RwLock::new(None)),
             broadcast_tx,
+            audit_emitter,
         }
     }
 

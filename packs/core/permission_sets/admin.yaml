@@ -28,3 +28,5 @@ grants:
     actions: [read, create, update, delete]
   - resource: permissions
     actions: [read, create, update, delete, manage]
+  - resource: audit_log
+    actions: [read]

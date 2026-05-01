@@ -5,6 +5,7 @@ use attune_cli::{commands, config, output};
 use commands::{
     action::{handle_action_command, ActionCommands},
     artifact::ArtifactCommands,
+    audit::AuditCommands,
     auth::AuthCommands,
     config::ConfigCommands,
     execution::ExecutionCommands,
@@ -100,6 +101,11 @@ enum Commands {
     Artifact {
         #[command(subcommand)]
         command: ArtifactCommands,
+    },
+    /// Audit log queries (list, show, chain)
+    Audit {
+        #[command(subcommand)]
+        command: AuditCommands,
     },
     /// Configuration management
     Config {
@@ -224,6 +230,15 @@ async fn main() {
         }
         Commands::Artifact { command } => {
             commands::artifact::handle_artifact_command(
+                &cli.profile,
+                command,
+                &cli.api_url,
+                output_format,
+            )
+            .await
+        }
+        Commands::Audit { command } => {
+            commands::audit::handle_audit_command(
                 &cli.profile,
                 command,
                 &cli.api_url,

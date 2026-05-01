@@ -7,6 +7,7 @@ import {
   KeyRound,
   Package,
   ShieldCheck,
+  ScrollText,
   SquareArrowRight,
   SquareAsterisk,
   SquareDot,
@@ -29,5 +30,6 @@ export const navIcons = {
   artifacts: FolderArchive,
   queues: SquareStack,
   accessControl: ShieldCheck,
+  auditLog: ScrollText,
   packs: Package,
 } as const;

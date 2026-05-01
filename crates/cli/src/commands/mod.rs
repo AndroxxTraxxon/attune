@@ -1,5 +1,6 @@
 pub mod action;
 pub mod artifact;
+pub mod audit;
 pub mod auth;
 pub mod config;
 pub mod execution;

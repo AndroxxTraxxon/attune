@@ -135,6 +135,16 @@ const RESOURCE_META: Record<string, ResourceMeta> = {
     color: "text-purple-600",
     label: "Sensors",
   },
+  queues: {
+    icon: navIcons.queues,
+    color: "text-emerald-600",
+    label: "Queues",
+  },
+  audit_log: {
+    icon: navIcons.auditLog,
+    color: "text-slate-600",
+    label: "Audit Log",
+  },
 };
 
 const ACTION_STYLE: Record<string, string> = {

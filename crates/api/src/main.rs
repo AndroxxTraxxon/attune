@@ -166,8 +166,21 @@ async fn main() -> Result<()> {
     let database = Database::new(&config.database).await?;
     info!("Database connection established");
 
+    // Spawn the audit writer task. The emitter is cheap and clone-able; we
+    // store it in AppState so handlers and middleware can record audit events
+    // without blocking the request path.
+    let audit_handle = attune_common::audit::spawn_writer(database.pool().clone());
+    info!("Audit writer task started");
+    let audit_emitter = audit_handle.emitter.clone();
+    // Detach the writer task so it lives as long as the process.
+    std::mem::forget(audit_handle.task);
+
     // Initialize application state (publisher starts as None)
-    let state = Arc::new(AppState::new(database.pool().clone(), config.clone()));
+    let state = Arc::new(AppState::new_with_audit(
+        database.pool().clone(),
+        config.clone(),
+        audit_emitter,
+    ));
 
     // Spawn background MQ reconnect loop if a message queue is configured.
     // The loop will keep retrying until it connects, then install the publisher

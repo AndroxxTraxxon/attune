@@ -38,11 +38,13 @@ pub mod repository;
 pub mod writer;
 
 pub use emitter::AuditEmitter;
-pub use repository::{AuditEventFilters, AuditRepository};
+pub use repository::{AuditEventFilters, AuditRepository, AuditSearchResult};
 pub use writer::{spawn_writer, AuditWriterHandle};
 
 /// Top-level category for an audit event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, utoipa::ToSchema,
+)]
 #[sqlx(type_name = "audit_category_enum", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum AuditCategory {
@@ -63,7 +65,9 @@ pub enum AuditCategory {
 }
 
 /// Outcome of an audited action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, utoipa::ToSchema,
+)]
 #[sqlx(type_name = "audit_outcome_enum", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum AuditOutcome {

@@ -11,7 +11,7 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::{
-    middleware::{create_cors_layer, log_request},
+    middleware::{audit_request, create_cors_layer, log_request},
     openapi::ApiDoc,
     routes,
     state::AppState,
@@ -63,6 +63,7 @@ impl Server {
             .merge(routes::analytics_routes())
             .merge(routes::artifact_routes())
             .merge(routes::agent_routes())
+            .merge(routes::audit_routes())
             .with_state(self.state.clone());
 
         // Auth routes at root level (not versioned for frontend compatibility)
@@ -86,6 +87,13 @@ impl Server {
                     // Add custom request logging
                     .layer(middleware::from_fn(log_request)),
             )
+            // Record an audit event for every request (skip-list applies).
+            // Layered separately because `from_fn_with_state` doesn't
+            // compose cleanly inside a ServiceBuilder chain.
+            .layer(middleware::from_fn_with_state(
+                self.state.clone(),
+                audit_request,
+            ))
     }
 
     /// Start the server and listen for requests
@@ -99,7 +107,11 @@ impl Server {
         let listener = TcpListener::bind(&addr).await?;
         info!("Server listening on {}", addr);
 
-        axum::serve(listener, router).await?;
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await?;
 
         Ok(())
     }

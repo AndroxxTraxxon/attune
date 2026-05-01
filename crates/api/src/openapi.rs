@@ -49,6 +49,9 @@ use crate::dto::{
     workflow::{CreateWorkflowRequest, UpdateWorkflowRequest, WorkflowResponse, WorkflowSummary},
 };
 
+use crate::dto::audit::{AuditEventResponse, AuditEventSummary};
+use attune_common::audit::{AuditCategory, AuditOutcome};
+
 /// OpenAPI documentation structure
 #[derive(OpenApi)]
 #[openapi(
@@ -232,6 +235,11 @@ use crate::dto::{
         // Agent
         crate::routes::agent::download_agent_binary,
         crate::routes::agent::agent_info,
+
+        // Audit log
+        crate::routes::audit::list_audit_events,
+        crate::routes::audit::get_audit_event,
+        crate::routes::audit::get_audit_events_by_request,
     ),
     components(
         schemas(
@@ -399,6 +407,15 @@ use crate::dto::{
             // Agent DTOs
             crate::routes::agent::AgentBinaryInfo,
             crate::routes::agent::AgentArchInfo,
+
+            // Audit DTOs
+            AuditCategory,
+            AuditOutcome,
+            AuditEventResponse,
+            AuditEventSummary,
+            ApiResponse<AuditEventResponse>,
+            ApiResponse<Vec<AuditEventResponse>>,
+            PaginatedResponse<AuditEventSummary>,
         )
     ),
     modifiers(&SecurityAddon),
@@ -420,6 +437,7 @@ use crate::dto::{
         (name = "workflows", description = "Workflow management endpoints"),
         (name = "webhooks", description = "Webhook management and receiver endpoints"),
         (name = "agent", description = "Agent binary distribution endpoints"),
+        (name = "audit", description = "Audit log query endpoints"),
     )
 )]
 pub struct ApiDoc;

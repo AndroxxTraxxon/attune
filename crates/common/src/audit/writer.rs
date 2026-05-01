@@ -135,10 +135,12 @@ async fn flush(pool: &PgPool, buffer: &mut Vec<PendingAuditEvent>) {
             .push_bind(e.outcome)
             .push_bind(e.actor_identity)
             .push_bind(e.actor_login)
-            .push_bind(e.actor_token_type)
-            // INET column accepts a string cast; use text rendering of IpAddr.
-            .push_bind(e.actor_ip.map(|ip| ip.to_string()))
-            .push_bind(e.actor_user_agent)
+            .push_bind(e.actor_token_type);
+        // INET column: bind the text representation and append an explicit
+        // ::inet cast so PostgreSQL parses it correctly.
+        b.push_bind(e.actor_ip.map(|ip| ip.to_string()));
+        b.push_unseparated("::inet");
+        b.push_bind(e.actor_user_agent)
             .push_bind(e.request_id)
             .push_bind(e.resource_type)
             .push_bind(e.resource_id)
@@ -151,13 +153,9 @@ async fn flush(pool: &PgPool, buffer: &mut Vec<PendingAuditEvent>) {
             .push_bind(e.correlation_chain);
     });
 
-    // The string cast for INET must be performed by the server; rewrite the
-    // bound parameter for actor_ip with an explicit ::inet. Achieved by
-    // appending a no-op type hint inside the VALUES clause is not trivial via
-    // QueryBuilder; instead we rely on PostgreSQL's text-to-inet implicit
-    // coercion which works for INET columns when the input is a valid IP
-    // literal. If the caller stored an invalid string, the row insert will
-    // fail at flush time and we'll log a WARN below.
+    // Note: the explicit `::inet` cast above replaces the prior implicit
+    // coercion approach which failed under some PostgreSQL configurations
+    // (`column "actor_ip" is of type inet but expression is of type text`).
 
     match qb.build().execute(pool).await {
         Ok(res) => debug!(rows = res.rows_affected(), "audit batch flushed"),

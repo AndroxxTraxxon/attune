@@ -895,7 +895,7 @@ async fn handle_upload(
             .canonicalize()
             .context("Failed to resolve pack directory path")?;
 
-        append_dir_to_tar(&mut tar, &abs_pack_dir, &abs_pack_dir)?;
+        append_dir_to_tar(&mut tar, &abs_pack_dir)?;
 
         let encoder = tar.into_inner().context("Failed to finalise tar archive")?;
         encoder.finish().context("Failed to flush gzip stream")?
@@ -963,29 +963,59 @@ async fn handle_upload(
     Ok(())
 }
 
-/// Recursively append a directory's contents to a tar archive.
-/// `base` is the root directory being archived; `dir` is the current directory
-/// being walked. Files are stored with paths relative to `base`.
-fn append_dir_to_tar<W: std::io::Write>(
-    tar: &mut tar::Builder<W>,
-    base: &Path,
-    dir: &Path,
-) -> Result<()> {
-    // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- The archiver walks a validated local directory selected by the CLI operator.
-    for entry in std::fs::read_dir(dir).context("Failed to read directory")? {
-        let entry = entry.context("Failed to read directory entry")?;
+/// Recursively append a directory's contents to a tar archive, honoring any
+/// `.gitignore` / `.ignore` files inside the pack directory plus the user's
+/// global gitignore. Hidden VCS metadata (`.git/`) and the directory's own
+/// `.gitignore` files are also skipped from the archive.
+///
+/// Files are stored with paths relative to `base`.
+fn append_dir_to_tar<W: std::io::Write>(tar: &mut tar::Builder<W>, base: &Path) -> Result<()> {
+    let walker = ignore::WalkBuilder::new(base)
+        // Honor .gitignore and .ignore files inside the pack directory plus the
+        // user's global gitignore. This is the only behavior change from the
+        // prior naive walk — dotfiles, symlinks, etc. are still treated the
+        // same way they were before.
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(true)
+        .ignore(true)
+        .hidden(false)
+        .parents(false)
+        .require_git(false)
+        .build();
+
+    for result in walker {
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(err) => {
+                anyhow::bail!("Failed to walk pack directory: {}", err);
+            }
+        };
+
         let entry_path = entry.path();
+
+        // Skip the root directory itself
+        if entry_path == base {
+            continue;
+        }
+
+        let file_type = match entry.file_type() {
+            Some(ft) => ft,
+            None => continue,
+        };
+
+        if !file_type.is_file() {
+            // Directories don't need explicit entries; tar's `append_path_with_name`
+            // creates parent dirs implicitly. Symlinks are intentionally skipped.
+            continue;
+        }
+
         let relative_path = entry_path
             .strip_prefix(base)
             .context("Failed to compute relative path")?;
 
-        if entry_path.is_dir() {
-            append_dir_to_tar(tar, base, &entry_path)?;
-        } else if entry_path.is_file() {
-            tar.append_path_with_name(&entry_path, relative_path)
-                .with_context(|| format!("Failed to add {} to archive", entry_path.display()))?;
-        }
-        // symlinks are intentionally skipped
+        tar.append_path_with_name(entry_path, relative_path)
+            .with_context(|| format!("Failed to add {} to archive", entry_path.display()))?;
     }
     Ok(())
 }

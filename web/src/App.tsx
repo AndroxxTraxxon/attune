@@ -45,6 +45,7 @@ const EnforcementDetailPage = lazy(
   () => import("@/pages/enforcements/EnforcementDetailPage"),
 );
 const KeysPage = lazy(() => import("@/pages/keys/KeysPage"));
+const AuditLogPage = lazy(() => import("@/pages/audit/AuditLogPage"));
 const TriggersPage = lazy(() => import("@/pages/triggers/TriggersPage"));
 const TriggerCreatePage = lazy(
   () => import("@/pages/triggers/TriggerCreatePage"),
@@ -163,6 +164,7 @@ function App() {
                     path="access-control/permission-sets/:ref"
                     element={<PermissionSetDetailPage />}
                   />
+                  <Route path="audit-log" element={<AuditLogPage />} />
                 </Route>
 
                 {/* Catch all - redirect to dashboard */}

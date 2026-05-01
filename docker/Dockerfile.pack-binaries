@@ -79,29 +79,22 @@ ENV SQLX_OFFLINE=true
 # only source code changes.
 # ---------------------------------------------------------------------------
 COPY crates/core-timer-sensor/Cargo.toml ./crates/core-timer-sensor/Cargo.toml
-COPY crates/core-enqueue-action/Cargo.toml ./crates/core-enqueue-action/Cargo.toml
 
 # Create minimal stub sources so cargo can resolve each crate and fetch deps.
 # These are ONLY used for `cargo fetch` — never compiled.
-RUN mkdir -p crates/core-timer-sensor/src && echo "fn main(){}" > crates/core-timer-sensor/src/main.rs && \
-    mkdir -p crates/core-enqueue-action/src/bin && \
-        echo "" > crates/core-enqueue-action/src/lib.rs && \
-        echo "fn main(){}" > crates/core-enqueue-action/src/bin/enqueue.rs && \
-        echo "fn main(){}" > crates/core-enqueue-action/src/bin/enqueue_batch.rs
+RUN mkdir -p crates/core-timer-sensor/src && echo "fn main(){}" > crates/core-timer-sensor/src/main.rs
 
 # Download all dependencies (cached unless Cargo.toml changes)
 # registry/git use sharing=shared — cargo handles concurrent reads safely
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
-    cd crates/core-timer-sensor && cargo fetch && \
-    cd ../core-enqueue-action && cargo fetch
+    cd crates/core-timer-sensor && cargo fetch
 
 # ---------------------------------------------------------------------------
 # Build layer
 # Copy real sources for the pack-binary crates and build with musl.
 # ---------------------------------------------------------------------------
 COPY crates/core-timer-sensor/ ./crates/core-timer-sensor/
-COPY crates/core-enqueue-action/ ./crates/core-enqueue-action/
 
 # Build pack binaries with BuildKit cache mounts, statically linked with musl.
 # Uses cargo-zigbuild so that cross-compilation works regardless of host arch.
@@ -112,15 +105,10 @@ COPY crates/core-enqueue-action/ ./crates/core-enqueue-action/
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=shared \
     --mount=type=cache,id=target-core-timer-sensor-static,target=/build/crates/core-timer-sensor/target,sharing=locked \
-    --mount=type=cache,id=target-core-enqueue-action-static,target=/build/crates/core-enqueue-action/target,sharing=locked \
     mkdir -p /build/pack-binaries && \
     cd /build/crates/core-timer-sensor && \
     cargo zigbuild --release --target ${RUST_TARGET} --bin attune-core-timer-sensor && \
-    cp target/${RUST_TARGET}/release/attune-core-timer-sensor /build/pack-binaries/attune-core-timer-sensor && \
-    cd /build/crates/core-enqueue-action && \
-    cargo zigbuild --release --target ${RUST_TARGET} --bin attune-core-enqueue --bin attune-core-enqueue-batch && \
-    cp target/${RUST_TARGET}/release/attune-core-enqueue /build/pack-binaries/attune-core-enqueue && \
-    cp target/${RUST_TARGET}/release/attune-core-enqueue-batch /build/pack-binaries/attune-core-enqueue-batch
+    cp target/${RUST_TARGET}/release/attune-core-timer-sensor /build/pack-binaries/attune-core-timer-sensor
 
 # Strip the binary to minimize size.
 # When cross-compiling for a different architecture, the host strip may not
@@ -128,19 +116,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
 # binary is still functional, just slightly larger.
 RUN (strip /build/pack-binaries/attune-core-timer-sensor 2>/dev/null && \
     echo "stripped attune-core-timer-sensor" || \
-    echo "strip skipped for attune-core-timer-sensor (cross-arch binary)") && \
-    (strip /build/pack-binaries/attune-core-enqueue 2>/dev/null && \
-    echo "stripped attune-core-enqueue" || \
-    echo "strip skipped for attune-core-enqueue (cross-arch binary)") && \
-    (strip /build/pack-binaries/attune-core-enqueue-batch 2>/dev/null && \
-    echo "stripped attune-core-enqueue-batch" || \
-    echo "strip skipped for attune-core-enqueue-batch (cross-arch binary)")
+    echo "strip skipped for attune-core-timer-sensor (cross-arch binary)")
 
 # Verify binaries were built successfully and are statically linked
 RUN ls -lh /build/pack-binaries/ && \
     file /build/pack-binaries/attune-core-timer-sensor && \
-    file /build/pack-binaries/attune-core-enqueue && \
-    file /build/pack-binaries/attune-core-enqueue-batch && \
     (ldd /build/pack-binaries/attune-core-timer-sensor 2>&1 || echo "statically linked (no dynamic dependencies)") && \
     /build/pack-binaries/attune-core-timer-sensor --version || echo "Built successfully"
 

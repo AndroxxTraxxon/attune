@@ -159,33 +159,66 @@ pub async fn login(
     State(state): State<SharedState>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<ApiResponse<TokenResponse>>, ApiError> {
+    use attune_common::audit::{AuditCategory, AuditEventBuilder, AuditOutcome};
+
+    let emit_failure = |reason: &str| {
+        let event = AuditEventBuilder::new(
+            AuditCategory::Auth,
+            "auth.login.failure",
+            AuditOutcome::Failure,
+        )
+        .actor_login(payload.login.clone())
+        .with_details(serde_json::json!({ "reason": reason }))
+        .build();
+        state.audit_emitter.emit(event);
+    };
+
     // Validate request
-    payload
-        .validate()
-        .map_err(|e| ApiError::ValidationError(format!("Invalid login request: {}", e)))?;
+    if let Err(e) = payload.validate() {
+        emit_failure("validation_error");
+        return Err(ApiError::ValidationError(format!(
+            "Invalid login request: {}",
+            e
+        )));
+    }
 
     // Find identity by login
-    let identity = IdentityRepository::find_by_login(&state.db, &payload.login)
-        .await?
-        .ok_or_else(|| ApiError::Unauthorized("Invalid login or password".to_string()))?;
+    let identity = match IdentityRepository::find_by_login(&state.db, &payload.login).await? {
+        Some(i) => i,
+        None => {
+            emit_failure("unknown_user");
+            return Err(ApiError::Unauthorized(
+                "Invalid login or password".to_string(),
+            ));
+        }
+    };
 
     if identity.frozen {
+        emit_failure("frozen");
         return Err(ApiError::Forbidden(
             "Identity is frozen and cannot authenticate".to_string(),
         ));
     }
 
     // Check if identity has a password set
-    let password_hash = identity
-        .password_hash
-        .as_ref()
-        .ok_or_else(|| ApiError::Unauthorized("Invalid login or password".to_string()))?;
+    let password_hash = match identity.password_hash.as_ref() {
+        Some(h) => h,
+        None => {
+            emit_failure("no_password");
+            return Err(ApiError::Unauthorized(
+                "Invalid login or password".to_string(),
+            ));
+        }
+    };
 
     // Verify password
-    let is_valid = verify_password(&payload.password, password_hash)
-        .map_err(|_| ApiError::Unauthorized("Invalid login or password".to_string()))?;
+    let is_valid = verify_password(&payload.password, password_hash).map_err(|_| {
+        emit_failure("password_verify_error");
+        ApiError::Unauthorized("Invalid login or password".to_string())
+    })?;
 
     if !is_valid {
+        emit_failure("invalid_password");
         return Err(ApiError::Unauthorized(
             "Invalid login or password".to_string(),
         ));
@@ -204,6 +237,18 @@ pub async fn login(
         identity.id,
         identity.login.clone(),
         identity.display_name.clone(),
+    );
+
+    // Audit success
+    state.audit_emitter.emit(
+        AuditEventBuilder::new(
+            AuditCategory::Auth,
+            "auth.login.success",
+            AuditOutcome::Success,
+        )
+        .actor_identity(identity.id)
+        .actor_login(identity.login.clone())
+        .build(),
     );
 
     Ok(Json(ApiResponse::new(response)))

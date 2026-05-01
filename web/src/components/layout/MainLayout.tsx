@@ -141,6 +141,12 @@ const navSections = [
         color: "gray",
       },
       {
+        to: "/audit-log",
+        label: "Audit Log",
+        icon: navIcons.auditLog,
+        color: "gray",
+      },
+      {
         to: "/packs",
         label: "Pack Management",
         icon: navIcons.packs,

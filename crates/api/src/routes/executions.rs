@@ -193,6 +193,34 @@ pub async fn create_execution(
 
     let response = ExecutionResponse::from(created_execution);
 
+    // Audit: explicit semantic event for manual execution requests so the
+    // audit log shows *what* action was kicked off, not just "POST /api/v1/
+    // executions/execute".
+    {
+        use attune_common::audit::{AuditCategory, AuditEventBuilder, AuditOutcome};
+        let mut builder = AuditEventBuilder::new(
+            AuditCategory::Execution,
+            "execution.requested",
+            AuditOutcome::Success,
+        )
+        .resource("executions")
+        .resource_id(response.id)
+        .resource_ref(response.action_ref.clone());
+        if let Ok(id) = user.identity_id() {
+            builder = builder.actor_identity(id);
+        }
+        builder = builder.actor_login(user.login().to_string());
+        builder = builder.actor_token_type(format!("{:?}", user.claims.token_type).to_lowercase());
+        let details = serde_json::json!({
+            "action_ref": response.action_ref,
+            "action_id": action.id,
+            "parent_execution_id": parent_from_token,
+            "executor_identity": executor_identity,
+        });
+        builder = builder.with_details(details);
+        state.audit_emitter.emit(builder.build());
+    }
+
     Ok((StatusCode::CREATED, Json(ApiResponse::new(response))))
 }
 

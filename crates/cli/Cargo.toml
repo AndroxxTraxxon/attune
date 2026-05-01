@@ -54,6 +54,7 @@ url = { workspace = true }
 # Archive/compression
 tar = { workspace = true }
 flate2 = { workspace = true }
+ignore = { workspace = true }
 
 # WebSocket client (for notifier integration)
 tokio-tungstenite = { workspace = true }
