@@ -42,7 +42,7 @@ export default function TriggerForm({
 
   // Fetch packs
   const { data: packsData } = usePacks({ page: 1, pageSize: 100 });
-  const packs = useMemo(() => packsData?.data || [], [packsData?.data]);
+  const packs = useMemo(() => packsData?.items || [], [packsData?.items]);
   const selectedPack = packs.find((p: PackSummary) => p.id === packId);
 
   // Mutations

@@ -399,19 +399,6 @@ function ArtifactMetadata({ artifact }: { artifact: ArtifactResponse }) {
             </span>
           </MetadataField>
 
-          <MetadataField label="Execution">
-            {artifact.execution ? (
-              <Link
-                to={`/executions/${artifact.execution}`}
-                className="text-blue-600 hover:text-blue-800 font-mono"
-              >
-                #{artifact.execution}
-              </Link>
-            ) : (
-              <span className="text-gray-400">{"\u2014"}</span>
-            )}
-          </MetadataField>
-
           <MetadataField label="Content Type">
             <span className="font-mono text-xs">
               {artifact.content_type || "\u2014"}
@@ -634,7 +621,6 @@ export default function ArtifactDetailPage() {
 
   // Subscribe to real-time updates for this artifact
   useArtifactStream({
-    executionId: artifact?.execution ?? undefined,
     enabled: true,
   });
 

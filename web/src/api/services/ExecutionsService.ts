@@ -33,7 +33,8 @@ export class ExecutionsService {
          */
         status?: (null | ExecutionStatus),
         /**
-         * Filter by action reference
+         * Filter by action reference.
+         * Supports exact refs and `<pack>.*` wildcards such as `core.*`.
          */
         actionRef?: string | null,
         /**
@@ -41,11 +42,13 @@ export class ExecutionsService {
          */
         packName?: string | null,
         /**
-         * Filter by rule reference
+         * Filter by rule reference.
+         * Supports exact refs and `<pack>.*` wildcards such as `core.*`.
          */
         ruleRef?: string | null,
         /**
-         * Filter by trigger reference
+         * Filter by trigger reference.
+         * Supports exact refs and `<pack>.*` wildcards such as `core.*`.
          */
         triggerRef?: string | null,
         /**
@@ -71,6 +74,7 @@ export class ExecutionsService {
         topLevelOnly?: boolean | null,
         /**
          * If true, include exact total counts in pagination metadata.
+         * Defaults to false for the main executions list to avoid expensive count queries.
          */
         includeTotal?: boolean | null,
         /**

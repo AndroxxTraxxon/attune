@@ -134,8 +134,8 @@ impl NativeRuntime {
 
         let mut stdout_writer = BoundedLogWriter::new_stdout(max_stdout_bytes);
         let mut stderr_writer = BoundedLogWriter::new_stderr(max_stderr_bytes);
-        let mut stdout_file = open_live_log_file(stdout_log_path, max_stdout_bytes, true).await?;
-        let mut stderr_file = open_live_log_file(stderr_log_path, max_stderr_bytes, false).await?;
+        let mut stdout_file = open_live_log_file(stdout_log_path, max_stdout_bytes, true);
+        let mut stderr_file = open_live_log_file(stderr_log_path, max_stderr_bytes, false);
 
         // Create buffered readers
         let mut stdout_reader = BufReader::new(stdout_handle);
@@ -414,21 +414,18 @@ impl Runtime for NativeRuntime {
     }
 }
 
-async fn open_live_log_file(
+fn open_live_log_file(
     path: Option<&Path>,
     max_bytes: usize,
     is_stdout: bool,
-) -> std::io::Result<Option<BoundedLogFileWriter>> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
-
+) -> Option<BoundedLogFileWriter> {
+    let path = path?;
     let writer = if is_stdout {
-        BoundedLogFileWriter::new_stdout(path, max_bytes).await?
+        BoundedLogFileWriter::new_stdout(path, max_bytes)
     } else {
-        BoundedLogFileWriter::new_stderr(path, max_bytes).await?
+        BoundedLogFileWriter::new_stderr(path, max_bytes)
     };
-    Ok(Some(writer))
+    Some(writer)
 }
 
 #[cfg(test)]

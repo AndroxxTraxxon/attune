@@ -118,9 +118,6 @@ const ArtifactsResultsTable = memo(
                     Scope / Owner
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Execution
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Size
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -190,20 +187,6 @@ const ArtifactsResultsTable = memo(
                             </div>
                           )}
                         </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {artifact.execution ? (
-                          <Link
-                            to={`/executions/${artifact.execution}`}
-                            className="text-sm font-mono text-blue-600 hover:text-blue-800"
-                          >
-                            #{artifact.execution}
-                          </Link>
-                        ) : (
-                          <span className="text-sm text-gray-400 italic">
-                            {"\u2014"}
-                          </span>
-                        )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
                         {formatBytes(artifact.size_bytes)}
@@ -329,7 +312,7 @@ export default function ArtifactsPage() {
   // Subscribe to real-time artifact updates
   useArtifactStream({ enabled: true });
 
-  const artifacts = useMemo(() => data?.data || [], [data]);
+  const artifacts = useMemo(() => data?.items || [], [data]);
   const total = data?.pagination?.total_items || 0;
 
   const hasActiveFilters =

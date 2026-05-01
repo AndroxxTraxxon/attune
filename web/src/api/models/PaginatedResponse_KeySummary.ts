@@ -10,9 +10,9 @@ import type { PaginationMeta } from './PaginationMeta';
  */
 export type PaginatedResponse_KeySummary = {
     /**
-     * The data items
+     * The page items
      */
-    data: Array<{
+    items: Array<{
         /**
          * Creation timestamp
          */

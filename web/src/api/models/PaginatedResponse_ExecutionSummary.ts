@@ -9,9 +9,9 @@ import type { PaginationMeta } from './PaginationMeta';
  */
 export type PaginatedResponse_ExecutionSummary = {
     /**
-     * The data items
+     * The page items
      */
-    data: Array<{
+    items: Array<{
         /**
          * Action reference
          */

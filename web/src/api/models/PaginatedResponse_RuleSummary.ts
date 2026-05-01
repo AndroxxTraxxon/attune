@@ -2,66 +2,67 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { PaginationMeta } from "./PaginationMeta";
+import type { PaginationMeta } from './PaginationMeta';
 /**
  * Paginated response wrapper
  */
 export type PaginatedResponse_RuleSummary = {
-  /**
-   * The data items
-   */
-  data: Array<{
     /**
-     * Parameters to pass to the action when rule is triggered
+     * The page items
      */
-    action_params: Record<string, any>;
+    items: Array<{
+        /**
+         * Parameters to pass to the action when rule is triggered
+         */
+        action_params: Record<string, any>;
+        /**
+         * Action reference
+         */
+        action_ref: string;
+        /**
+         * Creation timestamp
+         */
+        created: string;
+        /**
+         * Rule description
+         */
+        description?: string | null;
+        /**
+         * Whether the rule is enabled
+         */
+        enabled: boolean;
+        /**
+         * Rule ID
+         */
+        id: number;
+        /**
+         * Human-readable label
+         */
+        label: string;
+        /**
+         * Pack reference
+         */
+        pack_ref: string;
+        /**
+         * Unique reference identifier
+         */
+        ref: string;
+        /**
+         * Parameters for trigger configuration and event filtering
+         */
+        trigger_params: Record<string, any>;
+        /**
+         * Trigger reference
+         */
+        trigger_ref: string;
+        /**
+         * Last update timestamp
+         */
+        updated: string;
+    }>;
     /**
-     * Action reference
+     * Pagination metadata
      */
-    action_ref: string;
-    /**
-     * Creation timestamp
-     */
-    created: string;
-    /**
-     * Rule description
-     */
-    description: string | null;
-    /**
-     * Whether the rule is enabled
-     */
-    enabled: boolean;
-    /**
-     * Rule ID
-     */
-    id: number;
-    /**
-     * Human-readable label
-     */
-    label: string;
-    /**
-     * Pack reference
-     */
-    pack_ref: string;
-    /**
-     * Unique reference identifier
-     */
-    ref: string;
-    /**
-     * Parameters for trigger configuration and event filtering
-     */
-    trigger_params: Record<string, any>;
-    /**
-     * Trigger reference
-     */
-    trigger_ref: string;
-    /**
-     * Last update timestamp
-     */
-    updated: string;
-  }>;
-  /**
-   * Pagination metadata
-   */
-  pagination: PaginationMeta;
+    pagination: PaginationMeta;
 };
+

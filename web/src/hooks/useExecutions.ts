@@ -182,7 +182,7 @@ export function useChildExecutions(
             ),
           );
           for (const page of remaining) {
-            first.data.push(...page.data);
+            first.items.push(...page.items);
           }
         }
         return first;
@@ -193,7 +193,7 @@ export function useChildExecutions(
       if (includeDescendants) {
         // BFS over descendants. Bounded by the actual tree.
         const visited = new Set<number>([parentId!]);
-        const queue: number[] = root.data
+        const queue: number[] = root.items
           .map((e) => e.id)
           .filter((id) => !visited.has(id));
         for (const id of queue) visited.add(id);
@@ -204,10 +204,10 @@ export function useChildExecutions(
             layer.map((id) => fetchAllChildren(id)),
           );
           for (const r of results) {
-            for (const e of r.data) {
+            for (const e of r.items) {
               if (!visited.has(e.id)) {
                 visited.add(e.id);
-                root.data.push(e);
+                root.items.push(e);
                 queue.push(e.id);
               }
             }
@@ -216,7 +216,7 @@ export function useChildExecutions(
       }
 
       root.pagination.total_pages = 1;
-      root.pagination.page_size = root.data.length;
+      root.pagination.page_size = root.items.length;
       root.pagination.has_next = false;
       root.pagination.has_previous = false;
       return root;
@@ -227,7 +227,7 @@ export function useChildExecutions(
     refetchInterval: (query) => {
       const data = query.state.data;
       if (!data) return false;
-      const hasActive = data.data.some((e) => isExecutionActive(e.status));
+      const hasActive = data.items.some((e) => isExecutionActive(e.status));
       return hasActive ? 5000 : false;
     },
   });

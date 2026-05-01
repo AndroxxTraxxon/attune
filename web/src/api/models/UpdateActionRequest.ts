@@ -8,6 +8,10 @@ import type { RuntimeVersionConstraintPatch } from './RuntimeVersionConstraintPa
  */
 export type UpdateActionRequest = {
     /**
+     * Hint that this action may invoke the Attune MCP server and spawn child executions.
+     */
+    accesses_mcp?: boolean | null;
+    /**
      * Action description
      */
     description?: string | null;
@@ -30,10 +34,11 @@ export type UpdateActionRequest = {
     /**
      * Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
      */
-    required_worker_runtimes?: Record<string, string> | null;
+    required_worker_runtimes: any | null;
     /**
      * Runtime ID
      */
     runtime?: number | null;
     runtime_version_constraint?: (null | RuntimeVersionConstraintPatch);
 };
+

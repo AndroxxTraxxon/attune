@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { CreateActionRequest } from '../models/CreateActionRequest';
+import type { PaginatedResponse_ActionSearchHit } from '../models/PaginatedResponse_ActionSearchHit';
 import type { PaginatedResponse_ActionSummary } from '../models/PaginatedResponse_ActionSummary';
 import type { SuccessResponse } from '../models/SuccessResponse';
 import type { UpdateActionRequest } from '../models/UpdateActionRequest';
@@ -54,7 +55,7 @@ export class ActionsService {
             /**
              * Hint that this action may invoke the Attune MCP server and spawn child executions.
              */
-            accesses_mcp?: boolean;
+            accesses_mcp: boolean;
             /**
              * Creation timestamp
              */
@@ -62,7 +63,7 @@ export class ActionsService {
             /**
              * Action description
              */
-            description: string;
+            description?: string | null;
             /**
              * Entry point
              */
@@ -96,17 +97,21 @@ export class ActionsService {
              */
             param_schema: any | null;
             /**
-             * Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
-             */
-            required_worker_runtimes?: Record<string, string>;
-            /**
              * Unique reference identifier
              */
             ref: string;
             /**
+             * Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
+             */
+            required_worker_runtimes?: Record<string, any>;
+            /**
              * Runtime ID
              */
             runtime?: number | null;
+            /**
+             * Runtime reference (stable identifier, e.g., "core.python")
+             */
+            runtime_ref?: string | null;
             /**
              * Semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0")
              */
@@ -138,6 +143,54 @@ export class ActionsService {
         });
     }
     /**
+     * Search for actions by keyword and pack filter.
+     * Returns lean `ActionSearchHit` rows optimized for action discovery — useful
+     * for AI agents and human browsing of large action catalogs. Whitespace-separated
+     * tokens in `q` are AND-matched (each token must appear in at least one of
+     * `ref`, `label`, `description`, or `pack_ref`).
+     * @returns PaginatedResponse_ActionSearchHit Matching actions
+     * @throws ApiError
+     */
+    public static searchActions({
+        q,
+        packs,
+        page,
+        pageSize,
+    }: {
+        /**
+         * Keyword query. Whitespace-separated tokens are AND-matched against
+         * `ref`, `label`, `description`, and `pack_ref` (case-insensitive substring).
+         */
+        q?: string | null,
+        /**
+         * Restrict to one or more pack refs. Comma-separated (e.g., `core,slack,jira`)
+         * or repeated query params (e.g., `?packs=core&packs=slack`).
+         */
+        packs?: string | null,
+        /**
+         * Page number (1-based)
+         */
+        page?: number,
+        /**
+         * Number of items per page
+         */
+        pageSize?: number,
+    }): CancelablePromise<PaginatedResponse_ActionSearchHit> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/actions/search',
+            query: {
+                'q': q,
+                'packs': packs,
+                'page': page,
+                'page_size': pageSize,
+            },
+            errors: {
+                404: `One or more pack refs not found`,
+            },
+        });
+    }
+    /**
      * Get a single action by reference
      * @returns any Action details
      * @throws ApiError
@@ -157,7 +210,7 @@ export class ActionsService {
             /**
              * Hint that this action may invoke the Attune MCP server and spawn child executions.
              */
-            accesses_mcp?: boolean;
+            accesses_mcp: boolean;
             /**
              * Creation timestamp
              */
@@ -165,7 +218,7 @@ export class ActionsService {
             /**
              * Action description
              */
-            description: string;
+            description?: string | null;
             /**
              * Entry point
              */
@@ -199,17 +252,21 @@ export class ActionsService {
              */
             param_schema: any | null;
             /**
-             * Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
-             */
-            required_worker_runtimes?: Record<string, string>;
-            /**
              * Unique reference identifier
              */
             ref: string;
             /**
+             * Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
+             */
+            required_worker_runtimes?: Record<string, any>;
+            /**
              * Runtime ID
              */
             runtime?: number | null;
+            /**
+             * Runtime reference (stable identifier, e.g., "core.python")
+             */
+            runtime_ref?: string | null;
             /**
              * Semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0")
              */
@@ -261,7 +318,7 @@ export class ActionsService {
             /**
              * Hint that this action may invoke the Attune MCP server and spawn child executions.
              */
-            accesses_mcp?: boolean;
+            accesses_mcp: boolean;
             /**
              * Creation timestamp
              */
@@ -269,7 +326,7 @@ export class ActionsService {
             /**
              * Action description
              */
-            description: string;
+            description?: string | null;
             /**
              * Entry point
              */
@@ -303,17 +360,21 @@ export class ActionsService {
              */
             param_schema: any | null;
             /**
-             * Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
-             */
-            required_worker_runtimes?: Record<string, string>;
-            /**
              * Unique reference identifier
              */
             ref: string;
             /**
+             * Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
+             */
+            required_worker_runtimes?: Record<string, any>;
+            /**
              * Runtime ID
              */
             runtime?: number | null;
+            /**
+             * Runtime reference (stable identifier, e.g., "core.python")
+             */
+            runtime_ref?: string | null;
             /**
              * Semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0")
              */

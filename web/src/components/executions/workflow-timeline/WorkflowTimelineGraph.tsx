@@ -137,7 +137,7 @@ export default function WorkflowTimelineGraph({
   const { data: workflowData } = useWorkflow(actionRef);
 
   const childExecutions: ExecutionSummary[] = useMemo(() => {
-    return childData?.data ?? [];
+    return childData?.items ?? [];
   }, [childData]);
 
   const workflowDef: WorkflowDefinition | null = useMemo(() => {

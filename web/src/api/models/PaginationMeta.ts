@@ -7,6 +7,14 @@
  */
 export type PaginationMeta = {
     /**
+     * Whether a next page exists.
+     */
+    has_next: boolean;
+    /**
+     * Whether a previous page exists.
+     */
+    has_previous: boolean;
+    /**
      * Current page number (1-based)
      */
     page: number;
@@ -22,12 +30,5 @@ export type PaginationMeta = {
      * Total number of pages, when an exact count was requested.
      */
     total_pages?: number | null;
-    /**
-     * Whether a previous page exists.
-     */
-    has_previous: boolean;
-    /**
-     * Whether a next page exists.
-     */
-    has_next: boolean;
 };
+

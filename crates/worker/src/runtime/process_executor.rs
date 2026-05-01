@@ -15,7 +15,7 @@
 use super::{BoundedLogFileWriter, BoundedLogWriter, ExecutionResult, OutputFormat, RuntimeResult};
 use std::collections::HashMap;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -134,8 +134,8 @@ pub async fn execute_streaming_cancellable(
     // Create bounded writers
     let mut stdout_writer = BoundedLogWriter::new_stdout(max_stdout_bytes);
     let mut stderr_writer = BoundedLogWriter::new_stderr(max_stderr_bytes);
-    let mut stdout_file = open_live_log_file(stdout_log_path, max_stdout_bytes, true).await?;
-    let mut stderr_file = open_live_log_file(stderr_log_path, max_stderr_bytes, false).await?;
+    let mut stdout_file = open_live_log_file(stdout_log_path, max_stdout_bytes, true);
+    let mut stderr_file = open_live_log_file(stderr_log_path, max_stderr_bytes, false);
 
     // Take stdout and stderr streams
     let stdout = child.stdout.take().expect("stdout not captured");
@@ -363,22 +363,18 @@ pub async fn execute_streaming_cancellable(
     })
 }
 
-async fn open_live_log_file(
+fn open_live_log_file(
     path: Option<&Path>,
     max_bytes: usize,
     is_stdout: bool,
-) -> io::Result<Option<BoundedLogFileWriter>> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
-
-    let path: PathBuf = path.to_path_buf();
+) -> Option<BoundedLogFileWriter> {
+    let path = path?;
     let writer = if is_stdout {
-        BoundedLogFileWriter::new_stdout(&path, max_bytes).await?
+        BoundedLogFileWriter::new_stdout(path, max_bytes)
     } else {
-        BoundedLogFileWriter::new_stderr(&path, max_bytes).await?
+        BoundedLogFileWriter::new_stderr(path, max_bytes)
     };
-    Ok(Some(writer))
+    Some(writer)
 }
 
 /// Parse stdout content according to the specified output format.

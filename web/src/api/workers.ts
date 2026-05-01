@@ -44,7 +44,7 @@ export interface WorkerSummary {
 }
 
 export interface PaginatedResponseWorkerSummary {
-  data: WorkerSummary[];
+  items: WorkerSummary[];
   pagination: PaginationMeta;
 }
 

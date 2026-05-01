@@ -78,8 +78,10 @@ pub struct BoundedLogWriter {
 }
 
 /// A file-backed writer that applies the same truncation policy as `BoundedLogWriter`.
+/// The file is created lazily on first write — if nothing is written, no file is created.
 pub struct BoundedLogFileWriter {
-    file: tokio::fs::File,
+    file: Option<tokio::fs::File>,
+    path: std::path::PathBuf,
     max_bytes: usize,
     truncated: bool,
     data_bytes_written: usize,
@@ -177,41 +179,44 @@ impl BoundedLogWriter {
 }
 
 impl BoundedLogFileWriter {
-    pub async fn new_stdout(path: &Path, max_bytes: usize) -> std::io::Result<Self> {
-        Self::create(path, max_bytes, TRUNCATION_NOTICE_STDOUT).await
+    pub fn new_stdout(path: &Path, max_bytes: usize) -> Self {
+        Self::new(path, max_bytes, TRUNCATION_NOTICE_STDOUT)
     }
 
-    pub async fn new_stderr(path: &Path, max_bytes: usize) -> std::io::Result<Self> {
-        Self::create(path, max_bytes, TRUNCATION_NOTICE_STDERR).await
+    pub fn new_stderr(path: &Path, max_bytes: usize) -> Self {
+        Self::new(path, max_bytes, TRUNCATION_NOTICE_STDERR)
     }
 
-    async fn create(
-        path: &Path,
-        max_bytes: usize,
-        truncation_notice: &'static str,
-    ) -> std::io::Result<Self> {
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-
-        let file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(path)
-            .await?;
-
-        Ok(Self {
-            file,
+    fn new(path: &Path, max_bytes: usize, truncation_notice: &'static str) -> Self {
+        Self {
+            file: None,
+            path: path.to_path_buf(),
             max_bytes,
             truncated: false,
             data_bytes_written: 0,
             truncation_notice,
-        })
+        }
+    }
+
+    /// Ensure the file is open, creating it (and parent dirs) on first access.
+    async fn ensure_open(&mut self) -> std::io::Result<&mut tokio::fs::File> {
+        if self.file.is_none() {
+            if let Some(parent) = self.path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            let file = tokio::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&self.path)
+                .await?;
+            self.file = Some(file);
+        }
+        Ok(self.file.as_mut().unwrap())
     }
 
     pub async fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        if self.truncated {
+        if buf.is_empty() || self.truncated {
             return Ok(());
         }
 
@@ -225,7 +230,8 @@ impl BoundedLogFileWriter {
 
         let bytes_to_write = std::cmp::min(buf.len(), remaining_space);
         if bytes_to_write > 0 {
-            self.file.write_all(&buf[..bytes_to_write]).await?;
+            let file = self.ensure_open().await?;
+            file.write_all(&buf[..bytes_to_write]).await?;
             self.data_bytes_written += bytes_to_write;
         }
 
@@ -233,7 +239,10 @@ impl BoundedLogFileWriter {
             self.add_truncation_notice().await?;
         }
 
-        self.file.flush().await
+        if let Some(file) = self.file.as_mut() {
+            file.flush().await?;
+        }
+        Ok(())
     }
 
     async fn add_truncation_notice(&mut self) -> std::io::Result<()> {
@@ -242,7 +251,9 @@ impl BoundedLogFileWriter {
         }
 
         self.truncated = true;
-        self.file.write_all(self.truncation_notice.as_bytes()).await
+        let notice = self.truncation_notice;
+        let file = self.ensure_open().await?;
+        file.write_all(notice.as_bytes()).await
     }
 }
 

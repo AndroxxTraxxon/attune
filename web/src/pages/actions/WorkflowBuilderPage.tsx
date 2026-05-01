@@ -180,7 +180,7 @@ export default function WorkflowBuilderPage() {
 
   // Derived data
   const paletteActions: PaletteAction[] = useMemo(() => {
-    const actions = (actionsData?.data || []) as Array<{
+    const actions = (actionsData?.items || []) as Array<{
       id: number;
       ref: string;
       label: string;
@@ -231,7 +231,7 @@ export default function WorkflowBuilderPage() {
   }, [uniqueActionRefs, actionDetailQueries]);
 
   const packs = useMemo(() => {
-    return (packsData?.data || []) as Array<{
+    return (packsData?.items || []) as Array<{
       id: number;
       ref: string;
       label: string;

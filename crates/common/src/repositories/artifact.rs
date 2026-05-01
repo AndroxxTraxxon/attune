@@ -35,7 +35,6 @@ pub struct CreateArtifactInput {
     pub name: Option<String>,
     pub description: Option<String>,
     pub content_type: Option<String>,
-    pub execution: Option<i64>,
     pub data: Option<serde_json::Value>,
 }
 
@@ -52,7 +51,6 @@ pub struct UpdateArtifactInput {
     pub description: Option<Patch<String>>,
     pub content_type: Option<Patch<String>>,
     pub size_bytes: Option<i64>,
-    pub execution: Option<Patch<i64>>,
     pub data: Option<Patch<serde_json::Value>>,
 }
 
@@ -63,6 +61,8 @@ pub struct ArtifactSearchFilters {
     pub owner: Option<String>,
     pub r#type: Option<ArtifactType>,
     pub visibility: Option<ArtifactVisibility>,
+    /// Filter to artifacts that have at least one version produced by this
+    /// execution. Implemented by joining through `artifact_version`.
     pub execution: Option<i64>,
     pub name_contains: Option<String>,
     pub limit: u32,
@@ -132,8 +132,8 @@ impl Create for ArtifactRepository {
     {
         let query = format!(
             "INSERT INTO artifact (ref, scope, owner, type, visibility, retention_policy, retention_limit, \
-             name, description, content_type, execution, data) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+             name, description, content_type, data) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
              RETURNING {}",
             SELECT_COLUMNS
         );
@@ -148,7 +148,6 @@ impl Create for ArtifactRepository {
             .bind(&input.name)
             .bind(&input.description)
             .bind(&input.content_type)
-            .bind(input.execution)
             .bind(&input.data)
             .fetch_one(executor)
             .await
@@ -220,17 +219,6 @@ impl Update for ArtifactRepository {
             has_updates = true;
         }
         push_field!(input.size_bytes, "size_bytes");
-        if let Some(exec_val) = input.execution {
-            if has_updates {
-                query.push(", ");
-            }
-            query.push("execution = ");
-            match exec_val {
-                Patch::Set(value) => query.push_bind(value),
-                Patch::Clear => query.push_bind(Option::<i64>::None),
-            };
-            has_updates = true;
-        }
         if let Some(data) = &input.data {
             if has_updates {
                 query.push(", ");
@@ -282,7 +270,7 @@ impl ArtifactRepository {
     where
         E: Executor<'e, Database = Postgres> + Copy + 'e,
     {
-        // Build WHERE clauses
+        // Build WHERE clauses (predicates against the `artifact` table)
         let mut conditions: Vec<String> = Vec::new();
         let mut param_idx: usize = 0;
 
@@ -302,9 +290,14 @@ impl ArtifactRepository {
             param_idx += 1;
             conditions.push(format!("visibility = ${}", param_idx));
         }
+        // `execution` is now a per-version association — translate to an EXISTS
+        // sub-query against `artifact_version`.
         if filters.execution.is_some() {
             param_idx += 1;
-            conditions.push(format!("execution = ${}", param_idx));
+            conditions.push(format!(
+                "EXISTS (SELECT 1 FROM artifact_version av WHERE av.artifact = artifact.id AND av.execution = ${})",
+                param_idx
+            ));
         }
         if filters.name_contains.is_some() {
             param_idx += 1;
@@ -449,14 +442,23 @@ impl ArtifactRepository {
             .map_err(Into::into)
     }
 
-    /// Find artifacts by execution ID
+    /// Find artifacts that have at least one version produced by the given execution.
+    /// Uses a JOIN through `artifact_version` (per-version `execution` column).
     pub async fn find_by_execution<'e, E>(executor: E, execution_id: i64) -> Result<Vec<Artifact>>
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
+        let select_with_alias = SELECT_COLUMNS
+            .split(',')
+            .map(|c| format!("a.{}", c.trim()))
+            .collect::<Vec<_>>()
+            .join(", ");
         let query = format!(
-            "SELECT {} FROM artifact WHERE execution = $1 ORDER BY created DESC",
-            SELECT_COLUMNS
+            "SELECT DISTINCT {} FROM artifact a \
+             JOIN artifact_version av ON av.artifact = a.id \
+             WHERE av.execution = $1 \
+             ORDER BY a.created DESC",
+            select_with_alias
         );
         sqlx::query_as::<_, Artifact>(&query)
             .bind(execution_id)
@@ -940,8 +942,7 @@ impl ArtifactVersionRepository {
     }
 
     /// Find all file-backed versions linked to an execution.
-    /// Joins artifact_version → artifact on artifact.execution to find all
-    /// file-based versions produced by a given execution.
+    /// Filters `artifact_version` by the per-version `execution` column.
     pub async fn find_file_versions_by_execution<'e, E>(
         executor: E,
         execution_id: i64,
@@ -949,15 +950,11 @@ impl ArtifactVersionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        // Prefer the per-version `execution` column. Fall back to the parent
-        // artifact's `execution` column to keep older one-artifact-per-execution
-        // rows reachable.
         let query = format!(
             "SELECT {} \
              FROM artifact_version av \
-             LEFT JOIN artifact a ON av.artifact = a.id \
              WHERE av.file_path IS NOT NULL \
-               AND (av.execution = $1 OR (av.execution IS NULL AND a.execution = $1))",
+               AND av.execution = $1",
             Self::select_columns_with_alias("av")
         );
         sqlx::query_as::<_, ArtifactVersion>(&query)

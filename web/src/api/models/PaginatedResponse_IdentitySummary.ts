@@ -9,9 +9,9 @@ import type { Value } from './Value';
  */
 export type PaginatedResponse_IdentitySummary = {
     /**
-     * The data items
+     * The page items
      */
-    data: Array<{
+    items: Array<{
         attributes: Value;
         display_name?: string | null;
         frozen: boolean;

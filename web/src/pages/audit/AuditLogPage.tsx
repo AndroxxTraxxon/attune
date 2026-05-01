@@ -2,24 +2,26 @@ import { Fragment, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Search, X, ScrollText, ChevronDown, ChevronRight } from "lucide-react";
 import { useAuditEvents } from "@/hooks/useAuditEvents";
-import type {
-    AuditCategory,
-    AuditOutcome,
-    AuditEventSummary,
-} from "@/api/services/AuditLogService";
+import { AuditCategory } from "@/api/models/AuditCategory";
+import { AuditOutcome } from "@/api/models/AuditOutcome";
+import type { AuditEventSummary } from "@/api/models/AuditEventSummary";
 import Pagination from "@/components/executions/Pagination";
 
 const CATEGORIES: AuditCategory[] = [
-    "api",
-    "auth",
-    "rbac",
-    "secret",
-    "admin",
-    "execution",
-    "pack",
+    AuditCategory.API,
+    AuditCategory.AUTH,
+    AuditCategory.RBAC,
+    AuditCategory.SECRET,
+    AuditCategory.ADMIN,
+    AuditCategory.EXECUTION,
+    AuditCategory.PACK,
 ];
 
-const OUTCOMES: AuditOutcome[] = ["success", "failure", "denied"];
+const OUTCOMES: AuditOutcome[] = [
+    AuditOutcome.SUCCESS,
+    AuditOutcome.FAILURE,
+    AuditOutcome.DENIED,
+];
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 
@@ -124,7 +126,7 @@ export default function AuditLogPage() {
 
     const { data, isLoading, isFetching, error } = useAuditEvents(queryParams);
 
-    const events: AuditEventSummary[] = data?.data ?? [];
+    const events: AuditEventSummary[] = data?.items ?? [];
     const pagination = data?.pagination;
 
     const hasActiveFilters =
@@ -483,7 +485,7 @@ export default function AuditLogPage() {
                                     setPage={setPage}
                                     pageSize={pageSize}
                                     itemCount={events.length}
-                                    total={pagination?.total ?? undefined}
+                                    total={pagination?.total_items ?? undefined}
                                     hasPrevious={pagination?.has_previous}
                                     hasNext={pagination?.has_next}
                                     itemLabel="audit events"
@@ -532,7 +534,7 @@ function ExpandedRow({ event }: { event: AuditEventSummary }) {
     return (
         <div className="text-xs text-gray-700 grid grid-cols-2 md:grid-cols-3 gap-2">
             <KV k="ID" v={event.id.toString()} />
-            <KV k="Actor IP" v={event.actor_ip ?? "—"} />
+            <KV k="HTTP Method" v={event.http_method ?? "—"} mono />
             <KV k="HTTP Path" v={event.http_path ?? "—"} mono />
             {event.request_id && <KV k="Request ID" v={event.request_id} mono />}
         </div>

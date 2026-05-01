@@ -104,7 +104,7 @@ const ChildExecutionRow = memo(function ChildExecutionRow({
     expanded && isWorkflow ? execution.id : undefined,
   );
 
-  const children = useMemo(() => data?.data ?? [], [data]);
+  const children = useMemo(() => data?.items ?? [], [data]);
   const hasChildren = expanded && children.length > 0;
 
   const wt = execution.workflow_task;
@@ -284,7 +284,7 @@ const WorkflowExecutionRow = memo(function WorkflowExecutionRow({
     expanded && isWorkflow ? execution.id : undefined,
   );
 
-  const children = useMemo(() => data?.data ?? [], [data]);
+  const children = useMemo(() => data?.items ?? [], [data]);
 
   const summary = useMemo(() => {
     const total = children.length;

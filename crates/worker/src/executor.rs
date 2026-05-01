@@ -946,7 +946,6 @@ impl ActionExecutor {
                             execution.action_ref
                         )),
                         content_type: Some(content_type.clone()),
-                        execution: Some(execution.id),
                         data: None,
                     },
                 )
@@ -1060,6 +1059,19 @@ impl ActionExecutor {
                     0
                 }
             };
+
+            // If the file is empty, delete the version and clean up the file
+            if size_bytes == 0 {
+                debug!(
+                    "Removing empty artifact version {} (artifact {}): file='{}'",
+                    ver.id, ver.artifact, file_path,
+                );
+                let _ = tokio::fs::remove_file(&full_path).await;
+                if let Err(e) = ArtifactVersionRepository::delete(&self.pool, ver.id).await {
+                    warn!("Failed to delete empty artifact version {}: {}", ver.id, e,);
+                }
+                continue;
+            }
 
             // Update the version row
             if let Err(e) =

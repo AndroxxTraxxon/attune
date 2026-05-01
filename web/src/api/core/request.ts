@@ -89,11 +89,6 @@ export const getQueryString = (params: Record<string, any>): string => {
     return '';
 };
 
-const getQueryParams = (params: Record<string, any>): string => {
-    const query = getQueryString(params);
-    return query.startsWith('?') ? query.slice(1) : query;
-};
-
 const getUrl = (config: OpenAPIConfig, options: ApiRequestOptions): string => {
     const encoder = config.ENCODE_PATH || encodeURI;
 
@@ -106,7 +101,11 @@ const getUrl = (config: OpenAPIConfig, options: ApiRequestOptions): string => {
             return substring;
         });
 
-    return `${config.BASE}${path}`;
+    const url = `${config.BASE}${path}`;
+    if (options.query) {
+        return `${url}${getQueryString(options.query)}`;
+    }
+    return url;
 };
 
 export const getFormData = (options: ApiRequestOptions): FormData | undefined => {
@@ -215,10 +214,6 @@ export const sendRequest = async <T>(
         headers,
         data: body ?? formData,
         method: options.method,
-        params: options.query,
-        paramsSerializer: options.query ? {
-            serialize: getQueryParams,
-        } : undefined,
         withCredentials: config.WITH_CREDENTIALS,
         withXSRFToken: config.CREDENTIALS === 'include' ? config.WITH_CREDENTIALS : false,
         cancelToken: source.token,

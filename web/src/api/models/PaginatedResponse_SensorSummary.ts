@@ -2,54 +2,55 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { PaginationMeta } from "./PaginationMeta";
+import type { PaginationMeta } from './PaginationMeta';
 /**
  * Paginated response wrapper
  */
 export type PaginatedResponse_SensorSummary = {
-  /**
-   * The data items
-   */
-  data: Array<{
     /**
-     * Creation timestamp
+     * The page items
      */
-    created: string;
+    items: Array<{
+        /**
+         * Creation timestamp
+         */
+        created: string;
+        /**
+         * Sensor description
+         */
+        description?: string | null;
+        /**
+         * Whether the sensor is enabled
+         */
+        enabled: boolean;
+        /**
+         * Sensor ID
+         */
+        id: number;
+        /**
+         * Human-readable label
+         */
+        label: string;
+        /**
+         * Pack reference (optional)
+         */
+        pack_ref?: string | null;
+        /**
+         * Unique reference identifier
+         */
+        ref: string;
+        /**
+         * Trigger reference
+         */
+        trigger_ref: string;
+        /**
+         * Last update timestamp
+         */
+        updated: string;
+    }>;
     /**
-     * Sensor description
+     * Pagination metadata
      */
-    description: string | null;
-    /**
-     * Whether the sensor is enabled
-     */
-    enabled: boolean;
-    /**
-     * Sensor ID
-     */
-    id: number;
-    /**
-     * Human-readable label
-     */
-    label: string;
-    /**
-     * Pack reference (optional)
-     */
-    pack_ref?: string | null;
-    /**
-     * Unique reference identifier
-     */
-    ref: string;
-    /**
-     * Trigger reference
-     */
-    trigger_ref: string;
-    /**
-     * Last update timestamp
-     */
-    updated: string;
-  }>;
-  /**
-   * Pagination metadata
-   */
-  pagination: PaginationMeta;
+    pagination: PaginationMeta;
 };
+

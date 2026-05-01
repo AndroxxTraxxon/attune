@@ -14,6 +14,7 @@ export type NullableStringPatch = ({
 export namespace NullableStringPatch {
     export enum op {
         SET = 'set',
+        CLEAR = 'clear',
     }
 }
 

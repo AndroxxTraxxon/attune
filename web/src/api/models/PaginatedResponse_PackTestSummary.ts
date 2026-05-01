@@ -9,9 +9,9 @@ import type { PaginationMeta } from './PaginationMeta';
  */
 export type PaginatedResponse_PackTestSummary = {
     /**
-     * The data items
+     * The page items
      */
-    data: Array<{
+    items: Array<{
         durationMs: number;
         failed: number;
         packId: i64;

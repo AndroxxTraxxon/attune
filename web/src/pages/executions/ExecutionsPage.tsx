@@ -326,7 +326,7 @@ export default function ExecutionsPage() {
   const { data, isLoading, isFetching, error } = useExecutions(queryParams);
   const { isConnected } = useExecutionStream({ enabled: true });
 
-  const executions = useMemo(() => data?.data || [], [data]);
+  const executions = useMemo(() => data?.items || [], [data]);
   const total = data?.pagination?.total_items ?? undefined;
   const hasNext = data?.pagination?.has_next ?? false;
   const hasPrevious = data?.pagination?.has_previous ?? page > 1;

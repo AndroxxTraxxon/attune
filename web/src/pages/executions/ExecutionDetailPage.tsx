@@ -136,7 +136,7 @@ export default function ExecutionDetailPage() {
 
   // Build timeline entries from history records
   const timelineEntries = useMemo<TimelineEntry[]>(() => {
-    const records = historyData?.data ?? [];
+    const records = historyData?.items ?? [];
     const entries: TimelineEntry[] = [];
 
     for (const record of records) {

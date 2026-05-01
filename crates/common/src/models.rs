@@ -1507,8 +1507,6 @@ pub mod artifact {
         pub content_type: Option<String>,
         /// Size of the latest version's content in bytes
         pub size_bytes: Option<i64>,
-        /// Execution that produced this artifact (no FK by design)
-        pub execution: Option<Id>,
         /// Structured JSONB data for progress artifacts or metadata
         pub data: Option<serde_json::Value>,
         pub created: DateTime<Utc>,
@@ -1519,7 +1517,7 @@ pub mod artifact {
     /// Must be kept in sync with the Artifact struct field order.
     pub const SELECT_COLUMNS: &str =
         "id, ref, scope, owner, type, visibility, retention_policy, retention_limit, \
-         name, description, content_type, size_bytes, execution, data, \
+         name, description, content_type, size_bytes, data, \
          created, updated";
 }
 

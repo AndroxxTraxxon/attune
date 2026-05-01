@@ -45,11 +45,11 @@ use crate::{
     authz::{AuthorizationCheck, AuthorizationService},
     dto::{
         artifact::{
-            AllocateFileVersionByRefRequest, AppendProgressRequest, ArtifactExecutionPatch,
-            ArtifactJsonPatch, ArtifactQueryParams, ArtifactResponse, ArtifactStringPatch,
-            ArtifactSummary, ArtifactVersionResponse, ArtifactVersionSummary,
-            CreateArtifactRequest, CreateFileVersionRequest, CreateVersionJsonRequest,
-            SetDataRequest, UpdateArtifactRequest,
+            AllocateFileVersionByRefRequest, AppendProgressRequest, ArtifactJsonPatch,
+            ArtifactQueryParams, ArtifactResponse, ArtifactStringPatch, ArtifactSummary,
+            ArtifactVersionResponse, ArtifactVersionSummary, CreateArtifactRequest,
+            CreateFileVersionRequest, CreateVersionJsonRequest, SetDataRequest,
+            UpdateArtifactRequest,
         },
         common::{PaginatedResponse, PaginationParams},
         ApiResponse, SuccessResponse,
@@ -233,7 +233,6 @@ pub async fn create_artifact(
         name: request.name,
         description: request.description,
         content_type: request.content_type,
-        execution: request.execution,
         data: request.data,
     };
 
@@ -295,10 +294,6 @@ pub async fn update_artifact(
             ArtifactStringPatch::Clear => Patch::Clear,
         }),
         size_bytes: None, // Managed by version creation trigger
-        execution: request.execution.map(|patch| match patch {
-            ArtifactExecutionPatch::Set(value) => Patch::Set(value),
-            ArtifactExecutionPatch::Clear => Patch::Clear,
-        }),
         data: request.data.map(|patch| match patch {
             ArtifactJsonPatch::Set(value) => Patch::Set(value),
             ArtifactJsonPatch::Clear => Patch::Clear,
@@ -1201,28 +1196,7 @@ pub async fn upload_version_by_ref(
     let artifact = match ArtifactRepository::find_by_ref(&state.db, &artifact_ref).await? {
         Some(existing) => {
             authorize_artifact_action(&state, &user, Action::Update, &existing).await?;
-
-            // Update execution link if a new execution ID was provided
-            if execution_id.is_some() && execution_id != existing.execution {
-                let update_input = UpdateArtifactInput {
-                    r#ref: None,
-                    scope: None,
-                    owner: None,
-                    r#type: None,
-                    visibility: None,
-                    retention_policy: None,
-                    retention_limit: None,
-                    name: None,
-                    description: None,
-                    content_type: None,
-                    size_bytes: None,
-                    execution: execution_id.map(Patch::Set),
-                    data: None,
-                };
-                ArtifactRepository::update(&state.db, existing.id, update_input).await?
-            } else {
-                existing
-            }
+            existing
         }
         None => {
             // Parse artifact type
@@ -1295,7 +1269,6 @@ pub async fn upload_version_by_ref(
                 content_type: content_type_field
                     .clone()
                     .or_else(|| file_content_type.clone()),
-                execution: execution_id,
                 data: None,
             };
 
@@ -1310,7 +1283,7 @@ pub async fn upload_version_by_ref(
 
     let version_input = CreateArtifactVersionInput {
         artifact: artifact.id,
-        execution: None,
+        execution: execution_id,
         content_type: Some(resolved_ct),
         content: Some(file_bytes),
         content_json: None,
@@ -1362,28 +1335,7 @@ pub async fn allocate_file_version_by_ref(
     let artifact = match ArtifactRepository::find_by_ref(&state.db, &artifact_ref).await? {
         Some(existing) => {
             authorize_artifact_action(&state, &user, Action::Update, &existing).await?;
-
-            // Update execution link if a new execution ID was provided
-            if request.execution.is_some() && request.execution != existing.execution {
-                let update_input = UpdateArtifactInput {
-                    r#ref: None,
-                    scope: None,
-                    owner: None,
-                    r#type: None,
-                    visibility: None,
-                    retention_policy: None,
-                    retention_limit: None,
-                    name: None,
-                    description: None,
-                    content_type: None,
-                    size_bytes: None,
-                    execution: request.execution.map(Patch::Set),
-                    data: None,
-                };
-                ArtifactRepository::update(&state.db, existing.id, update_input).await?
-            } else {
-                existing
-            }
+            existing
         }
         None => {
             // Parse artifact type (default to FileText)
@@ -1426,7 +1378,6 @@ pub async fn allocate_file_version_by_ref(
                 name: request.name,
                 description: request.description,
                 content_type: request.content_type.clone(),
-                execution: request.execution,
                 data: None,
             };
 
@@ -2241,7 +2192,7 @@ pub async fn stream_artifact(
 
     let artifacts_dir = state.config.artifacts_dir.clone();
     let full_path = std::path::PathBuf::from(&artifacts_dir).join(&file_path);
-    let execution_id = artifact.execution;
+    let execution_id = ver.execution;
     let db = state.db.clone();
 
     // --- build the SSE stream via unfold -----------------------------------

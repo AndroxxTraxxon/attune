@@ -204,7 +204,7 @@ export default function QueueForm({
     );
   };
 
-  const actions = actionsData?.data ?? [];
+  const actions = actionsData?.items ?? [];
   const actionOptions =
     initialData?.dispatch_action_ref &&
     !actions.some((action) => action.ref === initialData.dispatch_action_ref)

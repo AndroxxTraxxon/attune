@@ -6,72 +6,77 @@
  * Response DTO for action information
  */
 export type ActionResponse = {
-  /**
-   * Hint that this action may invoke the Attune MCP server and spawn child executions.
-   */
-  accesses_mcp?: boolean;
-  /**
-   * Creation timestamp
-   */
-  created: string;
-  /**
-   * Action description
-   */
-  description: string | null;
-  /**
-   * Entry point
-   */
-  entrypoint: string;
-  /**
-   * Action ID
-   */
-  id: number;
-  /**
-   * Whether this is an ad-hoc action (not from pack installation)
-   */
-  is_adhoc: boolean;
-  /**
-   * Human-readable label
-   */
-  label: string;
-  /**
-   * Output schema
-   */
-  out_schema: any | null;
-  /**
-   * Pack ID
-   */
-  pack: number;
-  /**
-   * Pack reference
-   */
-  pack_ref: string;
-  /**
-   * Parameter schema (StackStorm-style with inline required/secret)
-   */
-  param_schema: any | null;
-  /**
-   * Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
-   */
-  required_worker_runtimes?: Record<string, string>;
-  /**
-   * Unique reference identifier
-   */
-  ref: string;
-  /**
-   * Runtime ID
-   */
-  runtime?: number | null;
-  /**
-   * Semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0")
-   */
-  runtime_version_constraint?: string | null;
-  /**
-   * Last update timestamp
-   */
-  updated: string;
-  /**
-   * Workflow definition ID (non-null if this action is a workflow)
-   */
-  workflow_def?: number | null;
+    /**
+     * Hint that this action may invoke the Attune MCP server and spawn child executions.
+     */
+    accesses_mcp: boolean;
+    /**
+     * Creation timestamp
+     */
+    created: string;
+    /**
+     * Action description
+     */
+    description?: string | null;
+    /**
+     * Entry point
+     */
+    entrypoint: string;
+    /**
+     * Action ID
+     */
+    id: number;
+    /**
+     * Whether this is an ad-hoc action (not from pack installation)
+     */
+    is_adhoc: boolean;
+    /**
+     * Human-readable label
+     */
+    label: string;
+    /**
+     * Output schema
+     */
+    out_schema: any | null;
+    /**
+     * Pack ID
+     */
+    pack: number;
+    /**
+     * Pack reference
+     */
+    pack_ref: string;
+    /**
+     * Parameter schema (StackStorm-style with inline required/secret)
+     */
+    param_schema: any | null;
+    /**
+     * Unique reference identifier
+     */
+    ref: string;
+    /**
+     * Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
+     */
+    required_worker_runtimes?: Record<string, any>;
+    /**
+     * Runtime ID
+     */
+    runtime?: number | null;
+    /**
+     * Runtime reference (stable identifier, e.g., "core.python")
+     */
+    runtime_ref?: string | null;
+    /**
+     * Semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0")
+     */
+    runtime_version_constraint?: string | null;
+    /**
+     * Last update timestamp
+     */
+    updated: string;
+    /**
+     * Workflow definition ID (non-null if this action is a workflow)
+     */
+    workflow_def?: number | null;
 };
+

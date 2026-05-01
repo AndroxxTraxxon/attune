@@ -223,7 +223,7 @@ function IdentitiesTab() {
   const freezeIdentity = useFreezeIdentity();
   const unfreezeIdentity = useUnfreezeIdentity();
 
-  const identities: IdentityRow[] = (data?.data as IdentityRow[]) || [];
+  const identities: IdentityRow[] = (data?.items as IdentityRow[]) || [];
   const total = data?.pagination?.total_items || 0;
   const filteredIdentities = searchTerm
     ? identities.filter((i) => {

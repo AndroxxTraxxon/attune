@@ -22,7 +22,7 @@ export default function KeysPage() {
 
   const deleteKeyMutation = useDeleteKey();
 
-  const keys = data?.data || [];
+  const keys = data?.items || [];
   const total = data?.pagination?.total_items || 0;
 
   // Client-side filtering by search term (ref or name)

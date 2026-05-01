@@ -31,7 +31,7 @@ export interface HistoryRecord {
  * Paginated history response from the API.
  */
 export interface PaginatedHistoryResponse {
-  data: HistoryRecord[];
+  items: HistoryRecord[];
   pagination: {
     page: number;
     page_size: number;

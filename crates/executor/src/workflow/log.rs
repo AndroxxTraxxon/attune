@@ -193,7 +193,6 @@ async fn ensure_log_artifact(
                             .into(),
                     ),
                     content_type: Some(LOG_CONTENT_TYPE.into()),
-                    execution: Some(parent_execution_id),
                     data: None,
                 },
             )

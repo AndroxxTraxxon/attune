@@ -20,7 +20,7 @@ import ParamSchemaDisplay, {
 export default function RulesPage() {
   const { ref } = useParams<{ ref?: string }>();
   const { data, isLoading, error } = useRules({});
-  const rules = useMemo(() => data?.data || [], [data?.data]);
+  const rules = useMemo(() => data?.items || [], [data?.items]);
   const [collapsedPacks, setCollapsedPacks] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
 

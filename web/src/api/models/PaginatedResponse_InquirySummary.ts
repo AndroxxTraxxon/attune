@@ -10,9 +10,9 @@ import type { PaginationMeta } from './PaginationMeta';
  */
 export type PaginatedResponse_InquirySummary = {
     /**
-     * The data items
+     * The page items
      */
-    data: Array<{
+    items: Array<{
         assigned_to?: (null | i64);
         /**
          * Creation timestamp

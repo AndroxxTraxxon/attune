@@ -138,7 +138,7 @@ export default function WorkflowDetailsPanel({
   // notifications update the query cache in real-time.
   useExecutionStream({ enabled: true });
 
-  const tasks = useMemo(() => data?.data ?? [], [data]);
+  const tasks = useMemo(() => data?.items ?? [], [data]);
 
   // Order tasks so descendants appear nested under their parent. We sort by:
   //   1. immediate children of the panel's root execution first (in id order)

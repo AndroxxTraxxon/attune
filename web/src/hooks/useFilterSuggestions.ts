@@ -47,17 +47,17 @@ export function useFilterSuggestions() {
   });
 
   const packNames = useMemo(() => {
-    const refs = packsData?.data?.map((p) => p.ref) || [];
+    const refs = packsData?.items?.map((p) => p.ref) || [];
     return [...new Set(refs)].sort();
   }, [packsData]);
 
   const ruleRefs = useMemo(() => {
-    const refs = rulesData?.data?.map((r) => r.ref) || [];
+    const refs = rulesData?.items?.map((r) => r.ref) || [];
     return [...new Set(refs)].sort();
   }, [rulesData]);
 
   const actionRefs = useMemo(() => {
-    const refs = actionsData?.data?.map((a) => a.ref) || [];
+    const refs = actionsData?.items?.map((a) => a.ref) || [];
     return [...new Set(refs)].sort();
   }, [actionsData]);
 
@@ -67,14 +67,14 @@ export function useFilterSuggestions() {
   // child executions via the execution-scoped API token.
   const workflowActionRefs = useMemo(() => {
     const refs =
-      actionsData?.data
+      actionsData?.items
         ?.filter((a) => a.workflow_def != null || a.accesses_mcp)
         .map((a) => a.ref) || [];
     return new Set(refs);
   }, [actionsData]);
 
   const triggerRefs = useMemo(() => {
-    const refs = triggersData?.data?.map((t) => t.ref) || [];
+    const refs = triggersData?.items?.map((t) => t.ref) || [];
     return [...new Set(refs)].sort();
   }, [triggersData]);
 

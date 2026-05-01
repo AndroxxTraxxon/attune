@@ -7,7 +7,7 @@ import { ChevronDown, ChevronRight, Search, X } from "lucide-react";
 export default function SensorsPage() {
   const { ref } = useParams<{ ref?: string }>();
   const { data, isLoading, error } = useSensors({});
-  const sensors = useMemo(() => data?.data || [], [data?.data]);
+  const sensors = useMemo(() => data?.items || [], [data?.items]);
   const [collapsedPacks, setCollapsedPacks] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
 

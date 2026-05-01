@@ -23,7 +23,7 @@ export default function ActionsPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { data, isLoading, error } = useActions();
-  const actions = useMemo(() => data?.data || [], [data?.data]);
+  const actions = useMemo(() => data?.items || [], [data?.items]);
   const [collapsedPacks, setCollapsedPacks] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const sidebarRef = useRef<HTMLDivElement | null>(null);
@@ -348,7 +348,7 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
     );
   }
 
-  const executions = executionsData?.data || [];
+  const executions = executionsData?.items || [];
   const paramSchema = action.data?.param_schema || {};
   const properties = extractProperties(paramSchema);
   const paramEntries = Object.entries(properties);

@@ -453,9 +453,9 @@ export class PacksService {
         pageSize?: number,
     }): CancelablePromise<{
         /**
-         * The data items
+         * The page items
          */
-        data: Array<{
+        items: Array<{
             created: string;
             durationMs: number;
             executionTime: string;

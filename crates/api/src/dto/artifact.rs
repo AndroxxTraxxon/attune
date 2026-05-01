@@ -58,10 +58,6 @@ pub struct CreateArtifactRequest {
     #[schema(example = "text/plain")]
     pub content_type: Option<String>,
 
-    /// Execution ID that produced this artifact
-    #[schema(example = 42)]
-    pub execution: Option<i64>,
-
     /// Initial structured data (for progress-type artifacts or metadata)
     #[schema(value_type = Option<Object>)]
     pub data: Option<JsonValue>,
@@ -105,19 +101,8 @@ pub struct UpdateArtifactRequest {
     /// Updated content type
     pub content_type: Option<ArtifactStringPatch>,
 
-    /// Updated execution patch (set a new execution ID or clear the link)
-    pub execution: Option<ArtifactExecutionPatch>,
-
     /// Updated structured data (replaces existing data entirely)
     pub data: Option<ArtifactJsonPatch>,
-}
-
-/// Explicit patch operation for a nullable execution link.
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
-#[serde(tag = "op", content = "value", rename_all = "snake_case")]
-pub enum ArtifactExecutionPatch {
-    Set(i64),
-    Clear,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -196,9 +181,6 @@ pub struct ArtifactResponse {
     /// Size of the latest version in bytes
     pub size_bytes: Option<i64>,
 
-    /// Execution that produced this artifact
-    pub execution: Option<i64>,
-
     /// Structured data (progress entries, metadata, etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<JsonValue>,
@@ -234,9 +216,6 @@ pub struct ArtifactSummary {
     /// Size of latest version in bytes
     pub size_bytes: Option<i64>,
 
-    /// Execution that produced this artifact
-    pub execution: Option<i64>,
-
     /// Owner scope
     pub scope: OwnerType,
 
@@ -265,7 +244,7 @@ pub struct ArtifactQueryParams {
     /// Filter by visibility
     pub visibility: Option<ArtifactVisibility>,
 
-    /// Filter by execution ID
+    /// Filter to artifacts that have at least one version produced by this execution
     pub execution: Option<i64>,
 
     /// Search by name (case-insensitive substring match)
@@ -496,7 +475,6 @@ impl From<attune_common::models::artifact::Artifact> for ArtifactResponse {
             description: a.description,
             content_type: a.content_type,
             size_bytes: a.size_bytes,
-            execution: a.execution,
             data: a.data,
             created: a.created,
             updated: a.updated,
@@ -514,7 +492,6 @@ impl From<attune_common::models::artifact::Artifact> for ArtifactSummary {
             name: a.name,
             content_type: a.content_type,
             size_bytes: a.size_bytes,
-            execution: a.execution,
             scope: a.scope,
             owner: a.owner,
             created: a.created,

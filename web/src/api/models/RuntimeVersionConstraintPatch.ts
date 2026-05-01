@@ -14,6 +14,7 @@ export type RuntimeVersionConstraintPatch = ({
 export namespace RuntimeVersionConstraintPatch {
     export enum op {
         SET = 'set',
+        CLEAR = 'clear',
     }
 }
 

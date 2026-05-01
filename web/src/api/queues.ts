@@ -20,7 +20,7 @@ export interface PaginationMeta {
 }
 
 export interface PaginatedApiResponse<T> {
-  data: T[];
+  items: T[];
   pagination: PaginationMeta;
 }
 

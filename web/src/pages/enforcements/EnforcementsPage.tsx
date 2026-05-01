@@ -324,7 +324,7 @@ export default function EnforcementsPage() {
   const { data, isLoading, isFetching, error } = useEnforcements(queryParams);
   const { isConnected } = useEnforcementStream({ enabled: true });
 
-  const enforcements = useMemo(() => data?.data || [], [data]);
+  const enforcements = useMemo(() => data?.items || [], [data]);
   const total = data?.pagination?.total_items ?? undefined;
   const hasNext = data?.pagination?.has_next ?? false;
   const hasPrevious = data?.pagination?.has_previous ?? page > 1;

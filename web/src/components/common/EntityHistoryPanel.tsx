@@ -62,7 +62,7 @@ export default function EntityHistoryPanel({
     !isCollapsed && !!entityId,
   );
 
-  const records = data?.data ?? [];
+  const records = data?.items ?? [];
   const pagination = data?.pagination;
   const totalPages = pagination?.total_pages ?? 1;
   const totalItems = pagination?.total_items ?? 0;

@@ -66,7 +66,7 @@ pub async fn list_entity_history(
     };
 
     let response = PaginatedResponse {
-        data,
+        items: data,
         pagination: PaginationMeta::new(
             pagination_params.page,
             pagination_params.page_size,
@@ -160,7 +160,7 @@ async fn get_entity_history_by_id(
     };
 
     let response = PaginatedResponse {
-        data,
+        items: data,
         pagination: PaginationMeta::new(
             pagination_params.page,
             pagination_params.page_size,

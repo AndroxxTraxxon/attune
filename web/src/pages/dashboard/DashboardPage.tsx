@@ -58,7 +58,7 @@ export default function DashboardPage() {
 
   // Calculate status distribution
   const statusDistribution = useMemo(() => {
-    if (!executionsData?.data) return {};
+    if (!executionsData?.items) return {};
 
     const distribution: Record<ExecutionStatus, number> = {
       [ExecutionStatus.REQUESTED]: 0,
@@ -73,7 +73,7 @@ export default function DashboardPage() {
       [ExecutionStatus.ABANDONED]: 0,
     };
 
-    executionsData.data.forEach((execution) => {
+    executionsData.items.forEach((execution) => {
       distribution[execution.status] =
         (distribution[execution.status] || 0) + 1;
     });
@@ -83,9 +83,9 @@ export default function DashboardPage() {
 
   // Calculate success rate
   const successRate = useMemo(() => {
-    if (!executionsData?.data || executionsData.data.length === 0) return 0;
+    if (!executionsData?.items || executionsData.items.length === 0) return 0;
 
-    const completed = executionsData.data.filter(
+    const completed = executionsData.items.filter(
       (e) =>
         e.status === ExecutionStatus.COMPLETED ||
         e.status === ExecutionStatus.FAILED ||
@@ -218,13 +218,13 @@ export default function DashboardPage() {
           </h2>
           {isLoading ? (
             <p className="text-gray-500 text-center py-8">Loading...</p>
-          ) : executionsData?.data && executionsData.data.length > 0 ? (
+          ) : executionsData?.items && executionsData.items.length > 0 ? (
             <div className="space-y-3">
               {Object.entries(statusDistribution).map(([status, count]) => {
                 const countNum = typeof count === "number" ? count : 0;
                 if (countNum === 0) return null;
-                const percentage = executionsData?.data
-                  ? Math.round((countNum / executionsData.data.length) * 100)
+                const percentage = executionsData?.items
+                  ? Math.round((countNum / executionsData.items.length) * 100)
                   : 0;
 
                 return (
@@ -285,9 +285,9 @@ export default function DashboardPage() {
 
           {isLoading ? (
             <p className="text-gray-500 text-center py-8">Loading...</p>
-          ) : executionsData?.data && executionsData.data.length > 0 ? (
+          ) : executionsData?.items && executionsData.items.length > 0 ? (
             <div className="space-y-3 max-h-96 overflow-y-auto">
-              {executionsData.data.map((execution) => (
+              {executionsData.items.map((execution) => (
                 <Link
                   key={execution.id}
                   to={`/executions/${execution.id}`}

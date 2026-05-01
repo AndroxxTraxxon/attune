@@ -179,7 +179,7 @@ export function QueueDetailPage() {
   const deleteQueue = useDeleteQueue();
   const deleteQueueItem = useDeleteQueueItem();
 
-  const items = itemsData?.data ?? [];
+  const items = itemsData?.items ?? [];
   const itemPagination = itemsData?.pagination;
   const itemTotal = itemPagination?.total_items ?? 0;
   const sourceBadge = queue ? getQueueSourceBadge(queue.is_adhoc) : null;

@@ -24,7 +24,7 @@ pub struct ApiResponse<T> {
 
 #[derive(Debug, serde::Deserialize)]
 struct PaginatedResponse<T> {
-    data: Vec<T>,
+    items: Vec<T>,
 }
 
 /// API error response
@@ -296,7 +296,7 @@ impl ApiClient {
                 .json()
                 .await
                 .context("Failed to parse paginated API response")?;
-            Ok(paginated.data)
+            Ok(paginated.items)
         } else {
             let error_text = response
                 .text()

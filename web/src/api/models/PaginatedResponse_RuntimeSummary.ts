@@ -8,9 +8,9 @@ import type { PaginationMeta } from './PaginationMeta';
  */
 export type PaginatedResponse_RuntimeSummary = {
     /**
-     * The data items
+     * The page items
      */
-    data: Array<{
+    items: Array<{
         created: string;
         description?: string | null;
         id: number;

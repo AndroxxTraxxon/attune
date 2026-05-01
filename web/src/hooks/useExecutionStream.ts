@@ -76,7 +76,7 @@ interface ExecutionQueryParams {
 
 /** Shape of the paginated API response stored in React Query cache */
 interface ExecutionListCache {
-  data: ExecutionSummary[];
+  items: ExecutionSummary[];
   pagination?: {
     total_items?: number;
     total_pages?: number;
@@ -262,7 +262,7 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
           queryKey: ["executions"],
           exact: false,
         })
-        .filter(([, data]) => data && Array.isArray(data?.data));
+        .filter(([, data]) => data && Array.isArray(data?.items));
 
       queries.forEach(([queryKey, oldData]) => {
         // Extract query params from the query key (format: ["executions", params])
@@ -275,14 +275,14 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
         const old = oldData as ExecutionListCache;
 
         // Check if execution already exists in the list
-        const existingIndex = old.data.findIndex(
+        const existingIndex = old.items.findIndex(
           (exec) => exec.id === executionNotification.entity_id,
         );
 
         // Merge the updated fields to determine if the execution matches the query
         const mergedExecution =
           existingIndex >= 0
-            ? { ...old.data[existingIndex], ...executionData }
+            ? { ...old.items[existingIndex], ...executionData }
             : (executionData as ExecutionSummary);
         const matchesQuery = executionMatchesParams(
           mergedExecution,
@@ -296,14 +296,14 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
           // ── Execution IS in the local data array ──
           if (matchesQuery) {
             // Still matches — update in place, no total_items change
-            updatedData = [...old.data];
+            updatedData = [...old.items];
             updatedData[existingIndex] = {
               ...updatedData[existingIndex],
               ...executionData,
             };
           } else {
             // No longer matches the query filter — remove it
-            updatedData = old.data.filter((_, i) => i !== existingIndex);
+            updatedData = old.items.filter((_, i) => i !== existingIndex);
             totalItemsDelta = -1;
           }
         } else {
@@ -330,7 +330,7 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
               // Execution LEFT this query's result set (e.g., was running,
               // now completed). Decrement total_items but don't touch the
               // data array — the item was never in it.
-              updatedData = old.data;
+              updatedData = old.items;
               totalItemsDelta = -1;
             } else if (!oldMatchedQuery && matchesQuery) {
               // Execution ENTERED this query's result set.
@@ -338,8 +338,8 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
                 return;
               }
               updatedData = isChildQuery
-                ? [...old.data, executionData as ExecutionSummary]
-                : [executionData as ExecutionSummary, ...old.data].slice(0, 50);
+                ? [...old.items, executionData as ExecutionSummary]
+                : [executionData as ExecutionSummary, ...old.items].slice(0, 50);
               totalItemsDelta = 1;
             } else {
               // No boundary crossing: either both match (execution was
@@ -358,8 +358,8 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
               // Add to the list. Child queries keep all items (no cap);
               // other lists cap at 50 to prevent unbounded growth.
               updatedData = isChildQuery
-                ? [...old.data, executionData as ExecutionSummary]
-                : [executionData as ExecutionSummary, ...old.data].slice(0, 50);
+                ? [...old.items, executionData as ExecutionSummary]
+                : [executionData as ExecutionSummary, ...old.items].slice(0, 50);
               totalItemsDelta = 1;
             } else {
               return;
@@ -369,7 +369,7 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
 
         // Update the query with the new data
         const page = old.pagination?.page ?? 1;
-        const pageSize = old.pagination?.page_size ?? (isChildQuery ? old.data.length : 50);
+        const pageSize = old.pagination?.page_size ?? (isChildQuery ? old.items.length : 50);
         const hasExactTotal = old.pagination?.total_items != null;
         const nextPagination = old.pagination ? { ...old.pagination } : undefined;
 
@@ -385,14 +385,14 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
             nextPagination.total_pages =
               pageSize > 0 ? Math.ceil(newTotal / pageSize) : 0;
             nextPagination.has_next = page * pageSize < newTotal;
-          } else if (!isChildQuery && totalItemsDelta > 0 && old.data.length >= pageSize) {
+          } else if (!isChildQuery && totalItemsDelta > 0 && old.items.length >= pageSize) {
             nextPagination.has_next = true;
           }
         }
 
         queryClient.setQueryData(queryKey, {
           ...old,
-          data: updatedData,
+          items: updatedData,
           pagination: nextPagination,
         });
       });

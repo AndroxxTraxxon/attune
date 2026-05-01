@@ -74,7 +74,7 @@ export default function RuntimeForm({
 }: RuntimeFormProps) {
   const navigate = useNavigate();
   const { data: packsData } = usePacks({ page: 1, pageSize: 200 });
-  const packs = useMemo(() => packsData?.data || [], [packsData?.data]);
+  const packs = useMemo(() => packsData?.items || [], [packsData?.items]);
   const createRuntime = useCreateRuntime();
   const updateRuntime = useUpdateRuntime();
 

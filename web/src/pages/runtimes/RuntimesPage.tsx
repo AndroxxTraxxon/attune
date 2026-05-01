@@ -224,11 +224,11 @@ function WorkersTab() {
   const [roleFilter, setRoleFilter] = useState("all");
   const [showNonActiveWorkers, setShowNonActiveWorkers] = useState(false);
 
-  const workers = useMemo(() => data?.data ?? [], [data?.data]);
+  const workers = useMemo(() => data?.items ?? [], [data?.items]);
   const runtimeNames = useMemo(() => {
     const seen = new Set<string>();
 
-    for (const runtime of runtimeData?.data ?? []) {
+    for (const runtime of runtimeData?.items ?? []) {
       const refName = runtime.ref.split(".").pop();
       if (refName) {
         seen.add(normalizeRuntimeName(refName));
@@ -245,7 +245,7 @@ function WorkersTab() {
     return Array.from(seen).sort((a, b) =>
       runtimeLabel(a).localeCompare(runtimeLabel(b)),
     );
-  }, [runtimeData?.data, workers]);
+  }, [runtimeData?.items, workers]);
 
   const filteredWorkers = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -611,7 +611,7 @@ function RuntimesTab({ runtimeRef }: { runtimeRef?: string }) {
   const navigate = useNavigate();
   const { data, isLoading, error } = useRuntimes();
   const [searchQuery, setSearchQuery] = useState("");
-  const runtimes = useMemo(() => data?.data || [], [data?.data]);
+  const runtimes = useMemo(() => data?.items || [], [data?.items]);
 
   const filteredRuntimes = useMemo(() => {
     if (!searchQuery.trim()) {

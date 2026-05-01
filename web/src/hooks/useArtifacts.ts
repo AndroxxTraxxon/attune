@@ -81,7 +81,7 @@ export interface ArtifactsListParams {
 // ============================================================================
 
 export interface PaginatedArtifacts {
-  data: ArtifactSummary[];
+  items: ArtifactSummary[];
   pagination: {
     page: number;
     page_size: number;

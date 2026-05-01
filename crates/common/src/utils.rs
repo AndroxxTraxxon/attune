@@ -59,8 +59,8 @@ impl Pagination {
 /// Paginated response wrapper
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaginatedResponse<T> {
-    /// The data items
-    pub data: Vec<T>,
+    /// The page items
+    pub items: Vec<T>,
 
     /// Pagination metadata
     pub pagination: PaginationMetadata,

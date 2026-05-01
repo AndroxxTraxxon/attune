@@ -100,13 +100,13 @@ export default function QueuesPage() {
   const { data: identityData, isLoading: isIdentityLoading } = useIdentity(user?.id ?? 0);
   const { data: permissionSetsData, isLoading: isPermissionSetsLoading } = usePermissionSets();
 
-  const queues = data?.data ?? [];
+  const queues = data?.items ?? [];
   const actionDescriptionsByRef = useMemo(
     () =>
       new Map(
-        (actionsData?.data ?? []).map((action) => [action.ref, action.description]),
+        (actionsData?.items ?? []).map((action) => [action.ref, action.description]),
       ),
-    [actionsData?.data],
+    [actionsData?.items],
   );
   const selectedQueueRef =
     queues.some((queue) => queue.ref === preferredQueueRef)

@@ -73,7 +73,7 @@ export function usePackRules(packRef: string) {
     queryKey: ["packs", packRef, "rules"],
     queryFn: async () => {
       const response = await RulesService.listRulesByPack({ packRef });
-      return response.data;
+      return response.items;
     },
     enabled: !!packRef,
     staleTime: 30000,

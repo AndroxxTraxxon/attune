@@ -11,9 +11,9 @@ import type { PaginationMeta } from './PaginationMeta';
  */
 export type PaginatedResponse_EnforcementSummary = {
     /**
-     * The data items
+     * The page items
      */
-    data: Array<{
+    items: Array<{
         /**
          * Enforcement condition
          */

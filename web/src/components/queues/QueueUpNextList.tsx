@@ -23,7 +23,7 @@ export default function QueueUpNextList({
     statuses: [WorkQueueItemStatus.QUEUED, WorkQueueItemStatus.RETRY],
   });
 
-  const items = data?.data ?? [];
+  const items = data?.items ?? [];
   const total = data?.pagination?.total_items ?? 0;
 
   return (

@@ -76,7 +76,7 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
 
   // Data fetching
   const { data: packsData } = usePacks({ pageSize: 1000 });
-  const packs = useMemo(() => packsData?.data || [], [packsData?.data]);
+  const packs = useMemo(() => packsData?.items || [], [packsData?.items]);
 
   const selectedPack = packs.find((p) => p.id === packId);
 
@@ -85,8 +85,8 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
   const { data: triggersData } = useTriggers({ pageSize: 1000 });
   const { data: actionsData } = useActions({ pageSize: 1000 });
 
-  const triggers = triggersData?.data || [];
-  const actions = actionsData?.data || [];
+  const triggers = triggersData?.items || [];
+  const actions = actionsData?.items || [];
 
   // Get selected trigger and action refs for detail fetching
   const selectedTriggerSummary = triggers.find((t) => t.id === triggerId);

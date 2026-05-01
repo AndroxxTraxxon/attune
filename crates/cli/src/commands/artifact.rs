@@ -90,10 +90,6 @@ pub enum ArtifactCommands {
         /// MIME content type
         #[arg(long)]
         content_type: Option<String>,
-
-        /// Execution ID to link this artifact to
-        #[arg(long)]
-        execution: Option<i64>,
     },
     /// Delete an artifact
     Delete {
@@ -248,8 +244,6 @@ struct ArtifactResponse {
     #[serde(default)]
     size_bytes: Option<i64>,
     #[serde(default)]
-    execution: Option<i64>,
-    #[serde(default)]
     data: Option<JsonValue>,
     created: String,
     updated: String,
@@ -268,8 +262,6 @@ struct ArtifactSummary {
     content_type: Option<String>,
     #[serde(default)]
     size_bytes: Option<i64>,
-    #[serde(default)]
-    execution: Option<i64>,
     scope: String,
     owner: String,
     created: String,
@@ -329,8 +321,6 @@ struct CreateArtifactBody {
     description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     content_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    execution: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -392,7 +382,6 @@ pub async fn handle_artifact_command(
             name,
             description,
             content_type,
-            execution,
         } => {
             handle_create(
                 profile,
@@ -406,7 +395,6 @@ pub async fn handle_artifact_command(
                 name,
                 description,
                 content_type,
-                execution,
                 api_url,
                 output_format,
             )
@@ -576,16 +564,7 @@ async fn handle_list(
                 let mut table = output::create_table();
                 output::add_header(
                     &mut table,
-                    vec![
-                        "ID",
-                        "Ref",
-                        "Name",
-                        "Type",
-                        "Visibility",
-                        "Size",
-                        "Execution",
-                        "Created",
-                    ],
+                    vec!["ID", "Ref", "Name", "Type", "Visibility", "Size", "Created"],
                 );
 
                 for artifact in &artifacts {
@@ -596,10 +575,6 @@ async fn handle_list(
                         artifact.r#type.clone(),
                         artifact.visibility.clone(),
                         format_size(artifact.size_bytes),
-                        artifact
-                            .execution
-                            .map(|e| e.to_string())
-                            .unwrap_or_else(|| "-".to_string()),
                         output::format_timestamp(&artifact.created),
                     ]);
                 }
@@ -667,13 +642,6 @@ async fn handle_show(
                         .unwrap_or_else(|| "-".to_string()),
                 ),
                 ("Size", format_size(artifact_resp.size_bytes)),
-                (
-                    "Execution",
-                    artifact_resp
-                        .execution
-                        .map(|e| e.to_string())
-                        .unwrap_or_else(|| "-".to_string()),
-                ),
             ];
 
             if let Some(ref desc) = artifact_resp.description {
@@ -709,7 +677,6 @@ async fn handle_create(
     name: Option<String>,
     description: Option<String>,
     content_type: Option<String>,
-    execution: Option<i64>,
     api_url: &Option<String>,
     output_format: OutputFormat,
 ) -> Result<()> {
@@ -727,7 +694,6 @@ async fn handle_create(
         name,
         description,
         content_type,
-        execution,
     };
 
     let artifact: ArtifactResponse = client.post("/artifacts", &request).await?;

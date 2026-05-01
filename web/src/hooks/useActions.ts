@@ -42,7 +42,7 @@ export function usePackActions(packRef: string) {
     queryKey: ["packs", packRef, "actions"],
     queryFn: async () => {
       const response = await ActionsService.listActionsByPack({ packRef });
-      return response.data;
+      return response.items;
     },
     enabled: !!packRef,
     staleTime: 30000,

@@ -314,7 +314,7 @@ export default function EventsPage() {
           (
             oldData:
               | {
-                  data: EventSummary[];
+                  items: EventSummary[];
                   pagination?: {
                     total_items?: number;
                     total_pages?: number;
@@ -364,13 +364,13 @@ export default function EventsPage() {
                       ? Math.ceil(newTotal / currentPageSize)
                       : 0;
                   nextPagination.has_next = currentPage * currentPageSize < newTotal;
-                } else if (oldData.data.length >= currentPageSize) {
+                } else if (oldData.items.length >= currentPageSize) {
                   nextPagination.has_next = true;
                 }
               }
               return {
                 ...oldData,
-                data: [newEvent, ...oldData.data].slice(0, pageSize),
+                items: [newEvent, ...oldData.items].slice(0, pageSize),
                 pagination: nextPagination,
               };
             }
@@ -401,7 +401,7 @@ export default function EventsPage() {
 
   const { data, isLoading, isFetching, error } = useEvents(queryParams);
 
-  const events = useMemo(() => data?.data || [], [data]);
+  const events = useMemo(() => data?.items || [], [data]);
   const total = data?.pagination?.total_items ?? undefined;
   const hasNext = data?.pagination?.has_next ?? false;
   const hasPrevious = data?.pagination?.has_previous ?? page > 1;

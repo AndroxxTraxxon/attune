@@ -1,12 +1,16 @@
 -- Migration: Artifact Content System
 -- Description: Enhances the artifact table with content fields (name, description,
---              content_type, size_bytes, execution link, structured data, visibility)
---              and creates the artifact_version table for versioned file/data storage.
+--              content_type, size_bytes, structured data, visibility) and creates
+--              the artifact_version table for versioned file/data storage.
 --
 --              The artifact table now serves as the "header" for a logical artifact,
 --              while artifact_version rows hold the actual immutable content snapshots.
 --              Progress-type artifacts store their live state directly in artifact.data
 --              (append-style updates without creating new versions).
+--
+--              Execution association is recorded per-version on
+--              artifact_version.execution (the parent artifact is associated with
+--              its action/owner, not a specific execution).
 --
 -- Version: 20250101000010
 
@@ -26,9 +30,6 @@ ALTER TABLE artifact ADD COLUMN IF NOT EXISTS content_type TEXT;
 -- Total size in bytes of the latest version's content (NULL for progress artifacts)
 ALTER TABLE artifact ADD COLUMN IF NOT EXISTS size_bytes BIGINT;
 
--- Execution that produced/owns this artifact (plain BIGINT, no FK by design)
-ALTER TABLE artifact ADD COLUMN IF NOT EXISTS execution BIGINT;
-
 -- Structured data for progress-type artifacts and small structured payloads.
 -- Progress artifacts append entries here; file artifacts may store parsed metadata.
 ALTER TABLE artifact ADD COLUMN IF NOT EXISTS data JSONB;
@@ -41,9 +42,7 @@ ALTER TABLE artifact ADD COLUMN IF NOT EXISTS data JSONB;
 ALTER TABLE artifact ADD COLUMN IF NOT EXISTS visibility artifact_visibility_enum NOT NULL DEFAULT 'private';
 
 -- New indexes for the added columns
-CREATE INDEX IF NOT EXISTS idx_artifact_execution ON artifact(execution);
 CREATE INDEX IF NOT EXISTS idx_artifact_name ON artifact(name);
-CREATE INDEX IF NOT EXISTS idx_artifact_execution_type ON artifact(execution, type);
 CREATE INDEX IF NOT EXISTS idx_artifact_visibility ON artifact(visibility);
 CREATE INDEX IF NOT EXISTS idx_artifact_visibility_scope ON artifact(visibility, scope, owner);
 
@@ -52,7 +51,6 @@ COMMENT ON COLUMN artifact.name IS 'Human-readable artifact name';
 COMMENT ON COLUMN artifact.description IS 'Optional description of the artifact';
 COMMENT ON COLUMN artifact.content_type IS 'MIME content type (e.g. application/json, text/plain)';
 COMMENT ON COLUMN artifact.size_bytes IS 'Size of latest version content in bytes';
-COMMENT ON COLUMN artifact.execution IS 'Execution that produced this artifact (no FK by design)';
 COMMENT ON COLUMN artifact.data IS 'Structured JSONB data for progress artifacts or metadata';
 COMMENT ON COLUMN artifact.visibility IS 'Access visibility: public (all users) or private (scope/owner-restricted)';
 

@@ -24,7 +24,7 @@ type JsonValue = any;
 export default function PacksPage() {
   const { ref } = useParams<{ ref?: string }>();
   const { data, isLoading, error } = usePacks();
-  const packs = useMemo(() => data?.data || [], [data?.data]);
+  const packs = useMemo(() => data?.items || [], [data?.items]);
   const [searchQuery, setSearchQuery] = useState("");
   const [showPackMenu, setShowPackMenu] = useState(false);
 
@@ -301,11 +301,11 @@ function PackDetail({ packRef }: { packRef: string }) {
   }
 
   const packActions = actions || [];
-  const packTriggers = triggers?.data || [];
-  const packSensors = sensors?.data || [];
+  const packTriggers = triggers?.items || [];
+  const packSensors = sensors?.items || [];
   const packRules = rules || [];
-  const packWorkflows = workflows?.data || [];
-  const packQueues = (queues?.data || []).filter((queue) => queue.pack_ref === packRef);
+  const packWorkflows = workflows?.items || [];
+  const packQueues = (queues?.items || []).filter((queue) => queue.pack_ref === packRef);
   const componentLinks = [
     {
       label: "Actions",

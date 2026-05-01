@@ -28,7 +28,7 @@ import { useAuth } from "@/contexts/AuthContext";
 export default function TriggersPage() {
   const { ref } = useParams<{ ref?: string }>();
   const { data, isLoading, error } = useTriggers({});
-  const triggers = useMemo(() => data?.data || [], [data?.data]);
+  const triggers = useMemo(() => data?.items || [], [data?.items]);
   const [collapsedPacks, setCollapsedPacks] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
 

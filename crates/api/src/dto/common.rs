@@ -49,8 +49,8 @@ impl Default for PaginationParams {
 /// Paginated response wrapper
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PaginatedResponse<T> {
-    /// The data items
-    pub data: Vec<T>,
+    /// The page items
+    pub items: Vec<T>,
 
     /// Pagination metadata
     pub pagination: PaginationMeta,
@@ -120,17 +120,17 @@ impl PaginationMeta {
 
 impl<T> PaginatedResponse<T> {
     /// Create a new paginated response
-    pub fn new(data: Vec<T>, params: &PaginationParams, total_items: u64) -> Self {
+    pub fn new(items: Vec<T>, params: &PaginationParams, total_items: u64) -> Self {
         Self {
-            data,
+            items,
             pagination: PaginationMeta::new(params.page, params.page_size, total_items),
         }
     }
 
     /// Create a paginated response without exact total counts.
-    pub fn without_totals(data: Vec<T>, params: &PaginationParams, has_next: bool) -> Self {
+    pub fn without_totals(items: Vec<T>, params: &PaginationParams, has_next: bool) -> Self {
         Self {
-            data,
+            items,
             pagination: PaginationMeta::without_totals(params.page, params.page_size, has_next),
         }
     }
@@ -261,7 +261,7 @@ mod tests {
         let params = PaginationParams::default();
         let response = PaginatedResponse::new(data.clone(), &params, 100);
 
-        assert_eq!(response.data, data);
+        assert_eq!(response.items, data);
         assert_eq!(response.pagination.total_items, Some(100));
         assert_eq!(response.pagination.page, 1);
     }
@@ -272,7 +272,7 @@ mod tests {
         let params = PaginationParams::default();
         let response = PaginatedResponse::without_totals(data.clone(), &params, false);
 
-        assert_eq!(response.data, data);
+        assert_eq!(response.items, data);
         assert_eq!(response.pagination.total_items, None);
         assert_eq!(response.pagination.total_pages, None);
         assert!(!response.pagination.has_next);
