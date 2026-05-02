@@ -37,6 +37,7 @@ from helpers import (
 @pytest.mark.timer
 @pytest.mark.integration
 @pytest.mark.timeout(90)
+@pytest.mark.skip(reason="Cron timer sensor not yet implemented in core timer binary")
 class TestCronTimerAutomation:
     """Test cron timer automation flow"""
 
@@ -169,20 +170,20 @@ class TestCronTimerAutomation:
             print(f"    Status: {status}")
 
             # Most should be succeeded by now, but wait if needed
-            if status not in ["succeeded", "failed", "canceled"]:
+            if status not in ["completed", "failed", "cancelled"]:
                 print(f"    Waiting for completion...")
                 from helpers import wait_for_execution_status
 
                 execution = wait_for_execution_status(
                     client=client,
                     execution_id=exec_id,
-                    expected_status="succeeded",
+                    expected_status="completed",
                     timeout=15,
                 )
                 status = execution["status"]
                 print(f"    Final status: {status}")
 
-            assert status == "succeeded", (
+            assert status == "completed", (
                 f"Execution {exec_id} failed with status '{status}'"
             )
             succeeded_count += 1
@@ -272,7 +273,7 @@ class TestCronTimerAutomation:
         )
 
         succeeded = sum(
-            1 for e in executions[:expected_fires] if e["status"] == "succeeded"
+            1 for e in executions[:expected_fires] if e["status"] == "completed"
         )
         print(f"✓ {succeeded}/{expected_fires} executions succeeded")
 

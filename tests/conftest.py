@@ -6,7 +6,6 @@ end-to-end tests.
 """
 
 import os
-import subprocess
 import sys
 import time
 from typing import Generator
@@ -144,29 +143,21 @@ def clean_test_data(request):
         return
 
     db_url = os.getenv(
-        "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/attune_e2e"
+        "DATABASE_URL", "postgresql://attune:attune@postgres:5432/attune"
     )
 
     try:
-        # Clean up test data but preserve core pack and test user
-        # Only clean events, enforcements, and executions from recent test runs
-        subprocess.run(
-            [
-                "psql",
-                db_url,
-                "-c",
-                """
-                -- Delete recent test-created events and enforcements
-                DELETE FROM attune.event WHERE created > NOW() - INTERVAL '5 minutes';
-                DELETE FROM attune.enforcement WHERE created > NOW() - INTERVAL '5 minutes';
-                DELETE FROM attune.execution WHERE created > NOW() - INTERVAL '5 minutes';
-                DELETE FROM attune.inquiry WHERE created > NOW() - INTERVAL '5 minutes';
-                """,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        import psycopg
+
+        with psycopg.connect(db_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    DELETE FROM event WHERE created > NOW() - INTERVAL '5 minutes';
+                    DELETE FROM enforcement WHERE created > NOW() - INTERVAL '5 minutes';
+                    DELETE FROM execution WHERE created > NOW() - INTERVAL '5 minutes';
+                    DELETE FROM inquiry WHERE created > NOW() - INTERVAL '5 minutes';
+                """)
+            conn.commit()
     except Exception as e:
         # Don't fail tests if cleanup fails
         print(f"Warning: Test data cleanup failed: {e}")
@@ -178,45 +169,29 @@ def setup_database():
     Ensure database is properly set up before running tests
 
     This runs once per test session to verify runtimes are seeded.
+    In Docker environments, init-packs handles seeding so this is a no-op.
     """
     db_url = os.getenv(
-        "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/attune_e2e"
+        "DATABASE_URL", "postgresql://attune:attune@postgres:5432/attune"
     )
 
-    # Check if runtimes exist
-    result = subprocess.run(
-        [
-            "psql",
-            db_url,
-            "-t",
-            "-c",
-            "SELECT COUNT(*) FROM attune.runtime WHERE pack_ref = 'core';",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
+    try:
+        import psycopg
 
-    runtime_count = int(result.stdout.strip()) if result.returncode == 0 else 0
+        with psycopg.connect(db_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM runtime WHERE pack_ref = 'core'")
+                row = cur.fetchone()
+                runtime_count = row[0] if row else 0
 
-    if runtime_count == 0:
-        print("\n⚠ No runtimes found, seeding default runtimes...")
-        # Seed runtimes
-        scripts_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"
-        )
-        seed_file = os.path.join(scripts_dir, "seed_runtimes.sql")
-
-        if os.path.exists(seed_file):
-            subprocess.run(
-                ["psql", db_url, "-f", seed_file],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            print("✓ Runtimes seeded successfully")
+        if runtime_count == 0:
+            print("\n⚠ No runtimes found — expected init-packs to seed them.")
+            print("  If running outside Docker, run: ./scripts/load-core-pack.sh")
         else:
-            print(f"✗ Seed file not found: {seed_file}")
+            print(f"\n✓ Database ready ({runtime_count} core runtimes found)")
+
+    except Exception as e:
+        print(f"\n⚠ Database check skipped: {e}")
 
     yield
 

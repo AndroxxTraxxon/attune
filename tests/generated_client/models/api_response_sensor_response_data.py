@@ -30,24 +30,24 @@ class ApiResponseSensorResponseData:
 
         Attributes:
             created (datetime.datetime): Creation timestamp Example: 2024-01-13T10:30:00Z.
-            description (str): Sensor description Example: Monitors CPU usage and generates events.
             enabled (bool): Whether the sensor is enabled Example: True.
             entrypoint (str): Entry point Example: /sensors/monitoring/cpu_monitor.py.
             id (int): Sensor ID Example: 1.
             label (str): Human-readable label Example: CPU Monitoring Sensor.
-            param_schema (ApiResponseSensorResponseDataParamSchemaType0 | None): Parameter schema
+            param_schema (ApiResponseSensorResponseDataParamSchemaType0 | None): Parameter schema (StackStorm-style with
+                inline required/secret)
             ref (str): Unique reference identifier Example: monitoring.cpu_sensor.
             runtime (int): Runtime ID Example: 1.
             runtime_ref (str): Runtime reference Example: python3.
             trigger (int): Trigger ID Example: 1.
             trigger_ref (str): Trigger reference Example: monitoring.cpu_threshold.
             updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:30:00Z.
+            description (None | str | Unset): Sensor description Example: Monitors CPU usage and generates events.
             pack (int | None | Unset): Pack ID (optional) Example: 1.
             pack_ref (None | str | Unset): Pack reference (optional) Example: monitoring.
      """
 
     created: datetime.datetime
-    description: str
     enabled: bool
     entrypoint: str
     id: int
@@ -59,6 +59,7 @@ class ApiResponseSensorResponseData:
     trigger: int
     trigger_ref: str
     updated: datetime.datetime
+    description: None | str | Unset = UNSET
     pack: int | None | Unset = UNSET
     pack_ref: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -70,8 +71,6 @@ class ApiResponseSensorResponseData:
     def to_dict(self) -> dict[str, Any]:
         from ..models.api_response_sensor_response_data_param_schema_type_0 import ApiResponseSensorResponseDataParamSchemaType0
         created = self.created.isoformat()
-
-        description = self.description
 
         enabled = self.enabled
 
@@ -99,6 +98,12 @@ class ApiResponseSensorResponseData:
 
         updated = self.updated.isoformat()
 
+        description: None | str | Unset
+        if isinstance(self.description, Unset):
+            description = UNSET
+        else:
+            description = self.description
+
         pack: int | None | Unset
         if isinstance(self.pack, Unset):
             pack = UNSET
@@ -116,7 +121,6 @@ class ApiResponseSensorResponseData:
         field_dict.update(self.additional_properties)
         field_dict.update({
             "created": created,
-            "description": description,
             "enabled": enabled,
             "entrypoint": entrypoint,
             "id": id,
@@ -129,6 +133,8 @@ class ApiResponseSensorResponseData:
             "trigger_ref": trigger_ref,
             "updated": updated,
         })
+        if description is not UNSET:
+            field_dict["description"] = description
         if pack is not UNSET:
             field_dict["pack"] = pack
         if pack_ref is not UNSET:
@@ -146,8 +152,6 @@ class ApiResponseSensorResponseData:
 
 
 
-
-        description = d.pop("description")
 
         enabled = d.pop("enabled")
 
@@ -190,6 +194,16 @@ class ApiResponseSensorResponseData:
 
 
 
+        def _parse_description(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        description = _parse_description(d.pop("description", UNSET))
+
+
         def _parse_pack(data: object) -> int | None | Unset:
             if data is None:
                 return data
@@ -212,7 +226,6 @@ class ApiResponseSensorResponseData:
 
         api_response_sensor_response_data = cls(
             created=created,
-            description=description,
             enabled=enabled,
             entrypoint=entrypoint,
             id=id,
@@ -224,6 +237,7 @@ class ApiResponseSensorResponseData:
             trigger=trigger,
             trigger_ref=trigger_ref,
             updated=updated,
+            description=description,
             pack=pack,
             pack_ref=pack_ref,
         )

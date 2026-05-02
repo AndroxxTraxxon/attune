@@ -33,13 +33,13 @@ class UpdateWorkflowResponse200Data:
         Attributes:
             created (datetime.datetime): Creation timestamp Example: 2024-01-13T10:30:00Z.
             definition (UpdateWorkflowResponse200DataDefinition): Workflow definition
-            enabled (bool): Whether the workflow is enabled Example: True.
             id (int): Workflow ID Example: 1.
             label (str): Human-readable label Example: Incident Response Workflow.
             out_schema (None | UpdateWorkflowResponse200DataOutSchemaType0): Output schema
             pack (int): Pack ID Example: 1.
             pack_ref (str): Pack reference Example: slack.
-            param_schema (None | UpdateWorkflowResponse200DataParamSchemaType0): Parameter schema
+            param_schema (None | UpdateWorkflowResponse200DataParamSchemaType0): Parameter schema (StackStorm-style with
+                inline required/secret)
             ref (str): Unique reference identifier Example: slack.incident_workflow.
             tags (list[str]): Tags Example: ['incident', 'slack', 'approval'].
             updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:30:00Z.
@@ -50,7 +50,6 @@ class UpdateWorkflowResponse200Data:
 
     created: datetime.datetime
     definition: UpdateWorkflowResponse200DataDefinition
-    enabled: bool
     id: int
     label: str
     out_schema: None | UpdateWorkflowResponse200DataOutSchemaType0
@@ -70,13 +69,11 @@ class UpdateWorkflowResponse200Data:
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.update_workflow_response_200_data_definition import UpdateWorkflowResponse200DataDefinition
-        from ..models.update_workflow_response_200_data_param_schema_type_0 import UpdateWorkflowResponse200DataParamSchemaType0
         from ..models.update_workflow_response_200_data_out_schema_type_0 import UpdateWorkflowResponse200DataOutSchemaType0
+        from ..models.update_workflow_response_200_data_param_schema_type_0 import UpdateWorkflowResponse200DataParamSchemaType0
         created = self.created.isoformat()
 
         definition = self.definition.to_dict()
-
-        enabled = self.enabled
 
         id = self.id
 
@@ -120,7 +117,6 @@ class UpdateWorkflowResponse200Data:
         field_dict.update({
             "created": created,
             "definition": definition,
-            "enabled": enabled,
             "id": id,
             "label": label,
             "out_schema": out_schema,
@@ -154,8 +150,6 @@ class UpdateWorkflowResponse200Data:
 
 
 
-
-        enabled = d.pop("enabled")
 
         id = d.pop("id")
 
@@ -226,7 +220,6 @@ class UpdateWorkflowResponse200Data:
         update_workflow_response_200_data = cls(
             created=created,
             definition=definition,
-            enabled=enabled,
             id=id,
             label=label,
             out_schema=out_schema,

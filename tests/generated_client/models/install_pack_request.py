@@ -26,14 +26,12 @@ class InstallPackRequest:
 
         Attributes:
             source (str): Repository URL or source location Example: https://github.com/attune/pack-slack.git.
-            force (bool | Unset): Force reinstall if pack already exists
             ref_spec (None | str | Unset): Git branch, tag, or commit reference Example: main.
             skip_deps (bool | Unset): Skip dependency validation (not recommended)
             skip_tests (bool | Unset): Skip running pack tests during installation
      """
 
     source: str
-    force: bool | Unset = UNSET
     ref_spec: None | str | Unset = UNSET
     skip_deps: bool | Unset = UNSET
     skip_tests: bool | Unset = UNSET
@@ -45,8 +43,6 @@ class InstallPackRequest:
 
     def to_dict(self) -> dict[str, Any]:
         source = self.source
-
-        force = self.force
 
         ref_spec: None | str | Unset
         if isinstance(self.ref_spec, Unset):
@@ -64,8 +60,6 @@ class InstallPackRequest:
         field_dict.update({
             "source": source,
         })
-        if force is not UNSET:
-            field_dict["force"] = force
         if ref_spec is not UNSET:
             field_dict["ref_spec"] = ref_spec
         if skip_deps is not UNSET:
@@ -81,8 +75,6 @@ class InstallPackRequest:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
         source = d.pop("source")
-
-        force = d.pop("force", UNSET)
 
         def _parse_ref_spec(data: object) -> None | str | Unset:
             if data is None:
@@ -100,7 +92,6 @@ class InstallPackRequest:
 
         install_pack_request = cls(
             source=source,
-            force=force,
             ref_spec=ref_spec,
             skip_deps=skip_deps,
             skip_tests=skip_tests,

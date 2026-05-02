@@ -32,13 +32,16 @@ class CreatePackRequest:
             label (str): Human-readable label Example: Slack Integration.
             ref (str): Unique reference identifier (e.g., "core", "aws", "slack") Example: slack.
             version (str): Pack version (semver format recommended) Example: 1.0.0.
-            conf_schema (CreatePackRequestConfSchema | Unset): Configuration schema (JSON Schema)
+            conf_schema (CreatePackRequestConfSchema | Unset): Configuration schema (flat format with inline required/secret
+                per parameter)
             config (CreatePackRequestConfig | Unset): Pack configuration values
+            dependencies (list[str] | Unset): Pack dependencies (refs of required packs) Example: ['core'].
             description (None | str | Unset): Pack description Example: Integration with Slack for messaging and
                 notifications.
             is_standard (bool | Unset): Whether this is a standard/built-in pack
             meta (CreatePackRequestMeta | Unset): Pack metadata
-            runtime_deps (list[str] | Unset): Runtime dependencies (refs of required packs) Example: ['core'].
+            runtime_deps (list[str] | Unset): Runtime dependencies (e.g., shell, python, nodejs) Example: ['shell',
+                'python'].
             tags (list[str] | Unset): Tags for categorization Example: ['messaging', 'collaboration'].
      """
 
@@ -47,6 +50,7 @@ class CreatePackRequest:
     version: str
     conf_schema: CreatePackRequestConfSchema | Unset = UNSET
     config: CreatePackRequestConfig | Unset = UNSET
+    dependencies: list[str] | Unset = UNSET
     description: None | str | Unset = UNSET
     is_standard: bool | Unset = UNSET
     meta: CreatePackRequestMeta | Unset = UNSET
@@ -59,9 +63,9 @@ class CreatePackRequest:
 
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.create_pack_request_conf_schema import CreatePackRequestConfSchema
         from ..models.create_pack_request_config import CreatePackRequestConfig
         from ..models.create_pack_request_meta import CreatePackRequestMeta
-        from ..models.create_pack_request_conf_schema import CreatePackRequestConfSchema
         label = self.label
 
         ref = self.ref
@@ -75,6 +79,12 @@ class CreatePackRequest:
         config: dict[str, Any] | Unset = UNSET
         if not isinstance(self.config, Unset):
             config = self.config.to_dict()
+
+        dependencies: list[str] | Unset = UNSET
+        if not isinstance(self.dependencies, Unset):
+            dependencies = self.dependencies
+
+
 
         description: None | str | Unset
         if isinstance(self.description, Unset):
@@ -112,6 +122,8 @@ class CreatePackRequest:
             field_dict["conf_schema"] = conf_schema
         if config is not UNSET:
             field_dict["config"] = config
+        if dependencies is not UNSET:
+            field_dict["dependencies"] = dependencies
         if description is not UNSET:
             field_dict["description"] = description
         if is_standard is not UNSET:
@@ -159,6 +171,9 @@ class CreatePackRequest:
 
 
 
+        dependencies = cast(list[str], d.pop("dependencies", UNSET))
+
+
         def _parse_description(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -193,6 +208,7 @@ class CreatePackRequest:
             version=version,
             conf_schema=conf_schema,
             config=config,
+            dependencies=dependencies,
             description=description,
             is_standard=is_standard,
             meta=meta,

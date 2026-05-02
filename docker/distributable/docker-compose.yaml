@@ -55,7 +55,7 @@ services:
       DB_USER: attune
       DB_PASSWORD: attune
       DB_NAME: attune
-      DB_SCHEMA: public
+      DB_SCHEMA: attune
       TEST_LOGIN: ${ATTUNE_TEST_LOGIN:-test@attune.local}
       TEST_PASSWORD: ${ATTUNE_TEST_PASSWORD:-TestPass123!}
       TEST_DISPLAY_NAME: ${ATTUNE_TEST_DISPLAY_NAME:-Test User}
@@ -103,7 +103,7 @@ services:
       DB_USER: attune
       DB_PASSWORD: attune
       DB_NAME: attune
-      DB_SCHEMA: public
+      DB_SCHEMA: attune
       SOURCE_PACKS_DIR: /source/packs
       TARGET_PACKS_DIR: /opt/attune/packs
       LOADER_SCRIPT: /scripts/load_core_pack.py

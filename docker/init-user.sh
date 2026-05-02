@@ -17,7 +17,7 @@ DB_PORT="${DB_PORT:-5432}"
 DB_USER="${DB_USER:-attune}"
 DB_PASSWORD="${DB_PASSWORD:-attune}"
 DB_NAME="${DB_NAME:-attune}"
-DB_SCHEMA="${DB_SCHEMA:-public}"
+DB_SCHEMA="${DB_SCHEMA:-attune}"
 
 # Test user configuration
 TEST_LOGIN="${TEST_LOGIN:-test@attune.local}"

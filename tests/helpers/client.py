@@ -9,7 +9,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
-import psycopg2
+import psycopg
 import requests
 from requests.adapters import HTTPAdapter
 from requests.models import Response
@@ -635,7 +635,7 @@ class AttuneClient:
             "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/attune"
         )
 
-        conn = psycopg2.connect(db_url)
+        conn = psycopg.connect(db_url)
         cur = conn.cursor()
 
         try:

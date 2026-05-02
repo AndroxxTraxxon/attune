@@ -7,6 +7,7 @@ use crate::api_client::ApiClient;
 use crate::timer_manager::TimerManager;
 use crate::types::{RuleLifecycleEvent, TimerConfig};
 use anyhow::{Context, Result};
+use chrono::Utc;
 use futures::StreamExt;
 use lapin::{options::*, types::FieldTable, Channel, Connection, ConnectionProperties, Consumer};
 use serde_json::Value as JsonValue;
@@ -196,9 +197,14 @@ impl RuleLifecycleListener {
                     // Parse message as JSON
                     match serde_json::from_slice::<JsonValue>(&delivery.data) {
                         Ok(json_value) => {
-                            // Try to parse as RuleLifecycleEvent
-                            match serde_json::from_value::<RuleLifecycleEvent>(json_value.clone()) {
-                                Ok(event) => {
+                            // Try to parse as RuleLifecycleEvent (native format)
+                            // or as a MessageEnvelope wrapping rule payload
+                            let event_opt = serde_json::from_value::<RuleLifecycleEvent>(json_value.clone())
+                                .ok()
+                                .or_else(|| Self::try_parse_envelope(&json_value));
+
+                            match event_opt {
+                                Some(event) => {
                                     // Filter by trigger type - only process timer events
                                     let trigger_type = event.trigger_type();
                                     if matches!(
@@ -219,8 +225,9 @@ impl RuleLifecycleListener {
                                         );
                                     }
                                 }
-                                Err(e) => {
-                                    warn!("Failed to parse message as RuleLifecycleEvent: {}", e);
+                                None => {
+                                    warn!("Failed to parse message as rule lifecycle event");
+                                    debug!("Unparseable message: {}", json_value);
                                 }
                             }
                         }
@@ -243,6 +250,64 @@ impl RuleLifecycleListener {
 
         info!("Message consumer stopped");
         Ok(())
+    }
+
+    /// Try to parse a MessageEnvelope-wrapped rule lifecycle event.
+    /// The API publishes messages as `{message_type, payload: {rule_id, trigger_ref, ...}}`.
+    fn try_parse_envelope(json: &JsonValue) -> Option<RuleLifecycleEvent> {
+        let message_type = json.get("message_type")?.as_str()?;
+        let payload = json.get("payload")?;
+        let rule_id = payload.get("rule_id")?.as_i64()?;
+        let rule_ref = payload
+            .get("rule_ref")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        // API uses trigger_ref, sensor model uses trigger_type
+        let trigger_type = payload
+            .get("trigger_ref")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let trigger_params = payload.get("trigger_params").cloned();
+        let timestamp = Utc::now();
+
+        match message_type {
+            "RuleCreated" => {
+                let enabled = payload
+                    .get("enabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                Some(RuleLifecycleEvent::RuleCreated {
+                    rule_id,
+                    rule_ref,
+                    trigger_type,
+                    trigger_params,
+                    enabled,
+                    timestamp,
+                })
+            }
+            "RuleEnabled" => Some(RuleLifecycleEvent::RuleEnabled {
+                rule_id,
+                rule_ref,
+                trigger_type,
+                trigger_params,
+                timestamp,
+            }),
+            "RuleDisabled" => Some(RuleLifecycleEvent::RuleDisabled {
+                rule_id,
+                rule_ref,
+                trigger_type,
+                timestamp,
+            }),
+            "RuleDeleted" => Some(RuleLifecycleEvent::RuleDeleted {
+                rule_id,
+                rule_ref,
+                trigger_type,
+                timestamp,
+            }),
+            _ => None,
+        }
     }
 
     /// Handle a rule lifecycle event

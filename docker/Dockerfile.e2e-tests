@@ -1,0 +1,27 @@
+# Lightweight Python image for running E2E integration tests
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install system dependencies (curl for health checks)
+RUN apt-get update -qq \
+    && apt-get install -y -qq --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python test dependencies
+COPY tests/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -q -r /app/requirements.txt
+
+# Copy generated client (baked in so the image is self-contained)
+COPY tests/generated_client /app/tests/generated_client
+
+# Copy test helpers (baked in for the same reason)
+COPY tests/helpers /app/tests/helpers
+COPY tests/conftest.py /app/tests/conftest.py
+COPY tests/pytest.ini /app/tests/pytest.ini
+
+# Copy entrypoint
+COPY docker/e2e-entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]

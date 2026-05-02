@@ -35,7 +35,7 @@ class CreateKeyResponse201Data:
             owner_type (OwnerType):
             ref (str): Unique reference identifier Example: github_token.
             updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:30:00Z.
-            value (str): The secret value (decrypted if encrypted) Example: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.
+            value (Any): The secret value (decrypted if encrypted). Can be a string, object, array, number, or boolean.
             owner (None | str | Unset): Owner identifier Example: github-integration.
             owner_action (int | None | Unset):
             owner_action_ref (None | str | Unset): Owner action reference Example: github.create_issue.
@@ -53,7 +53,7 @@ class CreateKeyResponse201Data:
     owner_type: OwnerType
     ref: str
     updated: datetime.datetime
-    value: str
+    value: Any
     owner: None | str | Unset = UNSET
     owner_action: int | None | Unset = UNSET
     owner_action_ref: None | str | Unset = UNSET

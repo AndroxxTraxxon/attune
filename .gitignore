@@ -80,7 +80,7 @@ docker-compose.override.yml
 *.pid
 
 packs.examples/
-packs.external
+packs.external/*
 codex/
 
 # Compiled pack binaries (built via Docker or build-pack-binaries.sh)

@@ -20,7 +20,7 @@ T = TypeVar("T", bound="CreateWorkflowRequestOutSchema")
 
 @_attrs_define
 class CreateWorkflowRequestOutSchema:
-    """ Output schema (JSON Schema) defining expected outputs
+    """ Output schema (flat format) defining expected outputs with inline required/secret
 
      """
 

@@ -32,11 +32,11 @@ class CreateTriggerRequest:
             ref (str): Unique reference identifier (e.g., "core.webhook", "system.timer") Example: core.webhook.
             description (None | str | Unset): Trigger description Example: Triggers when a webhook is received.
             enabled (bool | Unset): Whether the trigger is enabled Example: True.
-            out_schema (CreateTriggerRequestOutSchemaType0 | None | Unset): Output schema (JSON Schema) defining event data
-                structure
+            out_schema (CreateTriggerRequestOutSchemaType0 | None | Unset): Output schema (flat format) defining event data
+                structure with inline required/secret
             pack_ref (None | str | Unset): Optional pack reference this trigger belongs to Example: core.
-            param_schema (CreateTriggerRequestParamSchemaType0 | None | Unset): Parameter schema (JSON Schema) defining
-                event payload structure
+            param_schema (CreateTriggerRequestParamSchemaType0 | None | Unset): Parameter schema (StackStorm-style) defining
+                trigger configuration with inline required/secret
      """
 
     label: str

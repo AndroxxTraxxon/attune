@@ -31,15 +31,16 @@ class CreateWorkflowRequest:
         Attributes:
             definition (CreateWorkflowRequestDefinition): Workflow definition (complete workflow YAML structure as JSON)
             label (str): Human-readable label Example: Incident Response Workflow.
-            out_schema (CreateWorkflowRequestOutSchema): Output schema (JSON Schema) defining expected outputs
+            out_schema (CreateWorkflowRequestOutSchema): Output schema (flat format) defining expected outputs with inline
+                required/secret
             pack_ref (str): Pack reference this workflow belongs to Example: slack.
-            param_schema (CreateWorkflowRequestParamSchema): Parameter schema (JSON Schema) defining expected inputs
+            param_schema (CreateWorkflowRequestParamSchema): Parameter schema (StackStorm-style) defining expected inputs
+                with inline required/secret
             ref (str): Unique reference identifier (e.g., "core.notify_on_failure", "slack.incident_workflow") Example:
                 slack.incident_workflow.
             version (str): Workflow version (semantic versioning recommended) Example: 1.0.0.
             description (None | str | Unset): Workflow description Example: Automated incident response workflow with
                 notifications and approvals.
-            enabled (bool | None | Unset): Whether the workflow is enabled Example: True.
             tags (list[str] | None | Unset): Tags for categorization and search Example: ['incident', 'slack', 'approval'].
      """
 
@@ -51,7 +52,6 @@ class CreateWorkflowRequest:
     ref: str
     version: str
     description: None | str | Unset = UNSET
-    enabled: bool | None | Unset = UNSET
     tags: list[str] | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -60,9 +60,9 @@ class CreateWorkflowRequest:
 
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.create_workflow_request_param_schema import CreateWorkflowRequestParamSchema
         from ..models.create_workflow_request_definition import CreateWorkflowRequestDefinition
         from ..models.create_workflow_request_out_schema import CreateWorkflowRequestOutSchema
+        from ..models.create_workflow_request_param_schema import CreateWorkflowRequestParamSchema
         definition = self.definition.to_dict()
 
         label = self.label
@@ -82,12 +82,6 @@ class CreateWorkflowRequest:
             description = UNSET
         else:
             description = self.description
-
-        enabled: bool | None | Unset
-        if isinstance(self.enabled, Unset):
-            enabled = UNSET
-        else:
-            enabled = self.enabled
 
         tags: list[str] | None | Unset
         if isinstance(self.tags, Unset):
@@ -113,8 +107,6 @@ class CreateWorkflowRequest:
         })
         if description is not UNSET:
             field_dict["description"] = description
-        if enabled is not UNSET:
-            field_dict["enabled"] = enabled
         if tags is not UNSET:
             field_dict["tags"] = tags
 
@@ -161,16 +153,6 @@ class CreateWorkflowRequest:
         description = _parse_description(d.pop("description", UNSET))
 
 
-        def _parse_enabled(data: object) -> bool | None | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(bool | None | Unset, data)
-
-        enabled = _parse_enabled(d.pop("enabled", UNSET))
-
-
         def _parse_tags(data: object) -> list[str] | None | Unset:
             if data is None:
                 return data
@@ -198,7 +180,6 @@ class CreateWorkflowRequest:
             ref=ref,
             version=version,
             description=description,
-            enabled=enabled,
             tags=tags,
         )
 

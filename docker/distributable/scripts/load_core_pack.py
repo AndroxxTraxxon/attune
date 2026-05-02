@@ -49,7 +49,7 @@ class PackLoader:
     """Loads a pack into the database"""
 
     def __init__(
-        self, database_url: str, packs_dir: Path, pack_name: str, schema: str = "public"
+        self, database_url: str, packs_dir: Path, pack_name: str, schema: str = "attune"
     ):
         self.database_url = database_url
         self.packs_dir = packs_dir
@@ -874,8 +874,8 @@ def main():
     )
     parser.add_argument(
         "--schema",
-        default=os.getenv("DB_SCHEMA", "public"),
-        help="Database schema to use (default: public)",
+        default=os.getenv("DB_SCHEMA", "attune"),
+        help="Database schema to use (default: attune)",
     )
     parser.add_argument(
         "--dry-run",

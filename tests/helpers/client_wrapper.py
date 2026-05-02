@@ -32,6 +32,7 @@ from generated_client.api.auth import (
     register as gen_register,
 )
 from generated_client.api.enforcements import list_enforcements as gen_list_enforcements
+from generated_client.api.events import get_event as gen_get_event
 from generated_client.api.events import list_events as gen_list_events
 from generated_client.api.executions import (
     get_execution as gen_get_execution,
@@ -130,6 +131,7 @@ from generated_client.models.login_request import LoginRequest
 from generated_client.models.register_pack_request import RegisterPackRequest
 from generated_client.models.register_request import RegisterRequest
 from generated_client.models.update_key_request import UpdateKeyRequest
+from generated_client.models.owner_type import OwnerType
 
 
 def to_dict(obj: Any) -> Any:
@@ -143,6 +145,39 @@ def to_dict(obj: Any) -> Any:
     if isinstance(obj, list):
         return [to_dict(item) for item in obj]
     return obj
+
+
+def unwrap_list(response: Any) -> list[dict]:
+    """Unwrap a paginated list response into a list of dicts.
+
+    The generated client returns PaginatedResponse* objects with 'items' field.
+    """
+    if response is None:
+        return []
+    result = to_dict(response)
+    if isinstance(result, dict):
+        if "items" in result:
+            return result["items"]
+        if "data" in result:
+            return result["data"]
+    if isinstance(result, list):
+        return result
+    return []
+
+
+def unwrap_item(response: Any) -> Optional[dict]:
+    """Unwrap a single-item API response into a dict.
+
+    The generated client returns ApiResponse* objects with 'data' field.
+    """
+    if response is None:
+        return None
+    result = to_dict(response)
+    if isinstance(result, dict):
+        if "data" in result:
+            return result["data"]
+        return result
+    return result
 
 
 class AttuneClient:
@@ -233,11 +268,7 @@ class AttuneClient:
 
         response = gen_register.sync(client=self.auth_base_client, body=request)
 
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-            return result
+        return unwrap_item(response)
 
         raise Exception("Registration failed")
 
@@ -306,11 +337,7 @@ class AttuneClient:
     def list_packs(self, **params) -> list[dict]:
         """List all packs"""
         response = gen_list_packs.sync(client=self._get_client())
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return []
+        return unwrap_list(response)
 
     def get_pack(self, pack_id: int) -> dict:
         """Get pack by ID - Note: API uses ref, so need to lookup by ref"""
@@ -325,11 +352,7 @@ class AttuneClient:
     def get_pack_by_ref(self, ref: str) -> Optional[dict]:
         """Get pack by reference"""
         response = gen_get_pack.sync(ref=ref, client=self._get_client())
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return None
+        return unwrap_item(response)
 
     def create_pack(
         self,
@@ -351,21 +374,17 @@ class AttuneClient:
 
         response = gen_create_pack.sync(client=self._get_client(), body=request)
 
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-            return result
+        return unwrap_item(response)
 
         raise Exception("Failed to create pack")
 
     def register_pack(
         self, path: str, skip_tests: bool = True, force: bool = False
     ) -> dict:
-        """Register a pack from filesystem path
+        """Register a pack from filesystem path (API-server-side path)
 
         Args:
-            path: Path to pack directory
+            path: Path to pack directory (must be accessible by the API server)
             skip_tests: Skip running pack tests during registration (default: True)
             force: Force registration even if tests fail (default: False)
         """
@@ -380,6 +399,54 @@ class AttuneClient:
             return data
         raise Exception(
             f"Failed to register pack: {response.status_code} {response.text}"
+        )
+
+    def upload_pack(
+        self, pack_dir: str, force: bool = False, skip_tests: bool = True
+    ) -> dict:
+        """Upload a pack directory as a tarball to the API
+
+        This works across container boundaries (test container → API container)
+        by creating a .tar.gz archive and POSTing it to /api/v1/packs/upload.
+
+        Args:
+            pack_dir: Local path to pack directory
+            force: Overwrite existing pack (default: False)
+            skip_tests: Skip pack tests (default: True)
+        """
+        import io
+        import tarfile
+
+        # Create in-memory tarball
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            tar.add(pack_dir, arcname=".")
+        buf.seek(0)
+
+        # Upload via multipart form
+        client = self._get_client()
+        files = {"pack": ("pack.tar.gz", buf, "application/gzip")}
+        data = {}
+        if force:
+            data["force"] = "true"
+        if skip_tests:
+            data["skip_tests"] = "true"
+
+        response = client.get_httpx_client().post(
+            "/api/v1/packs/upload", files=files, data=data
+        )
+
+        if response.status_code in (200, 201):
+            resp_data = response.json()
+            # Upload response wraps pack data in {"data": {"pack": {...}, ...}}
+            if isinstance(resp_data, dict) and "data" in resp_data:
+                resp_data = resp_data["data"]
+            # Extract just the pack object if wrapped in {"pack": {...}}
+            if isinstance(resp_data, dict) and "pack" in resp_data:
+                return resp_data["pack"]
+            return resp_data
+        raise Exception(
+            f"Failed to upload pack: {response.status_code} {response.text}"
         )
 
     def reload_pack(self, pack_id: int) -> dict:
@@ -402,13 +469,13 @@ class AttuneClient:
         """List all actions"""
         response = gen_list_actions.sync(
             client=self._get_client(),
-            pack=params.get("pack"),
         )
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return []
+        items = unwrap_list(response)
+        # Client-side pack filter (API no longer supports server-side filtering)
+        pack = params.get("pack")
+        if pack:
+            items = [a for a in items if a.get("pack_ref") == pack or a.get("ref", "").startswith(f"{pack}.")]
+        return items
 
     def get_action(self, action_id: int) -> dict:
         """Get action by ID - needs ref lookup"""
@@ -421,11 +488,7 @@ class AttuneClient:
     def get_action_by_ref(self, ref: str) -> Optional[dict]:
         """Get action by reference"""
         response = gen_get_action.sync(ref=ref, client=self._get_client())
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return None
+        return unwrap_item(response)
 
     def create_action(
         self,
@@ -440,28 +503,49 @@ class AttuneClient:
         # Legacy arguments for backward compatibility
         name: Optional[str] = None,
         runner_type: Optional[str] = None,
+        data: Optional[dict] = None,
         **kwargs,
     ) -> dict:
         """Create a new action
 
         Supports both new-style (ref, label, pack_ref, entrypoint)
-        and legacy-style (pack_ref, name, runner_type, entrypoint) arguments.
+        and legacy-style (pack_ref, name, runner_type, entrypoint) arguments,
+        plus dict-style (pack_ref, data={...}) for tier 2/3 tests.
         """
+        # Handle dict-style argument (tier 2/3 tests pass data={...})
+        if data is not None:
+            name = name or data.get("name")
+            description = description or data.get("description")
+            runner_type = runner_type or data.get("runner_type")
+            entrypoint = entrypoint or data.get("entry_point") or data.get("entrypoint")
+            param_schema = param_schema or data.get("parameters") or data.get("param_schema")
+            out_schema = out_schema or data.get("out_schema")
+
         # Handle legacy-style arguments
-        if pack_ref and name:
-            # Build ref from pack_ref and name
+        if pack_ref and name and not ref:
             ref = f"{pack_ref}.{name}"
-            label = name.replace("_", " ").title()
+            label = label or name.replace("_", " ").title()
 
             # Map legacy runner_type to runtime_ref
             if runner_type and not runtime_ref:
-                runtime_ref = f"core.action.{runner_type}"
+                runtime_map = {
+                    "python3": "core.python",
+                    "python": "core.python",
+                    "shell": "core.shell",
+                    "node": "core.nodejs",
+                    "nodejs": "core.nodejs",
+                }
+                runtime_ref = runtime_map.get(runner_type, f"core.{runner_type}")
+
+        # Default entrypoint if not provided
+        if not entrypoint:
+            entrypoint = "action.sh"
 
         # Validate required fields
-        if not ref or not label or not pack_ref or not entrypoint:
+        if not ref or not label or not pack_ref:
             raise ValueError(
-                "Missing required arguments: ref, label, pack_ref, and entrypoint "
-                "(or pack_ref, name, and entrypoint)"
+                "Missing required arguments: ref, label, pack_ref "
+                "(or pack_ref, name)"
             )
 
         # Use plain POST request instead of generated client to handle API schema changes
@@ -501,29 +585,41 @@ class AttuneClient:
 
     def list_triggers(self, **params) -> list[dict]:
         """List all triggers"""
-        response = gen_list_triggers.sync(client=self._get_client())
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return []
+        response = gen_list_triggers.sync(client=self._get_client(), page_size=1000)
+        return unwrap_list(response)
 
     def get_trigger(self, trigger_id: int) -> dict:
         """Get trigger by ID"""
-        triggers = self.list_triggers()
-        for trigger in triggers:
-            if trigger.get("id") == trigger_id:
-                return self.get_trigger_by_ref(trigger["ref"])
+        # Use paginated listing with max page_size to handle many triggers
+        response = self.get("/api/v1/triggers", params={"page_size": 100})
+        if response.status_code == 200:
+            data = response.json()
+            triggers = data.get("items", data.get("data", []))
+            if isinstance(triggers, list):
+                for trigger in triggers:
+                    if trigger.get("id") == trigger_id:
+                        return self.get_trigger_by_ref(trigger["ref"])
+            # Check additional pages
+            pagination = data.get("pagination", {})
+            page = 2
+            while pagination.get("has_next"):
+                response = self.get("/api/v1/triggers", params={"page_size": 100, "page": page})
+                if response.status_code != 200:
+                    break
+                data = response.json()
+                triggers = data.get("items", data.get("data", []))
+                if isinstance(triggers, list):
+                    for trigger in triggers:
+                        if trigger.get("id") == trigger_id:
+                            return self.get_trigger_by_ref(trigger["ref"])
+                pagination = data.get("pagination", {})
+                page += 1
         raise Exception(f"Trigger {trigger_id} not found")
 
     def get_trigger_by_ref(self, ref: str) -> Optional[dict]:
         """Get trigger by reference"""
         response = gen_get_trigger.sync(ref=ref, client=self._get_client())
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return None
+        return unwrap_item(response)
 
     def create_trigger(
         self,
@@ -716,11 +812,7 @@ class AttuneClient:
     def list_sensors(self, **params) -> list[dict]:
         """List all sensors"""
         response = gen_list_sensors.sync(client=self._get_client())
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return []
+        return unwrap_list(response)
 
     def get_sensor(self, sensor_id: int) -> dict:
         """Get sensor by ID"""
@@ -773,11 +865,7 @@ class AttuneClient:
 
         response = gen_create_sensor.sync(client=self._get_client(), body=request)
 
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-            return result
+        return unwrap_item(response)
 
         # Get more detailed error information
         try:
@@ -805,11 +893,7 @@ class AttuneClient:
     def list_rules(self, **params) -> list[dict]:
         """List all rules"""
         response = gen_list_rules.sync(client=self._get_client())
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return []
+        return unwrap_list(response)
 
     def get_rule(self, rule_id: int) -> dict:
         """Get rule by ID"""
@@ -839,18 +923,29 @@ class AttuneClient:
         # Legacy arguments for backward compatibility
         name: Optional[str] = None,
         trigger_id: Optional[int] = None,
+        data: Optional[dict] = None,
         **kwargs,
     ) -> dict:
         """Create a new rule
 
-        Supports both new-style (ref, label, pack_ref, trigger_ref, action_ref)
-        and legacy-style (name, pack_ref, trigger_id, action_ref) arguments.
+        Supports new-style keyword args, legacy-style, and data={...} dict.
         """
+        # Handle dict-style argument
+        if data is not None:
+            name = name or data.get("name")
+            description = description or data.get("description")
+            trigger_ref = trigger_ref or data.get("trigger_ref")
+            action_ref = action_ref or data.get("action_ref")
+            enabled = data.get("enabled", enabled)
+            criteria = criteria or data.get("criteria")
+            action_parameters = action_parameters or data.get(
+                "action_parameters"
+            ) or data.get("action_params")
+
         # Handle legacy-style arguments
-        if pack_ref and name:
-            # Build ref from pack_ref and name
+        if pack_ref and name and not ref:
             ref = f"{pack_ref}.{name}"
-            label = name.replace("_", " ").title()
+            label = label or name.replace("_", " ").title()
 
             # If trigger_id is provided, get the trigger to find trigger_ref
             if trigger_id and not trigger_ref:
@@ -881,7 +976,12 @@ class AttuneClient:
         if criteria:
             payload["criteria"] = criteria
         if action_parameters:
-            payload["action_parameters"] = action_parameters
+            payload["action_params"] = action_parameters
+
+        # Include trigger_parameters if provided (required for triggers with param_schema)
+        trigger_parameters = kwargs.get("trigger_parameters")
+        if trigger_parameters:
+            payload["trigger_params"] = trigger_parameters
 
         response = self._request("POST", "/api/v1/rules", json=payload)
         if response.status_code in (200, 201):
@@ -903,11 +1003,7 @@ class AttuneClient:
         response = gen_enable_rule.sync(
             ref=rule.get("ref", str(rule_id)), client=self._get_client()
         )
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return {}
+        return unwrap_item(response) or {}
 
     def disable_rule(self, rule_id: int) -> dict:
         """Disable a rule"""
@@ -915,11 +1011,7 @@ class AttuneClient:
         response = gen_disable_rule.sync(
             ref=rule.get("ref", str(rule_id)), client=self._get_client()
         )
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return {}
+        return unwrap_item(response) or {}
 
     def delete_rule(self, rule_id: int):
         """Delete a rule"""
@@ -933,8 +1025,13 @@ class AttuneClient:
     # Events
     # ========================================================================
 
-    def list_events(self, **params) -> list[dict]:
-        """List all events"""
+    def list_events(self, enrich: bool = True, **params) -> list[dict]:
+        """List all events (optionally enriched with full payload from individual fetches)
+
+        Args:
+            enrich: If True, fetch full payload for each event (slow for large lists).
+                    If False, return list response as-is (has rule, created, trigger fields).
+        """
         # Map trigger_id to trigger for backward compatibility
         trigger = params.get("trigger_id") or params.get("trigger")
         response = gen_list_events.sync(
@@ -945,19 +1042,28 @@ class AttuneClient:
             page=params.get("page"),
             per_page=params.get("limit"),
         )
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return []
+        items = unwrap_list(response)
+        if not enrich:
+            return items
+        # Enrich events with full payload (list endpoint only returns summaries)
+        enriched = []
+        for event in items:
+            if event.get("has_payload") and "payload" not in event:
+                try:
+                    full = self.get_event(event["id"])
+                    enriched.append(full)
+                except Exception:
+                    enriched.append(event)
+            else:
+                enriched.append(event)
+        return enriched
 
     def get_event(self, event_id: int) -> dict:
-        """Get event by ID"""
-        # Events don't have a get-by-ref endpoint, need to list and filter
-        events = self.list_events(limit=1000)
-        for event in events:
-            if event.get("id") == event_id:
-                return event
+        """Get event by ID (full response with payload)"""
+        response = gen_get_event.sync(id=event_id, client=self._get_client())
+        result = unwrap_item(response)
+        if result:
+            return result
         raise Exception(f"Event {event_id} not found")
 
     # ========================================================================
@@ -968,15 +1074,13 @@ class AttuneClient:
         """List all enforcements"""
         response = gen_list_enforcements.sync(
             client=self._get_client(),
-            rule_id=params.get("rule_id"),
-            limit=params.get("limit"),
-            offset=params.get("offset"),
+            rule=params.get("rule_id") or params.get("rule"),
+            rule_ref=params.get("rule_ref"),
+            status=params.get("status"),
+            page=params.get("page"),
+            per_page=params.get("limit") or params.get("per_page"),
         )
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return []
+        return unwrap_list(response)
 
     def get_enforcement(self, enforcement_id: int) -> dict:
         """Get enforcement by ID"""
@@ -992,37 +1096,154 @@ class AttuneClient:
 
     def list_executions(self, **params) -> list[dict]:
         """List all executions"""
-        response = gen_list_executions.sync(
-            client=self._get_client(),
-            action_ref=params.get("action_ref"),
-            status=params.get("status"),
-            limit=params.get("limit"),
-            offset=params.get("offset"),
-        )
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
+        query_params = {}
+        if params.get("action_ref"):
+            query_params["action_ref"] = params["action_ref"]
+        if params.get("status"):
+            query_params["status"] = params["status"]
+        if params.get("page"):
+            query_params["page"] = params["page"]
+        per_page = params.get("limit") or params.get("per_page")
+        if per_page:
+            query_params["per_page"] = per_page
+        response = self._request("GET", "/api/v1/executions", params=query_params)
+        if response.status_code == 200:
+            data = response.json()
+            if "items" in data:
+                return data["items"]
+            if "data" in data:
+                return data["data"]
+            if isinstance(data, list):
+                return data
         return []
 
     def get_execution(self, execution_id: int) -> dict:
         """Get execution by ID"""
-        response = gen_get_execution.sync(
-            ref=str(execution_id), client=self._get_client()
-        )
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
+        response = self._request("GET", f"/api/v1/executions/{execution_id}")
+        if response.status_code == 200:
+            data = response.json()
+            if "data" in data:
+                return data["data"]
+            return data
         raise Exception(f"Execution {execution_id} not found")
+
+    def create_execution(
+        self,
+        action_ref: str,
+        parameters: Optional[dict] = None,
+        env_vars: Optional[dict] = None,
+    ) -> dict:
+        """Create and queue an execution"""
+        payload: dict = {"action_ref": action_ref}
+        if parameters:
+            payload["parameters"] = parameters
+        if env_vars:
+            payload["env_vars"] = env_vars
+        response = self._request("POST", "/api/v1/executions/execute", json=payload)
+        if response.status_code in (200, 201):
+            data = response.json()
+            if "data" in data:
+                return data["data"]
+            return data
+        raise Exception(
+            f"Failed to create execution: {response.status_code} {response.text}"
+        )
 
     def cancel_execution(self, execution_id: int) -> dict:
         """Cancel an execution"""
-        raise NotImplementedError("cancel_execution not yet implemented")
+        response = self._request(
+            "POST", f"/api/v1/executions/{execution_id}/cancel", json={}
+        )
+        if response.status_code in (200, 201):
+            data = response.json()
+            if "data" in data:
+                return data["data"]
+            return data
+        raise Exception(
+            f"Failed to cancel execution: {response.status_code} {response.text}"
+        )
+
+    # ========================================================================
+    # Webhooks
+    # ========================================================================
+
+    def post_webhook(self, webhook_url: str, payload: Optional[dict] = None) -> dict:
+        """Post data to a webhook URL.
+
+        Args:
+            webhook_url: Full webhook URL or just the key path
+            payload: JSON payload to send
+        """
+        # webhook_url may be full URL or just path like /api/v1/webhooks/{key}
+        if webhook_url.startswith("http"):
+            # Extract path from full URL
+            from urllib.parse import urlparse
+
+            parsed = urlparse(webhook_url)
+            path = parsed.path
+        else:
+            path = webhook_url
+
+        response = self._request("POST", path, json={"payload": payload or {}})
+        if response.status_code in (200, 201, 202):
+            return response.json() if response.text else {}
+        raise Exception(
+            f"Webhook POST failed: {response.status_code} {response.text}"
+        )
 
     # ========================================================================
     # Inquiries
     # ========================================================================
+
+    def create_inquiry(
+        self,
+        execution_id: Optional[int] = None,
+        data: Optional[dict] = None,
+        **kwargs,
+    ) -> dict:
+        """Create an inquiry.
+
+        Supports both keyword args and data={...} dict style.
+        """
+        if data is not None:
+            execution_id = execution_id or data.get("execution_id")
+            prompt = data.get("prompt", data.get("message", "Please respond"))
+            response_schema = data.get("schema") or data.get("response_schema")
+            assigned_to = data.get("assigned_to")
+            timeout_at = data.get("timeout_at") or data.get("ttl")
+        else:
+            prompt = kwargs.get("prompt", "Please respond")
+            response_schema = kwargs.get("schema") or kwargs.get("response_schema")
+            assigned_to = kwargs.get("assigned_to")
+            timeout_at = kwargs.get("timeout_at")
+
+        payload: dict = {
+            "execution": execution_id or 0,
+            "prompt": prompt,
+        }
+        if response_schema:
+            payload["response_schema"] = response_schema
+        if assigned_to:
+            payload["assigned_to"] = assigned_to
+        if timeout_at:
+            # Convert TTL (integer seconds) to ISO timestamp if needed
+            if isinstance(timeout_at, (int, float)):
+                from datetime import datetime, timezone, timedelta
+
+                timeout_at = (
+                    datetime.now(timezone.utc) + timedelta(seconds=timeout_at)
+                ).isoformat()
+            payload["timeout_at"] = timeout_at
+
+        response = self._request("POST", "/api/v1/inquiries", json=payload)
+        if response.status_code in (200, 201):
+            resp_data = response.json()
+            if "data" in resp_data:
+                return resp_data["data"]
+            return resp_data
+        raise Exception(
+            f"Failed to create inquiry: {response.status_code} {response.text}"
+        )
 
     def list_inquiries(self, **params) -> list[dict]:
         """List all inquiries"""
@@ -1032,11 +1253,7 @@ class AttuneClient:
             limit=params.get("limit"),
             offset=params.get("offset"),
         )
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return []
+        return unwrap_list(response)
 
     def get_inquiry(self, inquiry_id: int) -> dict:
         """Get inquiry by ID"""
@@ -1046,17 +1263,22 @@ class AttuneClient:
                 return inquiry
         raise Exception(f"Inquiry {inquiry_id} not found")
 
-    def respond_to_inquiry(self, inquiry_id: int, response_data: dict) -> dict:
+    def respond_to_inquiry(
+        self, inquiry_id: int, response_data: dict = None, response: dict = None
+    ) -> dict:
         """Respond to an inquiry"""
-        request = InquiryRespondRequest(response=response_data)
-        response = gen_respond_inquiry.sync(
-            ref=str(inquiry_id), client=self._get_client(), body=request
+        data = response_data or response or {}
+        resp = self._request(
+            "POST", f"/api/v1/inquiries/{inquiry_id}/respond", json={"response": data}
         )
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return {}
+        if resp.status_code in (200, 201):
+            resp_data = resp.json()
+            if "data" in resp_data:
+                return resp_data["data"]
+            return resp_data
+        raise Exception(
+            f"Failed to respond to inquiry: {resp.status_code} {resp.text}"
+        )
 
     # ========================================================================
     # Secrets (Datastore/Keys)
@@ -1065,20 +1287,12 @@ class AttuneClient:
     def list_secrets(self, **params) -> list[dict]:
         """List all secrets/keys"""
         response = gen_list_keys.sync(client=self._get_client())
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return []
+        return unwrap_list(response)
 
     def get_secret(self, key_name: str, **params) -> Optional[dict]:
         """Get secret by key name"""
         response = gen_get_key.sync(ref=key_name, client=self._get_client())
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-        return None
+        return unwrap_item(response)
 
     def datastore_get(self, key: str, **params) -> Optional[str]:
         """Get value from datastore"""
@@ -1097,19 +1311,17 @@ class AttuneClient:
             )
         else:
             # Create new
+            encrypted = params.get("encrypted", False)
             request = CreateKeyRequest(
-                key=key,
+                ref=key,
+                name=key,
                 value=value,
-                scope=params.get("scope", "user"),
+                owner_type=OwnerType.SYSTEM,
+                encrypted=encrypted,
             )
             response = gen_create_key.sync(client=self._get_client(), body=request)
 
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-            return result
-        return {}
+        return unwrap_item(response) or {}
 
     def datastore_delete(self, key: str, **params):
         """Delete value from datastore"""
@@ -1117,18 +1329,16 @@ class AttuneClient:
 
     def create_secret(self, key: str, value: str, **params) -> dict:
         """Create a new secret"""
+        encrypted = params.get("encrypted", True)
         request = CreateKeyRequest(
-            key=key,
+            ref=key,
+            name=key,
             value=value,
-            scope=params.get("scope", "user"),
+            owner_type=OwnerType.SYSTEM,
+            encrypted=encrypted,
         )
         response = gen_create_key.sync(client=self._get_client(), body=request)
-        if response:
-            result = to_dict(response)
-            if isinstance(result, dict) and "data" in result:
-                return result["data"]
-            return result
-        return {}
+        return unwrap_item(response) or {}
 
     def update_secret(self, key_id: int, **params) -> dict:
         """Update a secret"""
@@ -1153,6 +1363,15 @@ class AttuneClient:
             if secret.get("id") == key_id:
                 gen_delete_key.sync(ref=secret["key"], client=self._get_client())
                 return
+
+    # Aliases for tier 2 test compatibility
+    def get_datastore_item(self, key: str, **params) -> Optional[dict]:
+        """Get datastore item (alias for get_secret)"""
+        return self.get_secret(key)
+
+    def set_datastore_item(self, key: str, value: str, **params) -> dict:
+        """Set datastore item (alias for datastore_set)"""
+        return self.datastore_set(key, value, **params)
 
     # ========================================================================
     # Compatibility helpers

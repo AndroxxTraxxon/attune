@@ -34,17 +34,21 @@ class UpdateRuleRequest:
             conditions (None | UpdateRuleRequestConditionsType0): Conditions for rule evaluation
             trigger_params (None | UpdateRuleRequestTriggerParamsType0): Parameters for trigger configuration and event
                 filtering
+            action_ref (None | str | Unset): Action reference to execute when rule matches Example: slack.post_message.
             description (None | str | Unset): Rule description Example: Enhanced error notification with filtering.
             enabled (bool | None | Unset): Whether the rule is enabled
             label (None | str | Unset): Human-readable label Example: Notify on Error (Updated).
+            trigger_ref (None | str | Unset): Trigger reference that activates this rule Example: system.error_event.
      """
 
     action_params: None | UpdateRuleRequestActionParamsType0
     conditions: None | UpdateRuleRequestConditionsType0
     trigger_params: None | UpdateRuleRequestTriggerParamsType0
+    action_ref: None | str | Unset = UNSET
     description: None | str | Unset = UNSET
     enabled: bool | None | Unset = UNSET
     label: None | str | Unset = UNSET
+    trigger_ref: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
 
@@ -53,8 +57,8 @@ class UpdateRuleRequest:
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.update_rule_request_action_params_type_0 import UpdateRuleRequestActionParamsType0
-        from ..models.update_rule_request_trigger_params_type_0 import UpdateRuleRequestTriggerParamsType0
         from ..models.update_rule_request_conditions_type_0 import UpdateRuleRequestConditionsType0
+        from ..models.update_rule_request_trigger_params_type_0 import UpdateRuleRequestTriggerParamsType0
         action_params: dict[str, Any] | None
         if isinstance(self.action_params, UpdateRuleRequestActionParamsType0):
             action_params = self.action_params.to_dict()
@@ -72,6 +76,12 @@ class UpdateRuleRequest:
             trigger_params = self.trigger_params.to_dict()
         else:
             trigger_params = self.trigger_params
+
+        action_ref: None | str | Unset
+        if isinstance(self.action_ref, Unset):
+            action_ref = UNSET
+        else:
+            action_ref = self.action_ref
 
         description: None | str | Unset
         if isinstance(self.description, Unset):
@@ -91,6 +101,12 @@ class UpdateRuleRequest:
         else:
             label = self.label
 
+        trigger_ref: None | str | Unset
+        if isinstance(self.trigger_ref, Unset):
+            trigger_ref = UNSET
+        else:
+            trigger_ref = self.trigger_ref
+
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -99,12 +115,16 @@ class UpdateRuleRequest:
             "conditions": conditions,
             "trigger_params": trigger_params,
         })
+        if action_ref is not UNSET:
+            field_dict["action_ref"] = action_ref
         if description is not UNSET:
             field_dict["description"] = description
         if enabled is not UNSET:
             field_dict["enabled"] = enabled
         if label is not UNSET:
             field_dict["label"] = label
+        if trigger_ref is not UNSET:
+            field_dict["trigger_ref"] = trigger_ref
 
         return field_dict
 
@@ -170,6 +190,16 @@ class UpdateRuleRequest:
         trigger_params = _parse_trigger_params(d.pop("trigger_params"))
 
 
+        def _parse_action_ref(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        action_ref = _parse_action_ref(d.pop("action_ref", UNSET))
+
+
         def _parse_description(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -200,13 +230,25 @@ class UpdateRuleRequest:
         label = _parse_label(d.pop("label", UNSET))
 
 
+        def _parse_trigger_ref(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        trigger_ref = _parse_trigger_ref(d.pop("trigger_ref", UNSET))
+
+
         update_rule_request = cls(
             action_params=action_params,
             conditions=conditions,
             trigger_params=trigger_params,
+            action_ref=action_ref,
             description=description,
             enabled=enabled,
             label=label,
+            trigger_ref=trigger_ref,
         )
 
 

@@ -20,7 +20,7 @@ T = TypeVar("T", bound="CreatePackRequestConfSchema")
 
 @_attrs_define
 class CreatePackRequestConfSchema:
-    """ Configuration schema (JSON Schema)
+    """ Configuration schema (flat format with inline required/secret per parameter)
 
      """
 

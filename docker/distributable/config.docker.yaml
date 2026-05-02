@@ -21,7 +21,7 @@ database:
   connect_timeout: 30
   idle_timeout: 600
   log_statements: false
-  schema: "public"
+  schema: "attune"
 
 # Docker message queue (RabbitMQ container)
 message_queue:

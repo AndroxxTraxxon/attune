@@ -28,12 +28,12 @@ class UpdateKeyRequest:
             encrypted (bool | None | Unset): Update encryption status (re-encrypts if changing from false to true) Example:
                 True.
             name (None | str | Unset): Update the human-readable name Example: GitHub API Token (Updated).
-            value (None | str | Unset): Update the secret value Example: ghp_new_token_xxxxxxxxxxxxxxxxxxxxxxxx.
+            value (Any | Unset): Update the secret value. Can be a string, object, array, number, or boolean.
      """
 
     encrypted: bool | None | Unset = UNSET
     name: None | str | Unset = UNSET
-    value: None | str | Unset = UNSET
+    value: Any | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
 
@@ -53,11 +53,7 @@ class UpdateKeyRequest:
         else:
             name = self.name
 
-        value: None | str | Unset
-        if isinstance(self.value, Unset):
-            value = UNSET
-        else:
-            value = self.value
+        value = self.value
 
 
         field_dict: dict[str, Any] = {}
@@ -98,15 +94,7 @@ class UpdateKeyRequest:
         name = _parse_name(d.pop("name", UNSET))
 
 
-        def _parse_value(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        value = _parse_value(d.pop("value", UNSET))
-
+        value = d.pop("value", UNSET)
 
         update_key_request = cls(
             encrypted=encrypted,

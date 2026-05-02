@@ -20,7 +20,7 @@ T = TypeVar("T", bound="CreateTriggerRequestParamSchemaType0")
 
 @_attrs_define
 class CreateTriggerRequestParamSchemaType0:
-    """ Parameter schema (JSON Schema) defining event payload structure
+    """ Parameter schema (StackStorm-style) defining trigger configuration with inline required/secret
 
      """
 

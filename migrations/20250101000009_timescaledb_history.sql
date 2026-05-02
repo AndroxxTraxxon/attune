@@ -12,6 +12,9 @@
 --              CONSTRAINT statements are needed here.
 -- Version: 20250101000009
 
+-- Set search_path for schema isolation
+SET search_path TO attune, public;
+
 -- ============================================================================
 -- EXTENSION
 -- ============================================================================
@@ -381,14 +384,20 @@ SELECT add_retention_policy('event', INTERVAL '90 days');
 -- Drop existing continuous aggregates if they exist, so this migration can be
 -- re-run safely after a partial failure. (TimescaleDB continuous aggregates
 -- must be dropped with CASCADE to remove their associated policies.)
+-- Try DROP VIEW first (handles the case where an earlier run created a plain
+-- view instead of a materialized view), then DROP MATERIALIZED VIEW.
+DROP VIEW IF EXISTS execution_status_hourly CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS execution_status_hourly CASCADE;
+DROP VIEW IF EXISTS execution_throughput_hourly CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS execution_throughput_hourly CASCADE;
+DROP VIEW IF EXISTS event_volume_hourly CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS event_volume_hourly CASCADE;
+DROP VIEW IF EXISTS worker_status_hourly CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS worker_status_hourly CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS enforcement_volume_hourly CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS execution_volume_hourly CASCADE;
 DROP VIEW IF EXISTS enforcement_volume_hourly CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS enforcement_volume_hourly CASCADE;
 DROP VIEW IF EXISTS execution_volume_hourly CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS execution_volume_hourly CASCADE;
 
 -- ----------------------------------------------------------------------------
 -- execution_status_hourly

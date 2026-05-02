@@ -20,7 +20,7 @@ T = TypeVar("T", bound="CreateInquiryRequestResponseSchema")
 
 @_attrs_define
 class CreateInquiryRequestResponseSchema:
-    """ Optional JSON schema for the expected response format
+    """ Optional schema for the expected response format (flat format with inline required/secret)
 
      """
 

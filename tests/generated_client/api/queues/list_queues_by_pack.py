@@ -1,0 +1,272 @@
+from http import HTTPStatus
+from typing import Any, cast
+from urllib.parse import quote
+
+import httpx
+
+from ...client import AuthenticatedClient, Client
+from ...types import Response, UNSET
+from ... import errors
+
+from ...models.paginated_response_work_queue_summary import PaginatedResponseWorkQueueSummary
+from ...types import UNSET, Unset
+from typing import cast
+
+
+
+def _get_kwargs(
+    pack_ref: str,
+    *,
+    enabled: bool | None | Unset = UNSET,
+    is_adhoc: bool | None | Unset = UNSET,
+    search: None | str | Unset = UNSET,
+    page: int | Unset = UNSET,
+    per_page: int | Unset = UNSET,
+
+) -> dict[str, Any]:
+    
+
+    
+
+    params: dict[str, Any] = {}
+
+    json_enabled: bool | None | Unset
+    if isinstance(enabled, Unset):
+        json_enabled = UNSET
+    else:
+        json_enabled = enabled
+    params["enabled"] = json_enabled
+
+    json_is_adhoc: bool | None | Unset
+    if isinstance(is_adhoc, Unset):
+        json_is_adhoc = UNSET
+    else:
+        json_is_adhoc = is_adhoc
+    params["is_adhoc"] = json_is_adhoc
+
+    json_search: None | str | Unset
+    if isinstance(search, Unset):
+        json_search = UNSET
+    else:
+        json_search = search
+    params["search"] = json_search
+
+    params["page"] = page
+
+    params["per_page"] = per_page
+
+
+    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
+
+
+    _kwargs: dict[str, Any] = {
+        "method": "get",
+        "url": "/api/v1/packs/{pack_ref}/queues".format(pack_ref=quote(str(pack_ref), safe=""),),
+        "params": params,
+    }
+
+
+    return _kwargs
+
+
+
+def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> Any | PaginatedResponseWorkQueueSummary | None:
+    if response.status_code == 200:
+        response_200 = PaginatedResponseWorkQueueSummary.from_dict(response.json())
+
+
+
+        return response_200
+
+    if response.status_code == 403:
+        response_403 = cast(Any, None)
+        return response_403
+
+    if response.status_code == 404:
+        response_404 = cast(Any, None)
+        return response_404
+
+    if client.raise_on_unexpected_status:
+        raise errors.UnexpectedStatus(response.status_code, response.content)
+    else:
+        return None
+
+
+def _build_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> Response[Any | PaginatedResponseWorkQueueSummary]:
+    return Response(
+        status_code=HTTPStatus(response.status_code),
+        content=response.content,
+        headers=response.headers,
+        parsed=_parse_response(client=client, response=response),
+    )
+
+
+def sync_detailed(
+    pack_ref: str,
+    *,
+    client: AuthenticatedClient,
+    enabled: bool | None | Unset = UNSET,
+    is_adhoc: bool | None | Unset = UNSET,
+    search: None | str | Unset = UNSET,
+    page: int | Unset = UNSET,
+    per_page: int | Unset = UNSET,
+
+) -> Response[Any | PaginatedResponseWorkQueueSummary]:
+    """ 
+    Args:
+        pack_ref (str):
+        enabled (bool | None | Unset):
+        is_adhoc (bool | None | Unset):
+        search (None | str | Unset):
+        page (int | Unset):
+        per_page (int | Unset):
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        Response[Any | PaginatedResponseWorkQueueSummary]
+     """
+
+
+    kwargs = _get_kwargs(
+        pack_ref=pack_ref,
+enabled=enabled,
+is_adhoc=is_adhoc,
+search=search,
+page=page,
+per_page=per_page,
+
+    )
+
+    response = client.get_httpx_client().request(
+        **kwargs,
+    )
+
+    return _build_response(client=client, response=response)
+
+def sync(
+    pack_ref: str,
+    *,
+    client: AuthenticatedClient,
+    enabled: bool | None | Unset = UNSET,
+    is_adhoc: bool | None | Unset = UNSET,
+    search: None | str | Unset = UNSET,
+    page: int | Unset = UNSET,
+    per_page: int | Unset = UNSET,
+
+) -> Any | PaginatedResponseWorkQueueSummary | None:
+    """ 
+    Args:
+        pack_ref (str):
+        enabled (bool | None | Unset):
+        is_adhoc (bool | None | Unset):
+        search (None | str | Unset):
+        page (int | Unset):
+        per_page (int | Unset):
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        Any | PaginatedResponseWorkQueueSummary
+     """
+
+
+    return sync_detailed(
+        pack_ref=pack_ref,
+client=client,
+enabled=enabled,
+is_adhoc=is_adhoc,
+search=search,
+page=page,
+per_page=per_page,
+
+    ).parsed
+
+async def asyncio_detailed(
+    pack_ref: str,
+    *,
+    client: AuthenticatedClient,
+    enabled: bool | None | Unset = UNSET,
+    is_adhoc: bool | None | Unset = UNSET,
+    search: None | str | Unset = UNSET,
+    page: int | Unset = UNSET,
+    per_page: int | Unset = UNSET,
+
+) -> Response[Any | PaginatedResponseWorkQueueSummary]:
+    """ 
+    Args:
+        pack_ref (str):
+        enabled (bool | None | Unset):
+        is_adhoc (bool | None | Unset):
+        search (None | str | Unset):
+        page (int | Unset):
+        per_page (int | Unset):
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        Response[Any | PaginatedResponseWorkQueueSummary]
+     """
+
+
+    kwargs = _get_kwargs(
+        pack_ref=pack_ref,
+enabled=enabled,
+is_adhoc=is_adhoc,
+search=search,
+page=page,
+per_page=per_page,
+
+    )
+
+    response = await client.get_async_httpx_client().request(
+        **kwargs
+    )
+
+    return _build_response(client=client, response=response)
+
+async def asyncio(
+    pack_ref: str,
+    *,
+    client: AuthenticatedClient,
+    enabled: bool | None | Unset = UNSET,
+    is_adhoc: bool | None | Unset = UNSET,
+    search: None | str | Unset = UNSET,
+    page: int | Unset = UNSET,
+    per_page: int | Unset = UNSET,
+
+) -> Any | PaginatedResponseWorkQueueSummary | None:
+    """ 
+    Args:
+        pack_ref (str):
+        enabled (bool | None | Unset):
+        is_adhoc (bool | None | Unset):
+        search (None | str | Unset):
+        page (int | Unset):
+        per_page (int | Unset):
+
+    Raises:
+        errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
+        httpx.TimeoutException: If the request takes longer than Client.timeout.
+
+    Returns:
+        Any | PaginatedResponseWorkQueueSummary
+     """
+
+
+    return (await asyncio_detailed(
+        pack_ref=pack_ref,
+client=client,
+enabled=enabled,
+is_adhoc=is_adhoc,
+search=search,
+page=page,
+per_page=per_page,
+
+    )).parsed

@@ -18,7 +18,7 @@ DB_PORT="${DB_PORT:-5432}"
 DB_USER="${DB_USER:-attune}"
 DB_PASSWORD="${DB_PASSWORD:-attune}"
 DB_NAME="${DB_NAME:-attune}"
-DB_SCHEMA="${DB_SCHEMA:-public}"
+DB_SCHEMA="${DB_SCHEMA:-attune}"
 
 # Pack directories
 SOURCE_PACKS_DIR="${SOURCE_PACKS_DIR:-/source/packs}"
@@ -212,10 +212,8 @@ if [ -f "$LOADER_SCRIPT" ]; then
     # Build database URL with schema support
     DATABASE_URL="postgresql://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME"
 
-    # Set search_path for the Python script if not using default schema
-    if [ "$DB_SCHEMA" != "public" ]; then
-        export PGOPTIONS="-c search_path=$DB_SCHEMA,public"
-    fi
+    # Always set search_path so objects are created in the correct schema
+    export PGOPTIONS="-c search_path=$DB_SCHEMA,public"
 
     # Run the Python loader for each pack
     for pack_dir in "$TARGET_PACKS_DIR"/*; do

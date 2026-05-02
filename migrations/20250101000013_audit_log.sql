@@ -12,6 +12,9 @@
 --              the deletion of the referenced row.
 -- Version: 20250101000013
 
+-- Set search_path for schema isolation
+SET search_path TO attune, public;
+
 -- ============================================================================
 -- ENUMS
 -- ============================================================================

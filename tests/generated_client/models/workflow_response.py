@@ -33,13 +33,13 @@ class WorkflowResponse:
         Attributes:
             created (datetime.datetime): Creation timestamp Example: 2024-01-13T10:30:00Z.
             definition (WorkflowResponseDefinition): Workflow definition
-            enabled (bool): Whether the workflow is enabled Example: True.
             id (int): Workflow ID Example: 1.
             label (str): Human-readable label Example: Incident Response Workflow.
             out_schema (None | WorkflowResponseOutSchemaType0): Output schema
             pack (int): Pack ID Example: 1.
             pack_ref (str): Pack reference Example: slack.
-            param_schema (None | WorkflowResponseParamSchemaType0): Parameter schema
+            param_schema (None | WorkflowResponseParamSchemaType0): Parameter schema (StackStorm-style with inline
+                required/secret)
             ref (str): Unique reference identifier Example: slack.incident_workflow.
             tags (list[str]): Tags Example: ['incident', 'slack', 'approval'].
             updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:30:00Z.
@@ -50,7 +50,6 @@ class WorkflowResponse:
 
     created: datetime.datetime
     definition: WorkflowResponseDefinition
-    enabled: bool
     id: int
     label: str
     out_schema: None | WorkflowResponseOutSchemaType0
@@ -75,8 +74,6 @@ class WorkflowResponse:
         created = self.created.isoformat()
 
         definition = self.definition.to_dict()
-
-        enabled = self.enabled
 
         id = self.id
 
@@ -120,7 +117,6 @@ class WorkflowResponse:
         field_dict.update({
             "created": created,
             "definition": definition,
-            "enabled": enabled,
             "id": id,
             "label": label,
             "out_schema": out_schema,
@@ -154,8 +150,6 @@ class WorkflowResponse:
 
 
 
-
-        enabled = d.pop("enabled")
 
         id = d.pop("id")
 
@@ -226,7 +220,6 @@ class WorkflowResponse:
         workflow_response = cls(
             created=created,
             definition=definition,
-            enabled=enabled,
             id=id,
             label=label,
             out_schema=out_schema,

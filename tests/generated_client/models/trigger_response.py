@@ -33,9 +33,11 @@ class TriggerResponse:
             created (datetime.datetime): Creation timestamp Example: 2024-01-13T10:30:00Z.
             enabled (bool): Whether the trigger is enabled Example: True.
             id (int): Trigger ID Example: 1.
+            is_adhoc (bool): Whether this is an ad-hoc trigger (not from pack installation)
             label (str): Human-readable label Example: Webhook Trigger.
             out_schema (None | TriggerResponseOutSchemaType0): Output schema
-            param_schema (None | TriggerResponseParamSchemaType0): Parameter schema
+            param_schema (None | TriggerResponseParamSchemaType0): Parameter schema (StackStorm-style with inline
+                required/secret)
             ref (str): Unique reference identifier Example: core.webhook.
             updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:30:00Z.
             webhook_enabled (bool): Whether webhooks are enabled for this trigger
@@ -49,6 +51,7 @@ class TriggerResponse:
     created: datetime.datetime
     enabled: bool
     id: int
+    is_adhoc: bool
     label: str
     out_schema: None | TriggerResponseOutSchemaType0
     param_schema: None | TriggerResponseParamSchemaType0
@@ -73,6 +76,8 @@ class TriggerResponse:
         enabled = self.enabled
 
         id = self.id
+
+        is_adhoc = self.is_adhoc
 
         label = self.label
 
@@ -125,6 +130,7 @@ class TriggerResponse:
             "created": created,
             "enabled": enabled,
             "id": id,
+            "is_adhoc": is_adhoc,
             "label": label,
             "out_schema": out_schema,
             "param_schema": param_schema,
@@ -158,6 +164,8 @@ class TriggerResponse:
         enabled = d.pop("enabled")
 
         id = d.pop("id")
+
+        is_adhoc = d.pop("is_adhoc")
 
         label = d.pop("label")
 
@@ -250,6 +258,7 @@ class TriggerResponse:
             created=created,
             enabled=enabled,
             id=id,
+            is_adhoc=is_adhoc,
             label=label,
             out_schema=out_schema,
             param_schema=param_schema,

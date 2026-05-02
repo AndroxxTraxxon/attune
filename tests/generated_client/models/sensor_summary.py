@@ -28,24 +28,24 @@ class SensorSummary:
 
         Attributes:
             created (datetime.datetime): Creation timestamp Example: 2024-01-13T10:30:00Z.
-            description (str): Sensor description Example: Monitors CPU usage and generates events.
             enabled (bool): Whether the sensor is enabled Example: True.
             id (int): Sensor ID Example: 1.
             label (str): Human-readable label Example: CPU Monitoring Sensor.
             ref (str): Unique reference identifier Example: monitoring.cpu_sensor.
             trigger_ref (str): Trigger reference Example: monitoring.cpu_threshold.
             updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:30:00Z.
+            description (None | str | Unset): Sensor description Example: Monitors CPU usage and generates events.
             pack_ref (None | str | Unset): Pack reference (optional) Example: monitoring.
      """
 
     created: datetime.datetime
-    description: str
     enabled: bool
     id: int
     label: str
     ref: str
     trigger_ref: str
     updated: datetime.datetime
+    description: None | str | Unset = UNSET
     pack_ref: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -55,8 +55,6 @@ class SensorSummary:
 
     def to_dict(self) -> dict[str, Any]:
         created = self.created.isoformat()
-
-        description = self.description
 
         enabled = self.enabled
 
@@ -70,6 +68,12 @@ class SensorSummary:
 
         updated = self.updated.isoformat()
 
+        description: None | str | Unset
+        if isinstance(self.description, Unset):
+            description = UNSET
+        else:
+            description = self.description
+
         pack_ref: None | str | Unset
         if isinstance(self.pack_ref, Unset):
             pack_ref = UNSET
@@ -81,7 +85,6 @@ class SensorSummary:
         field_dict.update(self.additional_properties)
         field_dict.update({
             "created": created,
-            "description": description,
             "enabled": enabled,
             "id": id,
             "label": label,
@@ -89,6 +92,8 @@ class SensorSummary:
             "trigger_ref": trigger_ref,
             "updated": updated,
         })
+        if description is not UNSET:
+            field_dict["description"] = description
         if pack_ref is not UNSET:
             field_dict["pack_ref"] = pack_ref
 
@@ -103,8 +108,6 @@ class SensorSummary:
 
 
 
-
-        description = d.pop("description")
 
         enabled = d.pop("enabled")
 
@@ -121,6 +124,16 @@ class SensorSummary:
 
 
 
+        def _parse_description(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        description = _parse_description(d.pop("description", UNSET))
+
+
         def _parse_pack_ref(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -133,13 +146,13 @@ class SensorSummary:
 
         sensor_summary = cls(
             created=created,
-            description=description,
             enabled=enabled,
             id=id,
             label=label,
             ref=ref,
             trigger_ref=trigger_ref,
             updated=updated,
+            description=description,
             pack_ref=pack_ref,
         )
 

@@ -2,6 +2,9 @@
 -- Description: Consolidated PostgreSQL LISTEN/NOTIFY triggers for real-time event notifications
 -- Version: 20250101000008
 
+-- Set search_path for schema isolation
+SET search_path TO attune, public;
+
 -- ============================================================================
 -- EXECUTION CHANGE NOTIFICATION
 -- ============================================================================

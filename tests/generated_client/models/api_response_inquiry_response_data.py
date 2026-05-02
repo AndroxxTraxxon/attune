@@ -63,8 +63,8 @@ class ApiResponseInquiryResponseData:
 
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.api_response_inquiry_response_data_response_type_0 import ApiResponseInquiryResponseDataResponseType0
         from ..models.api_response_inquiry_response_data_response_schema_type_0 import ApiResponseInquiryResponseDataResponseSchemaType0
+        from ..models.api_response_inquiry_response_data_response_type_0 import ApiResponseInquiryResponseDataResponseType0
         created = self.created.isoformat()
 
         execution = self.execution

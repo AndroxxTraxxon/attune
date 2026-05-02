@@ -20,7 +20,7 @@ T = TypeVar("T", bound="WorkflowResponseParamSchemaType0")
 
 @_attrs_define
 class WorkflowResponseParamSchemaType0:
-    """ Parameter schema
+    """ Parameter schema (StackStorm-style with inline required/secret)
 
      """
 

@@ -20,9 +20,14 @@ def _get_kwargs(
     status: ExecutionStatus | None | Unset = UNSET,
     action_ref: None | str | Unset = UNSET,
     pack_name: None | str | Unset = UNSET,
+    rule_ref: None | str | Unset = UNSET,
+    trigger_ref: None | str | Unset = UNSET,
+    executor: int | None | Unset = UNSET,
     result_contains: None | str | Unset = UNSET,
     enforcement: int | None | Unset = UNSET,
     parent: int | None | Unset = UNSET,
+    top_level_only: bool | None | Unset = UNSET,
+    include_total: bool | None | Unset = UNSET,
     page: int | Unset = UNSET,
     per_page: int | Unset = UNSET,
 
@@ -56,6 +61,27 @@ def _get_kwargs(
         json_pack_name = pack_name
     params["pack_name"] = json_pack_name
 
+    json_rule_ref: None | str | Unset
+    if isinstance(rule_ref, Unset):
+        json_rule_ref = UNSET
+    else:
+        json_rule_ref = rule_ref
+    params["rule_ref"] = json_rule_ref
+
+    json_trigger_ref: None | str | Unset
+    if isinstance(trigger_ref, Unset):
+        json_trigger_ref = UNSET
+    else:
+        json_trigger_ref = trigger_ref
+    params["trigger_ref"] = json_trigger_ref
+
+    json_executor: int | None | Unset
+    if isinstance(executor, Unset):
+        json_executor = UNSET
+    else:
+        json_executor = executor
+    params["executor"] = json_executor
+
     json_result_contains: None | str | Unset
     if isinstance(result_contains, Unset):
         json_result_contains = UNSET
@@ -76,6 +102,20 @@ def _get_kwargs(
     else:
         json_parent = parent
     params["parent"] = json_parent
+
+    json_top_level_only: bool | None | Unset
+    if isinstance(top_level_only, Unset):
+        json_top_level_only = UNSET
+    else:
+        json_top_level_only = top_level_only
+    params["top_level_only"] = json_top_level_only
+
+    json_include_total: bool | None | Unset
+    if isinstance(include_total, Unset):
+        json_include_total = UNSET
+    else:
+        json_include_total = include_total
+    params["include_total"] = json_include_total
 
     params["page"] = page
 
@@ -125,9 +165,14 @@ def sync_detailed(
     status: ExecutionStatus | None | Unset = UNSET,
     action_ref: None | str | Unset = UNSET,
     pack_name: None | str | Unset = UNSET,
+    rule_ref: None | str | Unset = UNSET,
+    trigger_ref: None | str | Unset = UNSET,
+    executor: int | None | Unset = UNSET,
     result_contains: None | str | Unset = UNSET,
     enforcement: int | None | Unset = UNSET,
     parent: int | None | Unset = UNSET,
+    top_level_only: bool | None | Unset = UNSET,
+    include_total: bool | None | Unset = UNSET,
     page: int | Unset = UNSET,
     per_page: int | Unset = UNSET,
 
@@ -138,9 +183,14 @@ def sync_detailed(
         status (ExecutionStatus | None | Unset):
         action_ref (None | str | Unset):
         pack_name (None | str | Unset):
+        rule_ref (None | str | Unset):
+        trigger_ref (None | str | Unset):
+        executor (int | None | Unset):
         result_contains (None | str | Unset):
         enforcement (int | None | Unset):
         parent (int | None | Unset):
+        top_level_only (bool | None | Unset):
+        include_total (bool | None | Unset):
         page (int | Unset):
         per_page (int | Unset):
 
@@ -157,9 +207,14 @@ def sync_detailed(
         status=status,
 action_ref=action_ref,
 pack_name=pack_name,
+rule_ref=rule_ref,
+trigger_ref=trigger_ref,
+executor=executor,
 result_contains=result_contains,
 enforcement=enforcement,
 parent=parent,
+top_level_only=top_level_only,
+include_total=include_total,
 page=page,
 per_page=per_page,
 
@@ -177,9 +232,14 @@ def sync(
     status: ExecutionStatus | None | Unset = UNSET,
     action_ref: None | str | Unset = UNSET,
     pack_name: None | str | Unset = UNSET,
+    rule_ref: None | str | Unset = UNSET,
+    trigger_ref: None | str | Unset = UNSET,
+    executor: int | None | Unset = UNSET,
     result_contains: None | str | Unset = UNSET,
     enforcement: int | None | Unset = UNSET,
     parent: int | None | Unset = UNSET,
+    top_level_only: bool | None | Unset = UNSET,
+    include_total: bool | None | Unset = UNSET,
     page: int | Unset = UNSET,
     per_page: int | Unset = UNSET,
 
@@ -190,9 +250,14 @@ def sync(
         status (ExecutionStatus | None | Unset):
         action_ref (None | str | Unset):
         pack_name (None | str | Unset):
+        rule_ref (None | str | Unset):
+        trigger_ref (None | str | Unset):
+        executor (int | None | Unset):
         result_contains (None | str | Unset):
         enforcement (int | None | Unset):
         parent (int | None | Unset):
+        top_level_only (bool | None | Unset):
+        include_total (bool | None | Unset):
         page (int | Unset):
         per_page (int | Unset):
 
@@ -210,9 +275,14 @@ def sync(
 status=status,
 action_ref=action_ref,
 pack_name=pack_name,
+rule_ref=rule_ref,
+trigger_ref=trigger_ref,
+executor=executor,
 result_contains=result_contains,
 enforcement=enforcement,
 parent=parent,
+top_level_only=top_level_only,
+include_total=include_total,
 page=page,
 per_page=per_page,
 
@@ -224,9 +294,14 @@ async def asyncio_detailed(
     status: ExecutionStatus | None | Unset = UNSET,
     action_ref: None | str | Unset = UNSET,
     pack_name: None | str | Unset = UNSET,
+    rule_ref: None | str | Unset = UNSET,
+    trigger_ref: None | str | Unset = UNSET,
+    executor: int | None | Unset = UNSET,
     result_contains: None | str | Unset = UNSET,
     enforcement: int | None | Unset = UNSET,
     parent: int | None | Unset = UNSET,
+    top_level_only: bool | None | Unset = UNSET,
+    include_total: bool | None | Unset = UNSET,
     page: int | Unset = UNSET,
     per_page: int | Unset = UNSET,
 
@@ -237,9 +312,14 @@ async def asyncio_detailed(
         status (ExecutionStatus | None | Unset):
         action_ref (None | str | Unset):
         pack_name (None | str | Unset):
+        rule_ref (None | str | Unset):
+        trigger_ref (None | str | Unset):
+        executor (int | None | Unset):
         result_contains (None | str | Unset):
         enforcement (int | None | Unset):
         parent (int | None | Unset):
+        top_level_only (bool | None | Unset):
+        include_total (bool | None | Unset):
         page (int | Unset):
         per_page (int | Unset):
 
@@ -256,9 +336,14 @@ async def asyncio_detailed(
         status=status,
 action_ref=action_ref,
 pack_name=pack_name,
+rule_ref=rule_ref,
+trigger_ref=trigger_ref,
+executor=executor,
 result_contains=result_contains,
 enforcement=enforcement,
 parent=parent,
+top_level_only=top_level_only,
+include_total=include_total,
 page=page,
 per_page=per_page,
 
@@ -276,9 +361,14 @@ async def asyncio(
     status: ExecutionStatus | None | Unset = UNSET,
     action_ref: None | str | Unset = UNSET,
     pack_name: None | str | Unset = UNSET,
+    rule_ref: None | str | Unset = UNSET,
+    trigger_ref: None | str | Unset = UNSET,
+    executor: int | None | Unset = UNSET,
     result_contains: None | str | Unset = UNSET,
     enforcement: int | None | Unset = UNSET,
     parent: int | None | Unset = UNSET,
+    top_level_only: bool | None | Unset = UNSET,
+    include_total: bool | None | Unset = UNSET,
     page: int | Unset = UNSET,
     per_page: int | Unset = UNSET,
 
@@ -289,9 +379,14 @@ async def asyncio(
         status (ExecutionStatus | None | Unset):
         action_ref (None | str | Unset):
         pack_name (None | str | Unset):
+        rule_ref (None | str | Unset):
+        trigger_ref (None | str | Unset):
+        executor (int | None | Unset):
         result_contains (None | str | Unset):
         enforcement (int | None | Unset):
         parent (int | None | Unset):
+        top_level_only (bool | None | Unset):
+        include_total (bool | None | Unset):
         page (int | Unset):
         per_page (int | Unset):
 
@@ -309,9 +404,14 @@ async def asyncio(
 status=status,
 action_ref=action_ref,
 pack_name=pack_name,
+rule_ref=rule_ref,
+trigger_ref=trigger_ref,
+executor=executor,
 result_contains=result_contains,
 enforcement=enforcement,
 parent=parent,
+top_level_only=top_level_only,
+include_total=include_total,
 page=page,
 per_page=per_page,
 

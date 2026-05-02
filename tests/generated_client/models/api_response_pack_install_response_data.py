@@ -43,8 +43,8 @@ class ApiResponsePackInstallResponseData:
 
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.pack_test_result import PackTestResult
         from ..models.pack_response import PackResponse
+        from ..models.pack_test_result import PackTestResult
         pack = self.pack.to_dict()
 
         tests_skipped = self.tests_skipped

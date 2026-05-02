@@ -2,6 +2,9 @@
 -- Description: Creates first-class business work queue tables and enums
 -- Version: 20250101000012
 
+-- Set search_path for schema isolation
+SET search_path TO attune, public;
+
 -- ============================================================================
 -- ENUM TYPES
 -- ============================================================================

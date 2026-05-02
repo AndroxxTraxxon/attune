@@ -20,7 +20,7 @@ T = TypeVar("T", bound="UpdateWorkflowRequestParamSchemaType0")
 
 @_attrs_define
 class UpdateWorkflowRequestParamSchemaType0:
-    """ Parameter schema
+    """ Parameter schema (StackStorm-style with inline required/secret)
 
      """
 

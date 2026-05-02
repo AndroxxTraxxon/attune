@@ -3,12 +3,23 @@
 -- Version: 20250101000001
 
 -- ============================================================================
+-- SCHEMA
+-- ============================================================================
+
+-- Create the attune schema if it does not already exist.
+-- All application tables, types, and functions live here.
+CREATE SCHEMA IF NOT EXISTS attune;
+
+-- Set search_path so subsequent DDL lands in the attune schema.
+SET search_path TO attune, public;
+
+-- ============================================================================
 -- EXTENSIONS
 -- ============================================================================
 
--- Enable required extensions
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+-- Enable required extensions (extensions are schema-agnostic, always in public)
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS "pgcrypto" SCHEMA public;
 
 -- ============================================================================
 -- ENUM TYPES

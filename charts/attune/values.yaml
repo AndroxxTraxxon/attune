@@ -13,7 +13,7 @@ security:
   encryptionKey: change-me-in-production-32-bytes-minimum
 
 database:
-  schema: public
+  schema: attune
   username: attune
   password: attune
   database: attune

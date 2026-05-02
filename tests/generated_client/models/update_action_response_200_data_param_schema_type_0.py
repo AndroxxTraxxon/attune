@@ -20,7 +20,7 @@ T = TypeVar("T", bound="UpdateActionResponse200DataParamSchemaType0")
 
 @_attrs_define
 class UpdateActionResponse200DataParamSchemaType0:
-    """ Parameter schema
+    """ Parameter schema (StackStorm-style with inline required/secret)
 
      """
 

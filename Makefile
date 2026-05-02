@@ -9,7 +9,8 @@
         run-agent run-agent-release \
         docker-up-agent docker-down-agent \
         docker-build-pack-binaries docker-build-pack-binaries-arm64 docker-build-pack-binaries-all \
-        docker-build-mcp docker-up-mcp docker-down-mcp
+        docker-build-mcp docker-up-mcp docker-down-mcp \
+        e2e-test e2e-test-debug e2e-test-tier1 e2e-test-tier2 e2e-test-tier3
 
 # Default target
 help:
@@ -27,6 +28,9 @@ help:
 	@echo "  make test-api       - Run tests for API service"
 	@echo "  make test-integration     - Run integration tests (common + API)"
 	@echo "  make test-integration-api - Run API integration tests (requires DB)"
+	@echo "  make e2e-test       - Run E2E tests (Docker Compose lifecycle)"
+	@echo "  make e2e-test-debug - Run E2E tests, keep stack running"
+	@echo "  make e2e-test-tier1 - Run E2E tier 1 tests only"
 	@echo "  make check          - Check code without building"
 	@echo ""
 	@echo "Code Quality:"
@@ -196,6 +200,7 @@ watch:
 # Database operations
 db-create:
 	createdb attune || true
+	psql -d attune -c "CREATE SCHEMA IF NOT EXISTS attune; ALTER DATABASE attune SET search_path TO attune, public;" || true
 
 db-migrate:
 	sqlx migrate run
@@ -208,7 +213,8 @@ db-reset: db-drop db-create db-migrate
 
 # Test database operations
 db-test-create:
-	psql postgresql://postgres:postgres@localhost:5432 -c "CREATE DATABASE attune_test"
+	psql postgresql://postgres:postgres@localhost:5432 -c "CREATE DATABASE attune_test" || true
+	psql postgresql://postgres:postgres@localhost:5432/attune_test -c "CREATE SCHEMA IF NOT EXISTS attune; ALTER DATABASE attune_test SET search_path TO attune, public;" || true
 
 db-test-migrate:
 	DATABASE_URL=postgresql://postgres:postgres@localhost:5432/attune_test sqlx migrate run
@@ -487,3 +493,25 @@ install-git-hooks:
 # CI simulation
 ci: ci-blocking ci-advisory
 	@echo "✅ CI checks passed!"
+
+# ============================================================================
+# E2E Integration Tests (Docker Compose)
+# ============================================================================
+
+# Full lifecycle: build → start stack → run all tests → tear down
+e2e-test:
+	@./scripts/run-integration-tests.sh $(ARGS)
+
+# Run tests but keep the stack running for debugging
+e2e-test-debug:
+	@./scripts/run-integration-tests.sh --no-teardown $(ARGS)
+
+# Tier-specific shortcuts
+e2e-test-tier1:
+	@./scripts/run-integration-tests.sh --tier 1 $(ARGS)
+
+e2e-test-tier2:
+	@./scripts/run-integration-tests.sh --tier 2 $(ARGS)
+
+e2e-test-tier3:
+	@./scripts/run-integration-tests.sh --tier 3 $(ARGS)

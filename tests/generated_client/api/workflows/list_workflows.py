@@ -19,7 +19,6 @@ def _get_kwargs(
     page: int | Unset = UNSET,
     page_size: int | Unset = UNSET,
     tags: None | str | Unset = UNSET,
-    enabled: bool | None | Unset = UNSET,
     search: None | str | Unset = UNSET,
     pack_ref: None | str | Unset = UNSET,
 
@@ -40,13 +39,6 @@ def _get_kwargs(
     else:
         json_tags = tags
     params["tags"] = json_tags
-
-    json_enabled: bool | None | Unset
-    if isinstance(enabled, Unset):
-        json_enabled = UNSET
-    else:
-        json_enabled = enabled
-    params["enabled"] = json_enabled
 
     json_search: None | str | Unset
     if isinstance(search, Unset):
@@ -106,7 +98,6 @@ def sync_detailed(
     page: int | Unset = UNSET,
     page_size: int | Unset = UNSET,
     tags: None | str | Unset = UNSET,
-    enabled: bool | None | Unset = UNSET,
     search: None | str | Unset = UNSET,
     pack_ref: None | str | Unset = UNSET,
 
@@ -117,7 +108,6 @@ def sync_detailed(
         page (int | Unset):
         page_size (int | Unset):
         tags (None | str | Unset):
-        enabled (bool | None | Unset):
         search (None | str | Unset):
         pack_ref (None | str | Unset):
 
@@ -134,7 +124,6 @@ def sync_detailed(
         page=page,
 page_size=page_size,
 tags=tags,
-enabled=enabled,
 search=search,
 pack_ref=pack_ref,
 
@@ -152,7 +141,6 @@ def sync(
     page: int | Unset = UNSET,
     page_size: int | Unset = UNSET,
     tags: None | str | Unset = UNSET,
-    enabled: bool | None | Unset = UNSET,
     search: None | str | Unset = UNSET,
     pack_ref: None | str | Unset = UNSET,
 
@@ -163,7 +151,6 @@ def sync(
         page (int | Unset):
         page_size (int | Unset):
         tags (None | str | Unset):
-        enabled (bool | None | Unset):
         search (None | str | Unset):
         pack_ref (None | str | Unset):
 
@@ -181,7 +168,6 @@ def sync(
 page=page,
 page_size=page_size,
 tags=tags,
-enabled=enabled,
 search=search,
 pack_ref=pack_ref,
 
@@ -193,7 +179,6 @@ async def asyncio_detailed(
     page: int | Unset = UNSET,
     page_size: int | Unset = UNSET,
     tags: None | str | Unset = UNSET,
-    enabled: bool | None | Unset = UNSET,
     search: None | str | Unset = UNSET,
     pack_ref: None | str | Unset = UNSET,
 
@@ -204,7 +189,6 @@ async def asyncio_detailed(
         page (int | Unset):
         page_size (int | Unset):
         tags (None | str | Unset):
-        enabled (bool | None | Unset):
         search (None | str | Unset):
         pack_ref (None | str | Unset):
 
@@ -221,7 +205,6 @@ async def asyncio_detailed(
         page=page,
 page_size=page_size,
 tags=tags,
-enabled=enabled,
 search=search,
 pack_ref=pack_ref,
 
@@ -239,7 +222,6 @@ async def asyncio(
     page: int | Unset = UNSET,
     page_size: int | Unset = UNSET,
     tags: None | str | Unset = UNSET,
-    enabled: bool | None | Unset = UNSET,
     search: None | str | Unset = UNSET,
     pack_ref: None | str | Unset = UNSET,
 
@@ -250,7 +232,6 @@ async def asyncio(
         page (int | Unset):
         page_size (int | Unset):
         tags (None | str | Unset):
-        enabled (bool | None | Unset):
         search (None | str | Unset):
         pack_ref (None | str | Unset):
 
@@ -268,7 +249,6 @@ async def asyncio(
 page=page,
 page_size=page_size,
 tags=tags,
-enabled=enabled,
 search=search,
 pack_ref=pack_ref,
 

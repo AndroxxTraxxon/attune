@@ -10,6 +10,9 @@
 --              enforcement.rule → rule) are supported by TimescaleDB 2.x and are kept.
 -- Version: 20250101000004
 
+-- Set search_path for schema isolation
+SET search_path TO attune, public;
+
 -- ============================================================================
 -- WEBHOOK KEY GENERATION
 -- ============================================================================

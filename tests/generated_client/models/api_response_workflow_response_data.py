@@ -33,13 +33,13 @@ class ApiResponseWorkflowResponseData:
         Attributes:
             created (datetime.datetime): Creation timestamp Example: 2024-01-13T10:30:00Z.
             definition (ApiResponseWorkflowResponseDataDefinition): Workflow definition
-            enabled (bool): Whether the workflow is enabled Example: True.
             id (int): Workflow ID Example: 1.
             label (str): Human-readable label Example: Incident Response Workflow.
             out_schema (ApiResponseWorkflowResponseDataOutSchemaType0 | None): Output schema
             pack (int): Pack ID Example: 1.
             pack_ref (str): Pack reference Example: slack.
-            param_schema (ApiResponseWorkflowResponseDataParamSchemaType0 | None): Parameter schema
+            param_schema (ApiResponseWorkflowResponseDataParamSchemaType0 | None): Parameter schema (StackStorm-style with
+                inline required/secret)
             ref (str): Unique reference identifier Example: slack.incident_workflow.
             tags (list[str]): Tags Example: ['incident', 'slack', 'approval'].
             updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:30:00Z.
@@ -50,7 +50,6 @@ class ApiResponseWorkflowResponseData:
 
     created: datetime.datetime
     definition: ApiResponseWorkflowResponseDataDefinition
-    enabled: bool
     id: int
     label: str
     out_schema: ApiResponseWorkflowResponseDataOutSchemaType0 | None
@@ -70,13 +69,11 @@ class ApiResponseWorkflowResponseData:
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.api_response_workflow_response_data_definition import ApiResponseWorkflowResponseDataDefinition
-        from ..models.api_response_workflow_response_data_param_schema_type_0 import ApiResponseWorkflowResponseDataParamSchemaType0
         from ..models.api_response_workflow_response_data_out_schema_type_0 import ApiResponseWorkflowResponseDataOutSchemaType0
+        from ..models.api_response_workflow_response_data_param_schema_type_0 import ApiResponseWorkflowResponseDataParamSchemaType0
         created = self.created.isoformat()
 
         definition = self.definition.to_dict()
-
-        enabled = self.enabled
 
         id = self.id
 
@@ -120,7 +117,6 @@ class ApiResponseWorkflowResponseData:
         field_dict.update({
             "created": created,
             "definition": definition,
-            "enabled": enabled,
             "id": id,
             "label": label,
             "out_schema": out_schema,
@@ -154,8 +150,6 @@ class ApiResponseWorkflowResponseData:
 
 
 
-
-        enabled = d.pop("enabled")
 
         id = d.pop("id")
 
@@ -226,7 +220,6 @@ class ApiResponseWorkflowResponseData:
         api_response_workflow_response_data = cls(
             created=created,
             definition=definition,
-            enabled=enabled,
             id=id,
             label=label,
             out_schema=out_schema,

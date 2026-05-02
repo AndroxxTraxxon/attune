@@ -12,6 +12,9 @@ requests>=2.31.0
 urllib3>=2.0.0
 httpx>=0.23.0,<0.29.0
 
+# Database client (for direct DB assertions in tests)
+psycopg[binary]>=3.1.0
+
 # WebSocket client (for notifier tests)
 websockets>=11.0.0
 

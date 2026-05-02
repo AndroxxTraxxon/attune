@@ -8,6 +8,9 @@
 --              and execution.workflow_def use normal foreign keys.
 -- Version: 20250101000006
 
+-- Set search_path for schema isolation
+SET search_path TO attune, public;
+
 -- ============================================================================
 -- WORKFLOW DEFINITION TABLE
 -- ============================================================================

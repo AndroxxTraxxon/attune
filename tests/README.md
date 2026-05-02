@@ -446,18 +446,37 @@ cargo test --test e2e_*
 
 ---
 
-### Option 3: Docker Compose (TODO)
+### Option 3: Docker Compose
 
 ```bash
-# Start all services
-docker-compose -f docker-compose.e2e.yaml up -d
+# Full lifecycle: build, start stack, run tests, tear down
+make e2e-test
 
-# Run tests
-docker-compose -f docker-compose.e2e.yaml run --rm test
+# Run specific tier
+make e2e-test-tier1
+make e2e-test-tier2
+make e2e-test-tier3
 
-# Cleanup
-docker-compose -f docker-compose.e2e.yaml down
+# Keep stack running after tests (for debugging failures)
+make e2e-test-debug
+
+# Pass additional pytest args
+make e2e-test ARGS='-k "timer" -x'
+
+# Or use the script directly
+./scripts/run-integration-tests.sh --tier 1 --no-teardown
+./scripts/run-integration-tests.sh -k "webhook" -x
 ```
+
+**How it works:**
+1. `docker-compose.e2e.yaml` adds an `e2e-tests` service (Python 3.12 container with test deps)
+2. `scripts/run-integration-tests.sh` orchestrates the full lifecycle:
+   - Builds the test runner image
+   - Starts the entire Attune stack via Docker Compose
+   - Waits for API health check
+   - Runs pytest inside the container on the `attune-network`
+   - Reports results and tears down (unless `--no-teardown`)
+3. The test container has access to all services via Docker networking
 
 ---
 

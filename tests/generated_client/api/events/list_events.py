@@ -18,7 +18,9 @@ def _get_kwargs(
     *,
     trigger: int | None | Unset = UNSET,
     trigger_ref: None | str | Unset = UNSET,
+    rule_ref: None | str | Unset = UNSET,
     source: int | None | Unset = UNSET,
+    include_total: bool | None | Unset = UNSET,
     page: int | Unset = UNSET,
     per_page: int | Unset = UNSET,
 
@@ -43,12 +45,26 @@ def _get_kwargs(
         json_trigger_ref = trigger_ref
     params["trigger_ref"] = json_trigger_ref
 
+    json_rule_ref: None | str | Unset
+    if isinstance(rule_ref, Unset):
+        json_rule_ref = UNSET
+    else:
+        json_rule_ref = rule_ref
+    params["rule_ref"] = json_rule_ref
+
     json_source: int | None | Unset
     if isinstance(source, Unset):
         json_source = UNSET
     else:
         json_source = source
     params["source"] = json_source
+
+    json_include_total: bool | None | Unset
+    if isinstance(include_total, Unset):
+        json_include_total = UNSET
+    else:
+        json_include_total = include_total
+    params["include_total"] = json_include_total
 
     params["page"] = page
 
@@ -105,7 +121,9 @@ def sync_detailed(
     client: AuthenticatedClient,
     trigger: int | None | Unset = UNSET,
     trigger_ref: None | str | Unset = UNSET,
+    rule_ref: None | str | Unset = UNSET,
     source: int | None | Unset = UNSET,
+    include_total: bool | None | Unset = UNSET,
     page: int | Unset = UNSET,
     per_page: int | Unset = UNSET,
 
@@ -115,7 +133,9 @@ def sync_detailed(
     Args:
         trigger (int | None | Unset):
         trigger_ref (None | str | Unset):
+        rule_ref (None | str | Unset):
         source (int | None | Unset):
+        include_total (bool | None | Unset):
         page (int | Unset):
         per_page (int | Unset):
 
@@ -131,7 +151,9 @@ def sync_detailed(
     kwargs = _get_kwargs(
         trigger=trigger,
 trigger_ref=trigger_ref,
+rule_ref=rule_ref,
 source=source,
+include_total=include_total,
 page=page,
 per_page=per_page,
 
@@ -148,7 +170,9 @@ def sync(
     client: AuthenticatedClient,
     trigger: int | None | Unset = UNSET,
     trigger_ref: None | str | Unset = UNSET,
+    rule_ref: None | str | Unset = UNSET,
     source: int | None | Unset = UNSET,
+    include_total: bool | None | Unset = UNSET,
     page: int | Unset = UNSET,
     per_page: int | Unset = UNSET,
 
@@ -158,7 +182,9 @@ def sync(
     Args:
         trigger (int | None | Unset):
         trigger_ref (None | str | Unset):
+        rule_ref (None | str | Unset):
         source (int | None | Unset):
+        include_total (bool | None | Unset):
         page (int | Unset):
         per_page (int | Unset):
 
@@ -175,7 +201,9 @@ def sync(
         client=client,
 trigger=trigger,
 trigger_ref=trigger_ref,
+rule_ref=rule_ref,
 source=source,
+include_total=include_total,
 page=page,
 per_page=per_page,
 
@@ -186,7 +214,9 @@ async def asyncio_detailed(
     client: AuthenticatedClient,
     trigger: int | None | Unset = UNSET,
     trigger_ref: None | str | Unset = UNSET,
+    rule_ref: None | str | Unset = UNSET,
     source: int | None | Unset = UNSET,
+    include_total: bool | None | Unset = UNSET,
     page: int | Unset = UNSET,
     per_page: int | Unset = UNSET,
 
@@ -196,7 +226,9 @@ async def asyncio_detailed(
     Args:
         trigger (int | None | Unset):
         trigger_ref (None | str | Unset):
+        rule_ref (None | str | Unset):
         source (int | None | Unset):
+        include_total (bool | None | Unset):
         page (int | Unset):
         per_page (int | Unset):
 
@@ -212,7 +244,9 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         trigger=trigger,
 trigger_ref=trigger_ref,
+rule_ref=rule_ref,
 source=source,
+include_total=include_total,
 page=page,
 per_page=per_page,
 
@@ -229,7 +263,9 @@ async def asyncio(
     client: AuthenticatedClient,
     trigger: int | None | Unset = UNSET,
     trigger_ref: None | str | Unset = UNSET,
+    rule_ref: None | str | Unset = UNSET,
     source: int | None | Unset = UNSET,
+    include_total: bool | None | Unset = UNSET,
     page: int | Unset = UNSET,
     per_page: int | Unset = UNSET,
 
@@ -239,7 +275,9 @@ async def asyncio(
     Args:
         trigger (int | None | Unset):
         trigger_ref (None | str | Unset):
+        rule_ref (None | str | Unset):
         source (int | None | Unset):
+        include_total (bool | None | Unset):
         page (int | Unset):
         per_page (int | Unset):
 
@@ -256,7 +294,9 @@ async def asyncio(
         client=client,
 trigger=trigger,
 trigger_ref=trigger_ref,
+rule_ref=rule_ref,
 source=source,
+include_total=include_total,
 page=page,
 per_page=per_page,
 

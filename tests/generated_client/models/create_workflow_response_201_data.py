@@ -33,13 +33,13 @@ class CreateWorkflowResponse201Data:
         Attributes:
             created (datetime.datetime): Creation timestamp Example: 2024-01-13T10:30:00Z.
             definition (CreateWorkflowResponse201DataDefinition): Workflow definition
-            enabled (bool): Whether the workflow is enabled Example: True.
             id (int): Workflow ID Example: 1.
             label (str): Human-readable label Example: Incident Response Workflow.
             out_schema (CreateWorkflowResponse201DataOutSchemaType0 | None): Output schema
             pack (int): Pack ID Example: 1.
             pack_ref (str): Pack reference Example: slack.
-            param_schema (CreateWorkflowResponse201DataParamSchemaType0 | None): Parameter schema
+            param_schema (CreateWorkflowResponse201DataParamSchemaType0 | None): Parameter schema (StackStorm-style with
+                inline required/secret)
             ref (str): Unique reference identifier Example: slack.incident_workflow.
             tags (list[str]): Tags Example: ['incident', 'slack', 'approval'].
             updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:30:00Z.
@@ -50,7 +50,6 @@ class CreateWorkflowResponse201Data:
 
     created: datetime.datetime
     definition: CreateWorkflowResponse201DataDefinition
-    enabled: bool
     id: int
     label: str
     out_schema: CreateWorkflowResponse201DataOutSchemaType0 | None
@@ -69,14 +68,12 @@ class CreateWorkflowResponse201Data:
 
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.create_workflow_response_201_data_definition import CreateWorkflowResponse201DataDefinition
         from ..models.create_workflow_response_201_data_out_schema_type_0 import CreateWorkflowResponse201DataOutSchemaType0
         from ..models.create_workflow_response_201_data_param_schema_type_0 import CreateWorkflowResponse201DataParamSchemaType0
-        from ..models.create_workflow_response_201_data_definition import CreateWorkflowResponse201DataDefinition
         created = self.created.isoformat()
 
         definition = self.definition.to_dict()
-
-        enabled = self.enabled
 
         id = self.id
 
@@ -120,7 +117,6 @@ class CreateWorkflowResponse201Data:
         field_dict.update({
             "created": created,
             "definition": definition,
-            "enabled": enabled,
             "id": id,
             "label": label,
             "out_schema": out_schema,
@@ -154,8 +150,6 @@ class CreateWorkflowResponse201Data:
 
 
 
-
-        enabled = d.pop("enabled")
 
         id = d.pop("id")
 
@@ -226,7 +220,6 @@ class CreateWorkflowResponse201Data:
         create_workflow_response_201_data = cls(
             created=created,
             definition=definition,
-            enabled=enabled,
             id=id,
             label=label,
             out_schema=out_schema,

@@ -82,7 +82,7 @@ class TestDatastoreAccess:
                 "message": f"Datastore value: {test_value}",
             },
         )
-        print(f"✓ Created rule: {rule['name']}")
+        print(f"✓ Created rule: {rule['label']}")
 
         # Step 5: Execute action
         print("\n[5/6] Executing action...")
@@ -104,17 +104,17 @@ class TestDatastoreAccess:
         print(f"✓ Execution created (ID: {execution['id']})")
 
         # Wait for completion
-        if execution["status"] not in ["succeeded", "failed", "canceled"]:
+        if execution["status"] not in ["completed", "failed", "cancelled"]:
             execution = wait_for_execution_status(
                 client=client,
                 execution_id=execution["id"],
-                expected_status="succeeded",
+                expected_status="completed",
                 timeout=15,
             )
 
         # Step 6: Verify execution succeeded
         print("\n[6/6] Verifying execution result...")
-        assert execution["status"] == "succeeded", (
+        assert execution["status"] == "completed", (
             f"Execution failed with status: {execution['status']}"
         )
 
@@ -246,15 +246,15 @@ class TestDatastoreAccess:
         )
 
         execution = executions[0]
-        if execution["status"] not in ["succeeded", "failed", "canceled"]:
+        if execution["status"] not in ["completed", "failed", "cancelled"]:
             execution = wait_for_execution_status(
                 client=client,
                 execution_id=execution["id"],
-                expected_status="succeeded",
+                expected_status="completed",
                 timeout=15,
             )
 
-        assert execution["status"] == "succeeded"
+        assert execution["status"] == "completed"
         print(f"✓ Action executed successfully with encrypted value")
 
         # Cleanup

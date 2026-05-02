@@ -20,7 +20,7 @@ T = TypeVar("T", bound="CreateActionRequestOutSchemaType0")
 
 @_attrs_define
 class CreateActionRequestOutSchemaType0:
-    """ Output schema (JSON Schema) defining expected outputs
+    """ Output schema (flat format) defining expected outputs with inline required/secret
 
      """
 

@@ -20,7 +20,7 @@ T = TypeVar("T", bound="CreateWorkflowRequestParamSchema")
 
 @_attrs_define
 class CreateWorkflowRequestParamSchema:
-    """ Parameter schema (JSON Schema) defining expected inputs
+    """ Parameter schema (StackStorm-style) defining expected inputs with inline required/secret
 
      """
 

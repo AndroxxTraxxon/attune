@@ -20,7 +20,7 @@ T = TypeVar("T", bound="UpdateSensorRequestParamSchemaType0")
 
 @_attrs_define
 class UpdateSensorRequestParamSchemaType0:
-    """ Parameter schema
+    """ Parameter schema (StackStorm-style with inline required/secret)
 
      """
 

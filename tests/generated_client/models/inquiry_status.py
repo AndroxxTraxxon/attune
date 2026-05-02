@@ -1,10 +1,10 @@
 from enum import Enum
 
 class InquiryStatus(str, Enum):
-    CANCELLED = "Cancelled"
-    PENDING = "Pending"
-    RESPONDED = "Responded"
-    TIMEOUT = "Timeout"
+    CANCELLED = "cancelled"
+    PENDING = "pending"
+    RESPONDED = "responded"
+    TIMEOUT = "timeout"
 
     def __str__(self) -> str:
         return str(self.value)

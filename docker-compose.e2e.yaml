@@ -1,0 +1,73 @@
+# Docker Compose override for E2E and integration testing
+#
+# Two test services:
+#   1. e2e-tests       — Python pytest suite testing the API from the outside
+#   2. rust-int-tests  — Rust #[ignore]'d tests that exercise repository/API internals
+#
+# Usage:
+#   # Python E2E tests (need full stack):
+#   docker compose -f docker-compose.yaml -f docker-compose.e2e.yaml run --rm e2e-tests
+#   docker compose -f docker-compose.yaml -f docker-compose.e2e.yaml run --rm e2e-tests --tier 1
+#
+#   # Rust integration tests (need only database):
+#   docker compose -f docker-compose.yaml -f docker-compose.e2e.yaml run --rm rust-int-tests
+#   docker compose -f docker-compose.yaml -f docker-compose.e2e.yaml run --rm rust-int-tests --crate common
+#   docker compose -f docker-compose.yaml -f docker-compose.e2e.yaml run --rm rust-int-tests --crate api
+#
+#   # Full lifecycle (start stack, run both test suites, tear down):
+#   make e2e-test          # Python E2E only
+#   make rust-int-test     # Rust integration only
+#   make test-all          # Both suites
+#
+# The e2e-tests service builds a lightweight Python image with the test
+# dependencies, mounts the tests/ directory, and runs pytest against the
+# API service on the attune-network.
+#
+# The rust-int-tests service compiles the workspace test binaries and runs
+# them with --ignored to execute database-dependent integration tests.
+
+services:
+  # Override API to enable self-registration for multi-tenant tests
+  api:
+    environment:
+      ATTUNE__SECURITY__ALLOW_SELF_REGISTRATION: "true"
+
+  e2e-tests:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.e2e-tests
+    container_name: attune-e2e-tests
+    environment:
+      ATTUNE_API_URL: http://api:8080
+      ATTUNE_WS_URL: ws://notifier:8081
+      DATABASE_URL: postgresql://attune:attune@postgres:5432/attune
+      TEST_TIMEOUT: "60"
+      TEST_USER_LOGIN: test@attune.local
+      TEST_USER_PASSWORD: "TestPass123!"
+    volumes:
+      - ./tests:/app/tests:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      notifier:
+        condition: service_healthy
+    networks:
+      - attune-network
+    # Default entrypoint runs all tests; override via `run --rm e2e-tests <args>`
+    entrypoint: ["/app/entrypoint.sh"]
+
+  rust-int-tests:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.rust-tests
+    container_name: attune-rust-int-tests
+    environment:
+      DATABASE_URL: postgresql://attune:attune@postgres:5432/attune_test
+      TEST_THREADS: "4"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - attune-network
+    # Default runs all crates; pass --crate <name> to target one
+    entrypoint: ["/app/entrypoint.sh"]

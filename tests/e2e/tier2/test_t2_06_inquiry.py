@@ -105,7 +105,7 @@ def test_inquiry_basic_approval(client: AttuneClient, test_pack):
     inquiry_id = inquiry["id"]
     print(f"✓ Inquiry created: ID={inquiry_id}")
     print(f"  Status: {inquiry['status']}")
-    print(f"  Execution ID: {inquiry['execution_id']}")
+    print(f"  Execution ID: {inquiry.get('execution_id', inquiry.get('execution'))}")
     print(f"  TTL: {inquiry.get('ttl', 'N/A')} seconds")
 
     # ========================================================================

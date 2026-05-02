@@ -12,6 +12,8 @@ from ..types import UNSET, Unset
 from typing import cast
 
 if TYPE_CHECKING:
+  from ..models.trigger_string_patch_type_0 import TriggerStringPatchType0
+  from ..models.trigger_string_patch_type_1 import TriggerStringPatchType1
   from ..models.update_trigger_request_out_schema_type_0 import UpdateTriggerRequestOutSchemaType0
   from ..models.update_trigger_request_param_schema_type_0 import UpdateTriggerRequestParamSchemaType0
 
@@ -29,15 +31,16 @@ class UpdateTriggerRequest:
 
         Attributes:
             out_schema (None | UpdateTriggerRequestOutSchemaType0): Output schema
-            param_schema (None | UpdateTriggerRequestParamSchemaType0): Parameter schema
-            description (None | str | Unset): Trigger description Example: Updated webhook trigger description.
+            param_schema (None | UpdateTriggerRequestParamSchemaType0): Parameter schema (StackStorm-style with inline
+                required/secret)
+            description (None | TriggerStringPatchType0 | TriggerStringPatchType1 | Unset):
             enabled (bool | None | Unset): Whether the trigger is enabled Example: True.
             label (None | str | Unset): Human-readable label Example: Webhook Trigger (Updated).
      """
 
     out_schema: None | UpdateTriggerRequestOutSchemaType0
     param_schema: None | UpdateTriggerRequestParamSchemaType0
-    description: None | str | Unset = UNSET
+    description: None | TriggerStringPatchType0 | TriggerStringPatchType1 | Unset = UNSET
     enabled: bool | None | Unset = UNSET
     label: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -47,6 +50,8 @@ class UpdateTriggerRequest:
 
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.trigger_string_patch_type_0 import TriggerStringPatchType0
+        from ..models.trigger_string_patch_type_1 import TriggerStringPatchType1
         from ..models.update_trigger_request_out_schema_type_0 import UpdateTriggerRequestOutSchemaType0
         from ..models.update_trigger_request_param_schema_type_0 import UpdateTriggerRequestParamSchemaType0
         out_schema: dict[str, Any] | None
@@ -61,9 +66,13 @@ class UpdateTriggerRequest:
         else:
             param_schema = self.param_schema
 
-        description: None | str | Unset
+        description: dict[str, Any] | None | Unset
         if isinstance(self.description, Unset):
             description = UNSET
+        elif isinstance(self.description, TriggerStringPatchType0):
+            description = self.description.to_dict()
+        elif isinstance(self.description, TriggerStringPatchType1):
+            description = self.description.to_dict()
         else:
             description = self.description
 
@@ -99,6 +108,8 @@ class UpdateTriggerRequest:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.trigger_string_patch_type_0 import TriggerStringPatchType0
+        from ..models.trigger_string_patch_type_1 import TriggerStringPatchType1
         from ..models.update_trigger_request_out_schema_type_0 import UpdateTriggerRequestOutSchemaType0
         from ..models.update_trigger_request_param_schema_type_0 import UpdateTriggerRequestParamSchemaType0
         d = dict(src_dict)
@@ -138,12 +149,32 @@ class UpdateTriggerRequest:
         param_schema = _parse_param_schema(d.pop("param_schema"))
 
 
-        def _parse_description(data: object) -> None | str | Unset:
+        def _parse_description(data: object) -> None | TriggerStringPatchType0 | TriggerStringPatchType1 | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
-            return cast(None | str | Unset, data)
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                componentsschemas_trigger_string_patch_type_0 = TriggerStringPatchType0.from_dict(data)
+
+
+
+                return componentsschemas_trigger_string_patch_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                componentsschemas_trigger_string_patch_type_1 = TriggerStringPatchType1.from_dict(data)
+
+
+
+                return componentsschemas_trigger_string_patch_type_1
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(None | TriggerStringPatchType0 | TriggerStringPatchType1 | Unset, data)
 
         description = _parse_description(d.pop("description", UNSET))
 

@@ -11,7 +11,7 @@ from ..types import UNSET, Unset
 from typing import cast
 
 if TYPE_CHECKING:
-  from ..models.paginated_response_event_summary_data_item import PaginatedResponseEventSummaryDataItem
+  from ..models.paginated_response_event_summary_items_item import PaginatedResponseEventSummaryItemsItem
   from ..models.pagination_meta import PaginationMeta
 
 
@@ -27,11 +27,11 @@ class PaginatedResponseEventSummary:
     """ Paginated response wrapper
 
         Attributes:
-            data (list[PaginatedResponseEventSummaryDataItem]): The data items
+            items (list[PaginatedResponseEventSummaryItemsItem]): The page items
             pagination (PaginationMeta): Pagination metadata
      """
 
-    data: list[PaginatedResponseEventSummaryDataItem]
+    items: list[PaginatedResponseEventSummaryItemsItem]
     pagination: PaginationMeta
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -40,12 +40,12 @@ class PaginatedResponseEventSummary:
 
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.paginated_response_event_summary_data_item import PaginatedResponseEventSummaryDataItem
+        from ..models.paginated_response_event_summary_items_item import PaginatedResponseEventSummaryItemsItem
         from ..models.pagination_meta import PaginationMeta
-        data = []
-        for data_item_data in self.data:
-            data_item = data_item_data.to_dict()
-            data.append(data_item)
+        items = []
+        for items_item_data in self.items:
+            items_item = items_item_data.to_dict()
+            items.append(items_item)
 
 
 
@@ -55,7 +55,7 @@ class PaginatedResponseEventSummary:
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({
-            "data": data,
+            "items": items,
             "pagination": pagination,
         })
 
@@ -65,17 +65,17 @@ class PaginatedResponseEventSummary:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.paginated_response_event_summary_data_item import PaginatedResponseEventSummaryDataItem
+        from ..models.paginated_response_event_summary_items_item import PaginatedResponseEventSummaryItemsItem
         from ..models.pagination_meta import PaginationMeta
         d = dict(src_dict)
-        data = []
-        _data = d.pop("data")
-        for data_item_data in (_data):
-            data_item = PaginatedResponseEventSummaryDataItem.from_dict(data_item_data)
+        items = []
+        _items = d.pop("items")
+        for items_item_data in (_items):
+            items_item = PaginatedResponseEventSummaryItemsItem.from_dict(items_item_data)
 
 
 
-            data.append(data_item)
+            items.append(items_item)
 
 
         pagination = PaginationMeta.from_dict(d.pop("pagination"))
@@ -84,7 +84,7 @@ class PaginatedResponseEventSummary:
 
 
         paginated_response_event_summary = cls(
-            data=data,
+            items=items,
             pagination=pagination,
         )
 

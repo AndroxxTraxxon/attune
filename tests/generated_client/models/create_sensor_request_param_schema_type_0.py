@@ -20,7 +20,7 @@ T = TypeVar("T", bound="CreateSensorRequestParamSchemaType0")
 
 @_attrs_define
 class CreateSensorRequestParamSchemaType0:
-    """ Parameter schema (JSON Schema) for sensor configuration
+    """ Parameter schema (flat format) for sensor configuration
 
      """
 

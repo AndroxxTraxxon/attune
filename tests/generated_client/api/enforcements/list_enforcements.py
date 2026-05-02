@@ -21,6 +21,8 @@ def _get_kwargs(
     event: int | None | Unset = UNSET,
     status: EnforcementStatus | None | Unset = UNSET,
     trigger_ref: None | str | Unset = UNSET,
+    rule_ref: None | str | Unset = UNSET,
+    include_total: bool | None | Unset = UNSET,
     page: int | Unset = UNSET,
     per_page: int | Unset = UNSET,
 
@@ -60,6 +62,20 @@ def _get_kwargs(
     else:
         json_trigger_ref = trigger_ref
     params["trigger_ref"] = json_trigger_ref
+
+    json_rule_ref: None | str | Unset
+    if isinstance(rule_ref, Unset):
+        json_rule_ref = UNSET
+    else:
+        json_rule_ref = rule_ref
+    params["rule_ref"] = json_rule_ref
+
+    json_include_total: bool | None | Unset
+    if isinstance(include_total, Unset):
+        json_include_total = UNSET
+    else:
+        json_include_total = include_total
+    params["include_total"] = json_include_total
 
     params["page"] = page
 
@@ -118,6 +134,8 @@ def sync_detailed(
     event: int | None | Unset = UNSET,
     status: EnforcementStatus | None | Unset = UNSET,
     trigger_ref: None | str | Unset = UNSET,
+    rule_ref: None | str | Unset = UNSET,
+    include_total: bool | None | Unset = UNSET,
     page: int | Unset = UNSET,
     per_page: int | Unset = UNSET,
 
@@ -129,6 +147,8 @@ def sync_detailed(
         event (int | None | Unset):
         status (EnforcementStatus | None | Unset):
         trigger_ref (None | str | Unset):
+        rule_ref (None | str | Unset):
+        include_total (bool | None | Unset):
         page (int | Unset):
         per_page (int | Unset):
 
@@ -146,6 +166,8 @@ def sync_detailed(
 event=event,
 status=status,
 trigger_ref=trigger_ref,
+rule_ref=rule_ref,
+include_total=include_total,
 page=page,
 per_page=per_page,
 
@@ -164,6 +186,8 @@ def sync(
     event: int | None | Unset = UNSET,
     status: EnforcementStatus | None | Unset = UNSET,
     trigger_ref: None | str | Unset = UNSET,
+    rule_ref: None | str | Unset = UNSET,
+    include_total: bool | None | Unset = UNSET,
     page: int | Unset = UNSET,
     per_page: int | Unset = UNSET,
 
@@ -175,6 +199,8 @@ def sync(
         event (int | None | Unset):
         status (EnforcementStatus | None | Unset):
         trigger_ref (None | str | Unset):
+        rule_ref (None | str | Unset):
+        include_total (bool | None | Unset):
         page (int | Unset):
         per_page (int | Unset):
 
@@ -193,6 +219,8 @@ rule=rule,
 event=event,
 status=status,
 trigger_ref=trigger_ref,
+rule_ref=rule_ref,
+include_total=include_total,
 page=page,
 per_page=per_page,
 
@@ -205,6 +233,8 @@ async def asyncio_detailed(
     event: int | None | Unset = UNSET,
     status: EnforcementStatus | None | Unset = UNSET,
     trigger_ref: None | str | Unset = UNSET,
+    rule_ref: None | str | Unset = UNSET,
+    include_total: bool | None | Unset = UNSET,
     page: int | Unset = UNSET,
     per_page: int | Unset = UNSET,
 
@@ -216,6 +246,8 @@ async def asyncio_detailed(
         event (int | None | Unset):
         status (EnforcementStatus | None | Unset):
         trigger_ref (None | str | Unset):
+        rule_ref (None | str | Unset):
+        include_total (bool | None | Unset):
         page (int | Unset):
         per_page (int | Unset):
 
@@ -233,6 +265,8 @@ async def asyncio_detailed(
 event=event,
 status=status,
 trigger_ref=trigger_ref,
+rule_ref=rule_ref,
+include_total=include_total,
 page=page,
 per_page=per_page,
 
@@ -251,6 +285,8 @@ async def asyncio(
     event: int | None | Unset = UNSET,
     status: EnforcementStatus | None | Unset = UNSET,
     trigger_ref: None | str | Unset = UNSET,
+    rule_ref: None | str | Unset = UNSET,
+    include_total: bool | None | Unset = UNSET,
     page: int | Unset = UNSET,
     per_page: int | Unset = UNSET,
 
@@ -262,6 +298,8 @@ async def asyncio(
         event (int | None | Unset):
         status (EnforcementStatus | None | Unset):
         trigger_ref (None | str | Unset):
+        rule_ref (None | str | Unset):
+        include_total (bool | None | Unset):
         page (int | Unset):
         per_page (int | Unset):
 
@@ -280,6 +318,8 @@ rule=rule,
 event=event,
 status=status,
 trigger_ref=trigger_ref,
+rule_ref=rule_ref,
+include_total=include_total,
 page=page,
 per_page=per_page,
 

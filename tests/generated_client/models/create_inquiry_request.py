@@ -31,7 +31,8 @@ class CreateInquiryRequest:
         Attributes:
             execution (int):
             prompt (str): Prompt text to display to the user Example: Approve deployment to production?.
-            response_schema (CreateInquiryRequestResponseSchema): Optional JSON schema for the expected response format
+            response_schema (CreateInquiryRequestResponseSchema): Optional schema for the expected response format (flat
+                format with inline required/secret)
             assigned_to (int | None | Unset):
             timeout_at (datetime.datetime | None | Unset): Optional timeout timestamp (when inquiry expires) Example:
                 2024-01-13T11:30:00Z.

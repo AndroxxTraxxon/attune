@@ -119,7 +119,7 @@ def wait_for_execution_completion(
     def check_completion():
         nonlocal execution
         execution = client.get_execution(execution_id)
-        terminal_statuses = ["succeeded", "failed", "canceled", "timeout"]
+        terminal_statuses = ["completed", "failed", "cancelled", "timeout", "abandoned"]
         return execution["status"] in terminal_statuses
 
     wait_for_condition(
@@ -274,6 +274,8 @@ def wait_for_event_count(
     client: AttuneClient,
     expected_count: int,
     trigger_id: Optional[int] = None,
+    rule_id: Optional[int] = None,
+    created_after: Optional[str] = None,
     timeout: float = 30.0,
     poll_interval: float = 0.5,
     operator: str = ">=",
@@ -285,12 +287,14 @@ def wait_for_event_count(
         client: AttuneClient instance
         expected_count: Expected number of events
         trigger_id: Optional filter by trigger ID
+        rule_id: Optional filter by rule ID (events have a 'rule' field)
+        created_after: Optional ISO timestamp - only count events created after this time
         timeout: Maximum time to wait
         poll_interval: Time between checks
         operator: Comparison operator (>=, ==, <=, >, <)
 
     Returns:
-        List of events
+        List of events (filtered)
 
     Raises:
         TimeoutError: If count not reached within timeout
@@ -299,7 +303,27 @@ def wait_for_event_count(
 
     def check_count():
         nonlocal events
-        events = client.list_events(trigger_id=trigger_id, limit=1000)
+        all_events = client.list_events(trigger_id=trigger_id, limit=1000, enrich=False)
+
+        filtered = all_events
+
+        # Apply timestamp filter if provided
+        if created_after:
+            from datetime import datetime
+
+            cutoff = datetime.fromisoformat(created_after.replace("Z", "+00:00"))
+            filtered = [
+                e
+                for e in filtered
+                if datetime.fromisoformat(e["created"].replace("Z", "+00:00"))
+                >= cutoff
+            ]
+
+        # Apply rule_id filter if provided
+        if rule_id is not None:
+            filtered = [e for e in filtered if e.get("rule") == rule_id]
+
+        events = filtered
         actual_count = len(events)
 
         if operator == ">=":
@@ -324,7 +348,19 @@ def wait_for_event_count(
         error_message=f"Event count did not reach {operator} {expected_count}{filter_desc}",
     )
 
-    return events
+    # Enrich events with full payload now that we have the final set
+    enriched = []
+    for event in events:
+        if event.get("has_payload") and "payload" not in event:
+            try:
+                full = client.get_event(event["id"])
+                enriched.append(full)
+            except Exception:
+                enriched.append(event)
+        else:
+            enriched.append(event)
+
+    return enriched
 
 
 def wait_for_enforcement_count(

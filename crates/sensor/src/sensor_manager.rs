@@ -469,6 +469,16 @@ impl SensorManager {
             .as_ref()
             .ok_or_else(|| anyhow!("Sensor {} has no pack_ref", sensor.r#ref))?;
 
+        // Skip sensors with protocol-based entrypoints (e.g., internal://timer)
+        // These are placeholders created by tests and have no corresponding binary.
+        if sensor.entrypoint.contains("://") {
+            return Err(anyhow!(
+                "Sensor '{}' has protocol-based entrypoint '{}' which cannot be spawned as a process. \
+                 Use the core pack's built-in sensor instead.",
+                sensor.r#ref, sensor.entrypoint
+            ));
+        }
+
         let sensor_script = format!(
             "{}/{}/sensors/{}",
             self.inner.packs_base_dir, pack_ref, sensor.entrypoint

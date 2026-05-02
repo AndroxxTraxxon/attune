@@ -109,7 +109,7 @@ def test_rule_criteria_basic(client: AttuneClient, test_pack):
     info_events = [
         e
         for e in events
-        if e["trigger_ref"] == trigger_ref and e.get("data", {}).get("status") == "info"
+        if e["trigger_ref"] == trigger_ref and e.get("payload", {}).get("status") == "info"
     ]
 
     assert len(info_events) >= 1, "❌ Event not created for info status"

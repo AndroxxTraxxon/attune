@@ -77,7 +77,7 @@ services:
       DB_USER: attune
       DB_PASSWORD: attune
       DB_NAME: attune
-      DB_SCHEMA: public
+      DB_SCHEMA: attune
       TEST_LOGIN: test@attune.local
       TEST_PASSWORD: TestPass123!
       TEST_DISPLAY_NAME: Test User
@@ -133,7 +133,7 @@ services:
       DB_USER: attune
       DB_PASSWORD: attune
       DB_NAME: attune
-      DB_SCHEMA: public
+      DB_SCHEMA: attune
       SOURCE_PACKS_DIR: /source/packs
       TARGET_PACKS_DIR: /opt/attune/packs
       LOADER_SCRIPT: /scripts/load_core_pack.py
@@ -610,7 +610,7 @@ services:
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
-      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__DATABASE__SCHEMA: attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE__WORKER__WORKER_TYPE: container
       ATTUNE_API_URL: http://attune-api:8080

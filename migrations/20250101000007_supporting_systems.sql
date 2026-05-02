@@ -5,6 +5,9 @@
 --              000011 (pack_environments), and 000012 (pack_testing).
 -- Version: 20250101000007
 
+-- Set search_path for schema isolation
+SET search_path TO attune, public;
+
 -- ============================================================================
 -- KEY TABLE
 -- ============================================================================

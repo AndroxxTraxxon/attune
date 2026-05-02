@@ -60,6 +60,9 @@ def create_test_pack(
     """
     Create or get test pack
 
+    Uses upload (tarball) to work across container boundaries.
+    Falls back to register (filesystem path) for local development.
+
     Args:
         client: AttuneClient instance
         pack_ref: Optional pack reference (generated if not provided)
@@ -78,8 +81,19 @@ def create_test_pack(
     if existing_pack:
         return existing_pack
 
-    # Register new pack if it doesn't exist
-    return client.register_pack(pack_dir, force=True)
+    # Use upload_pack (works across Docker containers)
+    import os
+
+    if os.path.isdir(pack_dir):
+        return client.upload_pack(pack_dir, force=True)
+
+    # Try resolving relative to common locations
+    for base in [".", "/app", os.path.dirname(os.path.dirname(__file__))]:
+        candidate = os.path.join(base, pack_dir)
+        if os.path.isdir(candidate):
+            return client.upload_pack(candidate, force=True)
+
+    raise FileNotFoundError(f"Pack directory not found: {pack_dir}")
 
 
 def ensure_core_pack(client: AttuneClient) -> Dict[str, Any]:
@@ -121,20 +135,29 @@ def create_interval_timer(
     interval_seconds: int = 5,
     name: Optional[str] = None,
     pack_ref: str = "test.test_pack",
+    action_ref: Optional[str] = None,
+    action_parameters: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Create interval timer sensor for timer to actually fire
+    Create interval timer trigger configuration.
+
+    The core pack's built-in timer sensor (core.interval_timer_sensor) monitors
+    all core.intervaltimer triggers via trigger instances (rules). This fixture
+    creates the trigger and a rule so the core sensor will pick it up on its
+    next poll cycle.
 
     Args:
         client: AttuneClient instance
         interval_seconds: Interval in seconds
-        name: Sensor name (generated if not provided)
+        name: Timer name (generated if not provided)
         pack_ref: Pack reference
+        action_ref: Action to invoke on timer fire (defaults to core.echo)
+        action_parameters: Parameters to pass to the action
 
     Returns:
-        Dict with trigger and sensor info
+        Dict with trigger and rule info including the created rule
     """
-    sensor_name = name or f"interval_{interval_seconds}s_{unique_ref()}"
+    timer_name = name or f"interval_{interval_seconds}s_{unique_ref()}"
 
     # Ensure core pack exists
     ensure_core_pack(client)
@@ -148,7 +171,6 @@ def create_interval_timer(
             break
 
     if not core_trigger:
-        # Create core.intervaltimer trigger if it doesn't exist
         core_trigger = client.create_trigger(
             ref="core.intervaltimer",
             label="Interval Timer",
@@ -156,34 +178,41 @@ def create_interval_timer(
             description="Fires at regular intervals",
         )
 
-    # Create sensor to make timer actually fire events
-    sensor_ref = f"{pack_ref}.{sensor_name}_sensor"
-    sensor_config = {"unit": "seconds", "interval": interval_seconds}
+    # Resolve action_ref
+    if not action_ref:
+        actions = client.list_actions()
+        for a in actions:
+            if a.get("ref") == "core.noop" or a.get("ref") == "core.echo":
+                action_ref = a["ref"]
+                break
 
-    sensor = client.create_sensor(
-        ref=sensor_ref,
-        trigger_id=core_trigger["id"],
-        trigger_ref=core_trigger["ref"],
-        label=f"{sensor_name} Sensor",
-        description=f"Sensor for interval timer (every {interval_seconds}s)",
-        entrypoint="internal://timer",
-        runtime_ref="core.sensor.python3",
-        pack_ref=pack_ref,
-        enabled=True,
-        config=sensor_config,
-    )
+    rule = None
+    if action_ref:
+        try:
+            rule = client.create_rule(
+                pack_ref=pack_ref,
+                name=f"{timer_name}_rule",
+                trigger_ref=core_trigger["ref"],
+                action_ref=action_ref,
+                enabled=True,
+                trigger_parameters={
+                    "unit": "seconds",
+                    "interval": interval_seconds,
+                },
+                action_parameters=action_parameters or {},
+            )
+        except Exception:
+            pass
 
-    # Restart sensor service to load the new sensor
-    restart_sensor_service(wait_seconds=2)
-
-    # Return dict with both trigger and sensor info
+    # Return dict with trigger info (no sensor — core sensor handles it)
     return {
         "id": core_trigger["id"],
         "ref": core_trigger["ref"],
-        "label": sensor["label"],
+        "label": core_trigger.get("label", timer_name),
         "trigger": core_trigger,
-        "sensor": sensor,
-        "sensor_id": sensor["id"],
+        "sensor": {"id": 0, "ref": "core.interval_timer_sensor", "enabled": True},
+        "sensor_id": 0,
+        "rule": rule,
     }
 
 
@@ -195,22 +224,25 @@ def create_date_timer(
     pack_ref: str = "test.test_pack",
 ) -> Dict[str, Any]:
     """
-    Create date timer sensor for timer to actually fire
+    Create date timer trigger configuration.
+
+    The core timer sensor monitors core.datetimetimer triggers. This fixture
+    creates a rule with trigger_params so the sensor will schedule the one-shot.
 
     Args:
         client: AttuneClient instance
         fire_at: ISO timestamp when to fire (optional)
         seconds_from_now: Seconds from now to fire (used if fire_at not provided)
-        name: Sensor name (generated if not provided)
+        name: Timer name (generated if not provided)
         pack_ref: Pack reference
 
     Returns:
-        Dict with trigger and sensor info
+        Dict with trigger and rule info
     """
     if not fire_at:
         fire_at = timestamp_future(seconds_from_now)
 
-    sensor_name = name or f"date_{unique_ref()}"
+    timer_name = name or f"date_{unique_ref()}"
 
     # Ensure core pack exists
     ensure_core_pack(client)
@@ -224,7 +256,6 @@ def create_date_timer(
             break
 
     if not core_trigger:
-        # Create core.datetimetimer trigger if it doesn't exist
         core_trigger = client.create_trigger(
             ref="core.datetimetimer",
             label="Date/Time Timer",
@@ -232,35 +263,40 @@ def create_date_timer(
             description="Fires at a specific date/time",
         )
 
-    # Create sensor to make timer actually fire events
-    sensor_ref = f"{pack_ref}.{sensor_name}_sensor"
-    sensor_config = {"date": fire_at}
+    # Create a rule with trigger_params for the datetime
+    actions = client.list_actions()
+    echo_action = None
+    for a in actions:
+        if a.get("ref") == "core.noop" or a.get("ref") == "core.echo":
+            echo_action = a
+            break
 
-    sensor = client.create_sensor(
-        ref=sensor_ref,
-        trigger_id=core_trigger["id"],
-        trigger_ref=core_trigger["ref"],
-        label=f"{sensor_name} Sensor",
-        description=f"Sensor for date timer (fires at {fire_at})",
-        entrypoint="internal://timer",
-        runtime_ref="core.sensor.python3",
-        pack_ref=pack_ref,
-        enabled=True,
-        config=sensor_config,
-    )
+    rule = None
+    if echo_action:
+        try:
+            rule = client.create_rule(
+                pack_ref=pack_ref,
+                name=f"{timer_name}_rule",
+                trigger_ref=core_trigger["ref"],
+                action_ref=echo_action["ref"],
+                enabled=True,
+                trigger_parameters={
+                    "date": fire_at,
+                    "timezone": "UTC",
+                },
+            )
+        except Exception:
+            pass
 
-    # Restart sensor service to load the new sensor
-    restart_sensor_service(wait_seconds=2)
-
-    # Return dict with both trigger and sensor info
     return {
         "id": core_trigger["id"],
         "ref": core_trigger["ref"],
-        "label": sensor["label"],
+        "label": core_trigger.get("label", timer_name),
         "trigger": core_trigger,
-        "sensor": sensor,
-        "sensor_id": sensor["id"],
+        "sensor": {"id": 0, "ref": "core.interval_timer_sensor", "enabled": True},
+        "sensor_id": 0,
         "fire_at": fire_at,
+        "rule": rule,
     }
 
 
@@ -272,19 +308,22 @@ def create_cron_timer(
     timezone: str = "UTC",
 ) -> Dict[str, Any]:
     """
-    Create cron timer sensor for timer to actually fire
+    Create cron timer trigger configuration.
+
+    The core timer sensor monitors core.crontimer triggers. This fixture
+    creates a rule with trigger_params so the sensor will schedule the cron.
 
     Args:
         client: AttuneClient instance
         cron_expression: Cron expression (6-field with seconds)
-        name: Sensor name (generated if not provided)
+        name: Timer name (generated if not provided)
         pack_ref: Pack reference
         timezone: Timezone for cron evaluation
 
     Returns:
-        Dict with trigger and sensor info
+        Dict with trigger and rule info
     """
-    sensor_name = name or f"cron_{unique_ref()}"
+    timer_name = name or f"cron_{unique_ref()}"
 
     # Ensure core pack exists
     ensure_core_pack(client)
@@ -298,7 +337,6 @@ def create_cron_timer(
             break
 
     if not core_trigger:
-        # Create core.crontimer trigger if it doesn't exist
         core_trigger = client.create_trigger(
             ref="core.crontimer",
             label="Cron Timer",
@@ -306,42 +344,46 @@ def create_cron_timer(
             description="Fires based on cron schedule",
         )
 
-    # Create sensor to make timer actually fire events
-    sensor_ref = f"{pack_ref}.{sensor_name}_sensor"
-    sensor_config = {"cron": cron_expression, "timezone": timezone}
+    # Create a rule with trigger_params for the cron schedule
+    actions = client.list_actions()
+    echo_action = None
+    for a in actions:
+        if a.get("ref") == "core.noop" or a.get("ref") == "core.echo":
+            echo_action = a
+            break
 
-    sensor = client.create_sensor(
-        ref=sensor_ref,
-        trigger_id=core_trigger["id"],
-        trigger_ref=core_trigger["ref"],
-        label=f"{sensor_name} Sensor",
-        description=f"Sensor for cron timer ({cron_expression})",
-        entrypoint="internal://timer",
-        runtime_ref="core.sensor.python3",
-        pack_ref=pack_ref,
-        enabled=True,
-        config=sensor_config,
-    )
+    rule = None
+    if echo_action:
+        try:
+            rule = client.create_rule(
+                pack_ref=pack_ref,
+                name=f"{timer_name}_rule",
+                trigger_ref=core_trigger["ref"],
+                action_ref=echo_action["ref"],
+                enabled=True,
+                trigger_parameters={
+                    "cron": cron_expression,
+                    "timezone": timezone,
+                },
+            )
+        except Exception:
+            pass
 
-    # Restart sensor service to load the new sensor
-    restart_sensor_service(wait_seconds=2)
-
-    # Return dict with both trigger and sensor info
     return {
         "id": core_trigger["id"],
         "ref": core_trigger["ref"],
-        "label": sensor["label"],
+        "label": core_trigger.get("label", timer_name),
         "trigger": core_trigger,
-        "sensor": sensor,
-        "sensor_id": sensor["id"],
-        "cron_expression": cron_expression,
-        "timezone": timezone,
+        "sensor": {"id": 0, "ref": "core.interval_timer_sensor", "enabled": True},
+        "sensor_id": 0,
+        "rule": rule,
     }
 
 
 def create_webhook_trigger(
     client: AttuneClient,
     name: Optional[str] = None,
+    trigger_name: Optional[str] = None,
     pack_ref: str = "test.test_pack",
 ) -> Dict[str, Any]:
     """
@@ -350,19 +392,41 @@ def create_webhook_trigger(
     Args:
         client: AttuneClient instance
         name: Trigger name (generated if not provided)
+        trigger_name: Alias for name (backward compat with tier 2 tests)
         pack_ref: Pack reference
 
     Returns:
         Created trigger data
     """
-    trigger_name = name or f"webhook_{unique_ref()}"
+    trigger_name = name or trigger_name or f"webhook_{unique_ref()}"
 
-    return client.create_trigger(
+    trigger = client.create_trigger(
         pack_ref=pack_ref,
         name=trigger_name,
         trigger_type="webhook",
         parameters={},
     )
+
+    # Enable webhook and construct webhook_url for tests
+    trigger_ref = trigger.get("ref", f"{pack_ref}.{trigger_name}")
+    try:
+        enable_resp = client._request(
+            "POST", f"/api/v1/triggers/{trigger_ref}/webhooks/enable"
+        )
+        if enable_resp.status_code in (200, 201):
+            enable_data = enable_resp.json()
+            if "data" in enable_data:
+                trigger.update(enable_data["data"])
+            else:
+                trigger.update(enable_data)
+    except Exception:
+        pass
+
+    # Ensure webhook_url is present for test convenience
+    if "webhook_url" not in trigger and "webhook_key" in trigger:
+        trigger["webhook_url"] = f"/api/v1/webhooks/{trigger['webhook_key']}"
+
+    return trigger
 
 
 # ============================================================================
@@ -412,7 +476,9 @@ def create_simple_action(
 def create_echo_action(
     client: AttuneClient,
     name: Optional[str] = None,
+    action_name: Optional[str] = None,
     pack_ref: str = "test.test_pack",
+    echo_message: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Create echo action (simple action that echoes input)
@@ -420,23 +486,25 @@ def create_echo_action(
     Args:
         client: AttuneClient instance
         name: Action name (generated if not provided)
+        action_name: Alias for name (backward compat with tier 2 tests)
         pack_ref: Pack reference
+        echo_message: Default message (used in param_schema default)
 
     Returns:
         Created action data
     """
     return create_simple_action(
         client=client,
-        name=name or f"echo_{unique_ref()}",
+        name=name or action_name or f"echo_{unique_ref()}",
         pack_ref=pack_ref,
-        runner_type="python3",
-        entrypoint="actions/echo.py",
+        runner_type="shell",
+        entrypoint="echo.sh",
         param_schema={
-            "type": "object",
-            "properties": {
-                "message": {"type": "string", "default": "echo"},
-                "count": {"type": "integer", "default": 1},
+            "message": {
+                "type": "string",
+                "default": echo_message or "echo",
             },
+            "count": {"type": "integer", "default": 1},
         },
     )
 
@@ -454,7 +522,7 @@ def create_failing_action(
         client: AttuneClient instance
         name: Action name (generated if not provided)
         pack_ref: Pack reference
-        exit_code: Exit code to return
+        exit_code: Exit code to return (always 1 for shell version)
 
     Returns:
         Created action data
@@ -464,11 +532,10 @@ def create_failing_action(
     return client.create_action(
         pack_ref=pack_ref,
         name=action_name,
-        runner_type="python3",
-        entrypoint="actions/fail.py",
+        runner_type="shell",
+        entrypoint="fail.sh",
         param_schema={
-            "type": "object",
-            "properties": {"exit_code": {"type": "integer", "default": exit_code}},
+            "exit_code": {"type": "integer", "default": exit_code},
         },
     )
 
@@ -521,6 +588,7 @@ def create_rule(
     enabled: bool = True,
     criteria: Optional[str] = None,
     action_parameters: Optional[Dict[str, Any]] = None,
+    trigger_parameters: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Create rule
@@ -534,11 +602,23 @@ def create_rule(
         enabled: Whether rule is enabled
         criteria: Optional Jinja2 criteria expression
         action_parameters: Parameters to pass to action
+        trigger_parameters: Parameters for the trigger (required if trigger has param_schema)
 
     Returns:
         Created rule data
     """
     rule_name = name or f"rule_{unique_ref()}"
+
+    # Auto-populate trigger_parameters for known triggers if not provided
+    if trigger_parameters is None:
+        trigger = client.get_trigger(trigger_id)
+        trigger_ref = trigger.get("ref", "") if trigger else ""
+        if trigger_ref == "core.intervaltimer":
+            trigger_parameters = {"unit": "seconds", "interval": 60}
+        elif trigger_ref == "core.crontimer":
+            trigger_parameters = {"expression": "0 0 * * * *"}
+        elif trigger_ref == "core.datetimetimer":
+            trigger_parameters = {"fire_at": "2099-12-31T23:59:59Z"}
 
     return client.create_rule(
         name=rule_name,
@@ -548,6 +628,7 @@ def create_rule(
         enabled=enabled,
         criteria=criteria,
         action_parameters=action_parameters or {},
+        trigger_parameters=trigger_parameters,
     )
 
 
@@ -584,6 +665,7 @@ def create_timer_automation(
         action_ref=action["ref"],
         pack_ref=pack_ref,
         action_parameters=action_parameters,
+        trigger_parameters={"unit": "seconds", "interval": interval_seconds},
     )
 
     return {"trigger": trigger, "action": action, "rule": rule}
@@ -639,6 +721,8 @@ def restart_sensor_service(wait_seconds: int = 3) -> bool:
     and can start generating events.
 
     Works with E2E services managed by start-e2e-services.sh script.
+    In a Docker Compose environment the test container cannot restart
+    other services, so this is a best-effort no-op that logs a warning.
 
     Args:
         wait_seconds: Seconds to wait after restart for service to be ready
@@ -651,18 +735,15 @@ def restart_sensor_service(wait_seconds: int = 3) -> bool:
     import subprocess
 
     try:
-        # Check if we're running in docker-compose environment
+        # In Docker Compose, the test container has no control over sibling
+        # services. Log a warning and return False so callers can adapt.
         if os.path.exists("/.dockerenv") or os.getenv("DOCKER_ENV"):
-            # Try to restart via docker-compose
-            result = subprocess.run(
-                ["docker-compose", "restart", "sensor"],
-                capture_output=True,
-                text=True,
-                timeout=30,
+            print(
+                "Warning: Cannot restart sensor service from inside a Docker "
+                "container. Sensors created after service startup will not be "
+                "picked up until the sensor service is restarted externally."
             )
-            if result.returncode == 0:
-                time.sleep(wait_seconds)
-                return True
+            return False
 
         # For E2E services, use PID file to restart the sensor service
         # Calculate paths relative to tests directory

@@ -7,7 +7,7 @@ environment: development
 database:
   url: postgresql://postgres:postgres@localhost:5432/attune
   log_statements: true # Enable SQL logging for debugging
-  schema: "public" # Explicit schema for development
+  schema: "attune" # Use dedicated schema (not public)
 
 # Development message queue
 message_queue:

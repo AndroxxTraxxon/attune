@@ -20,7 +20,7 @@ T = TypeVar("T", bound="CreateTriggerRequestOutSchemaType0")
 
 @_attrs_define
 class CreateTriggerRequestOutSchemaType0:
-    """ Output schema (JSON Schema) defining event data structure
+    """ Output schema (flat format) defining event data structure with inline required/secret
 
      """
 

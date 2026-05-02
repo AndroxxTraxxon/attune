@@ -8,6 +8,7 @@ from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
 
+from ..types import UNSET, Unset
 from dateutil.parser import isoparse
 from typing import cast
 import datetime
@@ -30,41 +31,46 @@ class ApiResponseRuleResponseData:
     """ Response DTO for rule information
 
         Attributes:
-            action (int): Action ID Example: 1.
             action_params (ApiResponseRuleResponseDataActionParams): Parameters to pass to the action when rule is triggered
             action_ref (str): Action reference Example: slack.post_message.
             conditions (ApiResponseRuleResponseDataConditions): Conditions for rule evaluation
             created (datetime.datetime): Creation timestamp Example: 2024-01-13T10:30:00Z.
-            description (str): Rule description Example: Send Slack notification when an error occurs.
             enabled (bool): Whether the rule is enabled Example: True.
             id (int): Rule ID Example: 1.
+            is_adhoc (bool): Whether this is an ad-hoc rule (not from pack installation)
             label (str): Human-readable label Example: Notify on Error.
             pack (int): Pack ID Example: 1.
             pack_ref (str): Pack reference Example: slack.
             ref (str): Unique reference identifier Example: slack.notify_on_error.
-            trigger (int): Trigger ID Example: 1.
             trigger_params (ApiResponseRuleResponseDataTriggerParams): Parameters for trigger configuration and event
                 filtering
             trigger_ref (str): Trigger reference Example: system.error_event.
             updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:30:00Z.
+            action (int | None | Unset): Action ID (null if the referenced action has been deleted) Example: 1.
+            description (None | str | Unset): Rule description Example: Send Slack notification when an error occurs.
+            owner_identity (int | None | Unset): Identity that registered the rule. NULL for system-loaded rules. Example:
+                1.
+            trigger (int | None | Unset): Trigger ID (null if the referenced trigger has been deleted) Example: 1.
      """
 
-    action: int
     action_params: ApiResponseRuleResponseDataActionParams
     action_ref: str
     conditions: ApiResponseRuleResponseDataConditions
     created: datetime.datetime
-    description: str
     enabled: bool
     id: int
+    is_adhoc: bool
     label: str
     pack: int
     pack_ref: str
     ref: str
-    trigger: int
     trigger_params: ApiResponseRuleResponseDataTriggerParams
     trigger_ref: str
     updated: datetime.datetime
+    action: int | None | Unset = UNSET
+    description: None | str | Unset = UNSET
+    owner_identity: int | None | Unset = UNSET
+    trigger: int | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
 
@@ -72,11 +78,9 @@ class ApiResponseRuleResponseData:
 
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.api_response_rule_response_data_trigger_params import ApiResponseRuleResponseDataTriggerParams
         from ..models.api_response_rule_response_data_action_params import ApiResponseRuleResponseDataActionParams
         from ..models.api_response_rule_response_data_conditions import ApiResponseRuleResponseDataConditions
-        action = self.action
-
+        from ..models.api_response_rule_response_data_trigger_params import ApiResponseRuleResponseDataTriggerParams
         action_params = self.action_params.to_dict()
 
         action_ref = self.action_ref
@@ -85,11 +89,11 @@ class ApiResponseRuleResponseData:
 
         created = self.created.isoformat()
 
-        description = self.description
-
         enabled = self.enabled
 
         id = self.id
+
+        is_adhoc = self.is_adhoc
 
         label = self.label
 
@@ -99,35 +103,63 @@ class ApiResponseRuleResponseData:
 
         ref = self.ref
 
-        trigger = self.trigger
-
         trigger_params = self.trigger_params.to_dict()
 
         trigger_ref = self.trigger_ref
 
         updated = self.updated.isoformat()
 
+        action: int | None | Unset
+        if isinstance(self.action, Unset):
+            action = UNSET
+        else:
+            action = self.action
+
+        description: None | str | Unset
+        if isinstance(self.description, Unset):
+            description = UNSET
+        else:
+            description = self.description
+
+        owner_identity: int | None | Unset
+        if isinstance(self.owner_identity, Unset):
+            owner_identity = UNSET
+        else:
+            owner_identity = self.owner_identity
+
+        trigger: int | None | Unset
+        if isinstance(self.trigger, Unset):
+            trigger = UNSET
+        else:
+            trigger = self.trigger
+
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({
-            "action": action,
             "action_params": action_params,
             "action_ref": action_ref,
             "conditions": conditions,
             "created": created,
-            "description": description,
             "enabled": enabled,
             "id": id,
+            "is_adhoc": is_adhoc,
             "label": label,
             "pack": pack,
             "pack_ref": pack_ref,
             "ref": ref,
-            "trigger": trigger,
             "trigger_params": trigger_params,
             "trigger_ref": trigger_ref,
             "updated": updated,
         })
+        if action is not UNSET:
+            field_dict["action"] = action
+        if description is not UNSET:
+            field_dict["description"] = description
+        if owner_identity is not UNSET:
+            field_dict["owner_identity"] = owner_identity
+        if trigger is not UNSET:
+            field_dict["trigger"] = trigger
 
         return field_dict
 
@@ -139,8 +171,6 @@ class ApiResponseRuleResponseData:
         from ..models.api_response_rule_response_data_conditions import ApiResponseRuleResponseDataConditions
         from ..models.api_response_rule_response_data_trigger_params import ApiResponseRuleResponseDataTriggerParams
         d = dict(src_dict)
-        action = d.pop("action")
-
         action_params = ApiResponseRuleResponseDataActionParams.from_dict(d.pop("action_params"))
 
 
@@ -158,11 +188,11 @@ class ApiResponseRuleResponseData:
 
 
 
-        description = d.pop("description")
-
         enabled = d.pop("enabled")
 
         id = d.pop("id")
+
+        is_adhoc = d.pop("is_adhoc")
 
         label = d.pop("label")
 
@@ -171,8 +201,6 @@ class ApiResponseRuleResponseData:
         pack_ref = d.pop("pack_ref")
 
         ref = d.pop("ref")
-
-        trigger = d.pop("trigger")
 
         trigger_params = ApiResponseRuleResponseDataTriggerParams.from_dict(d.pop("trigger_params"))
 
@@ -186,23 +214,65 @@ class ApiResponseRuleResponseData:
 
 
 
+        def _parse_action(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        action = _parse_action(d.pop("action", UNSET))
+
+
+        def _parse_description(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        description = _parse_description(d.pop("description", UNSET))
+
+
+        def _parse_owner_identity(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        owner_identity = _parse_owner_identity(d.pop("owner_identity", UNSET))
+
+
+        def _parse_trigger(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        trigger = _parse_trigger(d.pop("trigger", UNSET))
+
+
         api_response_rule_response_data = cls(
-            action=action,
             action_params=action_params,
             action_ref=action_ref,
             conditions=conditions,
             created=created,
-            description=description,
             enabled=enabled,
             id=id,
+            is_adhoc=is_adhoc,
             label=label,
             pack=pack,
             pack_ref=pack_ref,
             ref=ref,
-            trigger=trigger,
             trigger_params=trigger_params,
             trigger_ref=trigger_ref,
             updated=updated,
+            action=action,
+            description=description,
+            owner_identity=owner_identity,
+            trigger=trigger,
         )
 
 

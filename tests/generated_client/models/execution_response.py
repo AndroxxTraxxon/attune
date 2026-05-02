@@ -17,6 +17,7 @@ import datetime
 if TYPE_CHECKING:
   from ..models.execution_response_config import ExecutionResponseConfig
   from ..models.execution_response_result import ExecutionResponseResult
+  from ..models.execution_response_workflow_task_type_0 import ExecutionResponseWorkflowTaskType0
 
 
 
@@ -40,8 +41,14 @@ class ExecutionResponse:
             updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:35:00Z.
             action (int | None | Unset): Action ID (optional, may be null for ad-hoc executions) Example: 1.
             enforcement (int | None | Unset): Enforcement ID (rule enforcement that triggered this) Example: 1.
-            executor (int | None | Unset): Executor ID (worker/executor that ran this) Example: 1.
+            executor (int | None | Unset): Identity ID that initiated this execution Example: 1.
             parent (int | None | Unset): Parent execution ID (for nested/child executions) Example: 1.
+            started_at (datetime.datetime | None | Unset): When the execution actually started running (worker picked it
+                up).
+                Null if the execution hasn't started running yet. Example: 2024-01-13T10:31:00Z.
+            worker (int | None | Unset): Worker ID currently assigned to this execution Example: 1.
+            workflow_task (ExecutionResponseWorkflowTaskType0 | None | Unset): Workflow task metadata (only populated for
+                workflow task executions)
      """
 
     action_ref: str
@@ -55,6 +62,9 @@ class ExecutionResponse:
     enforcement: int | None | Unset = UNSET
     executor: int | None | Unset = UNSET
     parent: int | None | Unset = UNSET
+    started_at: datetime.datetime | None | Unset = UNSET
+    worker: int | None | Unset = UNSET
+    workflow_task: ExecutionResponseWorkflowTaskType0 | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
 
@@ -62,8 +72,9 @@ class ExecutionResponse:
 
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.execution_response_result import ExecutionResponseResult
         from ..models.execution_response_config import ExecutionResponseConfig
+        from ..models.execution_response_result import ExecutionResponseResult
+        from ..models.execution_response_workflow_task_type_0 import ExecutionResponseWorkflowTaskType0
         action_ref = self.action_ref
 
         config = self.config.to_dict()
@@ -102,6 +113,28 @@ class ExecutionResponse:
         else:
             parent = self.parent
 
+        started_at: None | str | Unset
+        if isinstance(self.started_at, Unset):
+            started_at = UNSET
+        elif isinstance(self.started_at, datetime.datetime):
+            started_at = self.started_at.isoformat()
+        else:
+            started_at = self.started_at
+
+        worker: int | None | Unset
+        if isinstance(self.worker, Unset):
+            worker = UNSET
+        else:
+            worker = self.worker
+
+        workflow_task: dict[str, Any] | None | Unset
+        if isinstance(self.workflow_task, Unset):
+            workflow_task = UNSET
+        elif isinstance(self.workflow_task, ExecutionResponseWorkflowTaskType0):
+            workflow_task = self.workflow_task.to_dict()
+        else:
+            workflow_task = self.workflow_task
+
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -122,6 +155,12 @@ class ExecutionResponse:
             field_dict["executor"] = executor
         if parent is not UNSET:
             field_dict["parent"] = parent
+        if started_at is not UNSET:
+            field_dict["started_at"] = started_at
+        if worker is not UNSET:
+            field_dict["worker"] = worker
+        if workflow_task is not UNSET:
+            field_dict["workflow_task"] = workflow_task
 
         return field_dict
 
@@ -131,6 +170,7 @@ class ExecutionResponse:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.execution_response_config import ExecutionResponseConfig
         from ..models.execution_response_result import ExecutionResponseResult
+        from ..models.execution_response_workflow_task_type_0 import ExecutionResponseWorkflowTaskType0
         d = dict(src_dict)
         action_ref = d.pop("action_ref")
 
@@ -201,6 +241,56 @@ class ExecutionResponse:
         parent = _parse_parent(d.pop("parent", UNSET))
 
 
+        def _parse_started_at(data: object) -> datetime.datetime | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                started_at_type_0 = isoparse(data)
+
+
+
+                return started_at_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(datetime.datetime | None | Unset, data)
+
+        started_at = _parse_started_at(d.pop("started_at", UNSET))
+
+
+        def _parse_worker(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        worker = _parse_worker(d.pop("worker", UNSET))
+
+
+        def _parse_workflow_task(data: object) -> ExecutionResponseWorkflowTaskType0 | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                workflow_task_type_0 = ExecutionResponseWorkflowTaskType0.from_dict(data)
+
+
+
+                return workflow_task_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(ExecutionResponseWorkflowTaskType0 | None | Unset, data)
+
+        workflow_task = _parse_workflow_task(d.pop("workflow_task", UNSET))
+
+
         execution_response = cls(
             action_ref=action_ref,
             config=config,
@@ -213,6 +303,9 @@ class ExecutionResponse:
             enforcement=enforcement,
             executor=executor,
             parent=parent,
+            started_at=started_at,
+            worker=worker,
+            workflow_task=workflow_task,
         )
 
 

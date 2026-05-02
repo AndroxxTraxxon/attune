@@ -1,0 +1,353 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any, TypeVar, BinaryIO, TextIO, TYPE_CHECKING, Generator
+
+from attrs import define as _attrs_define
+from attrs import field as _attrs_field
+
+from ..types import UNSET, Unset
+
+from ..models.work_queue_batch_mode import WorkQueueBatchMode
+from ..models.work_queue_update_strategy import WorkQueueUpdateStrategy
+from ..types import UNSET, Unset
+from dateutil.parser import isoparse
+from typing import cast
+import datetime
+
+if TYPE_CHECKING:
+  from ..models.resolved_work_queue_dispatch_tuning_response import ResolvedWorkQueueDispatchTuningResponse
+  from ..models.work_queue_response_action_params import WorkQueueResponseActionParams
+  from ..models.work_queue_response_config import WorkQueueResponseConfig
+  from ..models.work_queue_response_item_schema import WorkQueueResponseItemSchema
+
+
+
+
+
+T = TypeVar("T", bound="WorkQueueResponse")
+
+
+
+@_attrs_define
+class WorkQueueResponse:
+    """ 
+        Attributes:
+            accepting_new_items (bool):  Example: True.
+            action_params (WorkQueueResponseActionParams):
+            allow_pending_update (bool):
+            batch_mode (WorkQueueBatchMode):
+            config (WorkQueueResponseConfig):
+            created (datetime.datetime):  Example: 2024-01-13T10:30:00Z.
+            default_priority (int):
+            dispatch_action_ref (str):  Example: core.process_item.
+            enabled (bool):  Example: True.
+            id (int):
+            is_adhoc (bool):
+            item_schema (WorkQueueResponseItemSchema):
+            label (str):  Example: Core Inbox.
+            ref (str):  Example: core.inbox.
+            update_strategy (WorkQueueUpdateStrategy):
+            updated (datetime.datetime):  Example: 2024-01-13T10:30:00Z.
+            description (None | str | Unset):  Example: Dispatches inbound work items to the core processor.
+            dispatch_action (int | None | Unset):
+            pack (int | None | Unset):
+            pack_ref (None | str | Unset):  Example: core.
+            resolved_dispatch_tuning (None | ResolvedWorkQueueDispatchTuningResponse | Unset):
+     """
+
+    accepting_new_items: bool
+    action_params: WorkQueueResponseActionParams
+    allow_pending_update: bool
+    batch_mode: WorkQueueBatchMode
+    config: WorkQueueResponseConfig
+    created: datetime.datetime
+    default_priority: int
+    dispatch_action_ref: str
+    enabled: bool
+    id: int
+    is_adhoc: bool
+    item_schema: WorkQueueResponseItemSchema
+    label: str
+    ref: str
+    update_strategy: WorkQueueUpdateStrategy
+    updated: datetime.datetime
+    description: None | str | Unset = UNSET
+    dispatch_action: int | None | Unset = UNSET
+    pack: int | None | Unset = UNSET
+    pack_ref: None | str | Unset = UNSET
+    resolved_dispatch_tuning: None | ResolvedWorkQueueDispatchTuningResponse | Unset = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
+
+
+
+
+
+    def to_dict(self) -> dict[str, Any]:
+        from ..models.resolved_work_queue_dispatch_tuning_response import ResolvedWorkQueueDispatchTuningResponse
+        from ..models.work_queue_response_action_params import WorkQueueResponseActionParams
+        from ..models.work_queue_response_config import WorkQueueResponseConfig
+        from ..models.work_queue_response_item_schema import WorkQueueResponseItemSchema
+        accepting_new_items = self.accepting_new_items
+
+        action_params = self.action_params.to_dict()
+
+        allow_pending_update = self.allow_pending_update
+
+        batch_mode = self.batch_mode.value
+
+        config = self.config.to_dict()
+
+        created = self.created.isoformat()
+
+        default_priority = self.default_priority
+
+        dispatch_action_ref = self.dispatch_action_ref
+
+        enabled = self.enabled
+
+        id = self.id
+
+        is_adhoc = self.is_adhoc
+
+        item_schema = self.item_schema.to_dict()
+
+        label = self.label
+
+        ref = self.ref
+
+        update_strategy = self.update_strategy.value
+
+        updated = self.updated.isoformat()
+
+        description: None | str | Unset
+        if isinstance(self.description, Unset):
+            description = UNSET
+        else:
+            description = self.description
+
+        dispatch_action: int | None | Unset
+        if isinstance(self.dispatch_action, Unset):
+            dispatch_action = UNSET
+        else:
+            dispatch_action = self.dispatch_action
+
+        pack: int | None | Unset
+        if isinstance(self.pack, Unset):
+            pack = UNSET
+        else:
+            pack = self.pack
+
+        pack_ref: None | str | Unset
+        if isinstance(self.pack_ref, Unset):
+            pack_ref = UNSET
+        else:
+            pack_ref = self.pack_ref
+
+        resolved_dispatch_tuning: dict[str, Any] | None | Unset
+        if isinstance(self.resolved_dispatch_tuning, Unset):
+            resolved_dispatch_tuning = UNSET
+        elif isinstance(self.resolved_dispatch_tuning, ResolvedWorkQueueDispatchTuningResponse):
+            resolved_dispatch_tuning = self.resolved_dispatch_tuning.to_dict()
+        else:
+            resolved_dispatch_tuning = self.resolved_dispatch_tuning
+
+
+        field_dict: dict[str, Any] = {}
+        field_dict.update(self.additional_properties)
+        field_dict.update({
+            "accepting_new_items": accepting_new_items,
+            "action_params": action_params,
+            "allow_pending_update": allow_pending_update,
+            "batch_mode": batch_mode,
+            "config": config,
+            "created": created,
+            "default_priority": default_priority,
+            "dispatch_action_ref": dispatch_action_ref,
+            "enabled": enabled,
+            "id": id,
+            "is_adhoc": is_adhoc,
+            "item_schema": item_schema,
+            "label": label,
+            "ref": ref,
+            "update_strategy": update_strategy,
+            "updated": updated,
+        })
+        if description is not UNSET:
+            field_dict["description"] = description
+        if dispatch_action is not UNSET:
+            field_dict["dispatch_action"] = dispatch_action
+        if pack is not UNSET:
+            field_dict["pack"] = pack
+        if pack_ref is not UNSET:
+            field_dict["pack_ref"] = pack_ref
+        if resolved_dispatch_tuning is not UNSET:
+            field_dict["resolved_dispatch_tuning"] = resolved_dispatch_tuning
+
+        return field_dict
+
+
+
+    @classmethod
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.resolved_work_queue_dispatch_tuning_response import ResolvedWorkQueueDispatchTuningResponse
+        from ..models.work_queue_response_action_params import WorkQueueResponseActionParams
+        from ..models.work_queue_response_config import WorkQueueResponseConfig
+        from ..models.work_queue_response_item_schema import WorkQueueResponseItemSchema
+        d = dict(src_dict)
+        accepting_new_items = d.pop("accepting_new_items")
+
+        action_params = WorkQueueResponseActionParams.from_dict(d.pop("action_params"))
+
+
+
+
+        allow_pending_update = d.pop("allow_pending_update")
+
+        batch_mode = WorkQueueBatchMode(d.pop("batch_mode"))
+
+
+
+
+        config = WorkQueueResponseConfig.from_dict(d.pop("config"))
+
+
+
+
+        created = isoparse(d.pop("created"))
+
+
+
+
+        default_priority = d.pop("default_priority")
+
+        dispatch_action_ref = d.pop("dispatch_action_ref")
+
+        enabled = d.pop("enabled")
+
+        id = d.pop("id")
+
+        is_adhoc = d.pop("is_adhoc")
+
+        item_schema = WorkQueueResponseItemSchema.from_dict(d.pop("item_schema"))
+
+
+
+
+        label = d.pop("label")
+
+        ref = d.pop("ref")
+
+        update_strategy = WorkQueueUpdateStrategy(d.pop("update_strategy"))
+
+
+
+
+        updated = isoparse(d.pop("updated"))
+
+
+
+
+        def _parse_description(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        description = _parse_description(d.pop("description", UNSET))
+
+
+        def _parse_dispatch_action(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        dispatch_action = _parse_dispatch_action(d.pop("dispatch_action", UNSET))
+
+
+        def _parse_pack(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        pack = _parse_pack(d.pop("pack", UNSET))
+
+
+        def _parse_pack_ref(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        pack_ref = _parse_pack_ref(d.pop("pack_ref", UNSET))
+
+
+        def _parse_resolved_dispatch_tuning(data: object) -> None | ResolvedWorkQueueDispatchTuningResponse | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                resolved_dispatch_tuning_type_1 = ResolvedWorkQueueDispatchTuningResponse.from_dict(data)
+
+
+
+                return resolved_dispatch_tuning_type_1
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(None | ResolvedWorkQueueDispatchTuningResponse | Unset, data)
+
+        resolved_dispatch_tuning = _parse_resolved_dispatch_tuning(d.pop("resolved_dispatch_tuning", UNSET))
+
+
+        work_queue_response = cls(
+            accepting_new_items=accepting_new_items,
+            action_params=action_params,
+            allow_pending_update=allow_pending_update,
+            batch_mode=batch_mode,
+            config=config,
+            created=created,
+            default_priority=default_priority,
+            dispatch_action_ref=dispatch_action_ref,
+            enabled=enabled,
+            id=id,
+            is_adhoc=is_adhoc,
+            item_schema=item_schema,
+            label=label,
+            ref=ref,
+            update_strategy=update_strategy,
+            updated=updated,
+            description=description,
+            dispatch_action=dispatch_action,
+            pack=pack,
+            pack_ref=pack_ref,
+            resolved_dispatch_tuning=resolved_dispatch_tuning,
+        )
+
+
+        work_queue_response.additional_properties = d
+        return work_queue_response
+
+    @property
+    def additional_keys(self) -> list[str]:
+        return list(self.additional_properties.keys())
+
+    def __getitem__(self, key: str) -> Any:
+        return self.additional_properties[key]
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self.additional_properties[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        del self.additional_properties[key]
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.additional_properties

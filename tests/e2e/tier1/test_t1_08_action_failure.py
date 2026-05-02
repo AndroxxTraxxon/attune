@@ -68,7 +68,7 @@ class TestActionFailureHandling:
             pack_ref=pack_ref,
             enabled=True,
         )
-        print(f"✓ Created rule: {rule['name']} (ID: {rule['id']})")
+        print(f"✓ Created rule: {rule['label']} (ID: {rule['id']})")
 
         # Step 4: Fire webhook to trigger execution
         print("\n[4/5] Triggering action execution...")
@@ -179,7 +179,7 @@ class TestActionFailureHandling:
             exec_id = execution["id"]
             status = execution["status"]
 
-            if status not in ["failed", "succeeded", "canceled"]:
+            if status not in ["failed", "completed", "cancelled"]:
                 execution = wait_for_execution_status(
                     client=client,
                     execution_id=exec_id,
@@ -232,7 +232,7 @@ class TestActionFailureHandling:
             )
 
             execution = executions[0]
-            if execution["status"] not in ["failed", "succeeded", "canceled"]:
+            if execution["status"] not in ["failed", "completed", "cancelled"]:
                 execution = wait_for_execution_status(
                     client=client,
                     execution_id=execution["id"],
@@ -278,7 +278,7 @@ class TestActionFailureHandling:
         )
 
         execution = executions[0]
-        if execution["status"] not in ["failed", "succeeded", "canceled"]:
+        if execution["status"] not in ["failed", "completed", "cancelled"]:
             execution = wait_for_execution_status(
                 client=client,
                 execution_id=execution["id"],
@@ -353,7 +353,7 @@ class TestActionFailureHandling:
         )
 
         fail_exec = fail_executions[0]
-        if fail_exec["status"] not in ["failed", "succeeded", "canceled"]:
+        if fail_exec["status"] not in ["failed", "completed", "cancelled"]:
             fail_exec = wait_for_execution_status(
                 client=client,
                 execution_id=fail_exec["id"],
@@ -378,15 +378,15 @@ class TestActionFailureHandling:
         )
 
         success_exec = success_executions[0]
-        if success_exec["status"] not in ["failed", "succeeded", "canceled"]:
+        if success_exec["status"] not in ["failed", "completed", "cancelled"]:
             success_exec = wait_for_execution_status(
                 client=client,
                 execution_id=success_exec["id"],
-                expected_status="succeeded",
+                expected_status="completed",
                 timeout=15,
             )
 
-        assert success_exec["status"] == "succeeded"
+        assert success_exec["status"] == "completed"
         print(f"✓ Second action succeeded")
 
         # Final verification

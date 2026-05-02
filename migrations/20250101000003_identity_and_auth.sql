@@ -2,6 +2,9 @@
 -- Description: Creates identity, permission, and policy tables
 -- Version: 20250101000002
 
+-- Set search_path for schema isolation
+SET search_path TO attune, public;
+
 -- ============================================================================
 -- IDENTITY TABLE
 -- ============================================================================

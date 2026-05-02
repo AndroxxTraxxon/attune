@@ -29,8 +29,8 @@ class CreateKeyRequest:
             name (str): Human-readable name for the key Example: GitHub API Token.
             owner_type (OwnerType):
             ref (str): Unique reference for the key (e.g., "github_token", "aws_secret_key") Example: github_token.
-            value (str): The secret value to store Example: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.
-            encrypted (bool | Unset): Whether to encrypt the value (recommended: true) Example: True.
+            value (Any): The secret value to store. Can be a string, object, array, number, or boolean.
+            encrypted (bool | Unset): Whether to encrypt the value at rest (default: false; use --encrypt / -e from CLI)
             owner (None | str | Unset): Optional owner string identifier Example: github-integration.
             owner_action (int | None | Unset):
             owner_action_ref (None | str | Unset): Optional owner action reference Example: github.create_issue.
@@ -44,7 +44,7 @@ class CreateKeyRequest:
     name: str
     owner_type: OwnerType
     ref: str
-    value: str
+    value: Any
     encrypted: bool | Unset = UNSET
     owner: None | str | Unset = UNSET
     owner_action: int | None | Unset = UNSET

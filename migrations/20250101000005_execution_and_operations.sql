@@ -8,6 +8,9 @@
 --              audit and analytics are handled by `execution_history`.
 -- Version: 20250101000005
 
+-- Set search_path for schema isolation
+SET search_path TO attune, public;
+
 -- ============================================================================
 -- EXECUTION TABLE
 -- ============================================================================

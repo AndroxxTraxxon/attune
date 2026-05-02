@@ -42,8 +42,9 @@ class EnforcementResponse:
             rule_ref (str): Rule reference Example: slack.notify_on_error.
             status (EnforcementStatus):
             trigger_ref (str): Trigger reference Example: system.error_event.
-            updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:30:00Z.
             event (int | None | Unset):
+            resolved_at (datetime.datetime | None | Unset): Timestamp when the enforcement was resolved (status changed from
+                created to processed/disabled) Example: 2024-01-13T10:30:01Z.
             rule (int | None | Unset):
      """
 
@@ -56,8 +57,8 @@ class EnforcementResponse:
     rule_ref: str
     status: EnforcementStatus
     trigger_ref: str
-    updated: datetime.datetime
     event: int | None | Unset = UNSET
+    resolved_at: datetime.datetime | None | Unset = UNSET
     rule: int | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -67,8 +68,8 @@ class EnforcementResponse:
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.enforcement_response_conditions import EnforcementResponseConditions
-        from ..models.enforcement_response_payload import EnforcementResponsePayload
         from ..models.enforcement_response_config_type_0 import EnforcementResponseConfigType0
+        from ..models.enforcement_response_payload import EnforcementResponsePayload
         condition = self.condition.value
 
         conditions = self.conditions.to_dict()
@@ -91,13 +92,19 @@ class EnforcementResponse:
 
         trigger_ref = self.trigger_ref
 
-        updated = self.updated.isoformat()
-
         event: int | None | Unset
         if isinstance(self.event, Unset):
             event = UNSET
         else:
             event = self.event
+
+        resolved_at: None | str | Unset
+        if isinstance(self.resolved_at, Unset):
+            resolved_at = UNSET
+        elif isinstance(self.resolved_at, datetime.datetime):
+            resolved_at = self.resolved_at.isoformat()
+        else:
+            resolved_at = self.resolved_at
 
         rule: int | None | Unset
         if isinstance(self.rule, Unset):
@@ -118,10 +125,11 @@ class EnforcementResponse:
             "rule_ref": rule_ref,
             "status": status,
             "trigger_ref": trigger_ref,
-            "updated": updated,
         })
         if event is not UNSET:
             field_dict["event"] = event
+        if resolved_at is not UNSET:
+            field_dict["resolved_at"] = resolved_at
         if rule is not UNSET:
             field_dict["rule"] = rule
 
@@ -184,11 +192,6 @@ class EnforcementResponse:
 
         trigger_ref = d.pop("trigger_ref")
 
-        updated = isoparse(d.pop("updated"))
-
-
-
-
         def _parse_event(data: object) -> int | None | Unset:
             if data is None:
                 return data
@@ -197,6 +200,26 @@ class EnforcementResponse:
             return cast(int | None | Unset, data)
 
         event = _parse_event(d.pop("event", UNSET))
+
+
+        def _parse_resolved_at(data: object) -> datetime.datetime | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                resolved_at_type_0 = isoparse(data)
+
+
+
+                return resolved_at_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(datetime.datetime | None | Unset, data)
+
+        resolved_at = _parse_resolved_at(d.pop("resolved_at", UNSET))
 
 
         def _parse_rule(data: object) -> int | None | Unset:
@@ -219,8 +242,8 @@ class EnforcementResponse:
             rule_ref=rule_ref,
             status=status,
             trigger_ref=trigger_ref,
-            updated=updated,
             event=event,
+            resolved_at=resolved_at,
             rule=rule,
         )
 

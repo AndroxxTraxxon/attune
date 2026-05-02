@@ -3,11 +3,23 @@
 from .action_response import ActionResponse
 from .action_response_out_schema_type_0 import ActionResponseOutSchemaType0
 from .action_response_param_schema_type_0 import ActionResponseParamSchemaType0
+from .action_response_required_worker_runtimes import ActionResponseRequiredWorkerRuntimes
+from .action_search_hit import ActionSearchHit
 from .action_summary import ActionSummary
+from .action_summary_required_worker_runtimes import ActionSummaryRequiredWorkerRuntimes
+from .agent_arch_info import AgentArchInfo
+from .agent_binary_info import AgentBinaryInfo
 from .api_response_action_response import ApiResponseActionResponse
 from .api_response_action_response_data import ApiResponseActionResponseData
 from .api_response_action_response_data_out_schema_type_0 import ApiResponseActionResponseDataOutSchemaType0
 from .api_response_action_response_data_param_schema_type_0 import ApiResponseActionResponseDataParamSchemaType0
+from .api_response_action_response_data_required_worker_runtimes import ApiResponseActionResponseDataRequiredWorkerRuntimes
+from .api_response_audit_event_response import ApiResponseAuditEventResponse
+from .api_response_audit_event_response_data import ApiResponseAuditEventResponseData
+from .api_response_audit_event_response_data_correlation_chain_type_0 import ApiResponseAuditEventResponseDataCorrelationChainType0
+from .api_response_audit_event_response_data_details_type_0 import ApiResponseAuditEventResponseDataDetailsType0
+from .api_response_auth_settings_response import ApiResponseAuthSettingsResponse
+from .api_response_auth_settings_response_data import ApiResponseAuthSettingsResponseData
 from .api_response_current_user_response import ApiResponseCurrentUserResponse
 from .api_response_current_user_response_data import ApiResponseCurrentUserResponseData
 from .api_response_enforcement_response import ApiResponseEnforcementResponse
@@ -23,6 +35,9 @@ from .api_response_execution_response import ApiResponseExecutionResponse
 from .api_response_execution_response_data import ApiResponseExecutionResponseData
 from .api_response_execution_response_data_config import ApiResponseExecutionResponseDataConfig
 from .api_response_execution_response_data_result import ApiResponseExecutionResponseDataResult
+from .api_response_execution_response_data_workflow_task_type_0 import ApiResponseExecutionResponseDataWorkflowTaskType0
+from .api_response_identity_response import ApiResponseIdentityResponse
+from .api_response_identity_response_data import ApiResponseIdentityResponseData
 from .api_response_inquiry_response import ApiResponseInquiryResponse
 from .api_response_inquiry_response_data import ApiResponseInquiryResponseData
 from .api_response_inquiry_response_data_response_schema_type_0 import ApiResponseInquiryResponseDataResponseSchemaType0
@@ -36,6 +51,8 @@ from .api_response_pack_response_data import ApiResponsePackResponseData
 from .api_response_pack_response_data_conf_schema import ApiResponsePackResponseDataConfSchema
 from .api_response_pack_response_data_config import ApiResponsePackResponseDataConfig
 from .api_response_pack_response_data_meta import ApiResponsePackResponseDataMeta
+from .api_response_permission_assignment_response import ApiResponsePermissionAssignmentResponse
+from .api_response_permission_assignment_response_data import ApiResponsePermissionAssignmentResponseData
 from .api_response_queue_stats_response import ApiResponseQueueStatsResponse
 from .api_response_queue_stats_response_data import ApiResponseQueueStatsResponseData
 from .api_response_rule_response import ApiResponseRuleResponse
@@ -43,6 +60,11 @@ from .api_response_rule_response_data import ApiResponseRuleResponseData
 from .api_response_rule_response_data_action_params import ApiResponseRuleResponseDataActionParams
 from .api_response_rule_response_data_conditions import ApiResponseRuleResponseDataConditions
 from .api_response_rule_response_data_trigger_params import ApiResponseRuleResponseDataTriggerParams
+from .api_response_runtime_response import ApiResponseRuntimeResponse
+from .api_response_runtime_response_data import ApiResponseRuntimeResponseData
+from .api_response_runtime_response_data_distributions import ApiResponseRuntimeResponseDataDistributions
+from .api_response_runtime_response_data_execution_config import ApiResponseRuntimeResponseDataExecutionConfig
+from .api_response_runtime_response_data_installation_type_0 import ApiResponseRuntimeResponseDataInstallationType0
 from .api_response_sensor_response import ApiResponseSensorResponse
 from .api_response_sensor_response_data import ApiResponseSensorResponseData
 from .api_response_sensor_response_data_param_schema_type_0 import ApiResponseSensorResponseDataParamSchemaType0
@@ -53,23 +75,54 @@ from .api_response_trigger_response import ApiResponseTriggerResponse
 from .api_response_trigger_response_data import ApiResponseTriggerResponseData
 from .api_response_trigger_response_data_out_schema_type_0 import ApiResponseTriggerResponseDataOutSchemaType0
 from .api_response_trigger_response_data_param_schema_type_0 import ApiResponseTriggerResponseDataParamSchemaType0
+from .api_response_vec_audit_event_response import ApiResponseVecAuditEventResponse
+from .api_response_vec_audit_event_response_data_item import ApiResponseVecAuditEventResponseDataItem
+from .api_response_vec_audit_event_response_data_item_correlation_chain_type_0 import ApiResponseVecAuditEventResponseDataItemCorrelationChainType0
+from .api_response_vec_audit_event_response_data_item_details_type_0 import ApiResponseVecAuditEventResponseDataItemDetailsType0
 from .api_response_webhook_receiver_response import ApiResponseWebhookReceiverResponse
 from .api_response_webhook_receiver_response_data import ApiResponseWebhookReceiverResponseData
+from .api_response_work_queue_item_response import ApiResponseWorkQueueItemResponse
+from .api_response_work_queue_item_response_data import ApiResponseWorkQueueItemResponseData
+from .api_response_work_queue_item_response_data_ack_summary_type_0 import ApiResponseWorkQueueItemResponseDataAckSummaryType0
+from .api_response_work_queue_item_response_data_last_error_type_0 import ApiResponseWorkQueueItemResponseDataLastErrorType0
+from .api_response_work_queue_item_response_data_metadata import ApiResponseWorkQueueItemResponseDataMetadata
+from .api_response_work_queue_item_response_data_payload import ApiResponseWorkQueueItemResponseDataPayload
+from .api_response_work_queue_response import ApiResponseWorkQueueResponse
+from .api_response_work_queue_response_data import ApiResponseWorkQueueResponseData
+from .api_response_work_queue_response_data_action_params import ApiResponseWorkQueueResponseDataActionParams
+from .api_response_work_queue_response_data_config import ApiResponseWorkQueueResponseDataConfig
+from .api_response_work_queue_response_data_item_schema import ApiResponseWorkQueueResponseDataItemSchema
 from .api_response_workflow_response import ApiResponseWorkflowResponse
 from .api_response_workflow_response_data import ApiResponseWorkflowResponseData
 from .api_response_workflow_response_data_definition import ApiResponseWorkflowResponseDataDefinition
 from .api_response_workflow_response_data_out_schema_type_0 import ApiResponseWorkflowResponseDataOutSchemaType0
 from .api_response_workflow_response_data_param_schema_type_0 import ApiResponseWorkflowResponseDataParamSchemaType0
+from .audit_category import AuditCategory
+from .audit_event_response import AuditEventResponse
+from .audit_event_response_correlation_chain_type_0 import AuditEventResponseCorrelationChainType0
+from .audit_event_response_details_type_0 import AuditEventResponseDetailsType0
+from .audit_event_summary import AuditEventSummary
+from .audit_outcome import AuditOutcome
+from .auth_settings_response_200 import AuthSettingsResponse200
+from .auth_settings_response_200_data import AuthSettingsResponse200Data
 from .change_password_request import ChangePasswordRequest
 from .change_password_response_200 import ChangePasswordResponse200
 from .change_password_response_200_data import ChangePasswordResponse200Data
 from .create_action_request import CreateActionRequest
 from .create_action_request_out_schema_type_0 import CreateActionRequestOutSchemaType0
 from .create_action_request_param_schema_type_0 import CreateActionRequestParamSchemaType0
+from .create_action_request_required_worker_runtimes import CreateActionRequestRequiredWorkerRuntimes
 from .create_action_response_201 import CreateActionResponse201
 from .create_action_response_201_data import CreateActionResponse201Data
 from .create_action_response_201_data_out_schema_type_0 import CreateActionResponse201DataOutSchemaType0
 from .create_action_response_201_data_param_schema_type_0 import CreateActionResponse201DataParamSchemaType0
+from .create_action_response_201_data_required_worker_runtimes import CreateActionResponse201DataRequiredWorkerRuntimes
+from .create_identity_request import CreateIdentityRequest
+from .create_identity_response_201 import CreateIdentityResponse201
+from .create_identity_response_201_data import CreateIdentityResponse201Data
+from .create_identity_role_assignment_request import CreateIdentityRoleAssignmentRequest
+from .create_identity_role_assignment_response_201 import CreateIdentityRoleAssignmentResponse201
+from .create_identity_role_assignment_response_201_data import CreateIdentityRoleAssignmentResponse201Data
 from .create_inquiry_request import CreateInquiryRequest
 from .create_inquiry_request_response_schema import CreateInquiryRequestResponseSchema
 from .create_key_request import CreateKeyRequest
@@ -84,16 +137,30 @@ from .create_pack_response_201_data import CreatePackResponse201Data
 from .create_pack_response_201_data_conf_schema import CreatePackResponse201DataConfSchema
 from .create_pack_response_201_data_config import CreatePackResponse201DataConfig
 from .create_pack_response_201_data_meta import CreatePackResponse201DataMeta
+from .create_permission_assignment_request import CreatePermissionAssignmentRequest
+from .create_permission_assignment_response_201 import CreatePermissionAssignmentResponse201
+from .create_permission_assignment_response_201_data import CreatePermissionAssignmentResponse201Data
+from .create_permission_set_role_assignment_request import CreatePermissionSetRoleAssignmentRequest
+from .create_permission_set_role_assignment_response_201 import CreatePermissionSetRoleAssignmentResponse201
+from .create_permission_set_role_assignment_response_201_data import CreatePermissionSetRoleAssignmentResponse201Data
 from .create_rule_request import CreateRuleRequest
 from .create_rule_request_action_params import CreateRuleRequestActionParams
 from .create_rule_request_conditions import CreateRuleRequestConditions
 from .create_rule_request_trigger_params import CreateRuleRequestTriggerParams
+from .create_runtime_request import CreateRuntimeRequest
+from .create_runtime_request_distributions import CreateRuntimeRequestDistributions
+from .create_runtime_request_execution_config import CreateRuntimeRequestExecutionConfig
+from .create_runtime_request_installation_type_0 import CreateRuntimeRequestInstallationType0
 from .create_sensor_request import CreateSensorRequest
 from .create_sensor_request_config_type_0 import CreateSensorRequestConfigType0
 from .create_sensor_request_param_schema_type_0 import CreateSensorRequestParamSchemaType0
 from .create_trigger_request import CreateTriggerRequest
 from .create_trigger_request_out_schema_type_0 import CreateTriggerRequestOutSchemaType0
 from .create_trigger_request_param_schema_type_0 import CreateTriggerRequestParamSchemaType0
+from .create_work_queue_request import CreateWorkQueueRequest
+from .create_work_queue_request_action_params import CreateWorkQueueRequestActionParams
+from .create_work_queue_request_config import CreateWorkQueueRequestConfig
+from .create_work_queue_request_item_schema import CreateWorkQueueRequestItemSchema
 from .create_workflow_request import CreateWorkflowRequest
 from .create_workflow_request_definition import CreateWorkflowRequestDefinition
 from .create_workflow_request_out_schema import CreateWorkflowRequestOutSchema
@@ -104,6 +171,14 @@ from .create_workflow_response_201_data_definition import CreateWorkflowResponse
 from .create_workflow_response_201_data_out_schema_type_0 import CreateWorkflowResponse201DataOutSchemaType0
 from .create_workflow_response_201_data_param_schema_type_0 import CreateWorkflowResponse201DataParamSchemaType0
 from .current_user_response import CurrentUserResponse
+from .delete_identity_response_200 import DeleteIdentityResponse200
+from .delete_identity_response_200_data import DeleteIdentityResponse200Data
+from .delete_identity_role_assignment_response_200 import DeleteIdentityRoleAssignmentResponse200
+from .delete_identity_role_assignment_response_200_data import DeleteIdentityRoleAssignmentResponse200Data
+from .delete_permission_assignment_response_200 import DeletePermissionAssignmentResponse200
+from .delete_permission_assignment_response_200_data import DeletePermissionAssignmentResponse200Data
+from .delete_permission_set_role_assignment_response_200 import DeletePermissionSetRoleAssignmentResponse200
+from .delete_permission_set_role_assignment_response_200_data import DeletePermissionSetRoleAssignmentResponse200Data
 from .enforcement_condition import EnforcementCondition
 from .enforcement_response import EnforcementResponse
 from .enforcement_response_conditions import EnforcementResponseConditions
@@ -111,6 +186,9 @@ from .enforcement_response_config_type_0 import EnforcementResponseConfigType0
 from .enforcement_response_payload import EnforcementResponsePayload
 from .enforcement_status import EnforcementStatus
 from .enforcement_summary import EnforcementSummary
+from .enqueue_work_queue_item_request import EnqueueWorkQueueItemRequest
+from .enqueue_work_queue_item_request_metadata import EnqueueWorkQueueItemRequestMetadata
+from .enqueue_work_queue_item_request_payload import EnqueueWorkQueueItemRequestPayload
 from .event_response import EventResponse
 from .event_response_config_type_0 import EventResponseConfigType0
 from .event_response_payload import EventResponsePayload
@@ -118,19 +196,27 @@ from .event_summary import EventSummary
 from .execution_response import ExecutionResponse
 from .execution_response_config import ExecutionResponseConfig
 from .execution_response_result import ExecutionResponseResult
+from .execution_response_workflow_task_type_0 import ExecutionResponseWorkflowTaskType0
 from .execution_status import ExecutionStatus
 from .execution_summary import ExecutionSummary
+from .execution_summary_workflow_task_type_0 import ExecutionSummaryWorkflowTaskType0
+from .freeze_identity_response_200 import FreezeIdentityResponse200
+from .freeze_identity_response_200_data import FreezeIdentityResponse200Data
 from .get_action_response_200 import GetActionResponse200
 from .get_action_response_200_data import GetActionResponse200Data
 from .get_action_response_200_data_out_schema_type_0 import GetActionResponse200DataOutSchemaType0
 from .get_action_response_200_data_param_schema_type_0 import GetActionResponse200DataParamSchemaType0
+from .get_action_response_200_data_required_worker_runtimes import GetActionResponse200DataRequiredWorkerRuntimes
 from .get_current_user_response_200 import GetCurrentUserResponse200
 from .get_current_user_response_200_data import GetCurrentUserResponse200Data
 from .get_execution_response_200 import GetExecutionResponse200
 from .get_execution_response_200_data import GetExecutionResponse200Data
 from .get_execution_response_200_data_config import GetExecutionResponse200DataConfig
 from .get_execution_response_200_data_result import GetExecutionResponse200DataResult
+from .get_execution_response_200_data_workflow_task_type_0 import GetExecutionResponse200DataWorkflowTaskType0
 from .get_execution_stats_response_200 import GetExecutionStatsResponse200
+from .get_identity_response_200 import GetIdentityResponse200
+from .get_identity_response_200_data import GetIdentityResponse200Data
 from .get_key_response_200 import GetKeyResponse200
 from .get_key_response_200_data import GetKeyResponse200Data
 from .get_pack_response_200 import GetPackResponse200
@@ -139,7 +225,7 @@ from .get_pack_response_200_data_conf_schema import GetPackResponse200DataConfSc
 from .get_pack_response_200_data_config import GetPackResponse200DataConfig
 from .get_pack_response_200_data_meta import GetPackResponse200DataMeta
 from .get_pack_test_history_response_200 import GetPackTestHistoryResponse200
-from .get_pack_test_history_response_200_data_item import GetPackTestHistoryResponse200DataItem
+from .get_pack_test_history_response_200_items_item import GetPackTestHistoryResponse200ItemsItem
 from .get_queue_stats_response_200 import GetQueueStatsResponse200
 from .get_queue_stats_response_200_data import GetQueueStatsResponse200Data
 from .get_workflow_response_200 import GetWorkflowResponse200
@@ -150,6 +236,9 @@ from .get_workflow_response_200_data_param_schema_type_0 import GetWorkflowRespo
 from .health_detailed_response_503 import HealthDetailedResponse503
 from .health_response import HealthResponse
 from .health_response_200 import HealthResponse200
+from .identity_response import IdentityResponse
+from .identity_role_assignment_response import IdentityRoleAssignmentResponse
+from .identity_summary import IdentitySummary
 from .inquiry_respond_request import InquiryRespondRequest
 from .inquiry_respond_request_response import InquiryRespondRequestResponse
 from .inquiry_response import InquiryResponse
@@ -160,10 +249,21 @@ from .inquiry_summary import InquirySummary
 from .install_pack_request import InstallPackRequest
 from .key_response import KeyResponse
 from .key_summary import KeySummary
+from .ldap_login_request import LdapLoginRequest
+from .ldap_login_response_200 import LdapLoginResponse200
+from .ldap_login_response_200_data import LdapLoginResponse200Data
 from .login_request import LoginRequest
 from .login_response_200 import LoginResponse200
 from .login_response_200_data import LoginResponse200Data
+from .nullable_json_patch_type_1 import NullableJsonPatchType1
+from .nullable_json_patch_type_1_op import NullableJsonPatchType1Op
+from .nullable_string_patch_type_1 import NullableStringPatchType1
+from .nullable_string_patch_type_1_op import NullableStringPatchType1Op
 from .owner_type import OwnerType
+from .pack_description_patch_type_0 import PackDescriptionPatchType0
+from .pack_description_patch_type_0_op import PackDescriptionPatchType0Op
+from .pack_description_patch_type_1 import PackDescriptionPatchType1
+from .pack_description_patch_type_1_op import PackDescriptionPatchType1Op
 from .pack_install_response import PackInstallResponse
 from .pack_response import PackResponse
 from .pack_response_conf_schema import PackResponseConfSchema
@@ -176,31 +276,56 @@ from .pack_test_summary import PackTestSummary
 from .pack_workflow_sync_response import PackWorkflowSyncResponse
 from .pack_workflow_validation_response import PackWorkflowValidationResponse
 from .pack_workflow_validation_response_errors import PackWorkflowValidationResponseErrors
+from .paginated_response_action_search_hit import PaginatedResponseActionSearchHit
+from .paginated_response_action_search_hit_items_item import PaginatedResponseActionSearchHitItemsItem
 from .paginated_response_action_summary import PaginatedResponseActionSummary
-from .paginated_response_action_summary_data_item import PaginatedResponseActionSummaryDataItem
+from .paginated_response_action_summary_items_item import PaginatedResponseActionSummaryItemsItem
+from .paginated_response_action_summary_items_item_required_worker_runtimes import PaginatedResponseActionSummaryItemsItemRequiredWorkerRuntimes
+from .paginated_response_audit_event_summary import PaginatedResponseAuditEventSummary
+from .paginated_response_audit_event_summary_items_item import PaginatedResponseAuditEventSummaryItemsItem
 from .paginated_response_enforcement_summary import PaginatedResponseEnforcementSummary
-from .paginated_response_enforcement_summary_data_item import PaginatedResponseEnforcementSummaryDataItem
+from .paginated_response_enforcement_summary_items_item import PaginatedResponseEnforcementSummaryItemsItem
 from .paginated_response_event_summary import PaginatedResponseEventSummary
-from .paginated_response_event_summary_data_item import PaginatedResponseEventSummaryDataItem
+from .paginated_response_event_summary_items_item import PaginatedResponseEventSummaryItemsItem
 from .paginated_response_execution_summary import PaginatedResponseExecutionSummary
-from .paginated_response_execution_summary_data_item import PaginatedResponseExecutionSummaryDataItem
+from .paginated_response_execution_summary_items_item import PaginatedResponseExecutionSummaryItemsItem
+from .paginated_response_execution_summary_items_item_workflow_task_type_0 import PaginatedResponseExecutionSummaryItemsItemWorkflowTaskType0
+from .paginated_response_identity_summary import PaginatedResponseIdentitySummary
+from .paginated_response_identity_summary_items_item import PaginatedResponseIdentitySummaryItemsItem
 from .paginated_response_inquiry_summary import PaginatedResponseInquirySummary
-from .paginated_response_inquiry_summary_data_item import PaginatedResponseInquirySummaryDataItem
+from .paginated_response_inquiry_summary_items_item import PaginatedResponseInquirySummaryItemsItem
 from .paginated_response_key_summary import PaginatedResponseKeySummary
-from .paginated_response_key_summary_data_item import PaginatedResponseKeySummaryDataItem
+from .paginated_response_key_summary_items_item import PaginatedResponseKeySummaryItemsItem
 from .paginated_response_pack_summary import PaginatedResponsePackSummary
-from .paginated_response_pack_summary_data_item import PaginatedResponsePackSummaryDataItem
+from .paginated_response_pack_summary_items_item import PaginatedResponsePackSummaryItemsItem
 from .paginated_response_pack_test_summary import PaginatedResponsePackTestSummary
-from .paginated_response_pack_test_summary_data_item import PaginatedResponsePackTestSummaryDataItem
+from .paginated_response_pack_test_summary_items_item import PaginatedResponsePackTestSummaryItemsItem
 from .paginated_response_rule_summary import PaginatedResponseRuleSummary
-from .paginated_response_rule_summary_data_item import PaginatedResponseRuleSummaryDataItem
+from .paginated_response_rule_summary_items_item import PaginatedResponseRuleSummaryItemsItem
+from .paginated_response_rule_summary_items_item_action_params import PaginatedResponseRuleSummaryItemsItemActionParams
+from .paginated_response_rule_summary_items_item_trigger_params import PaginatedResponseRuleSummaryItemsItemTriggerParams
+from .paginated_response_runtime_summary import PaginatedResponseRuntimeSummary
+from .paginated_response_runtime_summary_items_item import PaginatedResponseRuntimeSummaryItemsItem
 from .paginated_response_sensor_summary import PaginatedResponseSensorSummary
-from .paginated_response_sensor_summary_data_item import PaginatedResponseSensorSummaryDataItem
+from .paginated_response_sensor_summary_items_item import PaginatedResponseSensorSummaryItemsItem
 from .paginated_response_trigger_summary import PaginatedResponseTriggerSummary
-from .paginated_response_trigger_summary_data_item import PaginatedResponseTriggerSummaryDataItem
+from .paginated_response_trigger_summary_items_item import PaginatedResponseTriggerSummaryItemsItem
+from .paginated_response_work_queue_item_response import PaginatedResponseWorkQueueItemResponse
+from .paginated_response_work_queue_item_response_items_item import PaginatedResponseWorkQueueItemResponseItemsItem
+from .paginated_response_work_queue_item_response_items_item_ack_summary_type_0 import PaginatedResponseWorkQueueItemResponseItemsItemAckSummaryType0
+from .paginated_response_work_queue_item_response_items_item_last_error_type_0 import PaginatedResponseWorkQueueItemResponseItemsItemLastErrorType0
+from .paginated_response_work_queue_item_response_items_item_metadata import PaginatedResponseWorkQueueItemResponseItemsItemMetadata
+from .paginated_response_work_queue_item_response_items_item_payload import PaginatedResponseWorkQueueItemResponseItemsItemPayload
+from .paginated_response_work_queue_summary import PaginatedResponseWorkQueueSummary
+from .paginated_response_work_queue_summary_items_item import PaginatedResponseWorkQueueSummaryItemsItem
+from .paginated_response_worker_summary import PaginatedResponseWorkerSummary
+from .paginated_response_worker_summary_items_item import PaginatedResponseWorkerSummaryItemsItem
 from .paginated_response_workflow_summary import PaginatedResponseWorkflowSummary
-from .paginated_response_workflow_summary_data_item import PaginatedResponseWorkflowSummaryDataItem
+from .paginated_response_workflow_summary_items_item import PaginatedResponseWorkflowSummaryItemsItem
 from .pagination_meta import PaginationMeta
+from .permission_assignment_response import PermissionAssignmentResponse
+from .permission_set_role_assignment_response import PermissionSetRoleAssignmentResponse
+from .permission_set_summary import PermissionSetSummary
 from .queue_stats_response import QueueStatsResponse
 from .refresh_token_request import RefreshTokenRequest
 from .refresh_token_response_200 import RefreshTokenResponse200
@@ -209,14 +334,30 @@ from .register_pack_request import RegisterPackRequest
 from .register_request import RegisterRequest
 from .register_response_200 import RegisterResponse200
 from .register_response_200_data import RegisterResponse200Data
+from .resolved_work_queue_dispatch_tuning_response import ResolvedWorkQueueDispatchTuningResponse
 from .rule_response import RuleResponse
 from .rule_response_action_params import RuleResponseActionParams
 from .rule_response_conditions import RuleResponseConditions
 from .rule_response_trigger_params import RuleResponseTriggerParams
 from .rule_summary import RuleSummary
+from .rule_summary_action_params import RuleSummaryActionParams
+from .rule_summary_trigger_params import RuleSummaryTriggerParams
+from .runtime_response import RuntimeResponse
+from .runtime_response_distributions import RuntimeResponseDistributions
+from .runtime_response_execution_config import RuntimeResponseExecutionConfig
+from .runtime_response_installation_type_0 import RuntimeResponseInstallationType0
+from .runtime_summary import RuntimeSummary
+from .runtime_version_constraint_patch_type_0 import RuntimeVersionConstraintPatchType0
+from .runtime_version_constraint_patch_type_0_op import RuntimeVersionConstraintPatchType0Op
+from .runtime_version_constraint_patch_type_1 import RuntimeVersionConstraintPatchType1
+from .runtime_version_constraint_patch_type_1_op import RuntimeVersionConstraintPatchType1Op
 from .sensor_response import SensorResponse
 from .sensor_response_param_schema_type_0 import SensorResponseParamSchemaType0
 from .sensor_summary import SensorSummary
+from .set_json import SetJson
+from .set_json_op import SetJsonOp
+from .set_string import SetString
+from .set_string_op import SetStringOp
 from .success_response import SuccessResponse
 from .sync_pack_workflows_response_200 import SyncPackWorkflowsResponse200
 from .sync_pack_workflows_response_200_data import SyncPackWorkflowsResponse200Data
@@ -229,14 +370,25 @@ from .token_response import TokenResponse
 from .trigger_response import TriggerResponse
 from .trigger_response_out_schema_type_0 import TriggerResponseOutSchemaType0
 from .trigger_response_param_schema_type_0 import TriggerResponseParamSchemaType0
+from .trigger_string_patch_type_0 import TriggerStringPatchType0
+from .trigger_string_patch_type_0_op import TriggerStringPatchType0Op
+from .trigger_string_patch_type_1 import TriggerStringPatchType1
+from .trigger_string_patch_type_1_op import TriggerStringPatchType1Op
 from .trigger_summary import TriggerSummary
+from .unfreeze_identity_response_200 import UnfreezeIdentityResponse200
+from .unfreeze_identity_response_200_data import UnfreezeIdentityResponse200Data
 from .update_action_request import UpdateActionRequest
 from .update_action_request_out_schema_type_0 import UpdateActionRequestOutSchemaType0
 from .update_action_request_param_schema_type_0 import UpdateActionRequestParamSchemaType0
+from .update_action_request_required_worker_runtimes_type_0 import UpdateActionRequestRequiredWorkerRuntimesType0
 from .update_action_response_200 import UpdateActionResponse200
 from .update_action_response_200_data import UpdateActionResponse200Data
 from .update_action_response_200_data_out_schema_type_0 import UpdateActionResponse200DataOutSchemaType0
 from .update_action_response_200_data_param_schema_type_0 import UpdateActionResponse200DataParamSchemaType0
+from .update_action_response_200_data_required_worker_runtimes import UpdateActionResponse200DataRequiredWorkerRuntimes
+from .update_identity_request import UpdateIdentityRequest
+from .update_identity_response_200 import UpdateIdentityResponse200
+from .update_identity_response_200_data import UpdateIdentityResponse200Data
 from .update_inquiry_request import UpdateInquiryRequest
 from .update_inquiry_request_response_type_0 import UpdateInquiryRequestResponseType0
 from .update_key_request import UpdateKeyRequest
@@ -255,11 +407,21 @@ from .update_rule_request import UpdateRuleRequest
 from .update_rule_request_action_params_type_0 import UpdateRuleRequestActionParamsType0
 from .update_rule_request_conditions_type_0 import UpdateRuleRequestConditionsType0
 from .update_rule_request_trigger_params_type_0 import UpdateRuleRequestTriggerParamsType0
+from .update_runtime_request import UpdateRuntimeRequest
+from .update_runtime_request_distributions_type_0 import UpdateRuntimeRequestDistributionsType0
+from .update_runtime_request_execution_config_type_0 import UpdateRuntimeRequestExecutionConfigType0
 from .update_sensor_request import UpdateSensorRequest
 from .update_sensor_request_param_schema_type_0 import UpdateSensorRequestParamSchemaType0
 from .update_trigger_request import UpdateTriggerRequest
 from .update_trigger_request_out_schema_type_0 import UpdateTriggerRequestOutSchemaType0
 from .update_trigger_request_param_schema_type_0 import UpdateTriggerRequestParamSchemaType0
+from .update_work_queue_item_request import UpdateWorkQueueItemRequest
+from .update_work_queue_item_request_metadata_type_0 import UpdateWorkQueueItemRequestMetadataType0
+from .update_work_queue_item_request_payload_type_0 import UpdateWorkQueueItemRequestPayloadType0
+from .update_work_queue_request import UpdateWorkQueueRequest
+from .update_work_queue_request_action_params_type_0 import UpdateWorkQueueRequestActionParamsType0
+from .update_work_queue_request_config_type_0 import UpdateWorkQueueRequestConfigType0
+from .update_work_queue_request_item_schema_type_0 import UpdateWorkQueueRequestItemSchemaType0
 from .update_workflow_request import UpdateWorkflowRequest
 from .update_workflow_request_definition_type_0 import UpdateWorkflowRequestDefinitionType0
 from .update_workflow_request_out_schema_type_0 import UpdateWorkflowRequestOutSchemaType0
@@ -275,6 +437,25 @@ from .validate_pack_workflows_response_200_data import ValidatePackWorkflowsResp
 from .validate_pack_workflows_response_200_data_errors import ValidatePackWorkflowsResponse200DataErrors
 from .webhook_receiver_request import WebhookReceiverRequest
 from .webhook_receiver_response import WebhookReceiverResponse
+from .work_queue_batch_mode import WorkQueueBatchMode
+from .work_queue_item_response import WorkQueueItemResponse
+from .work_queue_item_response_ack_summary_type_0 import WorkQueueItemResponseAckSummaryType0
+from .work_queue_item_response_last_error_type_0 import WorkQueueItemResponseLastErrorType0
+from .work_queue_item_response_metadata import WorkQueueItemResponseMetadata
+from .work_queue_item_response_payload import WorkQueueItemResponsePayload
+from .work_queue_item_status import WorkQueueItemStatus
+from .work_queue_response import WorkQueueResponse
+from .work_queue_response_action_params import WorkQueueResponseActionParams
+from .work_queue_response_config import WorkQueueResponseConfig
+from .work_queue_response_item_schema import WorkQueueResponseItemSchema
+from .work_queue_summary import WorkQueueSummary
+from .work_queue_update_strategy import WorkQueueUpdateStrategy
+from .worker_load_snapshot import WorkerLoadSnapshot
+from .worker_role import WorkerRole
+from .worker_runtime_support import WorkerRuntimeSupport
+from .worker_status import WorkerStatus
+from .worker_summary import WorkerSummary
+from .worker_type import WorkerType
 from .workflow_response import WorkflowResponse
 from .workflow_response_definition import WorkflowResponseDefinition
 from .workflow_response_out_schema_type_0 import WorkflowResponseOutSchemaType0
@@ -286,11 +467,23 @@ __all__ = (
     "ActionResponse",
     "ActionResponseOutSchemaType0",
     "ActionResponseParamSchemaType0",
+    "ActionResponseRequiredWorkerRuntimes",
+    "ActionSearchHit",
     "ActionSummary",
+    "ActionSummaryRequiredWorkerRuntimes",
+    "AgentArchInfo",
+    "AgentBinaryInfo",
     "ApiResponseActionResponse",
     "ApiResponseActionResponseData",
     "ApiResponseActionResponseDataOutSchemaType0",
     "ApiResponseActionResponseDataParamSchemaType0",
+    "ApiResponseActionResponseDataRequiredWorkerRuntimes",
+    "ApiResponseAuditEventResponse",
+    "ApiResponseAuditEventResponseData",
+    "ApiResponseAuditEventResponseDataCorrelationChainType0",
+    "ApiResponseAuditEventResponseDataDetailsType0",
+    "ApiResponseAuthSettingsResponse",
+    "ApiResponseAuthSettingsResponseData",
     "ApiResponseCurrentUserResponse",
     "ApiResponseCurrentUserResponseData",
     "ApiResponseEnforcementResponse",
@@ -306,6 +499,9 @@ __all__ = (
     "ApiResponseExecutionResponseData",
     "ApiResponseExecutionResponseDataConfig",
     "ApiResponseExecutionResponseDataResult",
+    "ApiResponseExecutionResponseDataWorkflowTaskType0",
+    "ApiResponseIdentityResponse",
+    "ApiResponseIdentityResponseData",
     "ApiResponseInquiryResponse",
     "ApiResponseInquiryResponseData",
     "ApiResponseInquiryResponseDataResponseSchemaType0",
@@ -319,6 +515,8 @@ __all__ = (
     "ApiResponsePackResponseDataConfig",
     "ApiResponsePackResponseDataConfSchema",
     "ApiResponsePackResponseDataMeta",
+    "ApiResponsePermissionAssignmentResponse",
+    "ApiResponsePermissionAssignmentResponseData",
     "ApiResponseQueueStatsResponse",
     "ApiResponseQueueStatsResponseData",
     "ApiResponseRuleResponse",
@@ -326,6 +524,11 @@ __all__ = (
     "ApiResponseRuleResponseDataActionParams",
     "ApiResponseRuleResponseDataConditions",
     "ApiResponseRuleResponseDataTriggerParams",
+    "ApiResponseRuntimeResponse",
+    "ApiResponseRuntimeResponseData",
+    "ApiResponseRuntimeResponseDataDistributions",
+    "ApiResponseRuntimeResponseDataExecutionConfig",
+    "ApiResponseRuntimeResponseDataInstallationType0",
     "ApiResponseSensorResponse",
     "ApiResponseSensorResponseData",
     "ApiResponseSensorResponseDataParamSchemaType0",
@@ -336,6 +539,10 @@ __all__ = (
     "ApiResponseTriggerResponseData",
     "ApiResponseTriggerResponseDataOutSchemaType0",
     "ApiResponseTriggerResponseDataParamSchemaType0",
+    "ApiResponseVecAuditEventResponse",
+    "ApiResponseVecAuditEventResponseDataItem",
+    "ApiResponseVecAuditEventResponseDataItemCorrelationChainType0",
+    "ApiResponseVecAuditEventResponseDataItemDetailsType0",
     "ApiResponseWebhookReceiverResponse",
     "ApiResponseWebhookReceiverResponseData",
     "ApiResponseWorkflowResponse",
@@ -343,16 +550,43 @@ __all__ = (
     "ApiResponseWorkflowResponseDataDefinition",
     "ApiResponseWorkflowResponseDataOutSchemaType0",
     "ApiResponseWorkflowResponseDataParamSchemaType0",
+    "ApiResponseWorkQueueItemResponse",
+    "ApiResponseWorkQueueItemResponseData",
+    "ApiResponseWorkQueueItemResponseDataAckSummaryType0",
+    "ApiResponseWorkQueueItemResponseDataLastErrorType0",
+    "ApiResponseWorkQueueItemResponseDataMetadata",
+    "ApiResponseWorkQueueItemResponseDataPayload",
+    "ApiResponseWorkQueueResponse",
+    "ApiResponseWorkQueueResponseData",
+    "ApiResponseWorkQueueResponseDataActionParams",
+    "ApiResponseWorkQueueResponseDataConfig",
+    "ApiResponseWorkQueueResponseDataItemSchema",
+    "AuditCategory",
+    "AuditEventResponse",
+    "AuditEventResponseCorrelationChainType0",
+    "AuditEventResponseDetailsType0",
+    "AuditEventSummary",
+    "AuditOutcome",
+    "AuthSettingsResponse200",
+    "AuthSettingsResponse200Data",
     "ChangePasswordRequest",
     "ChangePasswordResponse200",
     "ChangePasswordResponse200Data",
     "CreateActionRequest",
     "CreateActionRequestOutSchemaType0",
     "CreateActionRequestParamSchemaType0",
+    "CreateActionRequestRequiredWorkerRuntimes",
     "CreateActionResponse201",
     "CreateActionResponse201Data",
     "CreateActionResponse201DataOutSchemaType0",
     "CreateActionResponse201DataParamSchemaType0",
+    "CreateActionResponse201DataRequiredWorkerRuntimes",
+    "CreateIdentityRequest",
+    "CreateIdentityResponse201",
+    "CreateIdentityResponse201Data",
+    "CreateIdentityRoleAssignmentRequest",
+    "CreateIdentityRoleAssignmentResponse201",
+    "CreateIdentityRoleAssignmentResponse201Data",
     "CreateInquiryRequest",
     "CreateInquiryRequestResponseSchema",
     "CreateKeyRequest",
@@ -367,10 +601,20 @@ __all__ = (
     "CreatePackResponse201DataConfig",
     "CreatePackResponse201DataConfSchema",
     "CreatePackResponse201DataMeta",
+    "CreatePermissionAssignmentRequest",
+    "CreatePermissionAssignmentResponse201",
+    "CreatePermissionAssignmentResponse201Data",
+    "CreatePermissionSetRoleAssignmentRequest",
+    "CreatePermissionSetRoleAssignmentResponse201",
+    "CreatePermissionSetRoleAssignmentResponse201Data",
     "CreateRuleRequest",
     "CreateRuleRequestActionParams",
     "CreateRuleRequestConditions",
     "CreateRuleRequestTriggerParams",
+    "CreateRuntimeRequest",
+    "CreateRuntimeRequestDistributions",
+    "CreateRuntimeRequestExecutionConfig",
+    "CreateRuntimeRequestInstallationType0",
     "CreateSensorRequest",
     "CreateSensorRequestConfigType0",
     "CreateSensorRequestParamSchemaType0",
@@ -386,7 +630,19 @@ __all__ = (
     "CreateWorkflowResponse201DataDefinition",
     "CreateWorkflowResponse201DataOutSchemaType0",
     "CreateWorkflowResponse201DataParamSchemaType0",
+    "CreateWorkQueueRequest",
+    "CreateWorkQueueRequestActionParams",
+    "CreateWorkQueueRequestConfig",
+    "CreateWorkQueueRequestItemSchema",
     "CurrentUserResponse",
+    "DeleteIdentityResponse200",
+    "DeleteIdentityResponse200Data",
+    "DeleteIdentityRoleAssignmentResponse200",
+    "DeleteIdentityRoleAssignmentResponse200Data",
+    "DeletePermissionAssignmentResponse200",
+    "DeletePermissionAssignmentResponse200Data",
+    "DeletePermissionSetRoleAssignmentResponse200",
+    "DeletePermissionSetRoleAssignmentResponse200Data",
     "EnforcementCondition",
     "EnforcementResponse",
     "EnforcementResponseConditions",
@@ -394,6 +650,9 @@ __all__ = (
     "EnforcementResponsePayload",
     "EnforcementStatus",
     "EnforcementSummary",
+    "EnqueueWorkQueueItemRequest",
+    "EnqueueWorkQueueItemRequestMetadata",
+    "EnqueueWorkQueueItemRequestPayload",
     "EventResponse",
     "EventResponseConfigType0",
     "EventResponsePayload",
@@ -401,19 +660,27 @@ __all__ = (
     "ExecutionResponse",
     "ExecutionResponseConfig",
     "ExecutionResponseResult",
+    "ExecutionResponseWorkflowTaskType0",
     "ExecutionStatus",
     "ExecutionSummary",
+    "ExecutionSummaryWorkflowTaskType0",
+    "FreezeIdentityResponse200",
+    "FreezeIdentityResponse200Data",
     "GetActionResponse200",
     "GetActionResponse200Data",
     "GetActionResponse200DataOutSchemaType0",
     "GetActionResponse200DataParamSchemaType0",
+    "GetActionResponse200DataRequiredWorkerRuntimes",
     "GetCurrentUserResponse200",
     "GetCurrentUserResponse200Data",
     "GetExecutionResponse200",
     "GetExecutionResponse200Data",
     "GetExecutionResponse200DataConfig",
     "GetExecutionResponse200DataResult",
+    "GetExecutionResponse200DataWorkflowTaskType0",
     "GetExecutionStatsResponse200",
+    "GetIdentityResponse200",
+    "GetIdentityResponse200Data",
     "GetKeyResponse200",
     "GetKeyResponse200Data",
     "GetPackResponse200",
@@ -422,7 +689,7 @@ __all__ = (
     "GetPackResponse200DataConfSchema",
     "GetPackResponse200DataMeta",
     "GetPackTestHistoryResponse200",
-    "GetPackTestHistoryResponse200DataItem",
+    "GetPackTestHistoryResponse200ItemsItem",
     "GetQueueStatsResponse200",
     "GetQueueStatsResponse200Data",
     "GetWorkflowResponse200",
@@ -433,6 +700,9 @@ __all__ = (
     "HealthDetailedResponse503",
     "HealthResponse",
     "HealthResponse200",
+    "IdentityResponse",
+    "IdentityRoleAssignmentResponse",
+    "IdentitySummary",
     "InquiryRespondRequest",
     "InquiryRespondRequestResponse",
     "InquiryResponse",
@@ -443,10 +713,21 @@ __all__ = (
     "InstallPackRequest",
     "KeyResponse",
     "KeySummary",
+    "LdapLoginRequest",
+    "LdapLoginResponse200",
+    "LdapLoginResponse200Data",
     "LoginRequest",
     "LoginResponse200",
     "LoginResponse200Data",
+    "NullableJsonPatchType1",
+    "NullableJsonPatchType1Op",
+    "NullableStringPatchType1",
+    "NullableStringPatchType1Op",
     "OwnerType",
+    "PackDescriptionPatchType0",
+    "PackDescriptionPatchType0Op",
+    "PackDescriptionPatchType1",
+    "PackDescriptionPatchType1Op",
     "PackInstallResponse",
     "PackResponse",
     "PackResponseConfig",
@@ -459,31 +740,56 @@ __all__ = (
     "PackWorkflowSyncResponse",
     "PackWorkflowValidationResponse",
     "PackWorkflowValidationResponseErrors",
+    "PaginatedResponseActionSearchHit",
+    "PaginatedResponseActionSearchHitItemsItem",
     "PaginatedResponseActionSummary",
-    "PaginatedResponseActionSummaryDataItem",
+    "PaginatedResponseActionSummaryItemsItem",
+    "PaginatedResponseActionSummaryItemsItemRequiredWorkerRuntimes",
+    "PaginatedResponseAuditEventSummary",
+    "PaginatedResponseAuditEventSummaryItemsItem",
     "PaginatedResponseEnforcementSummary",
-    "PaginatedResponseEnforcementSummaryDataItem",
+    "PaginatedResponseEnforcementSummaryItemsItem",
     "PaginatedResponseEventSummary",
-    "PaginatedResponseEventSummaryDataItem",
+    "PaginatedResponseEventSummaryItemsItem",
     "PaginatedResponseExecutionSummary",
-    "PaginatedResponseExecutionSummaryDataItem",
+    "PaginatedResponseExecutionSummaryItemsItem",
+    "PaginatedResponseExecutionSummaryItemsItemWorkflowTaskType0",
+    "PaginatedResponseIdentitySummary",
+    "PaginatedResponseIdentitySummaryItemsItem",
     "PaginatedResponseInquirySummary",
-    "PaginatedResponseInquirySummaryDataItem",
+    "PaginatedResponseInquirySummaryItemsItem",
     "PaginatedResponseKeySummary",
-    "PaginatedResponseKeySummaryDataItem",
+    "PaginatedResponseKeySummaryItemsItem",
     "PaginatedResponsePackSummary",
-    "PaginatedResponsePackSummaryDataItem",
+    "PaginatedResponsePackSummaryItemsItem",
     "PaginatedResponsePackTestSummary",
-    "PaginatedResponsePackTestSummaryDataItem",
+    "PaginatedResponsePackTestSummaryItemsItem",
     "PaginatedResponseRuleSummary",
-    "PaginatedResponseRuleSummaryDataItem",
+    "PaginatedResponseRuleSummaryItemsItem",
+    "PaginatedResponseRuleSummaryItemsItemActionParams",
+    "PaginatedResponseRuleSummaryItemsItemTriggerParams",
+    "PaginatedResponseRuntimeSummary",
+    "PaginatedResponseRuntimeSummaryItemsItem",
     "PaginatedResponseSensorSummary",
-    "PaginatedResponseSensorSummaryDataItem",
+    "PaginatedResponseSensorSummaryItemsItem",
     "PaginatedResponseTriggerSummary",
-    "PaginatedResponseTriggerSummaryDataItem",
+    "PaginatedResponseTriggerSummaryItemsItem",
+    "PaginatedResponseWorkerSummary",
+    "PaginatedResponseWorkerSummaryItemsItem",
     "PaginatedResponseWorkflowSummary",
-    "PaginatedResponseWorkflowSummaryDataItem",
+    "PaginatedResponseWorkflowSummaryItemsItem",
+    "PaginatedResponseWorkQueueItemResponse",
+    "PaginatedResponseWorkQueueItemResponseItemsItem",
+    "PaginatedResponseWorkQueueItemResponseItemsItemAckSummaryType0",
+    "PaginatedResponseWorkQueueItemResponseItemsItemLastErrorType0",
+    "PaginatedResponseWorkQueueItemResponseItemsItemMetadata",
+    "PaginatedResponseWorkQueueItemResponseItemsItemPayload",
+    "PaginatedResponseWorkQueueSummary",
+    "PaginatedResponseWorkQueueSummaryItemsItem",
     "PaginationMeta",
+    "PermissionAssignmentResponse",
+    "PermissionSetRoleAssignmentResponse",
+    "PermissionSetSummary",
     "QueueStatsResponse",
     "RefreshTokenRequest",
     "RefreshTokenResponse200",
@@ -492,14 +798,30 @@ __all__ = (
     "RegisterRequest",
     "RegisterResponse200",
     "RegisterResponse200Data",
+    "ResolvedWorkQueueDispatchTuningResponse",
     "RuleResponse",
     "RuleResponseActionParams",
     "RuleResponseConditions",
     "RuleResponseTriggerParams",
     "RuleSummary",
+    "RuleSummaryActionParams",
+    "RuleSummaryTriggerParams",
+    "RuntimeResponse",
+    "RuntimeResponseDistributions",
+    "RuntimeResponseExecutionConfig",
+    "RuntimeResponseInstallationType0",
+    "RuntimeSummary",
+    "RuntimeVersionConstraintPatchType0",
+    "RuntimeVersionConstraintPatchType0Op",
+    "RuntimeVersionConstraintPatchType1",
+    "RuntimeVersionConstraintPatchType1Op",
     "SensorResponse",
     "SensorResponseParamSchemaType0",
     "SensorSummary",
+    "SetJson",
+    "SetJsonOp",
+    "SetString",
+    "SetStringOp",
     "SuccessResponse",
     "SyncPackWorkflowsResponse200",
     "SyncPackWorkflowsResponse200Data",
@@ -512,14 +834,25 @@ __all__ = (
     "TriggerResponse",
     "TriggerResponseOutSchemaType0",
     "TriggerResponseParamSchemaType0",
+    "TriggerStringPatchType0",
+    "TriggerStringPatchType0Op",
+    "TriggerStringPatchType1",
+    "TriggerStringPatchType1Op",
     "TriggerSummary",
+    "UnfreezeIdentityResponse200",
+    "UnfreezeIdentityResponse200Data",
     "UpdateActionRequest",
     "UpdateActionRequestOutSchemaType0",
     "UpdateActionRequestParamSchemaType0",
+    "UpdateActionRequestRequiredWorkerRuntimesType0",
     "UpdateActionResponse200",
     "UpdateActionResponse200Data",
     "UpdateActionResponse200DataOutSchemaType0",
     "UpdateActionResponse200DataParamSchemaType0",
+    "UpdateActionResponse200DataRequiredWorkerRuntimes",
+    "UpdateIdentityRequest",
+    "UpdateIdentityResponse200",
+    "UpdateIdentityResponse200Data",
     "UpdateInquiryRequest",
     "UpdateInquiryRequestResponseType0",
     "UpdateKeyRequest",
@@ -538,6 +871,9 @@ __all__ = (
     "UpdateRuleRequestActionParamsType0",
     "UpdateRuleRequestConditionsType0",
     "UpdateRuleRequestTriggerParamsType0",
+    "UpdateRuntimeRequest",
+    "UpdateRuntimeRequestDistributionsType0",
+    "UpdateRuntimeRequestExecutionConfigType0",
     "UpdateSensorRequest",
     "UpdateSensorRequestParamSchemaType0",
     "UpdateTriggerRequest",
@@ -552,16 +888,42 @@ __all__ = (
     "UpdateWorkflowResponse200DataDefinition",
     "UpdateWorkflowResponse200DataOutSchemaType0",
     "UpdateWorkflowResponse200DataParamSchemaType0",
+    "UpdateWorkQueueItemRequest",
+    "UpdateWorkQueueItemRequestMetadataType0",
+    "UpdateWorkQueueItemRequestPayloadType0",
+    "UpdateWorkQueueRequest",
+    "UpdateWorkQueueRequestActionParamsType0",
+    "UpdateWorkQueueRequestConfigType0",
+    "UpdateWorkQueueRequestItemSchemaType0",
     "UserInfo",
     "ValidatePackWorkflowsResponse200",
     "ValidatePackWorkflowsResponse200Data",
     "ValidatePackWorkflowsResponse200DataErrors",
     "WebhookReceiverRequest",
     "WebhookReceiverResponse",
+    "WorkerLoadSnapshot",
+    "WorkerRole",
+    "WorkerRuntimeSupport",
+    "WorkerStatus",
+    "WorkerSummary",
+    "WorkerType",
     "WorkflowResponse",
     "WorkflowResponseDefinition",
     "WorkflowResponseOutSchemaType0",
     "WorkflowResponseParamSchemaType0",
     "WorkflowSummary",
     "WorkflowSyncResult",
+    "WorkQueueBatchMode",
+    "WorkQueueItemResponse",
+    "WorkQueueItemResponseAckSummaryType0",
+    "WorkQueueItemResponseLastErrorType0",
+    "WorkQueueItemResponseMetadata",
+    "WorkQueueItemResponsePayload",
+    "WorkQueueItemStatus",
+    "WorkQueueResponse",
+    "WorkQueueResponseActionParams",
+    "WorkQueueResponseConfig",
+    "WorkQueueResponseItemSchema",
+    "WorkQueueSummary",
+    "WorkQueueUpdateStrategy",
 )

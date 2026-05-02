@@ -47,9 +47,10 @@ pub struct EventData {
     pub id: i64,
 }
 
-/// Response wrapper for API responses
+/// Response wrapper for API responses (supports both `data` and `items` keys)
 #[derive(Debug, Deserialize)]
 pub struct ApiResponse<T> {
+    #[serde(alias = "items")]
     pub data: T,
 }
 
@@ -57,8 +58,14 @@ pub struct ApiResponse<T> {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Rule {
     pub id: i64,
+    #[serde(default)]
     pub trigger_params: serde_json::Value,
+    #[serde(default = "default_enabled")]
     pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 /// Response from token refresh

@@ -28,7 +28,6 @@ class CreateSensorRequest:
     """ Request DTO for creating a new sensor
 
         Attributes:
-            description (str): Sensor description Example: Monitors CPU usage and generates events.
             entrypoint (str): Entry point for sensor execution (e.g., path to script, function name) Example:
                 /sensors/monitoring/cpu_monitor.py.
             label (str): Human-readable label Example: CPU Monitoring Sensor.
@@ -38,12 +37,12 @@ class CreateSensorRequest:
             trigger_ref (str): Trigger reference this sensor monitors for Example: monitoring.cpu_threshold.
             config (CreateSensorRequestConfigType0 | None | Unset): Configuration values for this sensor instance (conforms
                 to param_schema)
+            description (None | str | Unset): Sensor description Example: Monitors CPU usage and generates events.
             enabled (bool | Unset): Whether the sensor is enabled Example: True.
-            param_schema (CreateSensorRequestParamSchemaType0 | None | Unset): Parameter schema (JSON Schema) for sensor
+            param_schema (CreateSensorRequestParamSchemaType0 | None | Unset): Parameter schema (flat format) for sensor
                 configuration
      """
 
-    description: str
     entrypoint: str
     label: str
     pack_ref: str
@@ -51,6 +50,7 @@ class CreateSensorRequest:
     runtime_ref: str
     trigger_ref: str
     config: CreateSensorRequestConfigType0 | None | Unset = UNSET
+    description: None | str | Unset = UNSET
     enabled: bool | Unset = UNSET
     param_schema: CreateSensorRequestParamSchemaType0 | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -60,10 +60,8 @@ class CreateSensorRequest:
 
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.create_sensor_request_param_schema_type_0 import CreateSensorRequestParamSchemaType0
         from ..models.create_sensor_request_config_type_0 import CreateSensorRequestConfigType0
-        description = self.description
-
+        from ..models.create_sensor_request_param_schema_type_0 import CreateSensorRequestParamSchemaType0
         entrypoint = self.entrypoint
 
         label = self.label
@@ -84,6 +82,12 @@ class CreateSensorRequest:
         else:
             config = self.config
 
+        description: None | str | Unset
+        if isinstance(self.description, Unset):
+            description = UNSET
+        else:
+            description = self.description
+
         enabled = self.enabled
 
         param_schema: dict[str, Any] | None | Unset
@@ -98,7 +102,6 @@ class CreateSensorRequest:
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({
-            "description": description,
             "entrypoint": entrypoint,
             "label": label,
             "pack_ref": pack_ref,
@@ -108,6 +111,8 @@ class CreateSensorRequest:
         })
         if config is not UNSET:
             field_dict["config"] = config
+        if description is not UNSET:
+            field_dict["description"] = description
         if enabled is not UNSET:
             field_dict["enabled"] = enabled
         if param_schema is not UNSET:
@@ -122,8 +127,6 @@ class CreateSensorRequest:
         from ..models.create_sensor_request_config_type_0 import CreateSensorRequestConfigType0
         from ..models.create_sensor_request_param_schema_type_0 import CreateSensorRequestParamSchemaType0
         d = dict(src_dict)
-        description = d.pop("description")
-
         entrypoint = d.pop("entrypoint")
 
         label = d.pop("label")
@@ -156,6 +159,16 @@ class CreateSensorRequest:
         config = _parse_config(d.pop("config", UNSET))
 
 
+        def _parse_description(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        description = _parse_description(d.pop("description", UNSET))
+
+
         enabled = d.pop("enabled", UNSET)
 
         def _parse_param_schema(data: object) -> CreateSensorRequestParamSchemaType0 | None | Unset:
@@ -179,7 +192,6 @@ class CreateSensorRequest:
 
 
         create_sensor_request = cls(
-            description=description,
             entrypoint=entrypoint,
             label=label,
             pack_ref=pack_ref,
@@ -187,6 +199,7 @@ class CreateSensorRequest:
             runtime_ref=runtime_ref,
             trigger_ref=trigger_ref,
             config=config,
+            description=description,
             enabled=enabled,
             param_schema=param_schema,
         )

@@ -34,12 +34,13 @@ class CreatePackResponse201Data:
             conf_schema (CreatePackResponse201DataConfSchema): Configuration schema
             config (CreatePackResponse201DataConfig): Pack configuration
             created (datetime.datetime): Creation timestamp Example: 2024-01-13T10:30:00Z.
+            dependencies (list[str]): Pack dependencies (refs of required packs) Example: ['core'].
             id (int): Pack ID Example: 1.
             is_standard (bool): Is standard pack
             label (str): Human-readable label Example: Slack Integration.
             meta (CreatePackResponse201DataMeta): Pack metadata
             ref (str): Unique reference identifier Example: slack.
-            runtime_deps (list[str]): Runtime dependencies Example: ['core'].
+            runtime_deps (list[str]): Runtime dependencies (e.g., shell, python, nodejs) Example: ['shell', 'python'].
             tags (list[str]): Tags Example: ['messaging', 'collaboration'].
             updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:30:00Z.
             version (str): Pack version Example: 1.0.0.
@@ -50,6 +51,7 @@ class CreatePackResponse201Data:
     conf_schema: CreatePackResponse201DataConfSchema
     config: CreatePackResponse201DataConfig
     created: datetime.datetime
+    dependencies: list[str]
     id: int
     is_standard: bool
     label: str
@@ -67,14 +69,18 @@ class CreatePackResponse201Data:
 
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.create_pack_response_201_data_config import CreatePackResponse201DataConfig
         from ..models.create_pack_response_201_data_conf_schema import CreatePackResponse201DataConfSchema
+        from ..models.create_pack_response_201_data_config import CreatePackResponse201DataConfig
         from ..models.create_pack_response_201_data_meta import CreatePackResponse201DataMeta
         conf_schema = self.conf_schema.to_dict()
 
         config = self.config.to_dict()
 
         created = self.created.isoformat()
+
+        dependencies = self.dependencies
+
+
 
         id = self.id
 
@@ -111,6 +117,7 @@ class CreatePackResponse201Data:
             "conf_schema": conf_schema,
             "config": config,
             "created": created,
+            "dependencies": dependencies,
             "id": id,
             "is_standard": is_standard,
             "label": label,
@@ -147,6 +154,9 @@ class CreatePackResponse201Data:
         created = isoparse(d.pop("created"))
 
 
+
+
+        dependencies = cast(list[str], d.pop("dependencies"))
 
 
         id = d.pop("id")
@@ -189,6 +199,7 @@ class CreatePackResponse201Data:
             conf_schema=conf_schema,
             config=config,
             created=created,
+            dependencies=dependencies,
             id=id,
             is_standard=is_standard,
             label=label,

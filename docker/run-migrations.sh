@@ -21,6 +21,9 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-/migrations}"
 # Export password for psql
 export PGPASSWORD="$DB_PASSWORD"
 
+# Set search_path for all psql connections so DDL lands in the attune schema
+export PGOPTIONS="-c search_path=attune,public"
+
 # Color output
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -53,6 +56,15 @@ setup_migrations_table() {
     echo "Setting up migrations tracking table..."
 
     psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 <<-EOSQL
+        -- Ensure attune schema exists before anything else
+        CREATE SCHEMA IF NOT EXISTS attune;
+
+        -- Set default search_path for the database so all connections use attune schema
+        ALTER DATABASE "$DB_NAME" SET search_path TO attune, public;
+
+        -- Set search_path for this session
+        SET search_path TO attune, public;
+
         CREATE TABLE IF NOT EXISTS _migrations (
             id SERIAL PRIMARY KEY,
             filename VARCHAR(255) UNIQUE NOT NULL,

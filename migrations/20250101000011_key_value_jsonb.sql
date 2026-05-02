@@ -7,6 +7,9 @@
 -- Before: value TEXT NOT NULL  (e.g., 'my-secret-token')
 -- After:  value JSONB NOT NULL (e.g., '"my-secret-token"' or '{"user":"admin","pass":"s3cret"}')
 
+-- Set search_path for schema isolation
+SET search_path TO attune, public;
+
 -- Step 1: Convert existing TEXT values to JSONB.
 -- to_jsonb(text) wraps a plain string as a JSON string literal, e.g.:
 --   'hello'  ->  '"hello"'

@@ -1,9 +1,9 @@
 from enum import Enum
 
 class EnforcementStatus(str, Enum):
-    CREATED = "Created"
-    DISABLED = "Disabled"
-    PROCESSED = "Processed"
+    CREATED = "created"
+    DISABLED = "disabled"
+    PROCESSED = "processed"
 
     def __str__(self) -> str:
         return str(self.value)

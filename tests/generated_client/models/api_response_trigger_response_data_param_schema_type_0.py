@@ -20,7 +20,7 @@ T = TypeVar("T", bound="ApiResponseTriggerResponseDataParamSchemaType0")
 
 @_attrs_define
 class ApiResponseTriggerResponseDataParamSchemaType0:
-    """ Parameter schema
+    """ Parameter schema (StackStorm-style with inline required/secret)
 
      """
 

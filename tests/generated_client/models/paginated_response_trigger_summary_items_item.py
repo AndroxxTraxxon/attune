@@ -1,0 +1,177 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any, TypeVar, BinaryIO, TextIO, TYPE_CHECKING, Generator
+
+from attrs import define as _attrs_define
+from attrs import field as _attrs_field
+
+from ..types import UNSET, Unset
+
+from ..types import UNSET, Unset
+from dateutil.parser import isoparse
+from typing import cast
+import datetime
+
+
+
+
+
+
+T = TypeVar("T", bound="PaginatedResponseTriggerSummaryItemsItem")
+
+
+
+@_attrs_define
+class PaginatedResponseTriggerSummaryItemsItem:
+    """ Simplified trigger response (for list endpoints)
+
+        Attributes:
+            created (datetime.datetime): Creation timestamp Example: 2024-01-13T10:30:00Z.
+            enabled (bool): Whether the trigger is enabled Example: True.
+            id (int): Trigger ID Example: 1.
+            label (str): Human-readable label Example: Webhook Trigger.
+            ref (str): Unique reference identifier Example: core.webhook.
+            updated (datetime.datetime): Last update timestamp Example: 2024-01-13T10:30:00Z.
+            webhook_enabled (bool): Whether webhooks are enabled for this trigger
+            description (None | str | Unset): Trigger description Example: Triggers when a webhook is received.
+            pack_ref (None | str | Unset): Pack reference (optional) Example: core.
+     """
+
+    created: datetime.datetime
+    enabled: bool
+    id: int
+    label: str
+    ref: str
+    updated: datetime.datetime
+    webhook_enabled: bool
+    description: None | str | Unset = UNSET
+    pack_ref: None | str | Unset = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
+
+
+
+
+
+    def to_dict(self) -> dict[str, Any]:
+        created = self.created.isoformat()
+
+        enabled = self.enabled
+
+        id = self.id
+
+        label = self.label
+
+        ref = self.ref
+
+        updated = self.updated.isoformat()
+
+        webhook_enabled = self.webhook_enabled
+
+        description: None | str | Unset
+        if isinstance(self.description, Unset):
+            description = UNSET
+        else:
+            description = self.description
+
+        pack_ref: None | str | Unset
+        if isinstance(self.pack_ref, Unset):
+            pack_ref = UNSET
+        else:
+            pack_ref = self.pack_ref
+
+
+        field_dict: dict[str, Any] = {}
+        field_dict.update(self.additional_properties)
+        field_dict.update({
+            "created": created,
+            "enabled": enabled,
+            "id": id,
+            "label": label,
+            "ref": ref,
+            "updated": updated,
+            "webhook_enabled": webhook_enabled,
+        })
+        if description is not UNSET:
+            field_dict["description"] = description
+        if pack_ref is not UNSET:
+            field_dict["pack_ref"] = pack_ref
+
+        return field_dict
+
+
+
+    @classmethod
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        d = dict(src_dict)
+        created = isoparse(d.pop("created"))
+
+
+
+
+        enabled = d.pop("enabled")
+
+        id = d.pop("id")
+
+        label = d.pop("label")
+
+        ref = d.pop("ref")
+
+        updated = isoparse(d.pop("updated"))
+
+
+
+
+        webhook_enabled = d.pop("webhook_enabled")
+
+        def _parse_description(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        description = _parse_description(d.pop("description", UNSET))
+
+
+        def _parse_pack_ref(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        pack_ref = _parse_pack_ref(d.pop("pack_ref", UNSET))
+
+
+        paginated_response_trigger_summary_items_item = cls(
+            created=created,
+            enabled=enabled,
+            id=id,
+            label=label,
+            ref=ref,
+            updated=updated,
+            webhook_enabled=webhook_enabled,
+            description=description,
+            pack_ref=pack_ref,
+        )
+
+
+        paginated_response_trigger_summary_items_item.additional_properties = d
+        return paginated_response_trigger_summary_items_item
+
+    @property
+    def additional_keys(self) -> list[str]:
+        return list(self.additional_properties.keys())
+
+    def __getitem__(self, key: str) -> Any:
+        return self.additional_properties[key]
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self.additional_properties[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        del self.additional_properties[key]
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.additional_properties

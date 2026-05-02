@@ -27,7 +27,8 @@ class UpdateSensorRequest:
     """ Request DTO for updating a sensor
 
         Attributes:
-            param_schema (None | UpdateSensorRequestParamSchemaType0): Parameter schema
+            param_schema (None | UpdateSensorRequestParamSchemaType0): Parameter schema (StackStorm-style with inline
+                required/secret)
             description (None | str | Unset): Sensor description Example: Enhanced CPU monitoring with alerts.
             enabled (bool | None | Unset): Whether the sensor is enabled
             entrypoint (None | str | Unset): Entry point for sensor execution Example:

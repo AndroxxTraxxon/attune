@@ -20,7 +20,7 @@ T = TypeVar("T", bound="CreateActionRequestParamSchemaType0")
 
 @_attrs_define
 class CreateActionRequestParamSchemaType0:
-    """ Parameter schema (JSON Schema) defining expected inputs
+    """ Parameter schema (StackStorm-style) defining expected inputs with inline required/secret
 
      """
 

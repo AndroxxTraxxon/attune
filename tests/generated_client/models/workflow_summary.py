@@ -28,7 +28,6 @@ class WorkflowSummary:
 
         Attributes:
             created (datetime.datetime): Creation timestamp Example: 2024-01-13T10:30:00Z.
-            enabled (bool): Whether the workflow is enabled Example: True.
             id (int): Workflow ID Example: 1.
             label (str): Human-readable label Example: Incident Response Workflow.
             pack_ref (str): Pack reference Example: slack.
@@ -41,7 +40,6 @@ class WorkflowSummary:
      """
 
     created: datetime.datetime
-    enabled: bool
     id: int
     label: str
     pack_ref: str
@@ -58,8 +56,6 @@ class WorkflowSummary:
 
     def to_dict(self) -> dict[str, Any]:
         created = self.created.isoformat()
-
-        enabled = self.enabled
 
         id = self.id
 
@@ -88,7 +84,6 @@ class WorkflowSummary:
         field_dict.update(self.additional_properties)
         field_dict.update({
             "created": created,
-            "enabled": enabled,
             "id": id,
             "label": label,
             "pack_ref": pack_ref,
@@ -111,8 +106,6 @@ class WorkflowSummary:
 
 
 
-
-        enabled = d.pop("enabled")
 
         id = d.pop("id")
 
@@ -144,7 +137,6 @@ class WorkflowSummary:
 
         workflow_summary = cls(
             created=created,
-            enabled=enabled,
             id=id,
             label=label,
             pack_ref=pack_ref,

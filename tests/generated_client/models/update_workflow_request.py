@@ -31,10 +31,10 @@ class UpdateWorkflowRequest:
         Attributes:
             definition (None | UpdateWorkflowRequestDefinitionType0): Workflow definition
             out_schema (None | UpdateWorkflowRequestOutSchemaType0): Output schema
-            param_schema (None | UpdateWorkflowRequestParamSchemaType0): Parameter schema
+            param_schema (None | UpdateWorkflowRequestParamSchemaType0): Parameter schema (StackStorm-style with inline
+                required/secret)
             description (None | str | Unset): Workflow description Example: Enhanced incident response workflow with
                 additional automation.
-            enabled (bool | None | Unset): Whether the workflow is enabled Example: True.
             label (None | str | Unset): Human-readable label Example: Incident Response Workflow (Updated).
             tags (list[str] | None | Unset): Tags Example: ['incident', 'slack', 'approval', 'automation'].
             version (None | str | Unset): Workflow version Example: 1.1.0.
@@ -44,7 +44,6 @@ class UpdateWorkflowRequest:
     out_schema: None | UpdateWorkflowRequestOutSchemaType0
     param_schema: None | UpdateWorkflowRequestParamSchemaType0
     description: None | str | Unset = UNSET
-    enabled: bool | None | Unset = UNSET
     label: None | str | Unset = UNSET
     tags: list[str] | None | Unset = UNSET
     version: None | str | Unset = UNSET
@@ -55,9 +54,9 @@ class UpdateWorkflowRequest:
 
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.update_workflow_request_param_schema_type_0 import UpdateWorkflowRequestParamSchemaType0
         from ..models.update_workflow_request_definition_type_0 import UpdateWorkflowRequestDefinitionType0
         from ..models.update_workflow_request_out_schema_type_0 import UpdateWorkflowRequestOutSchemaType0
+        from ..models.update_workflow_request_param_schema_type_0 import UpdateWorkflowRequestParamSchemaType0
         definition: dict[str, Any] | None
         if isinstance(self.definition, UpdateWorkflowRequestDefinitionType0):
             definition = self.definition.to_dict()
@@ -81,12 +80,6 @@ class UpdateWorkflowRequest:
             description = UNSET
         else:
             description = self.description
-
-        enabled: bool | None | Unset
-        if isinstance(self.enabled, Unset):
-            enabled = UNSET
-        else:
-            enabled = self.enabled
 
         label: None | str | Unset
         if isinstance(self.label, Unset):
@@ -120,8 +113,6 @@ class UpdateWorkflowRequest:
         })
         if description is not UNSET:
             field_dict["description"] = description
-        if enabled is not UNSET:
-            field_dict["enabled"] = enabled
         if label is not UNSET:
             field_dict["label"] = label
         if tags is not UNSET:
@@ -203,16 +194,6 @@ class UpdateWorkflowRequest:
         description = _parse_description(d.pop("description", UNSET))
 
 
-        def _parse_enabled(data: object) -> bool | None | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(bool | None | Unset, data)
-
-        enabled = _parse_enabled(d.pop("enabled", UNSET))
-
-
         def _parse_label(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -256,7 +237,6 @@ class UpdateWorkflowRequest:
             out_schema=out_schema,
             param_schema=param_schema,
             description=description,
-            enabled=enabled,
             label=label,
             tags=tags,
             version=version,
