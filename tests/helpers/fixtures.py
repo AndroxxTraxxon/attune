@@ -8,9 +8,12 @@ triggers, actions, rules, etc.
 import time
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
+import shutil
+import tempfile
 from typing import Any, Dict, Optional
 
-from .client import AttuneClient
+from .client_wrapper import AttuneClient
 
 
 def unique_ref(prefix: str = "test") -> str:
@@ -78,22 +81,71 @@ def create_test_pack(
 
     # Always try to get existing pack first
     existing_pack = client.get_pack_by_ref(pack_ref)
-    if existing_pack:
+    if existing_pack and (pack_ref == "test_pack" or client.list_actions(pack_ref=pack_ref)):
         return existing_pack
 
-    # Use upload_pack (works across Docker containers)
     import os
 
+    candidate_dir = None
     if os.path.isdir(pack_dir):
-        return client.upload_pack(pack_dir, force=True)
+        candidate_dir = pack_dir
+    else:
+        # Try resolving relative to common locations
+        for base in [".", "/app", os.path.dirname(os.path.dirname(__file__))]:
+            candidate = os.path.join(base, pack_dir)
+            if os.path.isdir(candidate):
+                candidate_dir = candidate
+                break
 
-    # Try resolving relative to common locations
-    for base in [".", "/app", os.path.dirname(os.path.dirname(__file__))]:
-        candidate = os.path.join(base, pack_dir)
-        if os.path.isdir(candidate):
-            return client.upload_pack(candidate, force=True)
+    if candidate_dir:
+        if pack_ref == "test_pack":
+            return client.upload_pack(candidate_dir, force=True)
+
+        with tempfile.TemporaryDirectory(prefix=f"attune-e2e-{pack_ref}-") as tmp:
+            isolated_pack = Path(tmp) / "pack"
+            shutil.copytree(candidate_dir, isolated_pack)
+            _rewrite_pack_ref(isolated_pack, "test_pack", pack_ref)
+            return client.upload_pack(str(isolated_pack), force=True)
 
     raise FileNotFoundError(f"Pack directory not found: {pack_dir}")
+
+
+def _rewrite_pack_ref(pack_dir: Path, old_ref: str, new_ref: str) -> None:
+    """Rewrite the fixture pack ref so xdist workers do not share one pack."""
+    for yaml_file in pack_dir.rglob("*.yaml"):
+        content = yaml_file.read_text()
+        content = re_sub_pack_ref(content, old_ref, new_ref)
+        content = content.replace(f"{old_ref}.", f"{new_ref}.")
+        if yaml_file.parent.name == "actions":
+            content = _ensure_action_ref(content, new_ref)
+        yaml_file.write_text(content)
+
+
+def re_sub_pack_ref(content: str, old_ref: str, new_ref: str) -> str:
+    lines = []
+    replaced = False
+    for line in content.splitlines():
+        if not replaced and line.strip() == f"ref: {old_ref}":
+            lines.append(line.replace(old_ref, new_ref, 1))
+            replaced = True
+        else:
+            lines.append(line)
+    return "\n".join(lines) + ("\n" if content.endswith("\n") else "")
+
+
+def _ensure_action_ref(content: str, pack_ref: str) -> str:
+    lines = content.splitlines()
+    if any(line.strip().startswith("ref:") for line in lines):
+        return content
+
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("name:"):
+            action_name = stripped.split(":", 1)[1].strip().strip("\"'")
+            if action_name:
+                lines.insert(index + 1, f"ref: {pack_ref}.{action_name}")
+                return "\n".join(lines) + ("\n" if content.endswith("\n") else "")
+    return content
 
 
 def ensure_core_pack(client: AttuneClient) -> Dict[str, Any]:
@@ -137,6 +189,9 @@ def create_interval_timer(
     pack_ref: str = "test.test_pack",
     action_ref: Optional[str] = None,
     action_parameters: Optional[Dict[str, Any]] = None,
+    trigger_ref: Optional[str] = None,
+    interval: Optional[int] = None,
+    **kwargs,
 ) -> Dict[str, Any]:
     """
     Create interval timer trigger configuration.
@@ -157,7 +212,9 @@ def create_interval_timer(
     Returns:
         Dict with trigger and rule info including the created rule
     """
-    timer_name = name or f"interval_{interval_seconds}s_{unique_ref()}"
+    if interval is not None:
+        interval_seconds = interval
+    timer_name = name or trigger_ref or f"interval_{interval_seconds}s_{unique_ref()}"
 
     # Ensure core pack exists
     ensure_core_pack(client)
@@ -177,7 +234,6 @@ def create_interval_timer(
             pack_ref="core",
             description="Fires at regular intervals",
         )
-
     # Resolve action_ref
     if not action_ref:
         actions = client.list_actions()
@@ -188,21 +244,18 @@ def create_interval_timer(
 
     rule = None
     if action_ref:
-        try:
-            rule = client.create_rule(
-                pack_ref=pack_ref,
-                name=f"{timer_name}_rule",
-                trigger_ref=core_trigger["ref"],
-                action_ref=action_ref,
-                enabled=True,
-                trigger_parameters={
-                    "unit": "seconds",
-                    "interval": interval_seconds,
-                },
-                action_parameters=action_parameters or {},
-            )
-        except Exception:
-            pass
+        rule = client.create_rule(
+            pack_ref=pack_ref,
+            name=f"{timer_name}_rule",
+            trigger_ref=core_trigger["ref"],
+            action_ref=action_ref,
+            enabled=True,
+            trigger_params={
+                "unit": "seconds",
+                "interval": interval_seconds,
+            },
+            action_params=action_parameters or {},
+        )
 
     # Return dict with trigger info (no sensor — core sensor handles it)
     return {
@@ -222,6 +275,11 @@ def create_date_timer(
     seconds_from_now: int = 5,
     name: Optional[str] = None,
     pack_ref: str = "test.test_pack",
+    action_ref: Optional[str] = None,
+    action_parameters: Optional[Dict[str, Any]] = None,
+    trigger_ref: Optional[str] = None,
+    date: Optional[str] = None,
+    **kwargs,
 ) -> Dict[str, Any]:
     """
     Create date timer trigger configuration.
@@ -235,14 +293,17 @@ def create_date_timer(
         seconds_from_now: Seconds from now to fire (used if fire_at not provided)
         name: Timer name (generated if not provided)
         pack_ref: Pack reference
+        action_ref: Action to invoke on timer fire (defaults to core.echo)
+        action_parameters: Parameters to pass to the action
 
     Returns:
-        Dict with trigger and rule info
+        Dict with trigger and rule info including the created rule
     """
+    fire_at = fire_at or date
     if not fire_at:
         fire_at = timestamp_future(seconds_from_now)
 
-    timer_name = name or f"date_{unique_ref()}"
+    timer_name = name or trigger_ref or f"date_{unique_ref()}"
 
     # Ensure core pack exists
     ensure_core_pack(client)
@@ -262,31 +323,28 @@ def create_date_timer(
             pack_ref="core",
             description="Fires at a specific date/time",
         )
-
-    # Create a rule with trigger_params for the datetime
-    actions = client.list_actions()
-    echo_action = None
-    for a in actions:
-        if a.get("ref") == "core.noop" or a.get("ref") == "core.echo":
-            echo_action = a
-            break
+    # Resolve action_ref
+    if not action_ref:
+        actions = client.list_actions()
+        for a in actions:
+            if a.get("ref") == "core.noop" or a.get("ref") == "core.echo":
+                action_ref = a["ref"]
+                break
 
     rule = None
-    if echo_action:
-        try:
-            rule = client.create_rule(
-                pack_ref=pack_ref,
-                name=f"{timer_name}_rule",
-                trigger_ref=core_trigger["ref"],
-                action_ref=echo_action["ref"],
-                enabled=True,
-                trigger_parameters={
-                    "date": fire_at,
-                    "timezone": "UTC",
-                },
-            )
-        except Exception:
-            pass
+    if action_ref:
+        rule = client.create_rule(
+            pack_ref=pack_ref,
+            name=f"{timer_name}_rule",
+            trigger_ref=core_trigger["ref"],
+            action_ref=action_ref,
+            enabled=True,
+            trigger_params={
+                "fire_at": fire_at,
+                "timezone": "UTC",
+            },
+            action_params=action_parameters or {},
+        )
 
     return {
         "id": core_trigger["id"],
@@ -306,6 +364,8 @@ def create_cron_timer(
     name: Optional[str] = None,
     pack_ref: str = "test.test_pack",
     timezone: str = "UTC",
+    action_ref: Optional[str] = None,
+    action_parameters: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Create cron timer trigger configuration.
@@ -319,9 +379,11 @@ def create_cron_timer(
         name: Timer name (generated if not provided)
         pack_ref: Pack reference
         timezone: Timezone for cron evaluation
+        action_ref: Action to invoke on timer fire (defaults to core.echo)
+        action_parameters: Parameters to pass to the action
 
     Returns:
-        Dict with trigger and rule info
+        Dict with trigger and rule info including the created rule
     """
     timer_name = name or f"cron_{unique_ref()}"
 
@@ -344,30 +406,28 @@ def create_cron_timer(
             description="Fires based on cron schedule",
         )
 
-    # Create a rule with trigger_params for the cron schedule
-    actions = client.list_actions()
-    echo_action = None
-    for a in actions:
-        if a.get("ref") == "core.noop" or a.get("ref") == "core.echo":
-            echo_action = a
-            break
+    # Resolve action_ref
+    if not action_ref:
+        actions = client.list_actions()
+        for a in actions:
+            if a.get("ref") == "core.noop" or a.get("ref") == "core.echo":
+                action_ref = a["ref"]
+                break
 
     rule = None
-    if echo_action:
-        try:
-            rule = client.create_rule(
-                pack_ref=pack_ref,
-                name=f"{timer_name}_rule",
-                trigger_ref=core_trigger["ref"],
-                action_ref=echo_action["ref"],
-                enabled=True,
-                trigger_parameters={
-                    "cron": cron_expression,
-                    "timezone": timezone,
-                },
-            )
-        except Exception:
-            pass
+    if action_ref:
+        rule = client.create_rule(
+            pack_ref=pack_ref,
+            name=f"{timer_name}_rule",
+            trigger_ref=core_trigger["ref"],
+            action_ref=action_ref,
+            enabled=True,
+            trigger_params={
+                "expression": cron_expression,
+                "timezone": timezone,
+            },
+            action_params=action_parameters or {},
+        )
 
     return {
         "id": core_trigger["id"],
@@ -385,6 +445,9 @@ def create_webhook_trigger(
     name: Optional[str] = None,
     trigger_name: Optional[str] = None,
     pack_ref: str = "test.test_pack",
+    trigger_ref: Optional[str] = None,
+    description: Optional[str] = None,
+    **kwargs,
 ) -> Dict[str, Any]:
     """
     Create webhook trigger
@@ -392,40 +455,36 @@ def create_webhook_trigger(
     Args:
         client: AttuneClient instance
         name: Trigger name (generated if not provided)
-        trigger_name: Alias for name (backward compat with tier 2 tests)
+        trigger_name: Optional trigger name
         pack_ref: Pack reference
 
     Returns:
         Created trigger data
     """
-    trigger_name = name or trigger_name or f"webhook_{unique_ref()}"
+    trigger_name = name or trigger_name
+    if not trigger_name and trigger_ref:
+        trigger_name = trigger_ref.split(".", 1)[1] if "." in trigger_ref else trigger_ref
+    trigger_name = trigger_name or f"webhook_{unique_ref()}"
+    trigger_ref = trigger_ref or f"{pack_ref}.{trigger_name}"
+    if "." not in trigger_ref:
+        trigger_ref = f"{pack_ref}.{trigger_ref}"
 
     trigger = client.create_trigger(
+        ref=trigger_ref,
+        label=trigger_name.replace("_", " ").title(),
         pack_ref=pack_ref,
-        name=trigger_name,
         trigger_type="webhook",
+        description=description,
         parameters={},
     )
 
-    # Enable webhook and construct webhook_url for tests
+    # Enable webhook and construct webhook_url for tests.
     trigger_ref = trigger.get("ref", f"{pack_ref}.{trigger_name}")
-    try:
-        enable_resp = client._request(
-            "POST", f"/api/v1/triggers/{trigger_ref}/webhooks/enable"
-        )
-        if enable_resp.status_code in (200, 201):
-            enable_data = enable_resp.json()
-            if "data" in enable_data:
-                trigger.update(enable_data["data"])
-            else:
-                trigger.update(enable_data)
-    except Exception:
-        pass
+    trigger = client.enable_webhook(trigger_ref=trigger_ref)
 
     # Ensure webhook_url is present for test convenience
     if "webhook_url" not in trigger and "webhook_key" in trigger:
         trigger["webhook_url"] = f"/api/v1/webhooks/{trigger['webhook_key']}"
-
     return trigger
 
 
@@ -438,7 +497,7 @@ def create_simple_action(
     client: AttuneClient,
     name: Optional[str] = None,
     pack_ref: str = "test.test_pack",
-    runner_type: str = "python3",
+    runtime_ref: str = "core.python",
     entrypoint: str = "actions/echo.py",
     param_schema: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -449,7 +508,7 @@ def create_simple_action(
         client: AttuneClient instance
         name: Action name (generated if not provided)
         pack_ref: Pack reference
-        runner_type: Runner type
+        runtime_ref: Runtime reference
         entrypoint: Entry point path
         param_schema: JSON Schema for parameters
 
@@ -460,14 +519,13 @@ def create_simple_action(
 
     if param_schema is None:
         param_schema = {
-            "type": "object",
-            "properties": {"message": {"type": "string", "default": "Hello, World!"}},
+            "message": {"type": "string", "default": "Hello, World!"},
         }
 
     return client.create_action(
         pack_ref=pack_ref,
         name=action_name,
-        runner_type=runner_type,
+        runtime_ref=runtime_ref,
         entrypoint=entrypoint,
         param_schema=param_schema,
     )
@@ -479,6 +537,11 @@ def create_echo_action(
     action_name: Optional[str] = None,
     pack_ref: str = "test.test_pack",
     echo_message: Optional[str] = None,
+    action_ref: Optional[str] = None,
+    message: Optional[str] = None,
+    suffix: Optional[str] = None,
+    description: Optional[str] = None,
+    **kwargs,
 ) -> Dict[str, Any]:
     """
     Create echo action (simple action that echoes input)
@@ -486,23 +549,28 @@ def create_echo_action(
     Args:
         client: AttuneClient instance
         name: Action name (generated if not provided)
-        action_name: Alias for name (backward compat with tier 2 tests)
+        action_name: Optional action name
         pack_ref: Pack reference
         echo_message: Default message (used in param_schema default)
 
     Returns:
         Created action data
     """
+    if action_ref and not name and not action_name:
+        name = action_ref.split(".", 1)[1] if "." in action_ref else action_ref
+    if suffix and not name and not action_name:
+        name = f"echo_{unique_ref()}{suffix}"
+
     return create_simple_action(
         client=client,
         name=name or action_name or f"echo_{unique_ref()}",
         pack_ref=pack_ref,
-        runner_type="shell",
-        entrypoint="echo.sh",
+        runtime_ref="core.shell",
+        entrypoint='INPUT=$(cat); printf \'{"success":true,"input":%s}\\n\' "${INPUT:-{}}"',
         param_schema={
             "message": {
                 "type": "string",
-                "default": echo_message or "echo",
+                "default": echo_message or message or "echo",
             },
             "count": {"type": "integer", "default": 1},
         },
@@ -532,8 +600,8 @@ def create_failing_action(
     return client.create_action(
         pack_ref=pack_ref,
         name=action_name,
-        runner_type="shell",
-        entrypoint="fail.sh",
+        runtime_ref="core.shell",
+        entrypoint=f"echo '{{\"error\":\"Action intentionally failed\",\"exit_code\":{exit_code}}}' >&2; exit {exit_code}",
         param_schema={
             "exit_code": {"type": "integer", "default": exit_code},
         },
@@ -563,13 +631,10 @@ def create_sleep_action(
     return client.create_action(
         pack_ref=pack_ref,
         name=action_name,
-        runner_type="python3",
-        entrypoint="actions/sleep.py",
+        runtime_ref="core.shell",
+        entrypoint="INPUT=$(cat); DURATION=$(echo \"$INPUT\" | sed -n 's/.*\"duration\"[[:space:]]*:[[:space:]]*\\([0-9]*\\).*/\\1/p'); DURATION=${DURATION:-%d}; sleep \"$DURATION\"; printf '{\"success\":true,\"slept\":%s}\\n' \"$DURATION\"" % (default_duration, "$DURATION"),
         param_schema={
-            "type": "object",
-            "properties": {
-                "duration": {"type": "integer", "default": default_duration}
-            },
+            "duration": {"type": "integer", "default": default_duration},
         },
     )
 
@@ -581,54 +646,51 @@ def create_sleep_action(
 
 def create_rule(
     client: AttuneClient,
-    trigger_id: int,
+    trigger_ref: str,
     action_ref: str,
     name: Optional[str] = None,
     pack_ref: str = "test.test_pack",
     enabled: bool = True,
-    criteria: Optional[str] = None,
-    action_parameters: Optional[Dict[str, Any]] = None,
-    trigger_parameters: Optional[Dict[str, Any]] = None,
+    conditions: Optional[Dict[str, Any]] = None,
+    action_params: Optional[Dict[str, Any]] = None,
+    trigger_params: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Create rule
 
     Args:
         client: AttuneClient instance
-        trigger_id: Trigger ID to monitor
+        trigger_ref: Trigger reference to monitor
         action_ref: Action reference to execute
         name: Rule name (generated if not provided)
         pack_ref: Pack reference
         enabled: Whether rule is enabled
-        criteria: Optional Jinja2 criteria expression
-        action_parameters: Parameters to pass to action
-        trigger_parameters: Parameters for the trigger (required if trigger has param_schema)
+        conditions: Rule condition expression object
+        action_params: Parameters to pass to action
+        trigger_params: Parameters for the trigger (required if trigger has param_schema)
 
     Returns:
         Created rule data
     """
     rule_name = name or f"rule_{unique_ref()}"
 
-    # Auto-populate trigger_parameters for known triggers if not provided
-    if trigger_parameters is None:
-        trigger = client.get_trigger(trigger_id)
-        trigger_ref = trigger.get("ref", "") if trigger else ""
+    if trigger_params is None:
         if trigger_ref == "core.intervaltimer":
-            trigger_parameters = {"unit": "seconds", "interval": 60}
+            trigger_params = {"unit": "seconds", "interval": 60}
         elif trigger_ref == "core.crontimer":
-            trigger_parameters = {"expression": "0 0 * * * *"}
+            trigger_params = {"expression": "0 0 * * * *"}
         elif trigger_ref == "core.datetimetimer":
-            trigger_parameters = {"fire_at": "2099-12-31T23:59:59Z"}
+            trigger_params = {"fire_at": "2099-12-31T23:59:59Z"}
 
     return client.create_rule(
         name=rule_name,
         pack_ref=pack_ref,
-        trigger_id=trigger_id,
+        trigger_ref=trigger_ref,
         action_ref=action_ref,
         enabled=enabled,
-        criteria=criteria,
-        action_parameters=action_parameters or {},
-        trigger_parameters=trigger_parameters,
+        conditions=conditions,
+        action_params=action_params or {},
+        trigger_params=trigger_params,
     )
 
 
@@ -661,11 +723,11 @@ def create_timer_automation(
     # Create rule linking them
     rule = create_rule(
         client=client,
-        trigger_id=trigger["id"],
+        trigger_ref=trigger["ref"],
         action_ref=action["ref"],
         pack_ref=pack_ref,
-        action_parameters=action_parameters,
-        trigger_parameters={"unit": "seconds", "interval": interval_seconds},
+        action_params=action_parameters,
+        trigger_params={"unit": "seconds", "interval": interval_seconds},
     )
 
     return {"trigger": trigger, "action": action, "rule": rule}
@@ -675,7 +737,7 @@ def create_webhook_automation(
     client: AttuneClient,
     pack_ref: str = "test.test_pack",
     action_parameters: Optional[Dict[str, Any]] = None,
-    criteria: Optional[str] = None,
+    conditions: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Create complete webhook automation (trigger + action + rule)
@@ -684,7 +746,7 @@ def create_webhook_automation(
         client: AttuneClient instance
         pack_ref: Pack reference
         action_parameters: Parameters to pass to action
-        criteria: Optional rule criteria
+        conditions: Optional rule conditions
 
     Returns:
         Dictionary with trigger, action, and rule data
@@ -698,11 +760,11 @@ def create_webhook_automation(
     # Create rule linking them
     rule = create_rule(
         client=client,
-        trigger_id=trigger["id"],
+        trigger_ref=trigger["ref"],
         action_ref=action["ref"],
         pack_ref=pack_ref,
-        action_parameters=action_parameters,
-        criteria=criteria,
+        action_params=action_parameters,
+        conditions=conditions,
     )
 
     return {"trigger": trigger, "action": action, "rule": rule}

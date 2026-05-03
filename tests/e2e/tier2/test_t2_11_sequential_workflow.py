@@ -15,7 +15,7 @@ Test validates:
 import time
 
 import pytest
-from helpers.client import AttuneClient
+from helpers import AttuneClient
 from helpers.fixtures import unique_ref
 from helpers.polling import wait_for_execution_status
 
@@ -51,7 +51,7 @@ import json
 print('Task A starting')
 time.sleep(1)
 result = {'step': 1, 'task': 'A', 'timestamp': time.time()}
-print(f'Task A completed: {result}')
+print(f'Task A succeeded: {result}')
 print(json.dumps(result))
 sys.exit(0)
 """
@@ -61,8 +61,8 @@ sys.exit(0)
         data={
             "name": f"task_a_{unique_ref()}",
             "description": "Task A - First in sequence",
-            "runner_type": "python3",
-            "entry_point": "task_a.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": 'echo "Task A starting"; sleep 1; echo \'{"step":1,"task":"A"}\'',
             "enabled": True,
             "parameters": {},
         },
@@ -79,7 +79,7 @@ import json
 print('Task B starting (depends on A)')
 time.sleep(1)
 result = {'step': 2, 'task': 'B', 'timestamp': time.time()}
-print(f'Task B completed: {result}')
+print(f'Task B succeeded: {result}')
 print(json.dumps(result))
 sys.exit(0)
 """
@@ -89,8 +89,8 @@ sys.exit(0)
         data={
             "name": f"task_b_{unique_ref()}",
             "description": "Task B - Second in sequence",
-            "runner_type": "python3",
-            "entry_point": "task_b.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": 'echo "Task B starting"; sleep 1; echo \'{"step":2,"task":"B"}\'',
             "enabled": True,
             "parameters": {},
         },
@@ -107,7 +107,7 @@ import json
 print('Task C starting (depends on B)')
 time.sleep(1)
 result = {'step': 3, 'task': 'C', 'timestamp': time.time()}
-print(f'Task C completed: {result}')
+print(f'Task C succeeded: {result}')
 print(json.dumps(result))
 sys.exit(0)
 """
@@ -117,8 +117,8 @@ sys.exit(0)
         data={
             "name": f"task_c_{unique_ref()}",
             "description": "Task C - Third in sequence",
-            "runner_type": "python3",
-            "entry_point": "task_c.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": 'echo "Task C starting"; sleep 1; echo \'{"step":3,"task":"C"}\'',
             "enabled": True,
             "parameters": {},
         },
@@ -131,37 +131,27 @@ sys.exit(0)
     # ========================================================================
     print("\n[STEP 2] Creating sequential workflow...")
 
-    workflow = client.create_action(
+    workflow_name = f"sequential_workflow_{unique_ref()}"
+    workflow = client.create_workflow(
         pack_ref=pack_ref,
-        data={
-            "name": f"sequential_workflow_{unique_ref()}",
-            "description": "Sequential workflow: A → B → C",
-            "runner_type": "workflow",
-            "entry_point": "",
-            "enabled": True,
-            "parameters": {},
-            "workflow_definition": {
-                "tasks": [
-                    {
-                        "name": "task_a",
-                        "action": task_a_ref,
-                        "parameters": {},
-                    },
-                    {
-                        "name": "task_b",
-                        "action": task_b_ref,
-                        "parameters": {},
-                        "depends_on": ["task_a"],  # B depends on A
-                    },
-                    {
-                        "name": "task_c",
-                        "action": task_c_ref,
-                        "parameters": {},
-                        "depends_on": ["task_b"],  # C depends on B
-                    },
-                ]
+        name=workflow_name,
+        label="Sequential Workflow",
+        description="Sequential workflow: A -> B -> C",
+        tasks=[
+            {
+                "name": "task_a",
+                "action": task_a_ref,
+                "input": {},
+                "next": [{"when": "{{ succeeded() }}", "do": ["task_b"]}],
             },
-        },
+            {
+                "name": "task_b",
+                "action": task_b_ref,
+                "input": {},
+                "next": [{"when": "{{ succeeded() }}", "do": ["task_c"]}],
+            },
+            {"name": "task_c", "action": task_c_ref, "input": {}},
+        ],
     )
     workflow_ref = workflow["ref"]
     print(f"✓ Created workflow: {workflow_ref}")
@@ -186,13 +176,13 @@ sys.exit(0)
     result = wait_for_execution_status(
         client=client,
         execution_id=workflow_execution_id,
-        expected_status="succeeded",
+        expected_status="completed",
         timeout=20,
     )
     end_time = time.time()
     total_time = end_time - start_time
 
-    print(f"✓ Workflow completed: status={result['status']}")
+    print(f"✓ Workflow succeeded: status={result['status']}")
     print(f"  Total execution time: {total_time:.1f}s")
 
     # ========================================================================
@@ -205,7 +195,7 @@ sys.exit(0)
     task_executions = [
         ex
         for ex in all_executions
-        if ex.get("parent_execution_id") == workflow_execution_id
+        if ex.get("parent") == workflow_execution_id
     ]
 
     print(f"  Found {len(task_executions)} task executions")
@@ -234,13 +224,13 @@ sys.exit(0)
     print("\n[STEP 6] Verifying execution timing and order...")
 
     # Check all tasks succeeded
-    assert task_a_exec["status"] == "succeeded", (
+    assert task_a_exec["status"] == "completed", (
         f"❌ Task A failed: {task_a_exec['status']}"
     )
-    assert task_b_exec["status"] == "succeeded", (
+    assert task_b_exec["status"] == "completed", (
         f"❌ Task B failed: {task_b_exec['status']}"
     )
-    assert task_c_exec["status"] == "succeeded", (
+    assert task_c_exec["status"] == "completed", (
         f"❌ Task C failed: {task_c_exec['status']}"
     )
     print("  ✓ All tasks succeeded")
@@ -267,9 +257,9 @@ sys.exit(0)
 
         # Task B should start after Task A completes
         if task_b_start >= task_a_end:
-            print(f"  ✓ Task B started after Task A completed")
+            print(f"  ✓ Task B started after Task A succeeded")
         else:
-            print(f"  ⚠ Task B may have started before Task A completed")
+            print(f"  ⚠ Task B may have started before Task A succeeded")
 
         # Task C should start after Task B starts
         if task_c_start >= task_b_start:
@@ -291,12 +281,12 @@ sys.exit(0)
     print(f"  ✓ All 3 tasks executed")
 
     # Criterion 2: All tasks succeeded
-    failed_tasks = [ex for ex in task_executions if ex["status"] != "succeeded"]
+    failed_tasks = [ex for ex in task_executions if ex["status"] not in ("completed", "completed")]
     assert len(failed_tasks) == 0, f"❌ {len(failed_tasks)} tasks failed"
     print(f"  ✓ All tasks succeeded")
 
     # Criterion 3: Workflow succeeded
-    assert result["status"] == "succeeded", (
+    assert result["status"] in ("completed", "completed"), (
         f"❌ Workflow status not succeeded: {result['status']}"
     )
     print(f"  ✓ Workflow succeeded")
@@ -332,7 +322,7 @@ def test_sequential_workflow_with_multiple_dependencies(
          A
         / \
        B   C
-        \ /
+        \\ /
          D
 
     D depends on both B and C completing.
@@ -355,8 +345,8 @@ def test_sequential_workflow_with_multiple_dependencies(
             data={
                 "name": f"task_{task_name.lower()}_{unique_ref()}",
                 "description": f"Task {task_name}",
-                "runner_type": "python3",
-                "entry_point": f"task_{task_name.lower()}.py",
+                "runtime_ref": "core.shell",
+                "entrypoint": f'echo "Task {task_name} starting"; echo \'{{"task":"{task_name}"}}\'',
                 "enabled": True,
                 "parameters": {},
             },
@@ -369,43 +359,38 @@ def test_sequential_workflow_with_multiple_dependencies(
     # ========================================================================
     print("\n[STEP 2] Creating workflow with diamond dependency...")
 
-    workflow = client.create_action(
+    workflow_name = f"diamond_workflow_{unique_ref()}"
+    workflow = client.create_workflow(
         pack_ref=pack_ref,
-        data={
-            "name": f"diamond_workflow_{unique_ref()}",
-            "description": "Workflow with diamond dependency pattern",
-            "runner_type": "workflow",
-            "entry_point": "",
-            "enabled": True,
-            "parameters": {},
-            "workflow_definition": {
-                "tasks": [
-                    {
-                        "name": "task_a",
-                        "action": tasks["A"]["ref"],
-                        "parameters": {},
-                    },
-                    {
-                        "name": "task_b",
-                        "action": tasks["B"]["ref"],
-                        "parameters": {},
-                        "depends_on": ["task_a"],
-                    },
-                    {
-                        "name": "task_c",
-                        "action": tasks["C"]["ref"],
-                        "parameters": {},
-                        "depends_on": ["task_a"],
-                    },
-                    {
-                        "name": "task_d",
-                        "action": tasks["D"]["ref"],
-                        "parameters": {},
-                        "depends_on": ["task_b", "task_c"],  # Multiple dependencies
-                    },
-                ]
+        name=workflow_name,
+        label="Diamond Workflow",
+        description="Workflow with diamond dependency pattern",
+        tasks=[
+            {
+                "name": "task_a",
+                "action": tasks["A"]["ref"],
+                "input": {},
+                "next": [{"when": "{{ succeeded() }}", "do": ["task_b", "task_c"]}],
             },
-        },
+            {
+                "name": "task_b",
+                "action": tasks["B"]["ref"],
+                "input": {},
+                "next": [{"when": "{{ succeeded() }}", "do": ["task_d"]}],
+            },
+            {
+                "name": "task_c",
+                "action": tasks["C"]["ref"],
+                "input": {},
+                "next": [{"when": "{{ succeeded() }}", "do": ["task_d"]}],
+            },
+            {
+                "name": "task_d",
+                "action": tasks["D"]["ref"],
+                "input": {},
+                "join": 2,
+            },
+        ],
     )
     workflow_ref = workflow["ref"]
     print(f"✓ Created workflow: {workflow_ref}")
@@ -433,10 +418,10 @@ def test_sequential_workflow_with_multiple_dependencies(
     result = wait_for_execution_status(
         client=client,
         execution_id=workflow_execution_id,
-        expected_status="succeeded",
+        expected_status="completed",
         timeout=30,
     )
-    print(f"✓ Workflow completed: status={result['status']}")
+    print(f"✓ Workflow succeeded: status={result['status']}")
 
     # ========================================================================
     # STEP 5: Verify all tasks executed
@@ -447,7 +432,7 @@ def test_sequential_workflow_with_multiple_dependencies(
     task_executions = [
         ex
         for ex in all_executions
-        if ex.get("parent_execution_id") == workflow_execution_id
+        if ex.get("parent") == workflow_execution_id
     ]
 
     assert len(task_executions) >= 4, (
@@ -457,7 +442,7 @@ def test_sequential_workflow_with_multiple_dependencies(
 
     # Verify all succeeded
     for ex in task_executions:
-        assert ex["status"] == "succeeded", f"❌ Task {ex['id']} failed: {ex['status']}"
+        assert ex["status"] == "completed", f"❌ Task {ex['id']} failed: {ex['status']}"
     print(f"✓ All tasks succeeded")
 
     # ========================================================================
@@ -501,8 +486,8 @@ def test_sequential_workflow_failure_propagation(client: AttuneClient, test_pack
         data={
             "name": f"success_task_{unique_ref()}",
             "description": "Task that succeeds",
-            "runner_type": "python3",
-            "entry_point": "success.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": 'echo "Task A succeeded"; echo \'{"task":"A","success":true}\'',
             "enabled": True,
             "parameters": {},
         },
@@ -521,8 +506,8 @@ sys.exit(1)
         data={
             "name": f"fail_task_{unique_ref()}",
             "description": "Task that fails",
-            "runner_type": "python3",
-            "entry_point": "fail.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": 'echo "Task B failing intentionally" >&2; exit 1',
             "enabled": True,
             "parameters": {},
         },
@@ -535,8 +520,8 @@ sys.exit(1)
         data={
             "name": f"dependent_task_{unique_ref()}",
             "description": "Task that depends on B",
-            "runner_type": "python3",
-            "entry_point": "task.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": 'echo "Task C should not run"; echo \'{"task":"C","success":true}\'',
             "enabled": True,
             "parameters": {},
         },
@@ -548,33 +533,27 @@ sys.exit(1)
     # ========================================================================
     print("\n[STEP 2] Creating workflow...")
 
-    workflow = client.create_action(
+    workflow_name = f"fail_workflow_{unique_ref()}"
+    workflow = client.create_workflow(
         pack_ref=pack_ref,
-        data={
-            "name": f"fail_workflow_{unique_ref()}",
-            "description": "Workflow with failing task",
-            "runner_type": "workflow",
-            "entry_point": "",
-            "enabled": True,
-            "parameters": {},
-            "workflow_definition": {
-                "tasks": [
-                    {"name": "task_a", "action": task_a["ref"], "parameters": {}},
-                    {
-                        "name": "task_b",
-                        "action": task_b["ref"],
-                        "parameters": {},
-                        "depends_on": ["task_a"],
-                    },
-                    {
-                        "name": "task_c",
-                        "action": task_c["ref"],
-                        "parameters": {},
-                        "depends_on": ["task_b"],
-                    },
-                ]
+        name=workflow_name,
+        label="Failing Sequential Workflow",
+        description="Workflow with failing task",
+        tasks=[
+            {
+                "name": "task_a",
+                "action": task_a["ref"],
+                "input": {},
+                "next": [{"when": "{{ succeeded() }}", "do": ["task_b"]}],
             },
-        },
+            {
+                "name": "task_b",
+                "action": task_b["ref"],
+                "input": {},
+                "next": [{"when": "{{ succeeded() }}", "do": ["task_c"]}],
+            },
+            {"name": "task_c", "action": task_c["ref"], "input": {}},
+        ],
     )
     workflow_ref = workflow["ref"]
     print(f"✓ Created workflow: {workflow_ref}")
@@ -610,7 +589,7 @@ sys.exit(1)
     task_executions = [
         ex
         for ex in all_executions
-        if ex.get("parent_execution_id") == workflow_execution_id
+        if ex.get("parent") == workflow_execution_id
     ]
 
     task_a_execs = [ex for ex in task_executions if ex["action_ref"] == task_a["ref"]]
@@ -619,7 +598,7 @@ sys.exit(1)
 
     # Task A should have succeeded
     assert len(task_a_execs) >= 1, "❌ Task A not executed"
-    assert task_a_execs[0]["status"] == "succeeded", "❌ Task A should succeed"
+    assert task_a_execs[0]["status"] == "completed", "❌ Task A should succeed"
     print(f"  ✓ Task A executed and succeeded")
 
     # Task B should have failed

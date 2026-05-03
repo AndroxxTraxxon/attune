@@ -893,18 +893,16 @@ class PackLoader:
                 """
                 INSERT INTO sensor (
                     ref, pack, pack_ref, label, description,
-                    entrypoint, runtime, runtime_ref, trigger, trigger_ref,
+                    entrypoint, runtime, runtime_ref,
                     runtime_version_constraint, enabled, config
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (ref) DO UPDATE SET
                     label = EXCLUDED.label,
                     description = EXCLUDED.description,
                     entrypoint = EXCLUDED.entrypoint,
                     runtime = EXCLUDED.runtime,
                     runtime_ref = EXCLUDED.runtime_ref,
-                    trigger = EXCLUDED.trigger,
-                    trigger_ref = EXCLUDED.trigger_ref,
                     runtime_version_constraint = EXCLUDED.runtime_version_constraint,
                     enabled = EXCLUDED.enabled,
                     config = EXCLUDED.config,
@@ -920,8 +918,6 @@ class PackLoader:
                     entry_point,
                     sensor_runtime_id,
                     runtime_ref,
-                    trigger_id,
-                    trigger_ref,
                     runtime_version_constraint,
                     enabled,
                     config,
@@ -930,6 +926,23 @@ class PackLoader:
 
             sensor_id = cursor.fetchone()[0]
             sensor_ids[ref] = sensor_id
+
+            # Link triggers to this sensor (trigger→sensor relationship)
+            for ttype in trigger_types:
+                tref = ttype if "." in ttype else f"{self.pack_ref}.{ttype}"
+                tid = trigger_ids.get(tref)
+                if tid:
+                    cursor.execute(
+                        """
+                        UPDATE trigger SET sensor = %s, sensor_ref = %s
+                        WHERE id = %s
+                        """,
+                        (sensor_id, ref, tid),
+                    )
+                    print(f"    → Linked trigger '{tref}' to sensor '{ref}'")
+                else:
+                    print(f"    ⚠ Trigger '{tref}' not found for sensor '{ref}'")
+
             print(f"  ✓ Sensor '{ref}' (ID: {sensor_id})")
 
         cursor.close()

@@ -784,6 +784,8 @@ impl<'a> PackComponentLoader<'a> {
                         Some(value) => Patch::Set(value),
                         None => Patch::Clear,
                     }),
+                    sensor: None,
+                    sensor_ref: None,
                 };
 
                 match TriggerRepository::update(self.pool, existing.id, update_input).await {
@@ -811,6 +813,8 @@ impl<'a> PackComponentLoader<'a> {
                 enabled,
                 param_schema,
                 out_schema,
+                sensor: None,
+                sensor_ref: None,
                 is_adhoc: false,
             };
 
@@ -1510,8 +1514,8 @@ impl<'a> PackComponentLoader<'a> {
                 .unwrap_or("")
                 .to_string();
 
-            // Resolve trigger reference
-            let (trigger_id, trigger_ref) = self.resolve_sensor_trigger(&data, trigger_ids).await;
+            // Resolve trigger reference(s) for post-load linkage
+            let sensor_triggers = self.resolve_sensor_triggers(&data, trigger_ids).await;
 
             let param_schema = data
                 .get("parameters")
@@ -1544,8 +1548,6 @@ impl<'a> PackComponentLoader<'a> {
                         Some(value) => Patch::Set(value),
                         None => Patch::Clear,
                     }),
-                    trigger: Some(trigger_id.unwrap_or(existing.trigger)),
-                    trigger_ref: Some(trigger_ref.unwrap_or(existing.trigger_ref.clone())),
                     enabled: Some(enabled),
                     param_schema: Some(match param_schema {
                         Some(value) => Patch::Set(value),
@@ -1560,6 +1562,8 @@ impl<'a> PackComponentLoader<'a> {
                             "Updated sensor '{}' (ID: {}, runtime: {} → {})",
                             sensor_ref, existing.id, existing.runtime_ref, sensor_runtime_ref
                         );
+                        self.link_triggers_to_sensor(existing.id, &sensor_ref, &sensor_triggers)
+                            .await;
                         result.sensors_updated += 1;
                     }
                     Err(e) => {
@@ -1582,8 +1586,6 @@ impl<'a> PackComponentLoader<'a> {
                 runtime: sensor_runtime_id,
                 runtime_ref: sensor_runtime_ref.clone(),
                 runtime_version_constraint,
-                trigger: trigger_id.unwrap_or(0),
-                trigger_ref: trigger_ref.unwrap_or_default(),
                 enabled,
                 param_schema,
                 config: Some(config),
@@ -1592,6 +1594,8 @@ impl<'a> PackComponentLoader<'a> {
             match SensorRepository::create(self.pool, input).await {
                 Ok(sensor) => {
                     info!("Created sensor '{}' (ID: {})", sensor_ref, sensor.id);
+                    self.link_triggers_to_sensor(sensor.id, &sensor_ref, &sensor_triggers)
+                        .await;
                     loaded_refs.push(sensor_ref);
                     result.sensors_loaded += 1;
                 }
@@ -1658,44 +1662,89 @@ impl<'a> PackComponentLoader<'a> {
         Ok((0, "unknown".to_string()))
     }
 
-    /// Resolve the trigger reference and ID for a sensor.
+    /// Resolve all trigger references for a sensor from its YAML `trigger_types`/`trigger_type` field.
     ///
-    /// Handles both `trigger_type` (singular) and `trigger_types` (array) fields.
-    async fn resolve_sensor_trigger(
+    /// Returns a list of (trigger_id, trigger_ref) pairs for all triggers this sensor emits.
+    async fn resolve_sensor_triggers(
         &self,
         data: &serde_yaml_ng::Value,
         trigger_ids: &HashMap<String, Id>,
-    ) -> (Option<Id>, Option<String>) {
-        // Try trigger_types (array) first, then trigger_type (singular)
-        let trigger_type_str = data
-            .get("trigger_types")
-            .and_then(|v| v.as_sequence())
-            .and_then(|seq| seq.first())
-            .and_then(|v| v.as_str())
-            .or_else(|| data.get("trigger_type").and_then(|v| v.as_str()));
+    ) -> Vec<(Option<Id>, String)> {
+        // Collect all trigger type strings
+        let trigger_type_strs: Vec<String> =
+            if let Some(seq) = data.get("trigger_types").and_then(|v| v.as_sequence()) {
+                seq.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .collect()
+            } else if let Some(t) = data.get("trigger_type").and_then(|v| v.as_str()) {
+                vec![t.to_string()]
+            } else {
+                return vec![];
+            };
 
-        let trigger_ref = match trigger_type_str {
-            Some(t) => {
-                if t.contains('.') {
-                    t.to_string()
-                } else {
-                    format!("{}.{}", self.pack_ref, t)
+        let mut results = Vec::new();
+        for t in trigger_type_strs {
+            let trigger_ref = if t.contains('.') {
+                t
+            } else {
+                format!("{}.{}", self.pack_ref, t)
+            };
+
+            // Look up trigger ID from our loaded triggers map first
+            if let Some(&id) = trigger_ids.get(&trigger_ref) {
+                results.push((Some(id), trigger_ref));
+                continue;
+            }
+
+            // Fall back to database lookup
+            match TriggerRepository::find_by_ref(self.pool, &trigger_ref).await {
+                Ok(Some(trigger)) => results.push((Some(trigger.id), trigger_ref)),
+                _ => {
+                    warn!("Could not resolve trigger ref '{}' for sensor", trigger_ref);
+                    results.push((None, trigger_ref));
                 }
             }
-            None => return (None, None),
-        };
-
-        // Look up trigger ID from our loaded triggers map first
-        if let Some(&id) = trigger_ids.get(&trigger_ref) {
-            return (Some(id), Some(trigger_ref));
         }
 
-        // Fall back to database lookup
-        match TriggerRepository::find_by_ref(self.pool, &trigger_ref).await {
-            Ok(Some(trigger)) => (Some(trigger.id), Some(trigger_ref)),
-            _ => {
-                warn!("Could not resolve trigger ref '{}' for sensor", trigger_ref);
-                (None, Some(trigger_ref))
+        results
+    }
+
+    /// After a sensor is created/updated, update its triggers to point back to it.
+    async fn link_triggers_to_sensor(
+        &self,
+        sensor_id: Id,
+        sensor_ref: &str,
+        trigger_refs: &[(Option<Id>, String)],
+    ) {
+        for (trigger_id_opt, trigger_ref) in trigger_refs {
+            let trigger_id = match trigger_id_opt {
+                Some(id) => *id,
+                None => {
+                    warn!(
+                        "Skipping trigger linkage for unresolved trigger '{}'",
+                        trigger_ref
+                    );
+                    continue;
+                }
+            };
+
+            let update_input = UpdateTriggerInput {
+                sensor: Some(Patch::Set(sensor_id)),
+                sensor_ref: Some(Patch::Set(sensor_ref.to_string())),
+                ..Default::default()
+            };
+
+            match TriggerRepository::update(self.pool, trigger_id, update_input).await {
+                Ok(_) => {
+                    info!("Linked trigger '{}' → sensor '{}'", trigger_ref, sensor_ref);
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to link trigger '{}' → sensor '{}': {}",
+                        trigger_ref, sensor_ref, e
+                    );
+                }
             }
         }
     }

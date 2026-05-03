@@ -135,6 +135,16 @@ pub struct TriggerResponse {
     #[schema(example = false)]
     pub is_adhoc: bool,
 
+    /// Sensor ID (optional — webhook triggers have no sensor)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 1)]
+    pub sensor: Option<i64>,
+
+    /// Sensor reference (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "core.timer_sensor")]
+    pub sensor_ref: Option<String>,
+
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
@@ -309,14 +319,6 @@ pub struct SensorResponse {
     #[schema(example = "python3")]
     pub runtime_ref: String,
 
-    /// Trigger ID
-    #[schema(example = 1)]
-    pub trigger: i64,
-
-    /// Trigger reference
-    #[schema(example = "monitoring.cpu_threshold")]
-    pub trigger_ref: String,
-
     /// Whether the sensor is enabled
     #[schema(example = true)]
     pub enabled: bool,
@@ -357,10 +359,6 @@ pub struct SensorSummary {
     #[schema(example = "Monitors CPU usage and generates events")]
     pub description: Option<String>,
 
-    /// Trigger reference
-    #[schema(example = "monitoring.cpu_threshold")]
-    pub trigger_ref: String,
-
     /// Whether the sensor is enabled
     #[schema(example = true)]
     pub enabled: bool,
@@ -390,6 +388,8 @@ impl From<attune_common::models::trigger::Trigger> for TriggerResponse {
             webhook_enabled: trigger.webhook_enabled,
             webhook_key: trigger.webhook_key,
             is_adhoc: trigger.is_adhoc,
+            sensor: trigger.sensor,
+            sensor_ref: trigger.sensor_ref,
             created: trigger.created,
             updated: trigger.updated,
         }
@@ -426,8 +426,6 @@ impl From<attune_common::models::trigger::Sensor> for SensorResponse {
             entrypoint: sensor.entrypoint,
             runtime: sensor.runtime,
             runtime_ref: sensor.runtime_ref,
-            trigger: sensor.trigger,
-            trigger_ref: sensor.trigger_ref,
             enabled: sensor.enabled,
             param_schema: sensor.param_schema,
             created: sensor.created,
@@ -445,7 +443,6 @@ impl From<attune_common::models::trigger::Sensor> for SensorSummary {
             pack_ref: sensor.pack_ref,
             label: sensor.label,
             description: sensor.description,
-            trigger_ref: sensor.trigger_ref,
             enabled: sensor.enabled,
             created: sensor.created,
             updated: sensor.updated,

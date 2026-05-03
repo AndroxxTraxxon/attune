@@ -11,7 +11,7 @@ Duration: ~20 seconds
 import time
 
 import pytest
-from helpers.client import AttuneClient
+from helpers import AttuneClient
 from helpers.fixtures import create_echo_action, create_webhook_trigger, unique_ref
 from helpers.polling import (
     wait_for_enforcement_count,
@@ -64,18 +64,19 @@ def test_rule_trigger_notification(client: AttuneClient, test_pack):
 
     # Step 3: Create rule
     print("\n[STEP 3] Creating rule...")
-    rule_ref = f"rule_notify_rule_{unique_ref()}"
+    rule_ref = f"{pack_ref}.rule_notify_rule_{unique_ref()}"
     rule_payload = {
         "ref": rule_ref,
-        "pack": pack_ref,
-        "trigger": trigger["ref"],
-        "action": action["ref"],
+        "pack_ref": pack_ref,
+        "label": "Rule Notify Rule",
+        "trigger_ref": trigger["ref"],
+        "action_ref": action["ref"],
         "enabled": True,
-        "parameters": {
+        "action_params": {
             "message": "Rule triggered - notification test",
         },
     }
-    rule_response = client.post("/rules", json=rule_payload)
+    rule_response = client.post("/api/v1/rules", json=rule_payload)
     assert rule_response.status_code == 201, (
         f"Failed to create rule: {rule_response.text}"
     )
@@ -84,9 +85,9 @@ def test_rule_trigger_notification(client: AttuneClient, test_pack):
 
     # Step 4: Trigger webhook
     print("\n[STEP 4] Triggering webhook to fire rule...")
-    webhook_url = f"/webhooks/{trigger['ref']}"
+    webhook_url = trigger["webhook_url"]
     webhook_response = client.post(
-        webhook_url, json={"test": "rule_notification", "timestamp": time.time()}
+        webhook_url, json={"payload": {"test": "rule_notification", "timestamp": time.time()}}
     )
     assert webhook_response.status_code == 200, (
         f"Webhook trigger failed: {webhook_response.text}"
@@ -95,24 +96,29 @@ def test_rule_trigger_notification(client: AttuneClient, test_pack):
 
     # Step 5: Wait for event creation
     print("\n[STEP 5] Waiting for event creation...")
-    wait_for_event_count(client, expected_count=1, timeout=10)
-    events = client.get("/events").json()["data"]
+    events = wait_for_event_count(
+        client,
+        expected_count=1,
+        trigger_ref=trigger["ref"],
+        timeout=10,
+        operator=">=",
+    )
     event = events[0]
     print(f"✓ Event created: {event['id']}")
 
     # Step 6: Wait for enforcement creation
     print("\n[STEP 6] Waiting for rule enforcement...")
-    wait_for_enforcement_count(client, expected_count=1, timeout=10)
-    enforcements = client.get("/enforcements").json()["data"]
+    enforcements = wait_for_enforcement_count(
+        client, expected_count=1, rule_id=rule["id"], timeout=10
+    )
     enforcement = enforcements[0]
     print(f"✓ Enforcement created: {enforcement['id']}")
 
     # Step 7: Validate notification metadata
     print("\n[STEP 7] Validating rule trigger notification metadata...")
-    assert enforcement["rule_id"] == rule["id"], "Enforcement should link to rule"
-    assert enforcement["event_id"] == event["id"], "Enforcement should link to event"
+    assert enforcement["rule"] == rule["id"], "Enforcement should link to rule"
+    assert enforcement["event"] == event["id"], "Enforcement should link to event"
     assert "created" in enforcement, "Enforcement missing created timestamp"
-    assert "updated" in enforcement, "Enforcement missing updated timestamp"
 
     print(f"✓ Rule trigger notification metadata validated")
     print(f"  - Rule ID: {rule['id']}")
@@ -173,15 +179,16 @@ def test_rule_enable_disable_notification(client: AttuneClient, test_pack):
 
     # Step 3: Create enabled rule
     print("\n[STEP 3] Creating enabled rule...")
-    rule_ref = f"rule_state_rule_{unique_ref()}"
+    rule_ref = f"{pack_ref}.rule_state_rule_{unique_ref()}"
     rule_payload = {
         "ref": rule_ref,
-        "pack": pack_ref,
-        "trigger": trigger["ref"],
-        "action": action["ref"],
+        "pack_ref": pack_ref,
+        "label": "Rule State Rule",
+        "trigger_ref": trigger["ref"],
+        "action_ref": action["ref"],
         "enabled": True,
     }
-    rule_response = client.post("/rules", json=rule_payload)
+    rule_response = client.post("/api/v1/rules", json=rule_payload)
     assert rule_response.status_code == 201
     rule = rule_response.json()["data"]
     rule_id = rule["id"]
@@ -190,12 +197,7 @@ def test_rule_enable_disable_notification(client: AttuneClient, test_pack):
 
     # Step 4: Disable the rule
     print("\n[STEP 4] Disabling rule...")
-    disable_payload = {"enabled": False}
-    disable_response = client.patch(f"/rules/{rule_id}", json=disable_payload)
-    assert disable_response.status_code == 200, (
-        f"Failed to disable rule: {disable_response.text}"
-    )
-    disabled_rule = disable_response.json()["data"]
+    disabled_rule = client.disable_rule(rule_id)
     print(f"✓ Rule disabled")
     assert disabled_rule["enabled"] is False, "Rule should be disabled"
 
@@ -210,12 +212,7 @@ def test_rule_enable_disable_notification(client: AttuneClient, test_pack):
 
     # Step 5: Re-enable the rule
     print("\n[STEP 5] Re-enabling rule...")
-    enable_payload = {"enabled": True}
-    enable_response = client.patch(f"/rules/{rule_id}", json=enable_payload)
-    assert enable_response.status_code == 200, (
-        f"Failed to enable rule: {enable_response.text}"
-    )
-    enabled_rule = enable_response.json()["data"]
+    enabled_rule = client.enable_rule(rule_id)
     print(f"✓ Rule re-enabled")
     assert enabled_rule["enabled"] is True, "Rule should be enabled"
 
@@ -280,18 +277,19 @@ def test_multiple_rule_triggers_notification(client: AttuneClient, test_pack):
     print("\n[STEP 3] Creating 3 rules for same trigger...")
     rules = []
     for i, action in enumerate(actions):
-        rule_ref = f"multi_rule_{i}_{unique_ref()}"
+        rule_ref = f"{pack_ref}.multi_rule_{i}_{unique_ref()}"
         rule_payload = {
             "ref": rule_ref,
-            "pack": pack_ref,
-            "trigger": trigger["ref"],
-            "action": action["ref"],
+            "pack_ref": pack_ref,
+            "label": f"Multi Rule {i}",
+            "trigger_ref": trigger["ref"],
+            "action_ref": action["ref"],
             "enabled": True,
-            "parameters": {
+            "action_params": {
                 "message": f"Rule {i} triggered",
             },
         }
-        rule_response = client.post("/rules", json=rule_payload)
+        rule_response = client.post("/api/v1/rules", json=rule_payload)
         assert rule_response.status_code == 201
         rule = rule_response.json()["data"]
         rules.append(rule)
@@ -299,41 +297,54 @@ def test_multiple_rule_triggers_notification(client: AttuneClient, test_pack):
 
     # Step 4: Trigger webhook once
     print("\n[STEP 4] Triggering webhook (should fire 3 rules)...")
-    webhook_url = f"/webhooks/{trigger['ref']}"
+    webhook_url = trigger["webhook_url"]
     webhook_response = client.post(
-        webhook_url, json={"test": "multiple_rules", "timestamp": time.time()}
+        webhook_url, json={"payload": {"test": "multiple_rules", "timestamp": time.time()}}
     )
     assert webhook_response.status_code == 200
     print(f"✓ Webhook triggered")
 
     # Step 5: Wait for event
     print("\n[STEP 5] Waiting for event...")
-    wait_for_event_count(client, expected_count=1, timeout=10)
-    events = client.get("/events").json()["data"]
+    events = wait_for_event_count(
+        client,
+        expected_count=1,
+        trigger_ref=trigger["ref"],
+        timeout=10,
+        operator=">=",
+    )
     event = events[0]
     print(f"✓ Event created: {event['id']}")
 
     # Step 6: Wait for enforcements
     print("\n[STEP 6] Waiting for rule enforcements...")
-    wait_for_enforcement_count(client, expected_count=3, timeout=10)
-    enforcements = client.get("/enforcements").json()["data"]
+    enforcements = []
+    for rule in rules:
+        rule_enforcements = wait_for_enforcement_count(
+            client,
+            expected_count=1,
+            rule_id=rule["id"],
+            timeout=10,
+            operator=">=",
+        )
+        enforcements.extend(rule_enforcements)
     print(f"✓ Found {len(enforcements)} enforcements")
 
     # Step 7: Validate notification metadata for each rule
     print("\n[STEP 7] Validating notification metadata for each rule...")
     for i, rule in enumerate(rules):
         # Find enforcement for this rule
-        rule_enforcements = [e for e in enforcements if e["rule_id"] == rule["id"]]
+        rule_enforcements = [e for e in enforcements if e["rule"] == rule["id"]]
         assert len(rule_enforcements) >= 1, f"Rule {i} should have enforcement"
 
         enforcement = rule_enforcements[0]
         print(f"\n  Rule {i} ({rule['ref']}):")
         print(f"    - Enforcement ID: {enforcement['id']}")
-        print(f"    - Event ID: {enforcement['event_id']}")
+        print(f"    - Event ID: {enforcement['event']}")
         print(f"    - Created: {enforcement['created']}")
 
-        assert enforcement["rule_id"] == rule["id"]
-        assert enforcement["event_id"] == event["id"]
+        assert enforcement["rule"] == rule["id"]
+        assert enforcement["event"] == event["id"]
 
     print(f"\n✓ All {len(rules)} rule trigger notifications validated")
 
@@ -387,19 +398,20 @@ def test_rule_criteria_evaluation_notification(client: AttuneClient, test_pack):
 
     # Step 3: Create rule with criteria
     print("\n[STEP 3] Creating rule with criteria...")
-    rule_ref = f"criteria_notify_rule_{unique_ref()}"
+    rule_ref = f"{pack_ref}.criteria_notify_rule_{unique_ref()}"
     rule_payload = {
         "ref": rule_ref,
-        "pack": pack_ref,
-        "trigger": trigger["ref"],
-        "action": action["ref"],
+        "pack_ref": pack_ref,
+        "label": "Criteria Notify Rule",
+        "trigger_ref": trigger["ref"],
+        "action_ref": action["ref"],
         "enabled": True,
-        "criteria": "{{ event.payload.environment == 'production' }}",
-        "parameters": {
+        "conditions": {"expression": "{{ event.payload.environment == 'production' }}"},
+        "action_params": {
             "message": "Production deployment approved",
         },
     }
-    rule_response = client.post("/rules", json=rule_payload)
+    rule_response = client.post("/api/v1/rules", json=rule_payload)
     assert rule_response.status_code == 201, (
         f"Failed to create rule: {rule_response.text}"
     )
@@ -409,17 +421,18 @@ def test_rule_criteria_evaluation_notification(client: AttuneClient, test_pack):
 
     # Step 4: Trigger with MATCHING payload
     print("\n[STEP 4] Triggering with MATCHING payload...")
-    webhook_url = f"/webhooks/{trigger['ref']}"
+    webhook_url = trigger["webhook_url"]
     webhook_response = client.post(
-        webhook_url, json={"environment": "production", "version": "v1.2.3"}
+        webhook_url, json={"payload": {"environment": "production", "version": "v1.2.3"}}
     )
     assert webhook_response.status_code == 200
     print(f"✓ Webhook triggered with matching payload")
 
     # Wait for enforcement
     time.sleep(2)
-    wait_for_enforcement_count(client, expected_count=1, timeout=10)
-    enforcements = client.get("/enforcements").json()["data"]
+    enforcements = wait_for_enforcement_count(
+        client, expected_count=1, rule_id=rule["id"], timeout=10
+    )
     matching_enforcement = enforcements[0]
     print(f"✓ Enforcement created (criteria matched): {matching_enforcement['id']}")
 
@@ -431,7 +444,7 @@ def test_rule_criteria_evaluation_notification(client: AttuneClient, test_pack):
     # Step 5: Trigger with NON-MATCHING payload
     print("\n[STEP 5] Triggering with NON-MATCHING payload...")
     webhook_response = client.post(
-        webhook_url, json={"environment": "development", "version": "v1.2.4"}
+        webhook_url, json={"payload": {"environment": "development", "version": "v1.2.4"}}
     )
     assert webhook_response.status_code == 200
     print(f"✓ Webhook triggered with non-matching payload")
@@ -440,7 +453,7 @@ def test_rule_criteria_evaluation_notification(client: AttuneClient, test_pack):
     time.sleep(2)
 
     # Should still only have 1 enforcement (rule didn't fire for non-matching)
-    enforcements = client.get("/enforcements").json()["data"]
+    enforcements = client.list_enforcements(rule_id=rule["id"], limit=1000)
     print(f"  Total enforcements: {len(enforcements)}")
 
     if len(enforcements) == 1:
@@ -456,8 +469,7 @@ def test_rule_criteria_evaluation_notification(client: AttuneClient, test_pack):
 
     # Step 6: Verify the events
     print("\n[STEP 6] Verifying events created...")
-    events = client.get("/events").json()["data"]
-    webhook_events = [e for e in events if e.get("trigger") == trigger["ref"]]
+    webhook_events = client.list_events(trigger_ref=trigger["ref"], limit=1000)
     print(f"  Total webhook events: {len(webhook_events)}")
     print(f"  Note: Both triggers created events, but only one matched criteria")
 

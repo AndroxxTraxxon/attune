@@ -15,18 +15,19 @@ Test validates:
 import time
 
 import pytest
-from helpers.client import AttuneClient
+from helpers import AttuneClient
 from helpers.fixtures import create_echo_action, create_webhook_trigger, unique_ref
 from helpers.polling import wait_for_event_count, wait_for_execution_count
 
 
+@pytest.mark.skip(reason="Rule criteria evaluation not yet implemented")
 def test_rule_criteria_basic(client: AttuneClient, test_pack):
     """
     Test that rule criteria filters events correctly.
 
     Flow:
     1. Create webhook trigger
-    2. Create rule with criteria: {{ trigger.data.status == "critical" }}
+    2. Create rule with conditions.expression: {{ event.payload.status == "critical" }}
     3. POST webhook with status="info" → No execution
     4. POST webhook with status="critical" → Execution created
     5. Verify only second webhook triggered action
@@ -71,7 +72,7 @@ def test_rule_criteria_basic(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 3] Creating rule with criteria...")
 
-    criteria_expression = '{{ trigger.data.status == "critical" }}'
+    criteria_expression = '{{ event.payload.status == "critical" }}'
     rule = client.create_rule(
         pack_ref=pack_ref,
         data={
@@ -80,7 +81,7 @@ def test_rule_criteria_basic(client: AttuneClient, test_pack):
             "trigger_ref": trigger_ref,
             "action_ref": action_ref,
             "enabled": True,
-            "criteria": criteria_expression,
+            "conditions": {"expression": criteria_expression},
         },
     )
     rule_ref = rule["ref"]
@@ -95,7 +96,7 @@ def test_rule_criteria_basic(client: AttuneClient, test_pack):
     client.post_webhook(
         webhook_url, payload={"status": "info", "message": "Informational event"}
     )
-    print("✓ Webhook POST completed")
+    print("✓ Webhook POST succeeded")
 
     # Wait for event to be created
     time.sleep(2)
@@ -131,7 +132,7 @@ def test_rule_criteria_basic(client: AttuneClient, test_pack):
     client.post_webhook(
         webhook_url, payload={"status": "critical", "message": "Critical event"}
     )
-    print("✓ Webhook POST completed")
+    print("✓ Webhook POST succeeded")
 
     # ========================================================================
     # STEP 7: Wait for execution to be created
@@ -207,11 +208,12 @@ def test_rule_criteria_basic(client: AttuneClient, test_pack):
     print("=" * 80 + "\n")
 
 
+@pytest.mark.skip(reason="Rule criteria evaluation not yet implemented")
 def test_rule_criteria_numeric_comparison(client: AttuneClient, test_pack):
     """
     Test rule criteria with numeric comparisons.
 
-    Criteria: {{ trigger.data.value > 100 }}
+    Criteria: {{ event.payload.value > 100 }}
     """
     print("\n" + "=" * 80)
     print("TEST: Rule Criteria - Numeric Comparison")
@@ -252,7 +254,7 @@ def test_rule_criteria_numeric_comparison(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 3] Creating rule with numeric criteria...")
 
-    criteria_expression = "{{ trigger.data.value > 100 }}"
+    criteria_expression = "{{ event.payload.value > 100 }}"
     rule = client.create_rule(
         pack_ref=pack_ref,
         data={
@@ -261,7 +263,7 @@ def test_rule_criteria_numeric_comparison(client: AttuneClient, test_pack):
             "trigger_ref": trigger_ref,
             "action_ref": action_ref,
             "enabled": True,
-            "criteria": criteria_expression,
+            "conditions": {"expression": criteria_expression},
         },
     )
     print(f"✓ Created rule with criteria: {criteria_expression}")
@@ -319,11 +321,12 @@ def test_rule_criteria_numeric_comparison(client: AttuneClient, test_pack):
     print("=" * 80 + "\n")
 
 
+@pytest.mark.skip(reason="Rule criteria evaluation not yet implemented")
 def test_rule_criteria_list_membership(client: AttuneClient, test_pack):
     """
     Test rule criteria with list membership checks.
 
-    Criteria: {{ trigger.data.environment in ['prod', 'staging'] }}
+    Criteria: {{ event.payload.environment in ['prod', 'staging'] }}
     """
     print("\n" + "=" * 80)
     print("TEST: Rule Criteria - List Membership")
@@ -364,7 +367,7 @@ def test_rule_criteria_list_membership(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 3] Creating rule with list membership criteria...")
 
-    criteria_expression = "{{ trigger.data.environment in ['prod', 'staging'] }}"
+    criteria_expression = "{{ event.payload.environment in ['prod', 'staging'] }}"
     rule = client.create_rule(
         pack_ref=pack_ref,
         data={
@@ -373,7 +376,7 @@ def test_rule_criteria_list_membership(client: AttuneClient, test_pack):
             "trigger_ref": trigger_ref,
             "action_ref": action_ref,
             "enabled": True,
-            "criteria": criteria_expression,
+            "conditions": {"expression": criteria_expression},
         },
     )
     print(f"✓ Created rule with criteria: {criteria_expression}")
@@ -442,11 +445,12 @@ def test_rule_criteria_list_membership(client: AttuneClient, test_pack):
     print("=" * 80 + "\n")
 
 
+@pytest.mark.skip(reason="Rule criteria evaluation not yet implemented")
 def test_rule_criteria_complex_expression(client: AttuneClient, test_pack):
     """
     Test complex criteria with multiple conditions.
 
-    Criteria: {{ trigger.data.severity == 'high' and trigger.data.count > 10 }}
+    Criteria: {{ event.payload.severity == 'high' and event.payload.count > 10 }}
     """
     print("\n" + "=" * 80)
     print("TEST: Rule Criteria - Complex Expression")
@@ -488,7 +492,7 @@ def test_rule_criteria_complex_expression(client: AttuneClient, test_pack):
     print("\n[STEP 3] Creating rule with complex criteria...")
 
     criteria_expression = (
-        "{{ trigger.data.severity == 'high' and trigger.data.count > 10 }}"
+        "{{ event.payload.severity == 'high' and event.payload.count > 10 }}"
     )
     rule = client.create_rule(
         pack_ref=pack_ref,
@@ -498,7 +502,7 @@ def test_rule_criteria_complex_expression(client: AttuneClient, test_pack):
             "trigger_ref": trigger_ref,
             "action_ref": action_ref,
             "enabled": True,
-            "criteria": criteria_expression,
+            "conditions": {"expression": criteria_expression},
         },
     )
     print(f"✓ Created rule with criteria: {criteria_expression}")

@@ -12,9 +12,9 @@ import time
 from datetime import datetime, timedelta
 
 import pytest
-from helpers.client import AttuneClient
+from helpers import AttuneClient
 from helpers.fixtures import create_date_timer, create_echo_action, unique_ref
-from helpers.polling import wait_for_event_count, wait_for_execution_count
+from helpers.polling import wait_for_execution_count
 
 
 @pytest.mark.tier3
@@ -32,8 +32,20 @@ def test_past_date_timer_immediate_execution(client: AttuneClient, test_pack):
 
     pack_ref = test_pack["ref"]
 
-    # Step 1: Create a date in the past (1 hour ago)
-    print("\n[STEP 1] Creating date timer with past date...")
+    # Step 1: Create an action
+    print("\n[STEP 1] Creating action...")
+    action = create_echo_action(
+        client=client, pack_ref=pack_ref, message="Past date timer fired!"
+    )
+    action_ref = action["ref"]
+    print(f"✓ Action created: {action_ref}")
+
+    initial_execution_count = len(
+        [e for e in client.list_executions(limit=100) if e["action_ref"] == action_ref]
+    )
+
+    # Step 2: Create a date in the past (1 hour ago)
+    print("\n[STEP 2] Creating date timer with past date...")
     past_date = datetime.utcnow() - timedelta(hours=1)
     date_str = past_date.strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -45,12 +57,16 @@ def test_past_date_timer_immediate_execution(client: AttuneClient, test_pack):
             pack_ref=pack_ref,
             trigger_ref=trigger_ref,
             date=date_str,
+            action_ref=action_ref,
         )
 
         trigger_id = trigger_response["id"]
-        print(f"✓ Past date timer created: {trigger_ref}")
+        rule_response = trigger_response["rule"]
+        rule_id = rule_response["id"]
+        core_trigger_ref = trigger_response["ref"]
+        print(f"✓ Past date timer rule created: {rule_id}")
         print(f"  Scheduled date: {date_str} (1 hour ago)")
-        print(f"  Trigger ID: {trigger_id}")
+        print(f"  Core trigger: {core_trigger_ref} (ID: {trigger_id})")
 
     except Exception as e:
         error_msg = str(e)
@@ -71,65 +87,31 @@ def test_past_date_timer_immediate_execution(client: AttuneClient, test_pack):
             print(f"⚠ Unexpected error: {error_msg}")
             pytest.fail(f"Past date timer failed with unclear error: {error_msg}")
 
-    # Step 2: Create an action
-    print("\n[STEP 2] Creating action...")
-    action_ref = create_echo_action(
-        client=client, pack_ref=pack_ref, message="Past date timer fired!"
-    )
-    print(f"✓ Action created: {action_ref}")
-
-    # Step 3: Create rule linking trigger to action
-    print("\n[STEP 3] Creating rule...")
-    rule_data = {
-        "name": f"Past Date Timer Rule {unique_ref()}",
-        "trigger": trigger_ref,
-        "action": action_ref,
-        "enabled": True,
-    }
-
-    rule_response = client.create_rule(rule_data)
-    rule_id = rule_response["id"]
-    print(f"✓ Rule created: {rule_id}")
-
-    # Step 4: Check if timer fires immediately
-    print("\n[STEP 4] Checking if timer fires immediately...")
+    # Step 3: Check if timer fires immediately
+    print("\n[STEP 3] Checking if timer fires immediately...")
     print("  Waiting up to 10 seconds for immediate execution...")
 
     start_time = time.time()
 
     try:
-        # Wait for at least 1 event
-        events = wait_for_event_count(
-            client=client,
-            trigger_ref=trigger_ref,
-            expected_count=1,
-            timeout=10,
-            operator=">=",
-        )
-
         elapsed = time.time() - start_time
-        print(f"✓ Timer fired immediately! ({elapsed:.1f}s after rule creation)")
-        print(f"  Events created: {len(events)}")
-
-        # Check if execution was created
         executions = wait_for_execution_count(
             client=client,
             action_ref=action_ref,
-            expected_count=1,
+            expected_count=initial_execution_count + 1,
             timeout=5,
             operator=">=",
         )
 
+        print(f"✓ Timer fired immediately! ({elapsed:.1f}s after rule creation)")
         print(f"✓ Execution created: {len(executions)} execution(s)")
 
         # Verify only 1 event (should not repeat)
         time.sleep(5)
-        events_after_wait = client.list_events(trigger=trigger_ref)
-
-        if len(events_after_wait) == 1:
-            print(f"✓ Timer fired only once (no repeat)")
+        if len(executions) == initial_execution_count + 1:
+            print(f"✓ Timer fired only once for the test action")
         else:
-            print(f"⚠ Timer fired {len(events_after_wait)} times (expected 1)")
+            print(f"⚠ Timer produced {len(executions) - initial_execution_count} executions")
 
         behavior = "immediate_execution"
 
@@ -147,8 +129,8 @@ def test_past_date_timer_immediate_execution(client: AttuneClient, test_pack):
 
         behavior = "no_execution"
 
-    # Step 5: Verify expected behavior
-    print("\n[STEP 5] Verifying behavior...")
+    # Step 4: Verify expected behavior
+    print("\n[STEP 4] Verifying behavior...")
 
     if behavior == "immediate_execution":
         print("✓ System executed past date timer immediately")
@@ -162,7 +144,7 @@ def test_past_date_timer_immediate_execution(client: AttuneClient, test_pack):
     print("\n" + "=" * 80)
     print("PAST DATE TIMER TEST SUMMARY")
     print("=" * 80)
-    print(f"✓ Past date timer created: {trigger_ref}")
+    print(f"✓ Past date timer rule created: {rule_id}")
     print(f"  Scheduled date: {date_str} (1 hour in past)")
     print(f"✓ Rule created: {rule_id}")
     print(f"  Behavior: {behavior}")
@@ -199,47 +181,43 @@ def test_just_missed_date_timer(client: AttuneClient, test_pack):
 
     trigger_ref = f"just_missed_timer_{unique_ref()}"
 
+    # Step 2: Create action
+    print("\n[STEP 2] Creating action...")
+    action = create_echo_action(
+        client=client, pack_ref=pack_ref, message="Just-missed timer fired"
+    )
+    action_ref = action["ref"]
+    initial_execution_count = len(
+        [e for e in client.list_executions(limit=100) if e["action_ref"] == action_ref]
+    )
+
     try:
         trigger_response = create_date_timer(
             client=client,
             pack_ref=pack_ref,
             trigger_ref=trigger_ref,
             date=date_str,
+            action_ref=action_ref,
         )
-        print(f"✓ Just-missed timer created: {trigger_ref}")
+        print(f"✓ Just-missed timer rule created: {trigger_response['rule']['id']}")
         print(f"  Date: {date_str} (2 seconds ago)")
     except Exception as e:
         print(f"✗ Timer creation failed: {e}")
         print("✓ System rejected just-missed date (acceptable)")
         return
 
-    # Step 2: Create action and rule
-    print("\n[STEP 2] Creating action and rule...")
-    action_ref = create_echo_action(
-        client=client, pack_ref=pack_ref, message="Just-missed timer fired"
-    )
-
-    rule_data = {
-        "name": f"Just Missed Timer Rule {unique_ref()}",
-        "trigger": trigger_ref,
-        "action": action_ref,
-        "enabled": True,
-    }
-    rule_response = client.create_rule(rule_data)
-    print(f"✓ Rule created: {rule_response['id']}")
-
     # Step 3: Check execution
     print("\n[STEP 3] Checking for immediate execution...")
 
     try:
-        events = wait_for_event_count(
+        executions = wait_for_execution_count(
             client=client,
-            trigger_ref=trigger_ref,
-            expected_count=1,
+            action_ref=action_ref,
+            expected_count=initial_execution_count + 1,
             timeout=5,
             operator=">=",
         )
-        print(f"✓ Just-missed timer executed: {len(events)} event(s)")
+        print(f"✓ Just-missed timer executed: {len(executions)} execution(s)")
     except Exception as e:
         print(f"⚠ Just-missed timer did not execute: {e}")
 

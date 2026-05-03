@@ -1025,6 +1025,9 @@ pub mod trigger {
         pub webhook_enabled: bool,
         pub webhook_key: Option<String>,
         pub webhook_config: Option<JsonDict>,
+        /// The sensor that emits events for this trigger (nullable — webhook triggers have no sensor)
+        pub sensor: Option<Id>,
+        pub sensor_ref: Option<String>,
         pub is_adhoc: bool,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
@@ -1044,8 +1047,6 @@ pub mod trigger {
         /// Optional semver version constraint for the runtime
         /// (e.g., ">=3.12", ">=3.12,<4.0", "~18.0"). NULL means any version.
         pub runtime_version_constraint: Option<String>,
-        pub trigger: Id,
-        pub trigger_ref: String,
         pub enabled: bool,
         pub param_schema: Option<JsonSchema>,
         pub config: Option<JsonValue>,

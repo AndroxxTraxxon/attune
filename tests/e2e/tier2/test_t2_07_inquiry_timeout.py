@@ -15,7 +15,7 @@ Test validates:
 import time
 
 import pytest
-from helpers.client import AttuneClient
+from helpers import AttuneClient
 from helpers.fixtures import unique_ref
 from helpers.polling import wait_for_execution_status
 
@@ -50,8 +50,8 @@ def test_inquiry_timeout_with_default(client: AttuneClient, test_pack):
         data={
             "name": f"timeout_action_{unique_ref()}",
             "description": "Action with inquiry timeout",
-            "runner_type": "python3",
-            "entry_point": "action.py",
+            "runtime_ref": "core.python",
+            "entrypoint": "action.py",
             "enabled": True,
             "parameters": {},
         },
@@ -202,8 +202,8 @@ def test_inquiry_timeout_no_default(client: AttuneClient, test_pack):
         data={
             "name": f"no_default_action_{unique_ref()}",
             "description": "Action without default response",
-            "runner_type": "python3",
-            "entry_point": "action.py",
+            "runtime_ref": "core.python",
+            "entrypoint": "action.py",
             "enabled": True,
             "parameters": {},
         },
@@ -309,8 +309,8 @@ def test_inquiry_response_before_timeout(client: AttuneClient, test_pack):
         data={
             "name": f"before_timeout_action_{unique_ref()}",
             "description": "Action with response before timeout",
-            "runner_type": "python3",
-            "entry_point": "action.py",
+            "runtime_ref": "core.python",
+            "entrypoint": "action.py",
             "enabled": True,
             "parameters": {},
         },
@@ -370,8 +370,8 @@ def test_inquiry_response_before_timeout(client: AttuneClient, test_pack):
     inquiry_after = client.get_inquiry(inquiry_id)
     print(f"  Inquiry status: {inquiry_after['status']}")
 
-    assert inquiry_after["status"] in ["responded", "completed"], (
-        f"❌ Expected 'responded' or 'completed', got '{inquiry_after['status']}'"
+    assert inquiry_after["status"] == "responded", (
+        f"❌ Expected 'responded', got '{inquiry_after['status']}'"
     )
     print("  ✓ Inquiry responded (not expired)")
 
@@ -418,8 +418,8 @@ def test_inquiry_multiple_timeouts(client: AttuneClient, test_pack):
             data={
                 "name": f"multi_timeout_action_{i}_{unique_ref()}",
                 "description": f"Action {i}",
-                "runner_type": "python3",
-                "entry_point": "action.py",
+                "runtime_ref": "core.python",
+                "entrypoint": "action.py",
                 "enabled": True,
                 "parameters": {},
             },

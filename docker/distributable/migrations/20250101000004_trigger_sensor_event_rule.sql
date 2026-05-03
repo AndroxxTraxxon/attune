@@ -43,6 +43,8 @@ CREATE TABLE trigger (
     webhook_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     webhook_key VARCHAR(64) UNIQUE,
     webhook_config JSONB DEFAULT '{}'::jsonb,
+    sensor BIGINT,
+    sensor_ref TEXT,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -59,6 +61,7 @@ CREATE INDEX idx_trigger_created ON trigger(created DESC);
 CREATE INDEX idx_trigger_pack_enabled ON trigger(pack, enabled);
 CREATE INDEX idx_trigger_webhook_key ON trigger(webhook_key) WHERE webhook_key IS NOT NULL;
 CREATE INDEX idx_trigger_enabled_created ON trigger(enabled, created DESC) WHERE enabled = TRUE;
+CREATE INDEX idx_trigger_sensor ON trigger(sensor) WHERE sensor IS NOT NULL;
 
 -- Trigger
 CREATE TRIGGER update_trigger_updated
@@ -91,8 +94,6 @@ CREATE TABLE sensor (
     entrypoint TEXT NOT NULL,
     runtime BIGINT NOT NULL REFERENCES runtime(id) ON DELETE CASCADE,
     runtime_ref TEXT NOT NULL,
-    trigger BIGINT NOT NULL REFERENCES trigger(id) ON DELETE CASCADE,
-    trigger_ref TEXT NOT NULL,
     enabled BOOLEAN NOT NULL,
     is_adhoc BOOLEAN NOT NULL DEFAULT FALSE,
     param_schema JSONB,
@@ -110,7 +111,6 @@ CREATE TABLE sensor (
 CREATE INDEX idx_sensor_ref ON sensor(ref);
 CREATE INDEX idx_sensor_pack ON sensor(pack);
 CREATE INDEX idx_sensor_runtime ON sensor(runtime);
-CREATE INDEX idx_sensor_trigger ON sensor(trigger);
 CREATE INDEX idx_sensor_enabled ON sensor(enabled) WHERE enabled = TRUE;
 CREATE INDEX idx_sensor_is_adhoc ON sensor(is_adhoc) WHERE is_adhoc = true;
 CREATE INDEX idx_sensor_created ON sensor(created DESC);
@@ -127,10 +127,13 @@ COMMENT ON COLUMN sensor.ref IS 'Unique sensor reference (format: pack.name)';
 COMMENT ON COLUMN sensor.label IS 'Human-readable sensor name';
 COMMENT ON COLUMN sensor.entrypoint IS 'Script or command to execute';
 COMMENT ON COLUMN sensor.runtime IS 'Runtime environment for execution';
-COMMENT ON COLUMN sensor.trigger IS 'Trigger type this sensor creates events for';
 COMMENT ON COLUMN sensor.enabled IS 'Whether this sensor is active';
 COMMENT ON COLUMN sensor.is_adhoc IS 'True if sensor was manually created (ad-hoc), false if installed from pack';
 COMMENT ON COLUMN sensor.runtime_version_constraint IS 'Semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0"). NULL means any version.';
+
+-- Add deferred FK from trigger.sensor → sensor.id (trigger table created before sensor)
+ALTER TABLE trigger ADD CONSTRAINT trigger_sensor_fk
+    FOREIGN KEY (sensor) REFERENCES sensor(id) ON DELETE SET NULL;
 
 -- ============================================================================
 -- EVENT TABLE

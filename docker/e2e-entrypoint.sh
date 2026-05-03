@@ -35,24 +35,24 @@ echo "✓ API is healthy (waited ${elapsed}s)"
 
 # ── Parse arguments ───────────────────────────────────────────────────────
 PYTEST_ARGS=()
-TEST_PATH="tests/e2e/"
+TEST_PATHS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --tier)
-      TEST_PATH="tests/e2e/tier${2}/"
+      TEST_PATHS+=("tests/e2e/tier${2}/")
       shift 2
       ;;
     --tier1)
-      TEST_PATH="tests/e2e/tier1/"
+      TEST_PATHS+=("tests/e2e/tier1/")
       shift
       ;;
     --tier2)
-      TEST_PATH="tests/e2e/tier2/"
+      TEST_PATHS+=("tests/e2e/tier2/")
       shift
       ;;
     --tier3)
-      TEST_PATH="tests/e2e/tier3/"
+      TEST_PATHS+=("tests/e2e/tier3/")
       shift
       ;;
     *)
@@ -61,6 +61,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Default to all tiers if none specified
+if [ ${#TEST_PATHS[@]} -eq 0 ]; then
+  TEST_PATHS=("tests/e2e/")
+fi
 
 # ── Run tests ─────────────────────────────────────────────────────────────
 cd /app
@@ -73,8 +78,8 @@ echo "║  Attune E2E Integration Tests                         ║"
 echo "╚════════════════════════════════════════════════════════╝"
 echo ""
 echo "  API:   ${API_URL}"
-echo "  Path:  ${TEST_PATH}"
+echo "  Path:  ${TEST_PATHS[*]}"
 echo "  Args:  ${PYTEST_ARGS[*]:-<none>}"
 echo ""
 
-exec pytest "${TEST_PATH}" "${PYTEST_ARGS[@]}"
+exec pytest "${TEST_PATHS[@]}" "${PYTEST_ARGS[@]}"

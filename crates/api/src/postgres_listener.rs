@@ -4,6 +4,23 @@ use sqlx::postgres::{PgListener, PgPool};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
+const NOTIFICATION_CHANNELS: &[&str] = &[
+    "execution_created",
+    "execution_status_changed",
+    "event_created",
+    "enforcement_created",
+    "enforcement_status_changed",
+    "inquiry_created",
+    "inquiry_responded",
+    "workflow_execution_status_changed",
+    "artifact_created",
+    "artifact_updated",
+    "work_queue_created",
+    "work_queue_updated",
+    "work_queue_item_created",
+    "work_queue_item_updated",
+];
+
 /// Start listening to PostgreSQL notifications and broadcast them to SSE clients
 pub async fn start_postgres_listener(
     db: PgPool,
@@ -14,10 +31,14 @@ pub async fn start_postgres_listener(
     // Create a listener
     let mut listener = PgListener::connect_with(&db).await?;
 
-    // Subscribe to the notifications channel
-    listener.listen("attune_notifications").await?;
+    listener
+        .listen_all(NOTIFICATION_CHANNELS.iter().copied())
+        .await?;
 
-    info!("Listening on channel: attune_notifications");
+    info!(
+        "Listening on PostgreSQL notification channels: {:?}",
+        NOTIFICATION_CHANNELS
+    );
 
     // Process notifications in a loop
     loop {
@@ -45,7 +66,10 @@ pub async fn start_postgres_listener(
 
                 match PgListener::connect_with(&db).await {
                     Ok(mut new_listener) => {
-                        match new_listener.listen("attune_notifications").await {
+                        match new_listener
+                            .listen_all(NOTIFICATION_CHANNELS.iter().copied())
+                            .await
+                        {
                             Ok(_) => {
                                 info!("Successfully reconnected to PostgreSQL listener");
                                 listener = new_listener;

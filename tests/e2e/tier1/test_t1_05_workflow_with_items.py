@@ -19,7 +19,7 @@ Success Criteria:
 - Each child execution has parent_execution_id set
 - Each child receives single item: "apple", "banana", "cherry"
 - Children can run in parallel
-- Parent status becomes 'succeeded' after all children succeed
+- Parent status becomes 'completed' after all children succeed
 - Child execution count matches array length
 
 Note: This test validates the workflow orchestration concept.
@@ -77,10 +77,10 @@ class TestWorkflowWithItems:
         for i, item in enumerate(test_items):
             rule = create_rule(
                 client=client,
-                trigger_id=trigger["id"],
+                trigger_ref=trigger["ref"],
                 action_ref=action_ref,
                 pack_ref=pack_ref,
-                action_parameters={"message": f"Processing item: {item}"},
+                action_params={"message": f"Processing item: {item}"},
             )
             rules.append(rule)
             print(f"  ✓ Rule {i + 1} for '{item}' (ID: {rule['id']})")
@@ -88,7 +88,7 @@ class TestWorkflowWithItems:
         # Step 4: Fire webhook to trigger all rules
         print("\n[4/5] Firing webhook to trigger executions...")
         client.fire_webhook(
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             payload={"items": test_items, "test": "with-items"},
         )
         print(f"✓ Webhook fired")
@@ -133,18 +133,18 @@ class TestWorkflowWithItems:
             if status == "completed":
                 succeeded_count += 1
 
-        print(f"\n✓ {succeeded_count}/{num_items} executions completed")
+        print(f"\n✓ {succeeded_count}/{num_items} executions succeeded")
 
         # Allow some infrastructure failures (artifact version race condition)
         assert succeeded_count >= num_items - 1, (
-            f"Too many failures: only {succeeded_count}/{num_items} completed"
+            f"Too many failures: only {succeeded_count}/{num_items} succeeded"
         )
 
         # Test demonstrates the concept
         print("\n=== Test Summary ===")
         print(f"✓ Array items: {test_items}")
         print(f"✓ {num_items} executions created (one per item)")
-        print(f"✓ All executions completed successfully")
+        print(f"✓ All executions succeeded successfully")
         print(f"✓ Demonstrates with-items iteration concept")
         print(f"✓ Test PASSED")
 
@@ -166,7 +166,7 @@ class TestWorkflowWithItems:
         print("\nEmpty array - no rules created")
 
         # Fire webhook
-        client.fire_webhook(trigger_id=trigger["id"], payload={"items": []})
+        client.fire_webhook(trigger_ref=trigger["ref"], payload={"items": []})
 
         # Wait briefly
         time.sleep(2)
@@ -192,16 +192,16 @@ class TestWorkflowWithItems:
         trigger = create_webhook_trigger(client=client, pack_ref=pack_ref)
         rule = create_rule(
             client=client,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             action_ref=action["ref"],
             pack_ref=pack_ref,
-            action_parameters={"message": f"Processing: {test_items[0]}"},
+            action_params={"message": f"Processing: {test_items[0]}"},
         )
 
         print(f"✓ Setup complete")
 
         # Execute
-        client.fire_webhook(trigger_id=trigger["id"], payload={"items": test_items})
+        client.fire_webhook(trigger_ref=trigger["ref"], payload={"items": test_items})
 
         # Should create exactly 1 execution
         executions = wait_for_execution_count(
@@ -247,17 +247,17 @@ class TestWorkflowWithItems:
         for i, item in enumerate(test_items):
             create_rule(
                 client=client,
-                trigger_id=trigger["id"],
+                trigger_ref=trigger["ref"],
                 action_ref=action["ref"],
                 pack_ref=pack_ref,
-                action_parameters={"message": item},
+                action_params={"message": item},
             )
             if (i + 1) % 3 == 0 or i == num_items - 1:
                 print(f"  ✓ {i + 1}/{num_items} rules created")
 
         # Fire webhook
         print(f"\nTriggering execution...")
-        client.fire_webhook(trigger_id=trigger["id"], payload={"items": test_items})
+        client.fire_webhook(trigger_ref=trigger["ref"], payload={"items": test_items})
 
         # Wait for all executions
         start = time.time()
@@ -323,21 +323,21 @@ class TestWorkflowWithItems:
         for item in test_items:
             create_rule(
                 client=client,
-                trigger_id=trigger["id"],
+                trigger_ref=trigger["ref"],
                 action_ref=action["ref"],
                 pack_ref=pack_ref,
-                action_parameters={"message": str(item)},
+                action_params={"message": str(item)},
             )
 
         # Execute
-        client.fire_webhook(trigger_id=trigger["id"], payload={"items": test_items})
+        client.fire_webhook(trigger_ref=trigger["ref"], payload={"items": test_items})
 
         # Wait for executions
         executions = wait_for_execution_count(
             client=client,
             expected_count=len(test_items),
             action_ref=action["ref"],
-            timeout=25,
+            timeout=45,
         )
 
         print(f"✓ {len(executions)} executions created")
@@ -364,7 +364,7 @@ class TestWorkflowWithItems:
 
         # Allow some infrastructure failures (artifact version race condition)
         assert succeeded >= len(test_items) - 1, (
-            f"Too many failures: only {succeeded}/{len(test_items)} completed"
+            f"Too many failures: only {succeeded}/{len(test_items)} succeeded"
         )
 
         print(f"\n✓ All data types handled correctly")

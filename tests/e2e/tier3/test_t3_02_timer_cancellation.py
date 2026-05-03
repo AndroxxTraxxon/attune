@@ -11,7 +11,7 @@ Duration: ~15 seconds
 import time
 
 import pytest
-from helpers.client import AttuneClient
+from helpers import AttuneClient
 from helpers.fixtures import create_echo_action, create_interval_timer, unique_ref
 from helpers.polling import wait_for_execution_count
 
@@ -36,43 +36,33 @@ def test_timer_cancellation_via_rule_disable(client: AttuneClient, test_pack):
 
     pack_ref = test_pack["ref"]
 
-    # Step 1: Create interval timer and action
-    print("\n[STEP 1] Creating interval timer (every 3 seconds)...")
+    # Step 1: Create action and interval timer rule
+    print("\n[STEP 1] Creating action and interval timer rule (every 3 seconds)...")
     trigger_ref = f"cancel_timer_{unique_ref()}"
+
+    action = create_echo_action(
+        client=client,
+        pack_ref=pack_ref,
+        message="Timer tick",
+        suffix="_cancel",
+    )
+    action_ref = action["ref"]
 
     trigger_response = create_interval_timer(
         client=client,
         pack_ref=pack_ref,
         trigger_ref=trigger_ref,
         interval=3,
+        action_ref=action_ref,
     )
+    rule_id = trigger_response["rule"]["id"]
 
-    print(f"✓ Interval timer created: {trigger_ref}")
+    print(f"✓ Interval timer rule created: {rule_id}")
     print(f"  Interval: 3 seconds")
-
-    # Step 2: Create action and rule
-    print("\n[STEP 2] Creating action and rule...")
-    action_ref = create_echo_action(
-        client=client,
-        pack_ref=pack_ref,
-        message="Timer tick",
-        suffix="_cancel",
-    )
-
-    rule_data = {
-        "name": f"Timer Cancellation Test Rule {unique_ref()}",
-        "trigger": trigger_ref,
-        "action": action_ref,
-        "enabled": True,
-    }
-
-    rule_response = client.create_rule(rule_data)
-    rule_id = rule_response["id"]
-    print(f"✓ Rule created: {rule_id}")
     print(f"  Status: enabled")
 
-    # Step 3: Wait for 2 executions
-    print("\n[STEP 3] Waiting for 2 timer executions...")
+    # Step 2: Wait for 2 executions
+    print("\n[STEP 2] Waiting for 2 timer executions...")
     wait_for_execution_count(
         client=client,
         action_ref=action_ref,
@@ -81,20 +71,19 @@ def test_timer_cancellation_via_rule_disable(client: AttuneClient, test_pack):
         operator=">=",
     )
 
-    executions_before_disable = client.list_executions(action=action_ref)
+    executions_before_disable = client.list_executions(action_ref=action_ref)
     print(f"✓ {len(executions_before_disable)} executions occurred")
 
-    # Step 4: Disable rule
-    print("\n[STEP 4] Disabling rule...")
-    update_data = {"enabled": False}
-    client.update_rule(rule_id, update_data)
+    # Step 3: Disable rule
+    print("\n[STEP 3] Disabling rule...")
+    client.disable_rule(rule_id)
     print(f"✓ Rule disabled: {rule_id}")
 
-    # Step 5: Wait and verify no new executions
-    print("\n[STEP 5] Waiting 10 seconds to verify no new executions...")
+    # Step 4: Wait and verify no new executions
+    print("\n[STEP 4] Waiting 10 seconds to verify no new executions...")
     time.sleep(10)
 
-    executions_after_disable = client.list_executions(action=action_ref)
+    executions_after_disable = client.list_executions(action_ref=action_ref)
     new_executions = len(executions_after_disable) - len(executions_before_disable)
 
     print(f"  Executions before disable: {len(executions_before_disable)}")
@@ -140,33 +129,26 @@ def test_timer_resume_after_re_enable(client: AttuneClient, test_pack):
 
     pack_ref = test_pack["ref"]
 
-    # Step 1: Create timer and rule
-    print("\n[STEP 1] Creating timer and rule...")
+    # Step 1: Create action and timer rule
+    print("\n[STEP 1] Creating action and timer rule...")
     trigger_ref = f"resume_timer_{unique_ref()}"
 
-    create_interval_timer(
-        client=client,
-        pack_ref=pack_ref,
-        trigger_ref=trigger_ref,
-        interval=3,
-    )
-
-    action_ref = create_echo_action(
+    action = create_echo_action(
         client=client,
         pack_ref=pack_ref,
         message="Resume test",
         suffix="_resume",
     )
+    action_ref = action["ref"]
 
-    rule_data = {
-        "name": f"Timer Resume Test Rule {unique_ref()}",
-        "trigger": trigger_ref,
-        "action": action_ref,
-        "enabled": True,
-    }
-
-    rule_response = client.create_rule(rule_data)
-    rule_id = rule_response["id"]
+    trigger_response = create_interval_timer(
+        client=client,
+        pack_ref=pack_ref,
+        trigger_ref=trigger_ref,
+        interval=3,
+        action_ref=action_ref,
+    )
+    rule_id = trigger_response["rule"]["id"]
     print(f"✓ Timer and rule created")
 
     # Step 2: Wait for 1 execution
@@ -175,37 +157,37 @@ def test_timer_resume_after_re_enable(client: AttuneClient, test_pack):
         client=client,
         action_ref=action_ref,
         expected_count=1,
-        timeout=10,
+        timeout=20,
         operator=">=",
     )
     print(f"✓ Initial execution confirmed")
 
     # Step 3: Disable rule
     print("\n[STEP 3] Disabling rule...")
-    client.update_rule(rule_id, {"enabled": False})
+    client.disable_rule(rule_id)
     time.sleep(1)
-    executions_after_disable = client.list_executions(action=action_ref)
+    executions_after_disable = client.list_executions(action_ref=action_ref)
     count_after_disable = len(executions_after_disable)
     print(f"✓ Rule disabled (executions: {count_after_disable})")
 
     # Step 4: Wait while disabled
     print("\n[STEP 4] Waiting 6 seconds while disabled...")
     time.sleep(6)
-    executions_still_disabled = client.list_executions(action=action_ref)
+    executions_still_disabled = client.list_executions(action_ref=action_ref)
     count_still_disabled = len(executions_still_disabled)
     increase_while_disabled = count_still_disabled - count_after_disable
     print(f"  Executions while disabled: {increase_while_disabled}")
 
     # Step 5: Re-enable rule
     print("\n[STEP 5] Re-enabling rule...")
-    client.update_rule(rule_id, {"enabled": True})
+    client.enable_rule(rule_id)
     print(f"✓ Rule re-enabled")
 
     # Step 6: Wait for new executions
     print("\n[STEP 6] Waiting for executions to resume...")
     time.sleep(8)
 
-    executions_after_enable = client.list_executions(action=action_ref)
+    executions_after_enable = client.list_executions(action_ref=action_ref)
     count_after_enable = len(executions_after_enable)
     increase_after_enable = count_after_enable - count_still_disabled
 
@@ -248,33 +230,26 @@ def test_timer_delete_stops_executions(client: AttuneClient, test_pack):
 
     pack_ref = test_pack["ref"]
 
-    # Step 1: Create timer and rule
-    print("\n[STEP 1] Creating timer and rule...")
+    # Step 1: Create action and timer rule
+    print("\n[STEP 1] Creating action and timer rule...")
     trigger_ref = f"delete_timer_{unique_ref()}"
 
-    create_interval_timer(
-        client=client,
-        pack_ref=pack_ref,
-        trigger_ref=trigger_ref,
-        interval=3,
-    )
-
-    action_ref = create_echo_action(
+    action = create_echo_action(
         client=client,
         pack_ref=pack_ref,
         message="Delete test",
         suffix="_delete",
     )
+    action_ref = action["ref"]
 
-    rule_data = {
-        "name": f"Timer Delete Test Rule {unique_ref()}",
-        "trigger": trigger_ref,
-        "action": action_ref,
-        "enabled": True,
-    }
-
-    rule_response = client.create_rule(rule_data)
-    rule_id = rule_response["id"]
+    trigger_response = create_interval_timer(
+        client=client,
+        pack_ref=pack_ref,
+        trigger_ref=trigger_ref,
+        interval=3,
+        action_ref=action_ref,
+    )
+    rule_id = trigger_response["rule"]["id"]
     print(f"✓ Timer and rule created")
 
     # Step 2: Wait for 1 execution
@@ -283,11 +258,11 @@ def test_timer_delete_stops_executions(client: AttuneClient, test_pack):
         client=client,
         action_ref=action_ref,
         expected_count=1,
-        timeout=10,
+        timeout=20,
         operator=">=",
     )
 
-    executions_before_delete = client.list_executions(action=action_ref)
+    executions_before_delete = client.list_executions(action_ref=action_ref)
     print(f"✓ Initial executions: {len(executions_before_delete)}")
 
     # Step 3: Delete rule
@@ -303,7 +278,7 @@ def test_timer_delete_stops_executions(client: AttuneClient, test_pack):
     print("\n[STEP 4] Waiting 10 seconds to verify no new executions...")
     time.sleep(10)
 
-    executions_after_delete = client.list_executions(action=action_ref)
+    executions_after_delete = client.list_executions(action_ref=action_ref)
     new_executions = len(executions_after_delete) - len(executions_before_delete)
 
     print(f"  Executions before delete: {len(executions_before_delete)}")

@@ -524,6 +524,8 @@ pub async fn create_test_trigger(pool: &PgPool, pack_id: i64, ref_name: &str) ->
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
 

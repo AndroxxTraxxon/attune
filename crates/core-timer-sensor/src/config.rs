@@ -15,7 +15,7 @@ pub struct SensorConfig {
     /// API token for authentication
     pub api_token: String,
 
-    /// Sensor reference name (e.g., "core.timer")
+    /// Sensor reference name (e.g., "core.timer_sensor")
     pub sensor_ref: String,
 
     /// RabbitMQ connection URL

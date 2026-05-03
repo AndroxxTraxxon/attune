@@ -73,6 +73,19 @@ def client(api_base_url: str, test_timeout: int) -> Generator[AttuneClient, None
     client.logout()
 
 
+@pytest.fixture(scope="session")
+def session_client(
+    api_base_url: str, test_timeout: int
+) -> Generator[AttuneClient, None, None]:
+    """Create an authenticated client for session-scoped fixture setup."""
+    client = AttuneClient(base_url=api_base_url, timeout=test_timeout)
+
+    try:
+        yield client
+    finally:
+        client.logout()
+
+
 @pytest.fixture
 def unique_user_client(
     api_base_url: str, test_timeout: int
@@ -105,21 +118,35 @@ def unique_user_client(
     client.logout()
 
 
-@pytest.fixture
-def test_pack(client: AttuneClient) -> dict:
+@pytest.fixture(scope="session")
+def e2e_pack_ref(worker_id: str) -> str:
+    """Use one isolated fixture pack per pytest-xdist worker."""
+    mode = os.getenv("ATTUNE_E2E_PACK_ISOLATION", "worker").lower()
+    if mode in {"0", "false", "no", "shared"}:
+        return "test_pack"
+    suffix = worker_id if worker_id != "master" else "local"
+    return f"test_pack_{suffix}"
+
+
+@pytest.fixture(scope="session")
+def test_pack(session_client: AttuneClient, e2e_pack_ref: str) -> dict:
     """
     Create or get test pack
 
     This fixture ensures the test pack is available for tests.
     """
     try:
-        pack = create_test_pack(client, pack_dir="tests/fixtures/packs/test_pack")
+        pack = create_test_pack(
+            session_client,
+            pack_ref=e2e_pack_ref,
+            pack_dir="tests/fixtures/packs/test_pack",
+        )
         return pack
     except Exception as e:
         pytest.fail(f"Failed to create test pack: {e}")
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def pack_ref(test_pack: dict) -> str:
     """Get pack reference from test pack"""
     return test_pack["ref"]
@@ -232,6 +259,7 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "tier1: Tier 1 core tests")
     config.addinivalue_line("markers", "tier2: Tier 2 orchestration tests")
     config.addinivalue_line("markers", "tier3: Tier 3 advanced tests")
+    config.addinivalue_line("markers", "api: API integration tests (ported from Rust)")
 
 
 def pytest_collection_modifyitems(config, items):

@@ -75,10 +75,10 @@ class TestDatastoreAccess:
         trigger = create_webhook_trigger(client=client, pack_ref=pack_ref)
         rule = create_rule(
             client=client,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             action_ref=action_ref,
             pack_ref=pack_ref,
-            action_parameters={
+            action_params={
                 "message": f"Datastore value: {test_value}",
             },
         )
@@ -87,7 +87,7 @@ class TestDatastoreAccess:
         # Step 5: Execute action
         print("\n[5/6] Executing action...")
         client.fire_webhook(
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             payload={"datastore_key": test_key},
         )
 
@@ -228,15 +228,15 @@ class TestDatastoreAccess:
         trigger = create_webhook_trigger(client=client, pack_ref=pack_ref)
         rule = create_rule(
             client=client,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             action_ref=action["ref"],
             pack_ref=pack_ref,
-            action_parameters={
+            action_params={
                 "message": "Using encrypted datastore value",
             },
         )
 
-        client.fire_webhook(trigger_id=trigger["id"], payload={})
+        client.fire_webhook(trigger_ref=trigger["ref"], payload={})
 
         executions = wait_for_execution_count(
             client=client,

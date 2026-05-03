@@ -16,7 +16,7 @@ Test validates:
 import time
 
 import pytest
-from helpers.client import AttuneClient
+from helpers import AttuneClient
 from helpers.fixtures import unique_ref
 from helpers.polling import wait_for_execution_status
 
@@ -45,46 +45,22 @@ def test_action_writes_to_datastore(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 1] Creating write action...")
 
-    write_script = f"""#!/usr/bin/env python3
-import os
-import sys
-import json
-import requests
-
-# Get API base URL from environment
-API_URL = os.environ.get('ATTUNE_API_URL', 'http://localhost:8080')
-TOKEN = os.environ.get('ATTUNE_AUTH_TOKEN', '')
-
-# Read parameters
-params = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {{}}
-key = params.get('key', '{test_key}')
-value = params.get('value', '{test_value}')
-
-# Write to datastore
-headers = {{'Authorization': f'Bearer {{TOKEN}}'}}
-response = requests.put(
-    f'{{API_URL}}/api/v1/datastore/{{key}}',
-    json={{'value': value, 'encrypted': False}},
-    headers=headers
-)
-
-if response.status_code in [200, 201]:
-    print(f'Successfully wrote {{key}}={{value}}')
-    sys.exit(0)
-else:
-    print(f'Failed to write: {{response.status_code}} {{response.text}}')
-    sys.exit(1)
-"""
-
     write_action = client.create_action(
         pack_ref=pack_ref,
         data={
             "name": f"write_datastore_{unique_ref()}",
             "description": "Writes value to datastore",
-            "runner_type": "python3",
-            "entry_point": "write.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": """
+payload=$(printf '{"ref":"%s","name":"%s","value":"%s","owner_type":"system","encrypted":false}' "$key" "$key" "$value")
+curl -sS -f -X POST "$ATTUNE_API_URL/api/v1/keys" \
+  -H "Authorization: Bearer $ATTUNE_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$payload" >/tmp/attune_key_response.json
+echo "Successfully wrote $key=$value"
+""",
             "enabled": True,
-            "parameters": {
+            "param_schema": {
                 "key": {"type": "string", "required": True},
                 "value": {"type": "string", "required": True},
             },
@@ -98,50 +74,20 @@ else:
     # ========================================================================
     print("\n[STEP 2] Creating read action...")
 
-    read_script = f"""#!/usr/bin/env python3
-import os
-import sys
-import json
-import requests
-
-# Get API base URL from environment
-API_URL = os.environ.get('ATTUNE_API_URL', 'http://localhost:8080')
-TOKEN = os.environ.get('ATTUNE_AUTH_TOKEN', '')
-
-# Read parameters
-params = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {{}}
-key = params.get('key', '{test_key}')
-
-# Read from datastore
-headers = {{'Authorization': f'Bearer {{TOKEN}}'}}
-response = requests.get(
-    f'{{API_URL}}/api/v1/datastore/{{key}}',
-    headers=headers
-)
-
-if response.status_code == 200:
-    data = response.json()
-    value = data.get('value')
-    print(f'Successfully read {{key}}={{value}}')
-    print(json.dumps({{'key': key, 'value': value}}))
-    sys.exit(0)
-elif response.status_code == 404:
-    print(f'Key not found: {{key}}')
-    sys.exit(1)
-else:
-    print(f'Failed to read: {{response.status_code}} {{response.text}}')
-    sys.exit(1)
-"""
-
     read_action = client.create_action(
         pack_ref=pack_ref,
         data={
             "name": f"read_datastore_{unique_ref()}",
             "description": "Reads value from datastore",
-            "runner_type": "python3",
-            "entry_point": "read.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": """
+curl -sS -f "$ATTUNE_API_URL/api/v1/keys/$key" \
+  -H "Authorization: Bearer $ATTUNE_API_TOKEN" >/tmp/attune_key_response.json
+echo "Successfully read $key"
+cat /tmp/attune_key_response.json
+""",
             "enabled": True,
-            "parameters": {
+            "param_schema": {
                 "key": {"type": "string", "required": True},
             },
         },
@@ -166,10 +112,10 @@ else:
     write_result = wait_for_execution_status(
         client=client,
         execution_id=write_execution_id,
-        expected_status="succeeded",
+        expected_status="completed",
         timeout=15,
     )
-    print(f"✓ Write execution completed: status={write_result['status']}")
+    print(f"✓ Write execution succeeded: status={write_result['status']}")
 
     # ========================================================================
     # STEP 4: Verify value in datastore via API
@@ -178,7 +124,7 @@ else:
 
     datastore_item = client.get_datastore_item(key=test_key)
     assert datastore_item is not None, f"❌ Datastore item not found: {test_key}"
-    assert datastore_item["key"] == test_key, f"❌ Key mismatch"
+    assert datastore_item.get("ref") == test_key or datastore_item.get("name") == test_key, f"❌ Key mismatch: {datastore_item}"
     assert datastore_item["value"] == test_value, (
         f"❌ Value mismatch: expected '{test_value}', got '{datastore_item['value']}'"
     )
@@ -199,10 +145,10 @@ else:
     read_result = wait_for_execution_status(
         client=client,
         execution_id=read_execution_id,
-        expected_status="succeeded",
+        expected_status="completed",
         timeout=15,
     )
-    print(f"✓ Read execution completed: status={read_result['status']}")
+    print(f"✓ Read execution succeeded: status={read_result['status']}")
 
     # ========================================================================
     # STEP 6: Validate success criteria
@@ -210,7 +156,7 @@ else:
     print("\n[STEP 6] Validating success criteria...")
 
     # Criterion 1: Write action succeeded
-    assert write_result["status"] == "succeeded", (
+    assert write_result["status"] in ("completed", "completed"), (
         f"❌ Write action failed: {write_result['status']}"
     )
     print("  ✓ Write action succeeded")
@@ -222,7 +168,7 @@ else:
     print("  ✓ Value persisted in datastore")
 
     # Criterion 3: Read action succeeded
-    assert read_result["status"] == "succeeded", (
+    assert read_result["status"] in ("completed", "completed"), (
         f"❌ Read action failed: {read_result['status']}"
     )
     print("  ✓ Read action succeeded")
@@ -279,10 +225,17 @@ def test_workflow_with_datastore_communication(client: AttuneClient, test_pack):
         data={
             "name": f"wf_write_{unique_ref()}",
             "description": "Workflow write action",
-            "runner_type": "python3",
-            "entry_point": "write.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": """
+payload=$(printf '{"ref":"%s","name":"%s","value":"%s","owner_type":"system","encrypted":false}' "$key" "$key" "$value")
+curl -sS -f -X POST "$ATTUNE_API_URL/api/v1/keys" \
+  -H "Authorization: Bearer $ATTUNE_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$payload" >/tmp/attune_key_response.json
+echo "Successfully wrote $key=$value"
+""",
             "enabled": True,
-            "parameters": {
+            "param_schema": {
                 "key": {"type": "string", "required": True},
                 "value": {"type": "string", "required": True},
             },
@@ -300,10 +253,15 @@ def test_workflow_with_datastore_communication(client: AttuneClient, test_pack):
         data={
             "name": f"wf_read_{unique_ref()}",
             "description": "Workflow read action",
-            "runner_type": "python3",
-            "entry_point": "read.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": """
+curl -sS -f "$ATTUNE_API_URL/api/v1/keys/$key" \
+  -H "Authorization: Bearer $ATTUNE_API_TOKEN" >/tmp/attune_key_response.json
+echo "Successfully read $key"
+cat /tmp/attune_key_response.json
+""",
             "enabled": True,
-            "parameters": {
+            "param_schema": {
                 "key": {"type": "string", "required": True},
             },
         },
@@ -315,30 +273,25 @@ def test_workflow_with_datastore_communication(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 3] Creating workflow...")
 
-    workflow_action = client.create_action(
+    workflow_name = f"datastore_workflow_{unique_ref()}"
+    workflow_action = client.create_workflow(
         pack_ref=pack_ref,
-        data={
-            "name": f"datastore_workflow_{unique_ref()}",
-            "description": "Workflow that uses datastore for communication",
-            "runner_type": "workflow",
-            "entry_point": "",
-            "enabled": True,
-            "parameters": {},
-            "workflow_definition": {
-                "tasks": [
-                    {
-                        "name": "write_task",
-                        "action": write_action["ref"],
-                        "parameters": {"key": shared_key, "value": shared_value},
-                    },
-                    {
-                        "name": "read_task",
-                        "action": read_action["ref"],
-                        "parameters": {"key": shared_key},
-                    },
-                ]
+        name=workflow_name,
+        label="Datastore Communication Workflow",
+        description="Workflow that uses datastore for communication",
+        tasks=[
+            {
+                "name": "write_task",
+                "action": write_action["ref"],
+                "input": {"key": shared_key, "value": shared_value},
+                "next": [{"when": "{{ succeeded() }}", "do": ["read_task"]}],
             },
-        },
+            {
+                "name": "read_task",
+                "action": read_action["ref"],
+                "input": {"key": shared_key},
+            },
+        ],
     )
     workflow_ref = workflow_action["ref"]
     print(f"✓ Created workflow: {workflow_ref}")
@@ -362,10 +315,10 @@ def test_workflow_with_datastore_communication(client: AttuneClient, test_pack):
     workflow_result = wait_for_execution_status(
         client=client,
         execution_id=workflow_execution_id,
-        expected_status="succeeded",
+        expected_status="completed",
         timeout=30,
     )
-    print(f"✓ Workflow completed: status={workflow_result['status']}")
+    print(f"✓ Workflow succeeded: status={workflow_result['status']}")
 
     # ========================================================================
     # STEP 6: Verify datastore value
@@ -384,11 +337,11 @@ def test_workflow_with_datastore_communication(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 7] Verifying task executions...")
 
-    all_executions = client.list_executions(limit=100)
+    all_executions = client.list_executions(parent=workflow_execution_id, limit=100)
     task_executions = [
         ex
         for ex in all_executions
-        if ex.get("parent_execution_id") == workflow_execution_id
+        if ex.get("parent") == workflow_execution_id
     ]
 
     print(f"  Found {len(task_executions)} task executions")
@@ -397,10 +350,10 @@ def test_workflow_with_datastore_communication(client: AttuneClient, test_pack):
     )
 
     for task in task_executions:
-        assert task["status"] == "succeeded", (
+        assert task["status"] == "completed", (
             f"❌ Task {task['id']} failed: {task['status']}"
         )
-        print(f"  ✓ Task {task['action_ref']}: succeeded")
+        print(f"  ✓ Task {task['action_ref']}: completed")
 
     # ========================================================================
     # FINAL SUMMARY

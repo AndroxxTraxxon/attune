@@ -17,7 +17,7 @@ Test validates:
 import time
 
 import pytest
-from helpers.client import AttuneClient
+from helpers import AttuneClient
 from helpers.fixtures import unique_ref
 from helpers.polling import wait_for_execution_status
 
@@ -52,8 +52,8 @@ def test_inquiry_basic_approval(client: AttuneClient, test_pack):
         data={
             "name": f"approval_action_{unique_ref()}",
             "description": "Action that requires approval",
-            "runner_type": "python3",
-            "entry_point": "approve.py",
+            "runtime_ref": "core.python",
+            "entrypoint": "approve.py",
             "enabled": True,
             "parameters": {
                 "message": {"type": "string", "required": False, "default": "Approve?"}
@@ -136,8 +136,8 @@ def test_inquiry_basic_approval(client: AttuneClient, test_pack):
     print("\n[STEP 6] Verifying inquiry status updated...")
 
     inquiry_after = client.get_inquiry(inquiry_id)
-    assert inquiry_after["status"] in ["responded", "completed"], (
-        f"❌ Expected inquiry status 'responded' or 'completed', got '{inquiry_after['status']}'"
+    assert inquiry_after["status"] == "responded", (
+        f"❌ Expected inquiry status 'responded', got '{inquiry_after['status']}'"
     )
     print(f"✓ Inquiry status updated: {inquiry_after['status']}")
     print(f"  Response: {inquiry_after.get('response')}")
@@ -190,8 +190,8 @@ def test_inquiry_rejection(client: AttuneClient, test_pack):
         data={
             "name": f"reject_action_{unique_ref()}",
             "description": "Action that might be rejected",
-            "runner_type": "python3",
-            "entry_point": "action.py",
+            "runtime_ref": "core.python",
+            "entrypoint": "action.py",
             "enabled": True,
             "parameters": {},
         },
@@ -243,7 +243,7 @@ def test_inquiry_rejection(client: AttuneClient, test_pack):
     print("\n[STEP 4] Verifying inquiry status...")
 
     inquiry_after = client.get_inquiry(inquiry_id)
-    assert inquiry_after["status"] in ["responded", "completed"], (
+    assert inquiry_after["status"] == "responded", (
         f"❌ Unexpected inquiry status: {inquiry_after['status']}"
     )
     assert inquiry_after.get("response", {}).get("approved") is False, (
@@ -285,8 +285,8 @@ def test_inquiry_multi_field_form(client: AttuneClient, test_pack):
         data={
             "name": f"form_action_{unique_ref()}",
             "description": "Action with multi-field form",
-            "runner_type": "python3",
-            "entry_point": "action.py",
+            "runtime_ref": "core.python",
+            "entrypoint": "action.py",
             "enabled": True,
             "parameters": {},
         },
@@ -394,8 +394,8 @@ def test_inquiry_list_all(client: AttuneClient, test_pack):
             data={
                 "name": f"list_action_{i}_{unique_ref()}",
                 "description": f"Test action {i}",
-                "runner_type": "python3",
-                "entry_point": "action.py",
+                "runtime_ref": "core.python",
+                "entrypoint": "action.py",
                 "enabled": True,
                 "parameters": {},
             },

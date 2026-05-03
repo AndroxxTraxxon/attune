@@ -2495,6 +2495,24 @@ impl ExecutionScheduler {
                 })
             }),
         );
+        let handled_failed_tasks: HashSet<String> = child_executions
+            .iter()
+            .filter_map(|child| {
+                child.workflow_task.as_ref().and_then(|wt| {
+                    (wt.workflow_execution == workflow_execution_id && wt.task_index.is_none())
+                        .then(|| wt.triggered_by.clone())
+                        .flatten()
+                })
+            })
+            .collect();
+        if !handled_failed_tasks.is_empty() {
+            failed_tasks.retain(|task_name| !handled_failed_tasks.contains(task_name));
+            for task_name in handled_failed_tasks {
+                if !completed_tasks.contains(&task_name) {
+                    completed_tasks.push(task_name);
+                }
+            }
+        }
 
         // -----------------------------------------------------------------
         // Rebuild the WorkflowContext from persisted state + completed task
@@ -2609,6 +2627,13 @@ impl ExecutionScheduler {
                         }
                     }
                 }
+            }
+        }
+
+        if !task_succeeded && !tasks_to_schedule.is_empty() {
+            failed_tasks.retain(|failed_task| failed_task != task_name);
+            if !completed_tasks.contains(task_name) {
+                completed_tasks.push(task_name.clone());
             }
         }
 

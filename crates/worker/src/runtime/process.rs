@@ -50,6 +50,24 @@ fn bash_single_quote_escape(s: &str) -> String {
     s.replace('\'', "'\\''")
 }
 
+fn shell_identifier(key: &str) -> String {
+    let mut identifier = String::with_capacity(key.len());
+    for (index, ch) in key.chars().enumerate() {
+        let valid = ch == '_' || ch.is_ascii_alphanumeric();
+        if valid && !(index == 0 && ch.is_ascii_digit()) {
+            identifier.push(ch);
+        } else {
+            identifier.push('_');
+        }
+    }
+
+    if identifier.is_empty() {
+        "_".to_string()
+    } else {
+        identifier
+    }
+}
+
 fn format_command_for_log(cmd: &Command) -> String {
     let program = cmd.as_std().get_program().to_string_lossy().into_owned();
     let args = cmd
@@ -541,8 +559,13 @@ impl ProcessRuntime {
             // them into the process environment. This keeps secrets available
             // to the current script while preventing leakage via `printenv`
             // or to child processes spawned by the action.
-            script.push_str(&format!("PARAM_{}='{}'\n", key.to_uppercase(), escaped));
-            script.push_str(&format!("{}='{}'\n", key, escaped));
+            let identifier = shell_identifier(key);
+            script.push_str(&format!(
+                "PARAM_{}='{}'\n",
+                identifier.to_uppercase(),
+                escaped
+            ));
+            script.push_str(&format!("{}='{}'\n", identifier, escaped));
         }
         script.push('\n');
         script.push_str("# Action code\n");
@@ -1659,6 +1682,10 @@ mod tests {
             parameters: {
                 let mut map = HashMap::new();
                 map.insert("name".to_string(), serde_json::json!("Alice"));
+                map.insert(
+                    "test.api_url".to_string(),
+                    serde_json::json!("https://api.example.com/v1"),
+                );
                 map
             },
             env: HashMap::new(),
@@ -1670,7 +1697,10 @@ mod tests {
             timeout: Some(10),
             working_dir: None,
             entry_point: "inline".to_string(),
-            code: Some("echo \"$name/$api_key/$PARAM_NAME/$PARAM_API_KEY\"".to_string()),
+            code: Some(
+                "echo \"$name/$api_key/$PARAM_NAME/$PARAM_API_KEY/$test_api_url/$PARAM_TEST_API_URL\""
+                    .to_string(),
+            ),
             code_path: None,
             runtime_name: Some("shell".to_string()),
             runtime_config_override: None,
@@ -1688,7 +1718,9 @@ mod tests {
 
         let result = runtime.execute(context).await.unwrap();
         assert_eq!(result.exit_code, 0);
-        assert!(result.stdout.contains("Alice/secret-123/Alice/secret-123"));
+        assert!(result.stdout.contains(
+            "Alice/secret-123/Alice/secret-123/https://api.example.com/v1/https://api.example.com/v1"
+        ));
     }
 
     #[tokio::test]

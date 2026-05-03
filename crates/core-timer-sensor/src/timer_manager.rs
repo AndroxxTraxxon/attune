@@ -33,11 +33,13 @@ struct TimerManagerInner {
     scheduler: Mutex<JobScheduler>,
     /// API client for creating events
     api_client: ApiClient,
+    /// Sensor reference for event payloads
+    sensor_ref: String,
 }
 
 impl TimerManager {
     /// Create a new timer manager
-    pub async fn new(api_client: ApiClient) -> Result<Self> {
+    pub async fn new(api_client: ApiClient, sensor_ref: String) -> Result<Self> {
         let scheduler = JobScheduler::new().await?;
 
         // Start the scheduler
@@ -48,6 +50,7 @@ impl TimerManager {
                 active_jobs: RwLock::new(HashMap::new()),
                 scheduler: Mutex::new(scheduler),
                 api_client,
+                sensor_ref,
             }),
         })
     }
@@ -170,6 +173,7 @@ impl TimerManager {
         }
 
         let api_client = self.inner.api_client.clone();
+        let sensor_ref = self.inner.sensor_ref.clone();
         let duration = Duration::from_secs(interval_seconds);
 
         info!(
@@ -181,6 +185,7 @@ impl TimerManager {
 
         let job = Job::new_repeated_async(duration, move |_uuid, _lock| {
             let api_client = api_client.clone();
+            let sensor_ref = sensor_ref.clone();
             let rule_id = rule_id;
             execution_count += 1;
             let count = execution_count;
@@ -195,7 +200,7 @@ impl TimerManager {
                     "interval_seconds": interval_secs,
                     "fired_at": now.to_rfc3339(),
                     "execution_count": count,
-                    "sensor_ref": "core.interval_timer_sensor",
+                    "sensor_ref": sensor_ref,
                 });
 
                 // Create event via API
@@ -230,12 +235,14 @@ impl TimerManager {
         );
 
         let api_client = self.inner.api_client.clone();
+        let sensor_ref = self.inner.sensor_ref.clone();
         let expr_clone = expression.clone();
 
         let mut execution_count = 0u64;
 
         let job = Job::new_async(&expression, move |uuid, mut lock| {
             let api_client = api_client.clone();
+            let sensor_ref = sensor_ref.clone();
             let rule_id = rule_id;
             let expression = expr_clone.clone();
             execution_count += 1;
@@ -263,7 +270,7 @@ impl TimerManager {
                     "timezone": "UTC",
                     "next_fire_at": next_fire,
                     "execution_count": count,
-                    "sensor_ref": "core.interval_timer_sensor",
+                    "sensor_ref": sensor_ref,
                 });
 
                 // Create event via API
@@ -315,10 +322,12 @@ impl TimerManager {
         );
 
         let api_client = self.inner.api_client.clone();
+        let sensor_ref = self.inner.sensor_ref.clone();
         let scheduled_time = fire_at.to_rfc3339();
 
         let job = Job::new_one_shot_async(duration, move |_uuid, _lock| {
             let api_client = api_client.clone();
+            let sensor_ref = sensor_ref.clone();
             let rule_id = rule_id;
             let scheduled_time = scheduled_time.clone();
 
@@ -335,7 +344,7 @@ impl TimerManager {
                     "fired_at": now.to_rfc3339(),
                     "timezone": "UTC",
                     "delay_ms": delay_ms,
-                    "sensor_ref": "core.interval_timer_sensor",
+                    "sensor_ref": sensor_ref,
                 });
 
                 // Create event via API
@@ -451,11 +460,13 @@ impl TimerManager {
 
             let manager = this.clone();
             let api_client = this.inner.api_client.clone();
+            let sensor_ref = this.inner.sensor_ref.clone();
             let scheduled_time = next.to_rfc3339();
             let ical_for_reschedule = ical.clone();
 
             let job = Job::new_one_shot_async(duration, move |_uuid, _lock| {
                 let api_client = api_client.clone();
+                let sensor_ref = sensor_ref.clone();
                 let manager = manager.clone();
                 let scheduled_time = scheduled_time.clone();
                 let ical_for_reschedule = ical_for_reschedule.clone();
@@ -471,7 +482,7 @@ impl TimerManager {
                         "scheduled_at": scheduled_time,
                         "delay_ms": delay_ms,
                         "execution_count": count,
-                        "sensor_ref": "core.interval_timer_sensor",
+                        "sensor_ref": sensor_ref,
                     });
 
                     let request = CreateEventRequest::new("core.rruletimer".to_string(), payload)

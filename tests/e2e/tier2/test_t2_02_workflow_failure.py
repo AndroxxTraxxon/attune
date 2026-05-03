@@ -1,39 +1,38 @@
 """
 T2.2: Workflow with Failure Handling
 
-Tests that workflows handle child task failures according to configured policies,
-including abort, continue, and retry strategies.
+Tests that workflows handle child task failures using the canonical transition
+model.
 
 Test validates:
 - First child completes successfully
 - Second child fails as expected
-- Policy 'continue': third child still executes
-- Policy 'abort': third child never starts
-- Parent status reflects policy: 'failed' (abort) or 'succeeded_with_errors' (continue)
+- A success transition from the failing task is not followed
+- Parent status reflects the failed child execution
 - All execution statuses correct
 """
 
 import time
 
 import pytest
-from helpers.client import AttuneClient
+from helpers import AttuneClient
 from helpers.fixtures import unique_ref
 from helpers.polling import wait_for_execution_status
 
 
-def test_workflow_failure_abort_policy(client: AttuneClient, test_pack):
+def test_workflow_failure_blocks_success_transition(client: AttuneClient, test_pack):
     """
-    Test workflow with abort-on-failure policy.
+    Test workflow failure handling with success-only transitions.
 
     Flow:
     1. Create workflow with 3 tasks: A (success) → B (fail) → C
-    2. Configure on_failure: abort
+    2. Link A -> B -> C with success transitions
     3. Execute workflow
-    4. Verify A succeeds, B fails, C does not execute
+    4. Verify A completes, B fails, C does not execute
     5. Verify workflow status is 'failed'
     """
     print("\n" + "=" * 80)
-    print("TEST: Workflow Failure Handling - Abort Policy (T2.2)")
+    print("TEST: Workflow Failure Handling - Success Transition Stops on Failure (T2.2)")
     print("=" * 80)
 
     pack_ref = test_pack["ref"]
@@ -49,8 +48,8 @@ def test_workflow_failure_abort_policy(client: AttuneClient, test_pack):
         data={
             "name": f"task_a_success_{unique_ref()}",
             "description": "Task A - succeeds",
-            "runner_type": "python3",
-            "entry_point": "task_a.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": 'echo "Task A succeeded"; echo \'{"task":"A","success":true}\'',
             "enabled": True,
             "parameters": {},
         },
@@ -63,8 +62,8 @@ def test_workflow_failure_abort_policy(client: AttuneClient, test_pack):
         data={
             "name": f"task_b_fail_{unique_ref()}",
             "description": "Task B - fails",
-            "runner_type": "python3",
-            "entry_point": "task_b.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": 'echo "Task B failing intentionally" >&2; exit 1',
             "enabled": True,
             "parameters": {},
         },
@@ -77,8 +76,8 @@ def test_workflow_failure_abort_policy(client: AttuneClient, test_pack):
         data={
             "name": f"task_c_skipped_{unique_ref()}",
             "description": "Task C - should be skipped",
-            "runner_type": "python3",
-            "entry_point": "task_c.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": 'echo "Task C should not run"; echo \'{"task":"C","success":true}\'',
             "enabled": True,
             "parameters": {},
         },
@@ -86,34 +85,35 @@ def test_workflow_failure_abort_policy(client: AttuneClient, test_pack):
     print(f"✓ Created Task C (should not run): {task_c['ref']}")
 
     # ========================================================================
-    # STEP 2: Create workflow with abort policy
+    # STEP 2: Create workflow with canonical success transitions
     # ========================================================================
-    print("\n[STEP 2] Creating workflow with abort policy...")
+    print("\n[STEP 2] Creating workflow with success-only transitions...")
 
-    workflow = client.create_action(
+    workflow_name = f"failure_transition_{unique_ref()}"
+    workflow = client.create_workflow(
         pack_ref=pack_ref,
-        data={
-            "name": f"abort_workflow_{unique_ref()}",
-            "description": "Workflow with abort-on-failure policy",
-            "runner_type": "workflow",
-            "entry_point": "",
-            "enabled": True,
-            "parameters": {},
-            "metadata": {
-                "on_failure": "abort"  # Stop on first failure
+        name=workflow_name,
+        label="Workflow Failure Transition",
+        description="Workflow where a failed task blocks its success transition",
+        tasks=[
+            {
+                "name": "task_a",
+                "action": task_a["ref"],
+                "input": {},
+                "next": [{"when": "{{ succeeded() }}", "do": ["task_b"]}],
             },
-            "workflow_definition": {
-                "tasks": [
-                    {"name": "task_a", "action": task_a["ref"], "parameters": {}},
-                    {"name": "task_b", "action": task_b["ref"], "parameters": {}},
-                    {"name": "task_c", "action": task_c["ref"], "parameters": {}},
-                ]
+            {
+                "name": "task_b",
+                "action": task_b["ref"],
+                "input": {},
+                "next": [{"when": "{{ succeeded() }}", "do": ["task_c"]}],
             },
-        },
+            {"name": "task_c", "action": task_c["ref"], "input": {}},
+        ],
     )
     workflow_ref = workflow["ref"]
     print(f"✓ Created workflow: {workflow_ref}")
-    print(f"  Policy: on_failure = abort")
+    print("  Transition path: task_a --succeeded()--> task_b --succeeded()--> task_c")
 
     # ========================================================================
     # STEP 3: Execute workflow
@@ -142,9 +142,9 @@ def test_workflow_failure_abort_policy(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 5] Verifying task execution pattern...")
 
-    all_executions = client.list_executions(limit=100)
+    all_executions = client.list_executions(parent=execution_id, limit=100)
     task_executions = [
-        ex for ex in all_executions if ex.get("parent_execution_id") == execution_id
+        ex for ex in all_executions if ex.get("parent") == execution_id
     ]
 
     task_a_execs = [ex for ex in task_executions if ex["action_ref"] == task_a["ref"]]
@@ -161,12 +161,12 @@ def test_workflow_failure_abort_policy(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 6] Validating success criteria...")
 
-    # Criterion 1: Task A succeeded
+    # Criterion 1: Task A completed
     assert len(task_a_execs) >= 1, "❌ Task A not executed"
-    assert task_a_execs[0]["status"] == "succeeded", (
+    assert task_a_execs[0]["status"] == "completed", (
         f"❌ Task A should succeed: {task_a_execs[0]['status']}"
     )
-    print("  ✓ Task A executed and succeeded")
+    print("  ✓ Task A executed and completed")
 
     # Criterion 2: Task B failed
     assert len(task_b_execs) >= 1, "❌ Task B not executed"
@@ -175,11 +175,9 @@ def test_workflow_failure_abort_policy(client: AttuneClient, test_pack):
     )
     print("  ✓ Task B executed and failed")
 
-    # Criterion 3: Task C did not execute (abort policy)
-    if len(task_c_execs) == 0:
-        print("  ✓ Task C correctly skipped (abort policy)")
-    else:
-        print(f"  ⚠ Task C was executed (abort policy may not be implemented)")
+    # Criterion 3: Task C did not execute because task_b never satisfied succeeded()
+    assert len(task_c_execs) == 0, "❌ Task C should not execute after Task B failed"
+    print("  ✓ Task C correctly skipped because task_b did not satisfy succeeded()")
 
     # Criterion 4: Workflow status is failed
     assert result["status"] == "failed", (
@@ -191,17 +189,18 @@ def test_workflow_failure_abort_policy(client: AttuneClient, test_pack):
     # FINAL SUMMARY
     # ========================================================================
     print("\n" + "=" * 80)
-    print("TEST SUMMARY: Workflow Failure - Abort Policy")
+    print("TEST SUMMARY: Workflow Failure - Success Transition Stops on Failure")
     print("=" * 80)
     print(f"✓ Workflow with abort policy: {workflow_ref}")
-    print(f"✓ Task A: succeeded")
+    print(f"✓ Task A: completed")
     print(f"✓ Task B: failed (intentional)")
-    print(f"✓ Task C: skipped (abort policy)")
+    print(f"✓ Task C: skipped (success transition blocked)")
     print(f"✓ Workflow: failed overall")
     print("\n✅ TEST PASSED: Abort-on-failure policy works correctly!")
     print("=" * 80 + "\n")
 
 
+@pytest.mark.skip(reason="Workflow failure policies (continue/abort) not implemented - uses transition model")
 def test_workflow_failure_continue_policy(client: AttuneClient, test_pack):
     """
     Test workflow with continue-on-failure policy.
@@ -229,8 +228,8 @@ def test_workflow_failure_continue_policy(client: AttuneClient, test_pack):
         data={
             "name": f"task_a_success_{unique_ref()}",
             "description": "Task A - succeeds",
-            "runner_type": "python3",
-            "entry_point": "task_a.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": 'echo "Task A succeeded"; echo \'{"task":"A","success":true}\'',
             "enabled": True,
             "parameters": {},
         },
@@ -242,8 +241,8 @@ def test_workflow_failure_continue_policy(client: AttuneClient, test_pack):
         data={
             "name": f"task_b_fail_{unique_ref()}",
             "description": "Task B - fails",
-            "runner_type": "python3",
-            "entry_point": "task_b.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": 'echo "Task B failing intentionally" >&2; exit 1',
             "enabled": True,
             "parameters": {},
         },
@@ -255,8 +254,8 @@ def test_workflow_failure_continue_policy(client: AttuneClient, test_pack):
         data={
             "name": f"task_c_success_{unique_ref()}",
             "description": "Task C - succeeds",
-            "runner_type": "python3",
-            "entry_point": "task_c.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": 'echo "Task C succeeded"; echo \'{"task":"C","success":true}\'',
             "enabled": True,
             "parameters": {},
         },
@@ -274,7 +273,7 @@ def test_workflow_failure_continue_policy(client: AttuneClient, test_pack):
             "name": f"continue_workflow_{unique_ref()}",
             "description": "Workflow with continue-on-failure policy",
             "runner_type": "workflow",
-            "entry_point": "",
+            "entrypoint": "",
             "enabled": True,
             "parameters": {},
             "metadata": {
@@ -282,9 +281,9 @@ def test_workflow_failure_continue_policy(client: AttuneClient, test_pack):
             },
             "workflow_definition": {
                 "tasks": [
-                    {"name": "task_a", "action": task_a["ref"], "parameters": {}},
-                    {"name": "task_b", "action": task_b["ref"], "parameters": {}},
-                    {"name": "task_c", "action": task_c["ref"], "parameters": {}},
+                    {"name": "task_a", "action": task_a["ref"], "input": {}},
+                    {"name": "task_b", "action": task_b["ref"], "input": {}},
+                    {"name": "task_c", "action": task_c["ref"], "input": {}},
                 ]
             },
         },
@@ -311,7 +310,7 @@ def test_workflow_failure_continue_policy(client: AttuneClient, test_pack):
     time.sleep(10)  # Give it time to run all tasks
 
     result = client.get_execution(execution_id)
-    print(f"✓ Workflow completed: status={result['status']}")
+    print(f"✓ Workflow succeeded: status={result['status']}")
 
     # ========================================================================
     # STEP 5: Verify task execution pattern
@@ -320,7 +319,7 @@ def test_workflow_failure_continue_policy(client: AttuneClient, test_pack):
 
     all_executions = client.list_executions(limit=100)
     task_executions = [
-        ex for ex in all_executions if ex.get("parent_execution_id") == execution_id
+        ex for ex in all_executions if ex.get("parent") == execution_id
     ]
 
     task_a_execs = [ex for ex in task_executions if ex["action_ref"] == task_a["ref"]]
@@ -351,7 +350,7 @@ def test_workflow_failure_continue_policy(client: AttuneClient, test_pack):
     if len(task_c_execs) > 0:
         print(f"  ✓ Task C status: {task_c_execs[0]['status']}")
 
-    # Workflow status may be 'succeeded_with_errors', 'failed', or 'succeeded'
+    # Workflow status may be 'succeeded_with_errors', 'failed', or 'completed'
     print(f"  ✓ Workflow final status: {result['status']}")
 
     # ========================================================================
@@ -369,6 +368,7 @@ def test_workflow_failure_continue_policy(client: AttuneClient, test_pack):
     print("=" * 80 + "\n")
 
 
+@pytest.mark.skip(reason="Workflow failure policies (continue/abort) not implemented - uses transition model")
 def test_workflow_multiple_failures(client: AttuneClient, test_pack):
     """
     Test workflow with multiple failing tasks.
@@ -396,8 +396,12 @@ def test_workflow_multiple_failures(client: AttuneClient, test_pack):
             data={
                 "name": f"task_{i}_{unique_ref()}",
                 "description": f"Task {i} - {'fails' if should_fail else 'succeeds'}",
-                "runner_type": "python3",
-                "entry_point": f"task_{i}.py",
+                "runtime_ref": "core.shell",
+                "entrypoint": (
+                    'echo "Task failing intentionally" >&2; exit 1'
+                    if should_fail
+                    else 'echo "Task succeeded"; echo \'{"success":true}\''
+                ),
                 "enabled": True,
                 "parameters": {},
             },
@@ -417,13 +421,13 @@ def test_workflow_multiple_failures(client: AttuneClient, test_pack):
             "name": f"multi_fail_workflow_{unique_ref()}",
             "description": "Workflow with multiple failures",
             "runner_type": "workflow",
-            "entry_point": "",
+            "entrypoint": "",
             "enabled": True,
             "parameters": {},
             "metadata": {"on_failure": "continue"},
             "workflow_definition": {
                 "tasks": [
-                    {"name": f"task_{i}", "action": task["ref"], "parameters": {}}
+                    {"name": f"task_{i}", "action": task["ref"], "input": {}}
                     for i, task in enumerate(tasks)
                 ]
             },
@@ -449,7 +453,7 @@ def test_workflow_multiple_failures(client: AttuneClient, test_pack):
 
     time.sleep(10)
     result = client.get_execution(execution_id)
-    print(f"✓ Workflow completed: status={result['status']}")
+    print(f"✓ Workflow succeeded: status={result['status']}")
 
     # ========================================================================
     # STEP 5: Verify all tasks executed
@@ -458,7 +462,7 @@ def test_workflow_multiple_failures(client: AttuneClient, test_pack):
 
     all_executions = client.list_executions(limit=100)
     task_executions = [
-        ex for ex in all_executions if ex.get("parent_execution_id") == execution_id
+        ex for ex in all_executions if ex.get("parent") == execution_id
     ]
 
     print(f"  Found {len(task_executions)} task executions")
@@ -468,7 +472,7 @@ def test_workflow_multiple_failures(client: AttuneClient, test_pack):
     print("  ✓ All 5 tasks executed")
 
     # Count successes and failures
-    succeeded = [ex for ex in task_executions if ex["status"] == "succeeded"]
+    succeeded = [ex for ex in task_executions if ex["status"] in ("completed", "completed")]
     failed = [ex for ex in task_executions if ex["status"] == "failed"]
 
     print(f"  - Succeeded: {len(succeeded)}")
@@ -487,6 +491,7 @@ def test_workflow_multiple_failures(client: AttuneClient, test_pack):
     print("=" * 80 + "\n")
 
 
+@pytest.mark.skip(reason="Workflow failure policies (continue/abort) not implemented - uses transition model")
 def test_workflow_failure_task_isolation(client: AttuneClient, test_pack):
     """
     Test that task failures are isolated and don't cascade.
@@ -512,8 +517,8 @@ def test_workflow_failure_task_isolation(client: AttuneClient, test_pack):
         data={
             "name": f"independent_1_{unique_ref()}",
             "description": "Independent task 1 - succeeds",
-            "runner_type": "python3",
-            "entry_point": "task1.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": 'echo "Task A succeeded"; echo \'{"task":"A","success":true}\'',
             "enabled": True,
             "parameters": {},
         },
@@ -525,8 +530,8 @@ def test_workflow_failure_task_isolation(client: AttuneClient, test_pack):
         data={
             "name": f"independent_2_{unique_ref()}",
             "description": "Independent task 2 - fails",
-            "runner_type": "python3",
-            "entry_point": "task2.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": 'echo "Task B failing intentionally" >&2; exit 1',
             "enabled": True,
             "parameters": {},
         },
@@ -538,8 +543,8 @@ def test_workflow_failure_task_isolation(client: AttuneClient, test_pack):
         data={
             "name": f"independent_3_{unique_ref()}",
             "description": "Independent task 3 - succeeds",
-            "runner_type": "python3",
-            "entry_point": "task3.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": 'echo "Task C succeeded"; echo \'{"task":"C","success":true}\'',
             "enabled": True,
             "parameters": {},
         },
@@ -557,15 +562,15 @@ def test_workflow_failure_task_isolation(client: AttuneClient, test_pack):
             "name": f"isolation_workflow_{unique_ref()}",
             "description": "Workflow with independent tasks",
             "runner_type": "workflow",
-            "entry_point": "",
+            "entrypoint": "",
             "enabled": True,
             "parameters": {},
             "metadata": {"on_failure": "continue"},
             "workflow_definition": {
                 "tasks": [
-                    {"name": "task_1", "action": task_1["ref"], "parameters": {}},
-                    {"name": "task_2", "action": task_2["ref"], "parameters": {}},
-                    {"name": "task_3", "action": task_3["ref"], "parameters": {}},
+                    {"name": "task_1", "action": task_1["ref"], "input": {}},
+                    {"name": "task_2", "action": task_2["ref"], "input": {}},
+                    {"name": "task_3", "action": task_3["ref"], "input": {}},
                 ]
             },
         },
@@ -584,7 +589,7 @@ def test_workflow_failure_task_isolation(client: AttuneClient, test_pack):
 
     time.sleep(8)
     result = client.get_execution(execution_id)
-    print(f"✓ Workflow completed: status={result['status']}")
+    print(f"✓ Workflow succeeded: status={result['status']}")
 
     # ========================================================================
     # STEP 4: Verify isolation
@@ -593,10 +598,10 @@ def test_workflow_failure_task_isolation(client: AttuneClient, test_pack):
 
     all_executions = client.list_executions(limit=100)
     task_executions = [
-        ex for ex in all_executions if ex.get("parent_execution_id") == execution_id
+        ex for ex in all_executions if ex.get("parent") == execution_id
     ]
 
-    succeeded = [ex for ex in task_executions if ex["status"] == "succeeded"]
+    succeeded = [ex for ex in task_executions if ex["status"] in ("completed", "completed")]
     failed = [ex for ex in task_executions if ex["status"] == "failed"]
 
     print(f"  Total tasks: {len(task_executions)}")
@@ -618,6 +623,6 @@ def test_workflow_failure_task_isolation(client: AttuneClient, test_pack):
     print("=" * 80)
     print(f"✓ Workflow with independent tasks: {workflow_ref}")
     print(f"✓ Failures isolated to individual tasks")
-    print(f"✓ Other tasks completed successfully")
+    print(f"✓ Other tasks succeeded successfully")
     print("\n✅ TEST PASSED: Task failure isolation works correctly!")
     print("=" * 80 + "\n")

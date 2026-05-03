@@ -34,6 +34,8 @@ async fn test_create_trigger() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
 
@@ -63,6 +65,8 @@ async fn test_create_trigger_without_pack() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
 
@@ -109,6 +113,8 @@ async fn test_create_trigger_with_schemas() {
         enabled: true,
         param_schema: Some(param_schema.clone()),
         out_schema: Some(out_schema.clone()),
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
 
@@ -133,6 +139,8 @@ async fn test_create_trigger_disabled() {
         enabled: false,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
 
@@ -158,6 +166,8 @@ async fn test_create_trigger_duplicate_ref() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
     TriggerRepository::create(&pool, input1).await.unwrap();
@@ -172,6 +182,8 @@ async fn test_create_trigger_duplicate_ref() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
     let result = TriggerRepository::create(&pool, input2).await;
@@ -205,6 +217,8 @@ async fn test_find_trigger_by_id() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
 
@@ -250,6 +264,8 @@ async fn test_find_trigger_by_ref() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
 
@@ -296,6 +312,8 @@ async fn test_list_triggers() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
     let trigger1 = TriggerRepository::create(&pool, input1).await.unwrap();
@@ -309,6 +327,8 @@ async fn test_list_triggers() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
     let trigger2 = TriggerRepository::create(&pool, input2).await.unwrap();
@@ -347,6 +367,8 @@ async fn test_find_triggers_by_pack() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
     let trigger1a = TriggerRepository::create(&pool, input1a).await.unwrap();
@@ -360,6 +382,8 @@ async fn test_find_triggers_by_pack() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
     let trigger1b = TriggerRepository::create(&pool, input1b).await.unwrap();
@@ -374,6 +398,8 @@ async fn test_find_triggers_by_pack() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
     TriggerRepository::create(&pool, input2).await.unwrap();
@@ -414,6 +440,8 @@ async fn test_find_enabled_triggers() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
     let trigger_enabled = TriggerRepository::create(&pool, input_enabled)
@@ -430,6 +458,8 @@ async fn test_find_enabled_triggers() {
         enabled: false,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
     TriggerRepository::create(&pool, input_disabled)
@@ -466,6 +496,8 @@ async fn test_update_trigger() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
 
@@ -481,6 +513,8 @@ async fn test_update_trigger() {
         enabled: Some(false),
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
     };
 
     let updated = TriggerRepository::update(&pool, trigger.id, update_input)
@@ -510,6 +544,8 @@ async fn test_update_trigger_partial() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
 
@@ -522,6 +558,8 @@ async fn test_update_trigger_partial() {
         enabled: None,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
     };
 
     let updated = TriggerRepository::update(&pool, trigger.id, update_input)
@@ -548,6 +586,8 @@ async fn test_update_trigger_schemas() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
 
@@ -573,6 +613,8 @@ async fn test_update_trigger_schemas() {
         enabled: None,
         param_schema: Some(Patch::Set(new_param_schema.clone())),
         out_schema: Some(Patch::Set(new_out_schema.clone())),
+        sensor: None,
+        sensor_ref: None,
     };
 
     let updated = TriggerRepository::update(&pool, trigger.id, update_input)
@@ -594,6 +636,8 @@ async fn test_update_trigger_not_found() {
         enabled: None,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
     };
 
     let result = TriggerRepository::update(&pool, 999999, update_input).await;
@@ -623,6 +667,8 @@ async fn test_delete_trigger() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
 
@@ -670,6 +716,8 @@ async fn test_trigger_timestamps_auto_populated() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
 
@@ -699,6 +747,8 @@ async fn test_trigger_updated_changes_on_update() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
 
@@ -715,6 +765,8 @@ async fn test_trigger_updated_changes_on_update() {
         enabled: None,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
     };
 
     let updated = TriggerRepository::update(&pool, trigger.id, update_input)
@@ -748,6 +800,8 @@ async fn test_multiple_triggers_same_pack() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
     let trigger1 = TriggerRepository::create(&pool, input1).await.unwrap();
@@ -761,6 +815,8 @@ async fn test_multiple_triggers_same_pack() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
     let trigger2 = TriggerRepository::create(&pool, input2).await.unwrap();
@@ -793,6 +849,8 @@ async fn test_trigger_cascade_delete_with_pack() {
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
 

@@ -11,13 +11,56 @@ Duration: ~30 seconds
 import time
 
 import pytest
-from helpers.client import AttuneClient
-from helpers.fixtures import create_echo_action, create_webhook_trigger, unique_ref
+from helpers import AttuneClient
+from helpers.fixtures import (
+    create_echo_action,
+    create_failing_action,
+    create_webhook_trigger,
+    unique_ref,
+)
 from helpers.polling import (
     wait_for_event_count,
     wait_for_execution_completion,
     wait_for_execution_count,
 )
+
+
+def create_webhook_post_action(
+    client: AttuneClient,
+    pack_ref: str,
+    action_ref: str,
+    webhook_url: str,
+    payload: dict,
+    label: str,
+) -> dict:
+    """Create a current-contract inline shell action that POSTs to a webhook."""
+    if webhook_url.startswith("/"):
+        webhook_url = f"{client.base_url}{webhook_url}"
+
+    action_payload = {
+        "ref": f"{pack_ref}.{action_ref}",
+        "pack_ref": pack_ref,
+        "label": label,
+        "description": f"{label} webhook POST action",
+        "runtime_ref": "core.shell",
+        "entrypoint": f"""python3 - <<'PY'
+import json
+import urllib.request
+
+request = urllib.request.Request(
+    "{webhook_url}",
+    data=json.dumps({{"payload": {payload!r}}}).encode(),
+    headers={{"Content-Type": "application/json"}},
+    method="POST",
+)
+with urllib.request.urlopen(request, timeout=10) as response:
+    print(json.dumps({{"status_code": response.status}}))
+PY""",
+        "required_worker_runtimes": {"python": "*"},
+    }
+    response = client.post("/api/v1/actions", json=action_payload)
+    assert response.status_code == 201, f"Failed to create action: {response.text}"
+    return response.json()["data"]
 
 
 @pytest.mark.tier3
@@ -78,32 +121,39 @@ def test_webhook_triggers_workflow_triggers_webhook(client: AttuneClient, test_p
 
     # Get API base URL (assume localhost:8080 for tests)
     api_url = client.base_url
-    webhook_b_url = f"{api_url}/webhooks/{webhook_b['ref']}"
+    webhook_b_url = webhook_b["webhook_url"]
+    if webhook_b_url.startswith("/"):
+        webhook_b_url = f"{api_url}{webhook_b_url}"
 
     http_action_payload = {
-        "ref": http_action_ref,
-        "pack": pack_ref,
-        "name": "HTTP Trigger Action",
+        "ref": f"{pack_ref}.{http_action_ref}",
+        "pack_ref": pack_ref,
+        "label": "HTTP Trigger Action",
         "description": "Triggers webhook B via HTTP",
-        "runner_type": "http",
-        "entry_point": webhook_b_url,
-        "parameters": {
+        "runtime_ref": "core.shell",
+        "entrypoint": f"""python3 - <<'PY'
+import json
+import urllib.request
+
+request = urllib.request.Request(
+    "{webhook_b_url}",
+    data=json.dumps({{"payload": {{"message": "Chained from workflow", "step": 2}}}}).encode(),
+    headers={{"Content-Type": "application/json"}},
+    method="POST",
+)
+with urllib.request.urlopen(request, timeout=10) as response:
+    print(json.dumps({{"status_code": response.status}}))
+PY""",
+        "required_worker_runtimes": {"python": "*"},
+        "param_schema": {
             "payload": {
                 "type": "object",
                 "description": "Data to send",
                 "required": False,
             }
         },
-        "metadata": {
-            "method": "POST",
-            "headers": {
-                "Content-Type": "application/json",
-            },
-            "body": "{{ parameters.payload }}",
-        },
-        "enabled": True,
     }
-    http_action_response = client.post("/actions", json=http_action_payload)
+    http_action_response = client.post("/api/v1/actions", json=http_action_payload)
     assert http_action_response.status_code == 201, (
         f"Failed to create HTTP action: {http_action_response.text}"
     )
@@ -113,19 +163,20 @@ def test_webhook_triggers_workflow_triggers_webhook(client: AttuneClient, test_p
 
     # Step 5: Create workflow that calls HTTP action
     print("\n[STEP 5] Creating workflow for chaining...")
-    workflow_ref = f"chain_workflow_{unique_ref()}"
+    workflow_ref = f"{pack_ref}.chain_workflow_{unique_ref()}"
     workflow_payload = {
         "ref": workflow_ref,
-        "pack": pack_ref,
-        "name": "Chain Workflow",
+        "pack_ref": pack_ref,
+        "label": "Chain Workflow",
         "description": "Workflow that triggers next webhook",
-        "runner_type": "workflow",
-        "entry_point": {
+        "version": "1.0.0",
+        "definition": {
+            "version": "1.0.0",
             "tasks": [
                 {
                     "name": "trigger_next_webhook",
                     "action": http_action["ref"],
-                    "parameters": {
+                    "input": {
                         "payload": {
                             "message": "Chained from workflow",
                             "step": 2,
@@ -134,9 +185,8 @@ def test_webhook_triggers_workflow_triggers_webhook(client: AttuneClient, test_p
                 }
             ]
         },
-        "enabled": True,
     }
-    workflow_response = client.post("/actions", json=workflow_payload)
+    workflow_response = client.post("/api/v1/workflows", json=workflow_payload)
     assert workflow_response.status_code == 201, (
         f"Failed to create workflow: {workflow_response.text}"
     )
@@ -145,15 +195,16 @@ def test_webhook_triggers_workflow_triggers_webhook(client: AttuneClient, test_p
 
     # Step 6: Create rule A (webhook A → workflow)
     print("\n[STEP 6] Creating rule A (webhook A → workflow)...")
-    rule_a_ref = f"rule_a_{unique_ref()}"
+    rule_a_ref = f"{pack_ref}.rule_a_{unique_ref()}"
     rule_a_payload = {
         "ref": rule_a_ref,
-        "pack": pack_ref,
-        "trigger": webhook_a["ref"],
-        "action": workflow["ref"],
+        "pack_ref": pack_ref,
+        "label": "Webhook A to Workflow",
+        "trigger_ref": webhook_a["ref"],
+        "action_ref": workflow["ref"],
         "enabled": True,
     }
-    rule_a_response = client.post("/rules", json=rule_a_payload)
+    rule_a_response = client.post("/api/v1/rules", json=rule_a_payload)
     assert rule_a_response.status_code == 201, (
         f"Failed to create rule A: {rule_a_response.text}"
     )
@@ -162,18 +213,19 @@ def test_webhook_triggers_workflow_triggers_webhook(client: AttuneClient, test_p
 
     # Step 7: Create rule B (webhook B → final action)
     print("\n[STEP 7] Creating rule B (webhook B → final action)...")
-    rule_b_ref = f"rule_b_{unique_ref()}"
+    rule_b_ref = f"{pack_ref}.rule_b_{unique_ref()}"
     rule_b_payload = {
         "ref": rule_b_ref,
-        "pack": pack_ref,
-        "trigger": webhook_b["ref"],
-        "action": final_action["ref"],
+        "pack_ref": pack_ref,
+        "label": "Webhook B to Final Action",
+        "trigger_ref": webhook_b["ref"],
+        "action_ref": final_action["ref"],
         "enabled": True,
-        "parameters": {
+        "action_params": {
             "message": "{{ event.payload.message }}",
         },
     }
-    rule_b_response = client.post("/rules", json=rule_b_payload)
+    rule_b_response = client.post("/api/v1/rules", json=rule_b_payload)
     assert rule_b_response.status_code == 201, (
         f"Failed to create rule B: {rule_b_response.text}"
     )
@@ -183,9 +235,9 @@ def test_webhook_triggers_workflow_triggers_webhook(client: AttuneClient, test_p
     # Step 8: Trigger the chain by calling webhook A
     print("\n[STEP 8] Triggering webhook chain...")
     print(f"  Chain: Webhook A → Workflow → HTTP → Webhook B → Final Action")
-    webhook_a_url = f"/webhooks/{webhook_a['ref']}"
+    webhook_a_url = webhook_a["webhook_url"]
     webhook_response = client.post(
-        webhook_a_url, json={"message": "Start chain", "step": 1}
+        webhook_a_url, json={"payload": {"message": "Start chain", "step": 1}}
     )
     assert webhook_response.status_code == 200, (
         f"Webhook A trigger failed: {webhook_response.text}"
@@ -197,40 +249,51 @@ def test_webhook_triggers_workflow_triggers_webhook(client: AttuneClient, test_p
     # Expected: 2 events (webhook A + webhook B), multiple executions
     time.sleep(3)
 
-    # Wait for at least 2 events
-    wait_for_event_count(client, expected_count=2, timeout=20, operator=">=")
-    events = client.get("/events").json()["data"]
-    print(f"  ✓ Found {len(events)} events")
+    webhook_a_events = wait_for_event_count(
+        client,
+        expected_count=1,
+        trigger_ref=webhook_a["ref"],
+        timeout=20,
+        operator=">=",
+    )
+    webhook_b_events = wait_for_event_count(
+        client,
+        expected_count=1,
+        trigger_ref=webhook_b["ref"],
+        timeout=20,
+        operator=">=",
+    )
+    print(f"  ✓ Found webhook A events: {len(webhook_a_events)}")
+    print(f"  ✓ Found webhook B events: {len(webhook_b_events)}")
 
-    # Wait for executions
-    wait_for_execution_count(client, expected_count=2, timeout=20, operator=">=")
-    executions = client.get("/executions").json()["data"]
-    print(f"  ✓ Found {len(executions)} executions")
+    workflow_execs = wait_for_execution_count(
+        client,
+        expected_count=1,
+        action_ref=workflow["ref"],
+        timeout=20,
+        operator=">=",
+    )
+    final_execs = wait_for_execution_count(
+        client,
+        expected_count=1,
+        action_ref=final_action["ref"],
+        timeout=20,
+        operator=">=",
+    )
+    print(f"  ✓ Found workflow executions: {len(workflow_execs)}")
+    print(f"  ✓ Found final action executions: {len(final_execs)}")
 
-    # Step 10: Verify chain completed
+    # Step 10: Verify chain succeeded
     print("\n[STEP 10] Verifying chain completion...")
-
-    # Verify we have events for both webhooks
-    webhook_a_events = [e for e in events if e.get("trigger") == webhook_a["ref"]]
-    webhook_b_events = [e for e in events if e.get("trigger") == webhook_b["ref"]]
 
     print(f"  - Webhook A events: {len(webhook_a_events)}")
     print(f"  - Webhook B events: {len(webhook_b_events)}")
 
     assert len(webhook_a_events) >= 1, "Webhook A should have fired"
-
-    # Webhook B may not have fired yet if HTTP action is async
-    # This is expected behavior
-    if len(webhook_b_events) >= 1:
-        print(f"  ✓ Webhook chain completed successfully")
-        print(f"  ✓ Webhook A → Workflow → HTTP → Webhook B verified")
-    else:
-        print(f"  Note: Webhook B not yet triggered (async HTTP may be pending)")
-
-    # Verify workflow execution
-    workflow_execs = [e for e in executions if e.get("action") == workflow["ref"]]
-    if workflow_execs:
-        print(f"  ✓ Workflow executed: {len(workflow_execs)} time(s)")
+    assert len(webhook_b_events) >= 1, "Webhook B should have fired"
+    assert len(workflow_execs) >= 1, "Workflow should have executed"
+    assert len(final_execs) >= 1, "Final action should have executed"
+    print(f"  ✓ Webhook A → Workflow → HTTP → Webhook B verified")
 
     print("\n✅ Test passed: Webhook chain validated")
 
@@ -287,90 +350,75 @@ def test_webhook_cascade_multiple_levels(client: AttuneClient, test_pack):
 
     # HTTP action A→B
     http_a_to_b_ref = f"http_a_to_b_{unique_ref()}"
-    http_a_to_b_payload = {
-        "ref": http_a_to_b_ref,
-        "pack": pack_ref,
-        "name": "Trigger B from A",
-        "description": "HTTP action to trigger webhook B",
-        "runner_type": "http",
-        "entry_point": f"{api_url}/webhooks/{webhook_b['ref']}",
-        "metadata": {
-            "method": "POST",
-            "headers": {"Content-Type": "application/json"},
-            "body": '{"level": 2, "from": "A"}',
-        },
-        "enabled": True,
-    }
-    http_a_to_b_response = client.post("/actions", json=http_a_to_b_payload)
-    assert http_a_to_b_response.status_code == 201
-    http_a_to_b = http_a_to_b_response.json()["data"]
+    http_a_to_b = create_webhook_post_action(
+        client=client,
+        pack_ref=pack_ref,
+        action_ref=http_a_to_b_ref,
+        webhook_url=webhook_b["webhook_url"],
+        payload={"level": 2, "from": "A"},
+        label="Trigger B from A",
+    )
     print(f"  ✓ Created HTTP A→B: {http_a_to_b['ref']}")
 
     # HTTP action B→C
     http_b_to_c_ref = f"http_b_to_c_{unique_ref()}"
-    http_b_to_c_payload = {
-        "ref": http_b_to_c_ref,
-        "pack": pack_ref,
-        "name": "Trigger C from B",
-        "description": "HTTP action to trigger webhook C",
-        "runner_type": "http",
-        "entry_point": f"{api_url}/webhooks/{webhook_c['ref']}",
-        "metadata": {
-            "method": "POST",
-            "headers": {"Content-Type": "application/json"},
-            "body": '{"level": 3, "from": "B"}',
-        },
-        "enabled": True,
-    }
-    http_b_to_c_response = client.post("/actions", json=http_b_to_c_payload)
-    assert http_b_to_c_response.status_code == 201
-    http_b_to_c = http_b_to_c_response.json()["data"]
+    http_b_to_c = create_webhook_post_action(
+        client=client,
+        pack_ref=pack_ref,
+        action_ref=http_b_to_c_ref,
+        webhook_url=webhook_c["webhook_url"],
+        payload={"level": 3, "from": "B"},
+        label="Trigger C from B",
+    )
     print(f"  ✓ Created HTTP B→C: {http_b_to_c['ref']}")
 
     # Step 4: Create rules for cascade
     print("\n[STEP 4] Creating cascade rules...")
 
     # Rule A: webhook A → HTTP A→B
-    rule_a_ref = f"cascade_rule_a_{unique_ref()}"
+    rule_a_ref = f"{pack_ref}.cascade_rule_a_{unique_ref()}"
     rule_a_payload = {
         "ref": rule_a_ref,
-        "pack": pack_ref,
-        "trigger": webhook_a["ref"],
-        "action": http_a_to_b["ref"],
+        "pack_ref": pack_ref,
+        "label": "Cascade Rule A",
+        "trigger_ref": webhook_a["ref"],
+        "action_ref": http_a_to_b["ref"],
         "enabled": True,
     }
-    rule_a_response = client.post("/rules", json=rule_a_payload)
+    rule_a_response = client.post("/api/v1/rules", json=rule_a_payload)
     assert rule_a_response.status_code == 201
     rule_a = rule_a_response.json()["data"]
     print(f"  ✓ Created rule A: {rule_a['ref']}")
 
     # Rule B: webhook B → HTTP B→C
-    rule_b_ref = f"cascade_rule_b_{unique_ref()}"
+    rule_b_ref = f"{pack_ref}.cascade_rule_b_{unique_ref()}"
     rule_b_payload = {
         "ref": rule_b_ref,
-        "pack": pack_ref,
-        "trigger": webhook_b["ref"],
-        "action": http_b_to_c["ref"],
+        "pack_ref": pack_ref,
+        "label": "Cascade Rule B",
+        "trigger_ref": webhook_b["ref"],
+        "action_ref": http_b_to_c["ref"],
         "enabled": True,
     }
-    rule_b_response = client.post("/rules", json=rule_b_payload)
+    rule_b_response = client.post("/api/v1/rules", json=rule_b_payload)
     assert rule_b_response.status_code == 201
     rule_b = rule_b_response.json()["data"]
     print(f"  ✓ Created rule B: {rule_b['ref']}")
 
     # Rule C: webhook C → final action
-    rule_c_ref = f"cascade_rule_c_{unique_ref()}"
+    rule_c_ref = f"{pack_ref}.cascade_rule_c_{unique_ref()}"
     rule_c_payload = {
         "ref": rule_c_ref,
-        "pack": pack_ref,
-        "trigger": webhook_c["ref"],
-        "action": final_action["ref"],
+        "pack_ref": pack_ref,
+        "label": "Cascade Rule C",
+        "trigger_ref": webhook_c["ref"],
+        "action_ref": final_action["ref"],
         "enabled": True,
-        "parameters": {
+        "action_params": {
             "message": "Cascade complete!",
         },
     }
-    rule_c_response = client.post("/rules", json=rule_c_payload)
+    rule_c_response = client.post("/api/v1/rules", json=rule_c_payload)
     assert rule_c_response.status_code == 201
     rule_c = rule_c_response.json()["data"]
     print(f"  ✓ Created rule C: {rule_c['ref']}")
@@ -378,9 +426,9 @@ def test_webhook_cascade_multiple_levels(client: AttuneClient, test_pack):
     # Step 5: Trigger cascade
     print("\n[STEP 5] Triggering webhook cascade...")
     print(f"  Cascade: A → B → C → Final Action")
-    webhook_a_url = f"/webhooks/{webhook_a['ref']}"
+    webhook_a_url = webhook_a["webhook_url"]
     webhook_response = client.post(
-        webhook_a_url, json={"level": 1, "message": "Start cascade"}
+        webhook_a_url, json={"payload": {"level": 1, "message": "Start cascade"}}
     )
     assert webhook_response.status_code == 200
     print(f"✓ Webhook A triggered - cascade started")
@@ -389,40 +437,36 @@ def test_webhook_cascade_multiple_levels(client: AttuneClient, test_pack):
     print("\n[STEP 6] Waiting for cascade to propagate...")
     time.sleep(5)  # Give time for async HTTP calls
 
-    # Get events and executions
-    events = client.get("/events").json()["data"]
-    executions = client.get("/executions").json()["data"]
-
-    print(f"  Total events: {len(events)}")
-    print(f"  Total executions: {len(executions)}")
+    webhook_a_events = wait_for_event_count(
+        client, expected_count=1, trigger_ref=webhook_a["ref"], timeout=20, operator=">="
+    )
+    webhook_b_events = wait_for_event_count(
+        client, expected_count=1, trigger_ref=webhook_b["ref"], timeout=20, operator=">="
+    )
+    webhook_c_events = wait_for_event_count(
+        client, expected_count=1, trigger_ref=webhook_c["ref"], timeout=20, operator=">="
+    )
+    final_execs = wait_for_execution_count(
+        client,
+        expected_count=1,
+        action_ref=final_action["ref"],
+        timeout=20,
+        operator=">=",
+    )
 
     # Step 7: Verify cascade
     print("\n[STEP 7] Verifying cascade propagation...")
 
     # Check webhook A fired
-    webhook_a_events = [e for e in events if e.get("trigger") == webhook_a["ref"]]
     print(f"  - Webhook A events: {len(webhook_a_events)}")
     assert len(webhook_a_events) >= 1, "Webhook A should have fired"
 
-    # Check for subsequent webhooks (may be async)
-    webhook_b_events = [e for e in events if e.get("trigger") == webhook_b["ref"]]
-    webhook_c_events = [e for e in events if e.get("trigger") == webhook_c["ref"]]
-
     print(f"  - Webhook B events: {len(webhook_b_events)}")
     print(f"  - Webhook C events: {len(webhook_c_events)}")
-
-    if len(webhook_b_events) >= 1:
-        print(f"  ✓ Webhook B triggered by A")
-    else:
-        print(f"  Note: Webhook B not yet triggered (async propagation)")
-
-    if len(webhook_c_events) >= 1:
-        print(f"  ✓ Webhook C triggered by B")
-        print(f"  ✓ Full cascade (A→B→C) verified")
-    else:
-        print(f"  Note: Webhook C not yet triggered (async propagation)")
-
-    # At minimum, webhook A should have fired
+    assert len(webhook_b_events) >= 1, "Webhook B should have fired"
+    assert len(webhook_c_events) >= 1, "Webhook C should have fired"
+    assert len(final_execs) >= 1, "Final cascade action should have executed"
+    print(f"  ✓ Full cascade (A→B→C) verified")
     print(f"\n✓ Cascade initiated successfully")
 
     print("\n✅ Test passed: Multi-level webhook cascade validated")
@@ -471,31 +515,38 @@ def test_webhook_chain_with_data_passing(client: AttuneClient, test_pack):
     print("\n[STEP 2] Creating data transformation action...")
     transform_action_ref = f"transform_data_{unique_ref()}"
     transform_action_payload = {
-        "ref": transform_action_ref,
-        "pack": pack_ref,
-        "name": "Transform Data",
+        "ref": f"{pack_ref}.{transform_action_ref}",
+        "pack_ref": pack_ref,
+        "label": "Transform Data",
         "description": "Transforms data for next step",
-        "runner_type": "python",
-        "parameters": {
+        "runtime_ref": "core.shell",
+        "param_schema": {
             "value": {
                 "type": "integer",
                 "description": "Value to transform",
                 "required": True,
             }
         },
-        "entry_point": """
+        "entrypoint": f"""python3 - "$value" <<'PY'
 import json
 import sys
+import urllib.request
 
-params = json.loads(sys.stdin.read())
-value = params.get('value', 0)
-transformed = value * 2 + 10  # Transform: (x * 2) + 10
-print(json.dumps({'transformed_value': transformed, 'original': value}))
-""",
-        "enabled": True,
+value = int(sys.argv[1])
+transformed = value * 2 + 10
+request = urllib.request.Request(
+    "{client.base_url}{webhook_b['webhook_url']}",
+    data=json.dumps({{"payload": {{"original": value, "transformed_value": transformed}}}}).encode(),
+    headers={{"Content-Type": "application/json"}},
+    method="POST",
+)
+with urllib.request.urlopen(request, timeout=10) as response:
+    print(json.dumps({{"original": value, "transformed_value": transformed, "status_code": response.status}}))
+PY""",
+        "required_worker_runtimes": {"python": "*"},
     }
-    transform_response = client.post("/actions", json=transform_action_payload)
-    assert transform_response.status_code == 201
+    transform_response = client.post("/api/v1/actions", json=transform_action_payload)
+    assert transform_response.status_code == 201, transform_response.text
     transform_action = transform_response.json()["data"]
     print(f"✓ Created transform action: {transform_action['ref']}")
 
@@ -514,35 +565,37 @@ print(json.dumps({'transformed_value': transformed, 'original': value}))
     print("\n[STEP 4] Creating rules with data mapping...")
 
     # Rule A: webhook A → transform action
-    rule_a_ref = f"data_rule_a_{unique_ref()}"
+    rule_a_ref = f"{pack_ref}.data_rule_a_{unique_ref()}"
     rule_a_payload = {
         "ref": rule_a_ref,
-        "pack": pack_ref,
-        "trigger": webhook_a["ref"],
-        "action": transform_action["ref"],
+        "pack_ref": pack_ref,
+        "label": "Data Rule A",
+        "trigger_ref": webhook_a["ref"],
+        "action_ref": transform_action["ref"],
         "enabled": True,
-        "parameters": {
+        "action_params": {
             "value": "{{ event.payload.input_value }}",
         },
     }
-    rule_a_response = client.post("/rules", json=rule_a_payload)
+    rule_a_response = client.post("/api/v1/rules", json=rule_a_payload)
     assert rule_a_response.status_code == 201
     rule_a = rule_a_response.json()["data"]
     print(f"  ✓ Created rule A with data mapping")
 
     # Rule B: webhook B → final action
-    rule_b_ref = f"data_rule_b_{unique_ref()}"
+    rule_b_ref = f"{pack_ref}.data_rule_b_{unique_ref()}"
     rule_b_payload = {
         "ref": rule_b_ref,
-        "pack": pack_ref,
-        "trigger": webhook_b["ref"],
-        "action": final_action["ref"],
+        "pack_ref": pack_ref,
+        "label": "Data Rule B",
+        "trigger_ref": webhook_b["ref"],
+        "action_ref": final_action["ref"],
         "enabled": True,
-        "parameters": {
+        "action_params": {
             "message": "Received: {{ event.payload.transformed_value }}",
         },
     }
-    rule_b_response = client.post("/rules", json=rule_b_payload)
+    rule_b_response = client.post("/api/v1/rules", json=rule_b_payload)
     assert rule_b_response.status_code == 201
     rule_b = rule_b_response.json()["data"]
     print(f"  ✓ Created rule B with data mapping")
@@ -552,8 +605,10 @@ print(json.dumps({'transformed_value': transformed, 'original': value}))
     test_input = 5
     expected_output = test_input * 2 + 10  # Should be 20
 
-    webhook_a_url = f"/webhooks/{webhook_a['ref']}"
-    webhook_response = client.post(webhook_a_url, json={"input_value": test_input})
+    webhook_a_url = webhook_a["webhook_url"]
+    webhook_response = client.post(
+        webhook_a_url, json={"payload": {"input_value": test_input}}
+    )
     assert webhook_response.status_code == 200
     print(f"✓ Webhook A triggered with input: {test_input}")
     print(f"  Expected transformation: {test_input} → {expected_output}")
@@ -561,22 +616,38 @@ print(json.dumps({'transformed_value': transformed, 'original': value}))
     # Step 6: Wait for execution
     print("\n[STEP 6] Waiting for transformation...")
     time.sleep(3)
-    wait_for_execution_count(client, expected_count=1, timeout=20, operator=">=")
-    executions = client.get("/executions").json()["data"]
-
-    # Find transform execution
-    transform_execs = [
-        e for e in executions if e.get("action") == transform_action["ref"]
-    ]
+    transform_execs = wait_for_execution_count(
+        client,
+        expected_count=1,
+        action_ref=transform_action["ref"],
+        timeout=20,
+        operator=">=",
+    )
+    final_execs = wait_for_execution_count(
+        client,
+        expected_count=1,
+        action_ref=final_action["ref"],
+        timeout=20,
+        operator=">=",
+    )
+    webhook_b_events = wait_for_event_count(
+        client,
+        expected_count=1,
+        trigger_ref=webhook_b["ref"],
+        timeout=20,
+        operator=">=",
+    )
+    assert len(final_execs) >= 1
+    assert len(webhook_b_events) >= 1
 
     if transform_execs:
         transform_exec = transform_execs[0]
         transform_exec = wait_for_execution_completion(
             client, transform_exec["id"], timeout=20
         )
-        print(f"✓ Transform action completed: {transform_exec['status']}")
+        print(f"✓ Transform action succeeded: {transform_exec['status']}")
 
-        if transform_exec["status"] == "succeeded":
+        if transform_exec["status"] == "completed":
             result = transform_exec.get("result", {})
             if isinstance(result, dict):
                 transformed = result.get("transformed_value")
@@ -622,53 +693,50 @@ def test_webhook_chain_error_propagation(client: AttuneClient, test_pack):
 
     # Step 2: Create failing action
     print("\n[STEP 2] Creating failing action...")
-    fail_action_ref = f"fail_chain_action_{unique_ref()}"
-    fail_action_payload = {
-        "ref": fail_action_ref,
-        "pack": pack_ref,
-        "name": "Failing Chain Action",
-        "description": "Action that fails in chain",
-        "runner_type": "python",
-        "entry_point": "raise Exception('Chain failure test')",
-        "enabled": True,
-    }
-    fail_response = client.post("/actions", json=fail_action_payload)
-    assert fail_response.status_code == 201
-    fail_action = fail_response.json()["data"]
+    fail_action = create_failing_action(
+        client=client,
+        pack_ref=pack_ref,
+        name=f"fail_chain_action_{unique_ref()}",
+    )
     print(f"✓ Created failing action: {fail_action['ref']}")
 
     # Step 3: Create rule
     print("\n[STEP 3] Creating rule...")
-    rule_ref = f"error_chain_rule_{unique_ref()}"
+    rule_ref = f"{pack_ref}.error_chain_rule_{unique_ref()}"
     rule_payload = {
         "ref": rule_ref,
-        "pack": pack_ref,
-        "trigger": webhook["ref"],
-        "action": fail_action["ref"],
+        "pack_ref": pack_ref,
+        "label": "Error Chain Rule",
+        "trigger_ref": webhook["ref"],
+        "action_ref": fail_action["ref"],
         "enabled": True,
     }
-    rule_response = client.post("/rules", json=rule_payload)
+    rule_response = client.post("/api/v1/rules", json=rule_payload)
     assert rule_response.status_code == 201
     rule = rule_response.json()["data"]
     print(f"✓ Created rule: {rule['ref']}")
 
     # Step 4: Trigger webhook
     print("\n[STEP 4] Triggering webhook with failing action...")
-    webhook_url = f"/webhooks/{webhook['ref']}"
-    webhook_response = client.post(webhook_url, json={"test": "error"})
+    webhook_url = webhook["webhook_url"]
+    webhook_response = client.post(webhook_url, json={"payload": {"test": "error"}})
     assert webhook_response.status_code == 200
     print(f"✓ Webhook triggered")
 
     # Step 5: Wait and verify failure handling
     print("\n[STEP 5] Verifying error handling...")
     time.sleep(3)
-    wait_for_execution_count(client, expected_count=1, timeout=20)
-    executions = client.get("/executions").json()["data"]
-
+    executions = wait_for_execution_count(
+        client,
+        expected_count=1,
+        action_ref=fail_action["ref"],
+        timeout=20,
+        operator=">=",
+    )
     fail_exec = executions[0]
     fail_exec = wait_for_execution_completion(client, fail_exec["id"], timeout=20)
 
-    print(f"✓ Execution completed: {fail_exec['status']}")
+    print(f"✓ Execution succeeded: {fail_exec['status']}")
     assert fail_exec["status"] == "failed", (
         f"Expected failed status, got {fail_exec['status']}"
     )
@@ -678,8 +746,13 @@ def test_webhook_chain_error_propagation(client: AttuneClient, test_pack):
     print(f"✓ Error captured in execution result")
 
     # Verify webhook event was still created despite failure
-    events = client.get("/events").json()["data"]
-    webhook_events = [e for e in events if e.get("trigger") == webhook["ref"]]
+    webhook_events = wait_for_event_count(
+        client,
+        expected_count=1,
+        trigger_ref=webhook["ref"],
+        timeout=20,
+        operator=">=",
+    )
     assert len(webhook_events) >= 1, "Webhook event should exist despite failure"
     print(f"✓ Webhook event created despite action failure")
 

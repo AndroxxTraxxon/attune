@@ -332,6 +332,8 @@ mod tests {
             webhook_enabled: false,
             webhook_key: None,
             webhook_config: None,
+            sensor: None,
+            sensor_ref: None,
             is_adhoc: false,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),

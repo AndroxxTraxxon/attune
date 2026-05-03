@@ -11,7 +11,7 @@ Duration: ~15 seconds
 import time
 
 import pytest
-from helpers.client import AttuneClient
+from helpers import AttuneClient
 from helpers.fixtures import create_echo_action, create_webhook_trigger, unique_ref
 from helpers.polling import (
     wait_for_event_count,
@@ -49,6 +49,7 @@ def test_webhook_fires_multiple_rules(client: AttuneClient, test_pack):
         pack_ref=pack_ref,
         trigger_ref=trigger_ref,
     )
+    trigger_ref = trigger_response["ref"]
 
     webhook_url = (
         trigger_response.get("webhook_url") or f"/api/v1/webhooks/{trigger_ref}"
@@ -61,12 +62,13 @@ def test_webhook_fires_multiple_rules(client: AttuneClient, test_pack):
     actions = []
 
     for i in range(1, 4):
-        action_ref = create_echo_action(
+        action = create_echo_action(
             client=client,
             pack_ref=pack_ref,
             message=f"Action {i} triggered by webhook",
             suffix=f"_action{i}",
         )
+        action_ref = action["ref"]
         actions.append(action_ref)
         print(f"✓ Action {i} created: {action_ref}")
 
@@ -78,8 +80,8 @@ def test_webhook_fires_multiple_rules(client: AttuneClient, test_pack):
         rule_data = {
             "name": f"Multi-Rule Test Rule {i} {unique_ref()}",
             "description": f"Rule {i} for multi-rule webhook test",
-            "trigger": trigger_ref,
-            "action": action_ref,
+            "trigger_ref": trigger_ref,
+            "action_ref": action_ref,
             "enabled": True,
         }
 
@@ -100,7 +102,7 @@ def test_webhook_fires_multiple_rules(client: AttuneClient, test_pack):
         "message": "Testing multiple rules from single webhook",
     }
 
-    webhook_response = client.post_webhook(trigger_ref, webhook_payload)
+    webhook_response = client.post_webhook(webhook_url, webhook_payload)
     print(f"✓ Webhook POST sent")
     print(f"  Payload: {webhook_payload}")
     print(f"  Response: {webhook_response}")
@@ -193,7 +195,7 @@ def test_webhook_fires_multiple_rules(client: AttuneClient, test_pack):
 
     # Wait a bit more and check again
     time.sleep(3)
-    events_final = client.list_events(trigger=trigger_ref)
+    events_final = client.list_events(trigger_ref=trigger_ref)
 
     if len(events_final) == 1:
         print(f"✓ Still only 1 event (no duplicates)")
@@ -252,6 +254,7 @@ def test_webhook_multiple_posts_multiple_rules(client: AttuneClient, test_pack):
         pack_ref=pack_ref,
         trigger_ref=trigger_ref,
     )
+    trigger_ref = trigger_response["ref"]
     print(f"✓ Webhook trigger created: {trigger_ref}")
 
     # Create 2 actions and rules
@@ -259,18 +262,19 @@ def test_webhook_multiple_posts_multiple_rules(client: AttuneClient, test_pack):
     rules = []
 
     for i in range(1, 3):
-        action_ref = create_echo_action(
+        action = create_echo_action(
             client=client,
             pack_ref=pack_ref,
             message=f"Action {i}",
             suffix=f"_multi{i}",
         )
+        action_ref = action["ref"]
         actions.append(action_ref)
 
         rule_data = {
             "name": f"Multi-POST Rule {i} {unique_ref()}",
-            "trigger": trigger_ref,
-            "action": action_ref,
+            "trigger_ref": trigger_ref,
+            "action_ref": action_ref,
             "enabled": True,
         }
         rule_response = client.create_rule(rule_data)
@@ -286,7 +290,7 @@ def test_webhook_multiple_posts_multiple_rules(client: AttuneClient, test_pack):
             "post_number": i,
             "timestamp": time.time(),
         }
-        client.post_webhook(trigger_ref, payload)
+        client.post_webhook(trigger_response["webhook_url"], payload)
         print(f"✓ POST {i} sent")
         time.sleep(1)  # Small delay between posts
 
@@ -312,7 +316,7 @@ def test_webhook_multiple_posts_multiple_rules(client: AttuneClient, test_pack):
 
     total_executions = 0
     for action_ref in actions:
-        executions = client.list_executions(action=action_ref)
+        executions = client.list_executions(action_ref=action_ref)
         count = len(executions)
         total_executions += count
         print(f"  Action {action_ref}: {count} execution(s)")

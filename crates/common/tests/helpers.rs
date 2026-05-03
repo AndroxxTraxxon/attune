@@ -560,6 +560,8 @@ impl TriggerFixture {
             enabled: self.enabled,
             param_schema: self.param_schema,
             out_schema: self.out_schema,
+            sensor: None,
+            sensor_ref: None,
             is_adhoc: false,
         };
 
@@ -985,21 +987,17 @@ pub struct SensorFixture {
     pub entrypoint: String,
     pub runtime_id: i64,
     pub runtime_ref: String,
-    pub trigger_id: i64,
-    pub trigger_ref: String,
     pub enabled: bool,
     pub param_schema: Option<serde_json::Value>,
 }
 
 impl SensorFixture {
-    /// Create a new sensor fixture with the given pack, runtime, trigger and sensor name
+    /// Create a new sensor fixture with the given pack, runtime and sensor name
     pub fn new(
         pack_id: Option<i64>,
         pack_ref: Option<String>,
         runtime_id: i64,
         runtime_ref: String,
-        trigger_id: i64,
-        trigger_ref: String,
         sensor_name: &str,
     ) -> Self {
         let full_ref = if let Some(p_ref) = &pack_ref {
@@ -1017,8 +1015,6 @@ impl SensorFixture {
             entrypoint: format!("sensors/{}.py", sensor_name),
             runtime_id,
             runtime_ref,
-            trigger_id,
-            trigger_ref,
             enabled: true,
             param_schema: None,
         }
@@ -1030,8 +1026,6 @@ impl SensorFixture {
         pack_ref: Option<String>,
         runtime_id: i64,
         runtime_ref: String,
-        trigger_id: i64,
-        trigger_ref: String,
         base_name: &str,
     ) -> Self {
         let unique_name = unique_sensor_name(base_name);
@@ -1050,8 +1044,6 @@ impl SensorFixture {
             entrypoint: format!("sensors/{}.py", base_name),
             runtime_id,
             runtime_ref,
-            trigger_id,
-            trigger_ref,
             enabled: true,
             param_schema: None,
         }
@@ -1095,8 +1087,6 @@ impl SensorFixture {
             runtime: self.runtime_id,
             runtime_ref: self.runtime_ref,
             runtime_version_constraint: None,
-            trigger: self.trigger_id,
-            trigger_ref: self.trigger_ref,
             enabled: self.enabled,
             param_schema: self.param_schema,
             config: None,

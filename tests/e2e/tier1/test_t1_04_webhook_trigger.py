@@ -74,12 +74,12 @@ class TestWebhookTrigger:
 
         rule = create_rule(
             client=client,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             action_ref=action_ref,
             pack_ref=pack_ref,
             enabled=True,
-            action_parameters={
-                "message": "{{ trigger.data.message }}",
+            action_params={
+                "message": "{{ event.payload.message }}",
                 "count": 1,
             },
         )
@@ -98,7 +98,7 @@ class TestWebhookTrigger:
         print(f"  Payload: {webhook_payload}")
 
         event_response = client.fire_webhook(
-            trigger_id=trigger["id"], payload=webhook_payload
+            trigger_ref=trigger["ref"], payload=webhook_payload
         )
         print(f"✓ Webhook fired")
         print(f"  Event ID: {event_response.get('id')}")
@@ -108,7 +108,7 @@ class TestWebhookTrigger:
         events = wait_for_event_count(
             client=client,
             expected_count=1,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             timeout=10,
             poll_interval=0.5,
         )
@@ -134,7 +134,7 @@ class TestWebhookTrigger:
 
         print(f"✓ Event payload matches webhook payload")
 
-        # Step 6: Verify execution completed with webhook data
+        # Step 6: Verify execution succeeded with webhook data
         print("\n[6/6] Verifying execution with webhook data...")
 
         executions = wait_for_execution_count(
@@ -177,7 +177,7 @@ class TestWebhookTrigger:
         print(f"✓ Webhook trigger created")
         print(f"✓ Webhook POST created event")
         print(f"✓ Event payload correct")
-        print(f"✓ Execution completed successfully")
+        print(f"✓ Execution succeeded successfully")
         print(f"✓ Webhook data accessible in action")
         print(f"✓ Test PASSED")
 
@@ -198,7 +198,7 @@ class TestWebhookTrigger:
         action = create_echo_action(client=client, pack_ref=pack_ref)
         rule = create_rule(
             client=client,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             action_ref=action["ref"],
             pack_ref=pack_ref,
         )
@@ -212,7 +212,7 @@ class TestWebhookTrigger:
                 "message": f"Webhook post #{i + 1}",
                 "timestamp": time.time(),
             }
-            client.fire_webhook(trigger_id=trigger["id"], payload=payload)
+            client.fire_webhook(trigger_ref=trigger["ref"], payload=payload)
             print(f"  ✓ POST {i + 1}/{num_posts}")
             time.sleep(0.5)  # Small delay between posts
 
@@ -221,7 +221,7 @@ class TestWebhookTrigger:
         events = wait_for_event_count(
             client=client,
             expected_count=num_posts,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             timeout=15,
             poll_interval=0.5,
         )
@@ -230,7 +230,7 @@ class TestWebhookTrigger:
         assert len(events) >= num_posts
 
         # Verify executions created
-        print(f"\n[4/4] Verifying {num_posts} executions completed...")
+        print(f"\n[4/4] Verifying {num_posts} executions succeeded...")
         executions = wait_for_execution_count(
             client=client,
             expected_count=num_posts,
@@ -259,13 +259,13 @@ class TestWebhookTrigger:
         print(f"✓ {succeeded}/{num_posts} executions succeeded")
         # Allow 1 failure due to artifact version race condition
         assert succeeded >= num_posts - 1, (
-            f"Too many failures: only {succeeded}/{num_posts} completed"
+            f"Too many failures: only {succeeded}/{num_posts} succeeded"
         )
 
         print("\n=== Test Summary ===")
         print(f"✓ {num_posts} webhook POSTs handled")
         print(f"✓ {num_posts} events created")
-        print(f"✓ {num_posts} executions completed")
+        print(f"✓ {num_posts} executions succeeded")
         print(f"✓ Test PASSED")
 
     def test_webhook_with_complex_payload(self, client: AttuneClient, pack_ref: str):
@@ -283,7 +283,7 @@ class TestWebhookTrigger:
         action = create_echo_action(client=client, pack_ref=pack_ref)
         rule = create_rule(
             client=client,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             action_ref=action["ref"],
             pack_ref=pack_ref,
         )
@@ -314,7 +314,7 @@ class TestWebhookTrigger:
             "timestamp": "2024-01-01T00:00:00Z",
         }
 
-        client.fire_webhook(trigger_id=trigger["id"], payload=complex_payload)
+        client.fire_webhook(trigger_ref=trigger["ref"], payload=complex_payload)
         print(f"✓ Complex payload posted")
 
         # Verify event and execution
@@ -322,7 +322,7 @@ class TestWebhookTrigger:
         events = wait_for_event_count(
             client=client,
             expected_count=1,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             timeout=10,
         )
 
@@ -359,12 +359,12 @@ class TestWebhookTrigger:
             )
 
         assert execution["status"] == "completed"
-        print(f"✓ Execution completed successfully")
+        print(f"✓ Execution succeeded successfully")
 
         print("\n=== Test Summary ===")
         print(f"✓ Complex nested payload handled")
         print(f"✓ JSON structure preserved")
-        print(f"✓ Execution completed")
+        print(f"✓ Execution succeeded")
         print(f"✓ Test PASSED")
 
     def test_webhook_without_payload(self, client: AttuneClient, pack_ref: str):
@@ -381,20 +381,20 @@ class TestWebhookTrigger:
         action = create_echo_action(client=client, pack_ref=pack_ref)
         rule = create_rule(
             client=client,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             action_ref=action["ref"],
             pack_ref=pack_ref,
         )
 
         # Fire webhook with empty payload
         print("\nFiring webhook with empty payload...")
-        client.fire_webhook(trigger_id=trigger["id"], payload={})
+        client.fire_webhook(trigger_ref=trigger["ref"], payload={})
 
         # Verify event created
         events = wait_for_event_count(
             client=client,
             expected_count=1,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             timeout=10,
         )
 

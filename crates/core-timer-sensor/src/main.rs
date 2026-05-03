@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
     info!("API connectivity verified");
 
     // Create timer manager
-    let timer_manager = TimerManager::new(api_client.clone())
+    let timer_manager = TimerManager::new(api_client.clone(), config.sensor_ref.clone())
         .await
         .context("Failed to initialize timer manager")?;
     info!("Timer manager initialized");

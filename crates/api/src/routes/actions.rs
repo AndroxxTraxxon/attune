@@ -226,8 +226,8 @@ pub async fn create_action(
             .await?;
     }
 
-    // If runtime is specified, we could verify it exists (future enhancement)
-    // For now, the database foreign key constraint will handle invalid runtime IDs
+    let runtime =
+        resolve_runtime_id(&state, request.runtime, request.runtime_ref.as_deref()).await?;
 
     // Create action input
     let action_input = CreateActionInput {
@@ -237,7 +237,7 @@ pub async fn create_action(
         label: request.label,
         description: request.description,
         entrypoint: request.entrypoint,
-        runtime: request.runtime,
+        runtime,
         runtime_version_constraint: request.runtime_version_constraint,
         required_worker_runtimes: json!(request.required_worker_runtimes),
         param_schema: request.param_schema,
@@ -306,12 +306,15 @@ pub async fn update_action(
             .await?;
     }
 
+    let runtime =
+        resolve_runtime_id(&state, request.runtime, request.runtime_ref.as_deref()).await?;
+
     // Create update input
     let update_input = UpdateActionInput {
         label: request.label,
         description: request.description.map(Patch::Set),
         entrypoint: request.entrypoint,
-        runtime: request.runtime,
+        runtime,
         runtime_version_constraint: request.runtime_version_constraint.map(|patch| match patch {
             RuntimeVersionConstraintPatch::Set(value) => Patch::Set(value),
             RuntimeVersionConstraintPatch::Clear => Patch::Clear,
@@ -560,6 +563,23 @@ async fn resolve_runtime_ref(
     };
     let refs = RuntimeRepository::find_refs_by_ids(&state.db, &[id]).await?;
     Ok(refs.get(&id).cloned())
+}
+
+async fn resolve_runtime_id(
+    state: &Arc<AppState>,
+    runtime_id: Option<i64>,
+    runtime_ref: Option<&str>,
+) -> ApiResult<Option<i64>> {
+    if runtime_id.is_some() {
+        return Ok(runtime_id);
+    }
+    let Some(runtime_ref) = runtime_ref else {
+        return Ok(None);
+    };
+    let runtime = RuntimeRepository::find_by_ref(&state.db, runtime_ref)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Runtime '{}' not found", runtime_ref)))?;
+    Ok(Some(runtime.id))
 }
 
 #[cfg(test)]

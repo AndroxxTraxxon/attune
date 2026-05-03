@@ -715,7 +715,8 @@ When reporting, ask: "Should I fix this first or continue with [original task]?"
 - `scripts/build-pack-binaries.sh` - Build pack binaries script
 
 ## Common Pitfalls to Avoid
-1. **NEVER** bypass repositories - always use the repository layer for DB access
+1. **NEVER** commit to git - only the user commits. You may stage files (`git add`) but never run `git commit`.
+2. **NEVER** bypass repositories - always use the repository layer for DB access
 2. **NEVER** forget `RequireAuth` middleware on protected endpoints
 3. **NEVER** hardcode service URLs - use configuration
 4. **NEVER** commit secrets in config files (use env vars in production)

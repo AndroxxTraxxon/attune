@@ -9,7 +9,7 @@ Duration: ~5 seconds
 """
 
 import pytest
-from helpers.client import AttuneClient
+from helpers import AttuneClient
 from helpers.fixtures import unique_ref
 from helpers.polling import wait_for_execution_status
 
@@ -51,11 +51,11 @@ print(f"Successfully processed URL: {url}")
         "ref": action_ref,
         "name": "Parameter Validation Test Action",
         "description": "Requires 'url' parameter",
-        "runner_type": "python",
-        "entry_point": "main.py",
-        "pack": pack_ref,
+        "runtime_ref": "core.shell",
+        "entrypoint": 'if [ -z "${url:-}" ]; then echo "ERROR: Missing required parameter: url"; exit 1; fi; echo "Successfully processed URL: $url"',
+        "pack_ref": pack_ref,
         "enabled": True,
-        "parameters": {
+        "param_schema": {
             "url": {
                 "type": "string",
                 "required": True,
@@ -72,20 +72,16 @@ print(f"Successfully processed URL: {url}")
 
     action_response = client.create_action(action_data)
     assert "id" in action_response, "Action creation failed"
+    action_ref = action_response["ref"]
     print(f"✓ Action created: {action_ref}")
     print(f"  Required parameters: url")
     print(f"  Optional parameters: timeout (default: 30)")
-
-    # Upload action files
-    files = {"main.py": action_script}
-    client.upload_action_files(action_ref, files)
-    print(f"✓ Action files uploaded")
 
     # Step 2: Execute action WITHOUT required parameter
     print("\n[STEP 2] Executing action without required parameter...")
 
     execution_data = {
-        "action": action_ref,
+        "action_ref": action_ref,
         "parameters": {
             # Missing 'url' parameter intentionally
             "timeout": 60
@@ -105,11 +101,11 @@ print(f"Successfully processed URL: {url}")
     final_exec = wait_for_execution_status(
         client=client,
         execution_id=execution_id,
-        expected_status=["failed", "succeeded"],  # Should fail
+        expected_status=["failed", "completed"],  # Should fail
         timeout=15,
     )
 
-    print(f"✓ Execution completed with status: {final_exec['status']}")
+    print(f"✓ Execution succeeded with status: {final_exec['status']}")
 
     # Step 4: Verify error handling
     print("\n[STEP 4] Verifying error handling...")
@@ -203,11 +199,11 @@ print("All parameters have correct types")
     action_data = {
         "ref": action_ref,
         "name": "Type Validation Test Action",
-        "runner_type": "python",
-        "entry_point": "main.py",
-        "pack": pack_ref,
+        "runtime_ref": "core.shell",
+        "entrypoint": 'echo "Port: $port (type: shell)"; echo "Enabled: $enabled (type: shell)"; case "${port:-}" in ""|*[!0-9]*) echo "ERROR: Expected integer for port"; exit 1;; esac; if [ "${enabled:-}" != "true" ] && [ "${enabled:-}" != "false" ]; then echo "ERROR: Expected boolean for enabled"; exit 1; fi; echo "All parameters have correct types"',
+        "pack_ref": pack_ref,
         "enabled": True,
-        "parameters": {
+        "param_schema": {
             "port": {
                 "type": "integer",
                 "required": True,
@@ -222,17 +218,15 @@ print("All parameters have correct types")
     }
 
     action_response = client.create_action(action_data)
+    action_ref = action_response["ref"]
     print(f"✓ Action created: {action_ref}")
     print(f"  Parameters: port (integer), enabled (boolean)")
-
-    files = {"main.py": action_script}
-    client.upload_action_files(action_ref, files)
 
     # Step 2: Execute with invalid types
     print("\n[STEP 2] Executing with string instead of integer...")
 
     execution_data = {
-        "action": action_ref,
+        "action_ref": action_ref,
         "parameters": {
             "port": "8080",  # String instead of integer
             "enabled": True,
@@ -247,7 +241,7 @@ print("All parameters have correct types")
     final_exec = wait_for_execution_status(
         client=client,
         execution_id=execution_id,
-        expected_status=["failed", "succeeded"],
+        expected_status=["failed", "completed"],
         timeout=15,
     )
 
@@ -260,7 +254,7 @@ print("All parameters have correct types")
     print("\n[STEP 3] Executing with correct types...")
 
     execution_data = {
-        "action": action_ref,
+        "action_ref": action_ref,
         "parameters": {
             "port": 8080,  # Correct integer
             "enabled": True,  # Correct boolean
@@ -274,7 +268,7 @@ print("All parameters have correct types")
     final_exec = wait_for_execution_status(
         client=client,
         execution_id=execution_id,
-        expected_status="succeeded",
+        expected_status="completed",
         timeout=15,
     )
 
@@ -332,17 +326,17 @@ if unexpected:
     print(f"Unexpected parameters: {list(unexpected)}")
     print("These will be ignored (not an error)")
 
-print("Execution completed successfully")
+print("Execution succeeded successfully")
 """
 
     action_data = {
         "ref": action_ref,
         "name": "Extra Parameters Test Action",
-        "runner_type": "python",
-        "entry_point": "main.py",
-        "pack": pack_ref,
+        "runtime_ref": "core.shell",
+        "entrypoint": 'echo "Received parameters: message"; if [ -n "${message:-}" ]; then echo "Message: $message"; else echo "No message parameter"; fi; echo "Unexpected parameters: extra parameters are ignored"; echo "Execution succeeded successfully"',
+        "pack_ref": pack_ref,
         "enabled": True,
-        "parameters": {
+        "param_schema": {
             "message": {
                 "type": "string",
                 "required": True,
@@ -352,17 +346,15 @@ print("Execution completed successfully")
     }
 
     action_response = client.create_action(action_data)
+    action_ref = action_response["ref"]
     print(f"✓ Action created: {action_ref}")
     print(f"  Expected parameters: message")
-
-    files = {"main.py": action_script}
-    client.upload_action_files(action_ref, files)
 
     # Step 2: Execute with extra parameters
     print("\n[STEP 2] Executing with extra parameters...")
 
     execution_data = {
-        "action": action_ref,
+        "action_ref": action_ref,
         "parameters": {
             "message": "Hello, World!",
             "extra_param_1": "unexpected",
@@ -380,7 +372,7 @@ print("Execution completed successfully")
     final_exec = wait_for_execution_status(
         client=client,
         execution_id=execution_id,
-        expected_status="succeeded",
+        expected_status="completed",
         timeout=15,
     )
 
@@ -437,17 +429,17 @@ debug = params.get('debug', False)
 print(f"Message: {message}")
 print(f"Count: {count}")
 print(f"Debug: {debug}")
-print("Execution completed")
+print("Execution succeeded")
 """
 
     action_data = {
         "ref": action_ref,
         "name": "Default Values Test Action",
-        "runner_type": "python",
-        "entry_point": "main.py",
-        "pack": pack_ref,
+        "runtime_ref": "core.shell",
+        "entrypoint": 'echo "Message: ${message:-Hello from defaults}"; echo "Count: ${count:-3}"; echo "Debug: ${debug:-False}"; echo "Execution succeeded"',
+        "pack_ref": pack_ref,
         "enabled": True,
-        "parameters": {
+        "param_schema": {
             "message": {
                 "type": "string",
                 "required": False,
@@ -470,17 +462,15 @@ print("Execution completed")
     }
 
     action_response = client.create_action(action_data)
+    action_ref = action_response["ref"]
     print(f"✓ Action created: {action_ref}")
     print(f"  Default values: message='Hello from defaults', count=3, debug=False")
-
-    files = {"main.py": action_script}
-    client.upload_action_files(action_ref, files)
 
     # Step 2: Execute without providing optional parameters
     print("\n[STEP 2] Executing without optional parameters...")
 
     execution_data = {
-        "action": action_ref,
+        "action_ref": action_ref,
         "parameters": {},  # No parameters provided
     }
 
@@ -492,7 +482,7 @@ print("Execution completed")
     final_exec = wait_for_execution_status(
         client=client,
         execution_id=execution_id,
-        expected_status="succeeded",
+        expected_status="completed",
         timeout=15,
     )
 
@@ -523,7 +513,7 @@ print("Execution completed")
     print("\n[STEP 3] Executing with explicit values (override defaults)...")
 
     execution_data = {
-        "action": action_ref,
+        "action_ref": action_ref,
         "parameters": {
             "message": "Custom message",
             "count": 10,
@@ -538,7 +528,7 @@ print("Execution completed")
     final_exec = wait_for_execution_status(
         client=client,
         execution_id=execution_id,
-        expected_status="succeeded",
+        expected_status="completed",
         timeout=15,
     )
 

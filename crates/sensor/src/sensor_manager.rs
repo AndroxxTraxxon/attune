@@ -13,7 +13,8 @@
 use anyhow::{anyhow, Result};
 use attune_common::models::{runtime::RuntimeExecutionConfig, Id, Sensor, Trigger};
 use attune_common::repositories::{
-    FindById, List, RuntimeRepository, RuntimeVersionRepository, WorkerRepository,
+    FindById, List, RuntimeRepository, RuntimeVersionRepository, TriggerRepository,
+    WorkerRepository,
 };
 use attune_common::runtime_detection::normalize_runtime_name;
 use attune_common::version_matching::select_best_version;
@@ -227,13 +228,10 @@ impl SensorManager {
         info!("Loaded {} enabled sensor(s)", sensors.len());
 
         for sensor in sensors {
-            // Only start sensors that have active rules
-            match self.has_active_rules(sensor.trigger).await {
+            // Only start sensors that have active rules (across all their triggers)
+            match self.sensor_has_active_rules(sensor.id).await {
                 Ok(true) => {
-                    let count = self
-                        .get_active_rule_count(sensor.trigger)
-                        .await
-                        .unwrap_or(0);
+                    let count = self.sensor_active_rule_count(sensor.id).await.unwrap_or(0);
                     info!(
                         "Starting sensor {} - has {} active rule(s)",
                         sensor.r#ref, count
@@ -422,12 +420,22 @@ impl SensorManager {
     async fn start_sensor(&self, sensor: Sensor) -> Result<()> {
         info!("Starting sensor {} ({})", sensor.r#ref, sensor.id);
 
-        // Load trigger information
-        let trigger = self.load_trigger(sensor.trigger).await?;
+        // Load all triggers that this sensor emits
+        let triggers = TriggerRepository::find_by_sensor(&self.inner.db, sensor.id)
+            .await
+            .map_err(|e| anyhow!("Failed to load triggers for sensor {}: {}", sensor.r#ref, e))?;
+
+        if triggers.is_empty() {
+            warn!(
+                "Sensor {} has no associated triggers, skipping start",
+                sensor.r#ref
+            );
+            return Ok(());
+        }
 
         // All sensors are now standalone processes
         let instance = self
-            .start_standalone_sensor(sensor.clone(), trigger)
+            .start_standalone_sensor(sensor.clone(), triggers)
             .await?;
 
         // Store instance
@@ -442,12 +450,12 @@ impl SensorManager {
     async fn start_standalone_sensor(
         &self,
         sensor: Sensor,
-        trigger: Trigger,
+        triggers: Vec<Trigger>,
     ) -> Result<SensorInstance> {
         info!("Starting standalone sensor: {}", sensor.r#ref);
 
-        // Get trigger types
-        let trigger_types = vec![trigger.r#ref.clone()];
+        // Get all trigger type refs for token provisioning
+        let trigger_types: Vec<String> = triggers.iter().map(|t| t.r#ref.clone()).collect();
 
         // Provision sensor token via API
         info!("Provisioning token for sensor: {}", sensor.r#ref);
@@ -571,28 +579,33 @@ impl SensorManager {
         );
         info!("Starting standalone sensor process: {}", sensor_script);
 
-        // Fetch trigger instances (enabled rules with their trigger params)
+        // Fetch trigger instances (enabled rules with their trigger params) for ALL triggers
         info!(
-            "About to fetch trigger instances for sensor {} (trigger_id: {})",
-            sensor.r#ref, sensor.trigger
+            "About to fetch trigger instances for sensor {} ({} trigger(s))",
+            sensor.r#ref,
+            triggers.len()
         );
-        let trigger_instances = match self.fetch_trigger_instances(sensor.trigger).await {
-            Ok(instances) => {
-                info!(
-                    "Fetched {} trigger instance(s) for sensor {}",
-                    instances.len(),
-                    sensor.r#ref
-                );
-                instances
+        let mut trigger_instances = Vec::new();
+        for trig in &triggers {
+            match self.fetch_trigger_instances(trig.id).await {
+                Ok(instances) => {
+                    info!(
+                        "Fetched {} trigger instance(s) for trigger {} (sensor {})",
+                        instances.len(),
+                        trig.r#ref,
+                        sensor.r#ref
+                    );
+                    trigger_instances.extend(instances);
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to fetch trigger instances for trigger {} (sensor {}): {}",
+                        trig.r#ref, sensor.r#ref, e
+                    );
+                    return Err(e);
+                }
             }
-            Err(e) => {
-                error!(
-                    "Failed to fetch trigger instances for sensor {}: {}",
-                    sensor.r#ref, e
-                );
-                return Err(e);
-            }
-        };
+        }
 
         let trigger_instances_json = serde_json::to_string(&trigger_instances)
             .map_err(|e| anyhow!("Failed to serialize trigger instances: {}", e))?;
@@ -729,15 +742,6 @@ impl SensorManager {
             stdout_handle,
             stderr_handle,
         ))
-    }
-
-    /// Load trigger information
-    async fn load_trigger(&self, trigger_id: Id) -> Result<Trigger> {
-        use attune_common::repositories::TriggerRepository;
-
-        TriggerRepository::find_by_id(&self.inner.db, trigger_id)
-            .await?
-            .ok_or_else(|| anyhow!("Trigger {} not found", trigger_id))
     }
 
     /// Resolve a sensor's `runtime_version_constraint` against the locally
@@ -986,34 +990,36 @@ impl SensorManager {
         false
     }
 
-    /// Check if a trigger has any active/enabled rules
-    async fn has_active_rules(&self, trigger_id: Id) -> Result<bool> {
+    /// Check if a sensor has active rules across any of its triggers
+    async fn sensor_has_active_rules(&self, sensor_id: Id) -> Result<bool> {
         let count = sqlx::query_scalar::<_, i64>(
             r#"
             SELECT COUNT(*)
-            FROM rule
-            WHERE trigger = $1
-              AND enabled = TRUE
+            FROM rule r
+            JOIN trigger t ON r.trigger = t.id
+            WHERE t.sensor = $1
+              AND r.enabled = TRUE
             "#,
         )
-        .bind(trigger_id)
+        .bind(sensor_id)
         .fetch_one(&self.inner.db)
         .await?;
 
         Ok(count > 0)
     }
 
-    /// Get count of active rules for a trigger
-    async fn get_active_rule_count(&self, trigger_id: Id) -> Result<i64> {
+    /// Get count of active rules across all triggers for a sensor
+    async fn sensor_active_rule_count(&self, sensor_id: Id) -> Result<i64> {
         let count = sqlx::query_scalar::<_, i64>(
             r#"
             SELECT COUNT(*)
-            FROM rule
-            WHERE trigger = $1
-              AND enabled = TRUE
+            FROM rule r
+            JOIN trigger t ON r.trigger = t.id
+            WHERE t.sensor = $1
+              AND r.enabled = TRUE
             "#,
         )
-        .bind(trigger_id)
+        .bind(sensor_id)
         .fetch_one(&self.inner.db)
         .await?;
 
@@ -1082,33 +1088,41 @@ impl SensorManager {
     pub async fn handle_rule_change(&self, trigger_id: Id) -> Result<()> {
         info!("Handling rule change for trigger {}", trigger_id);
 
-        // Find sensors for this trigger
-        let sensors = sqlx::query_as::<_, Sensor>(
+        // Find the sensor for this trigger (via trigger.sensor)
+        let trigger = sqlx::query_as::<_, Trigger>(
             r#"
-            SELECT
-                id,
-                ref,
-                pack,
-                pack_ref,
-                label,
-                description,
-                entrypoint,
-                runtime,
-                runtime_ref,
-                runtime_version_constraint,
-                trigger,
-                trigger_ref,
-                enabled,
-                param_schema,
-                config,
-                created,
-                updated
-            FROM sensor
-            WHERE trigger = $1
-              AND enabled = TRUE
+            SELECT id, ref, pack, pack_ref, label, description, enabled,
+                   param_schema, out_schema, webhook_enabled, webhook_key, webhook_config,
+                   sensor, sensor_ref, is_adhoc, created, updated
+            FROM trigger
+            WHERE id = $1
             "#,
         )
         .bind(trigger_id)
+        .fetch_optional(&self.inner.db)
+        .await?;
+
+        let sensor_id = match trigger.and_then(|t| t.sensor) {
+            Some(id) => id,
+            None => {
+                info!("Trigger {} has no associated sensor, skipping", trigger_id);
+                return Ok(());
+            }
+        };
+
+        // Load the sensor
+        let sensors = sqlx::query_as::<_, Sensor>(
+            r#"
+            SELECT
+                id, ref, pack, pack_ref, label, description, entrypoint,
+                runtime, runtime_ref, runtime_version_constraint,
+                enabled, param_schema, config, created, updated
+            FROM sensor
+            WHERE id = $1
+              AND enabled = TRUE
+            "#,
+        )
+        .bind(sensor_id)
         .fetch_all(&self.inner.db)
         .await?;
 
@@ -1116,8 +1130,8 @@ impl SensorManager {
             // Check if sensor is running
             let is_running = self.inner.sensors.read().await.contains_key(&sensor.id);
 
-            // Check if sensor should be running (has active rules)
-            let should_run = self.has_active_rules(trigger_id).await?;
+            // Check if sensor should be running (has active rules across any trigger)
+            let should_run = self.sensor_has_active_rules(sensor.id).await?;
 
             match (is_running, should_run) {
                 (false, true) => {
@@ -1241,9 +1255,8 @@ impl SensorManager {
             r#"
             SELECT COUNT(DISTINCT rule.id)
             FROM rule
-            JOIN sensor ON sensor.trigger = rule.trigger
-            WHERE sensor.id = ANY($1)
-              AND sensor.enabled = TRUE
+            JOIN trigger ON trigger.id = rule.trigger
+            WHERE trigger.sensor = ANY($1)
               AND rule.enabled = TRUE
             "#,
         )

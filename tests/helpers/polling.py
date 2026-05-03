@@ -6,17 +6,21 @@ during end-to-end testing.
 """
 
 import time
+import os
 from typing import Any, Callable, List, Optional
 
 from requests.models import HTTPError
 
-from .client import AttuneClient
+from .client_wrapper import AttuneClient
+
+
+DEFAULT_POLL_INTERVAL = float(os.getenv("ATTUNE_E2E_POLL_INTERVAL", "0.25"))
 
 
 def wait_for_condition(
     condition_fn: Callable[[], bool],
     timeout: float = 30.0,
-    poll_interval: float = 0.5,
+    poll_interval: float = DEFAULT_POLL_INTERVAL,
     error_message: str = "Condition not met within timeout",
 ) -> bool:
     """
@@ -41,8 +45,10 @@ def wait_for_condition(
         try:
             if condition_fn():
                 return True
+        except (UnexpectedTerminalStatusError, KeyboardInterrupt):
+            raise  # Never swallow these
         except Exception:
-            # Ignore exceptions during polling (e.g., 404 errors)
+            # Ignore transient exceptions during polling (e.g., 404 errors)
             pass
 
         time.sleep(poll_interval)
@@ -51,12 +57,36 @@ def wait_for_condition(
     raise TimeoutError(f"{error_message} (waited {elapsed:.1f}s)")
 
 
+class UnexpectedTerminalStatusError(Exception):
+    """Raised when an execution reaches a terminal status other than the expected one."""
+
+    def __init__(self, execution_id: int, expected: str, actual: str, result: Any = None):
+        self.execution_id = execution_id
+        self.expected = expected
+        self.actual = actual
+        self.result = result
+        detail = ""
+        if isinstance(result, dict):
+            detail = f" — {result.get('error', result)}"
+        elif result is not None:
+            detail = f" — {result}"
+        super().__init__(
+            f"Execution {execution_id} reached terminal status '{actual}' "
+            f"(expected '{expected}'){detail}"
+        )
+
+
+TERMINAL_STATUSES = frozenset([
+    "completed", "failed", "cancelled", "timeout", "abandoned",
+])
+
+
 def wait_for_execution_status(
     client: AttuneClient,
     execution_id: int,
-    expected_status: str,
+    expected_status: str | list[str],
     timeout: float = 30.0,
-    poll_interval: float = 0.5,
+    poll_interval: float = DEFAULT_POLL_INTERVAL,
 ) -> dict:
     """
     Wait for execution to reach expected status
@@ -64,7 +94,7 @@ def wait_for_execution_status(
     Args:
         client: AttuneClient instance
         execution_id: Execution ID to monitor
-        expected_status: Expected status (succeeded, failed, canceled, etc)
+        expected_status: Expected status (completed, failed, cancelled, etc)
         timeout: Maximum time to wait in seconds
         poll_interval: Time between status checks
 
@@ -72,14 +102,26 @@ def wait_for_execution_status(
         Final execution object
 
     Raises:
+        UnexpectedTerminalStatusError: If execution reaches a different terminal status
         TimeoutError: If status not reached within timeout
     """
     execution = client.get_execution(execution_id)
 
+    expected_values = expected_status if isinstance(expected_status, list) else [expected_status]
+    expected_values = set(expected_values)
+
     def check_status():
         nonlocal execution
         execution = client.get_execution(execution_id)
-        return execution["status"] == expected_status
+        status = execution["status"]
+        if status in expected_values:
+            return True
+        # Bail early if a different terminal status was reached
+        if status in TERMINAL_STATUSES:
+            raise UnexpectedTerminalStatusError(
+                execution_id, str(expected_status), status, execution.get("result")
+            )
+        return False
 
     wait_for_condition(
         check_status,
@@ -95,12 +137,12 @@ def wait_for_execution_completion(
     client: AttuneClient,
     execution_id: int,
     timeout: float = 30.0,
-    poll_interval: float = 0.5,
+    poll_interval: float = DEFAULT_POLL_INTERVAL,
 ) -> dict:
     """
     Wait for execution to complete (reach terminal status)
 
-    Terminal statuses are: succeeded, failed, canceled, timeout
+    Terminal statuses are: completed, failed, cancelled, timeout
 
     Args:
         client: AttuneClient instance
@@ -119,8 +161,7 @@ def wait_for_execution_completion(
     def check_completion():
         nonlocal execution
         execution = client.get_execution(execution_id)
-        terminal_statuses = ["completed", "failed", "cancelled", "timeout", "abandoned"]
-        return execution["status"] in terminal_statuses
+        return execution["status"] in TERMINAL_STATUSES
 
     wait_for_condition(
         check_completion,
@@ -141,7 +182,7 @@ def wait_for_execution_count(
     rule_id: Optional[int] = None,
     created_after: Optional[str] = None,
     timeout: float = 30.0,
-    poll_interval: float = 0.5,
+    poll_interval: float = DEFAULT_POLL_INTERVAL,
     operator: str = ">=",
     verbose: bool = False,
 ) -> List[dict]:
@@ -274,10 +315,11 @@ def wait_for_event_count(
     client: AttuneClient,
     expected_count: int,
     trigger_id: Optional[int] = None,
+    trigger_ref: Optional[str] = None,
     rule_id: Optional[int] = None,
     created_after: Optional[str] = None,
     timeout: float = 30.0,
-    poll_interval: float = 0.5,
+    poll_interval: float = DEFAULT_POLL_INTERVAL,
     operator: str = ">=",
 ) -> List[dict]:
     """
@@ -287,6 +329,7 @@ def wait_for_event_count(
         client: AttuneClient instance
         expected_count: Expected number of events
         trigger_id: Optional filter by trigger ID
+        trigger_ref: Optional filter by trigger ref (e.g. "core.crontimer")
         rule_id: Optional filter by rule ID (events have a 'rule' field)
         created_after: Optional ISO timestamp - only count events created after this time
         timeout: Maximum time to wait
@@ -303,7 +346,9 @@ def wait_for_event_count(
 
     def check_count():
         nonlocal events
-        all_events = client.list_events(trigger_id=trigger_id, limit=1000, enrich=False)
+        all_events = client.list_events(
+            trigger_id=trigger_id, trigger_ref=trigger_ref, limit=1000, enrich=False
+        )
 
         filtered = all_events
 
@@ -339,7 +384,7 @@ def wait_for_event_count(
         else:
             raise ValueError(f"Invalid operator: {operator}")
 
-    filter_desc = f" for trigger {trigger_id}" if trigger_id else ""
+    filter_desc = f" for trigger {trigger_ref or trigger_id}" if (trigger_id or trigger_ref) else ""
 
     wait_for_condition(
         check_count,
@@ -368,7 +413,7 @@ def wait_for_enforcement_count(
     expected_count: int,
     rule_id: Optional[int] = None,
     timeout: float = 30.0,
-    poll_interval: float = 0.5,
+    poll_interval: float = DEFAULT_POLL_INTERVAL,
     operator: str = ">=",
 ) -> List[dict]:
     """
@@ -425,7 +470,7 @@ def wait_for_inquiry_status(
     inquiry_id: int,
     expected_status: str,
     timeout: float = 30.0,
-    poll_interval: float = 0.5,
+    poll_interval: float = DEFAULT_POLL_INTERVAL,
 ) -> dict:
     """
     Wait for inquiry to reach expected status
@@ -465,7 +510,7 @@ def wait_for_inquiry_count(
     expected_count: int,
     status: Optional[str] = None,
     timeout: float = 30.0,
-    poll_interval: float = 0.5,
+    poll_interval: float = DEFAULT_POLL_INTERVAL,
     operator: str = ">=",
 ) -> List[dict]:
     """

@@ -11,7 +11,7 @@ Duration: ~30 seconds
 import time
 
 import pytest
-from helpers.client import AttuneClient
+from helpers import AttuneClient
 from helpers.fixtures import create_echo_action, create_interval_timer, unique_ref
 from helpers.polling import wait_for_execution_count
 
@@ -39,52 +39,43 @@ def test_multiple_concurrent_timers(client: AttuneClient, test_pack):
 
     pack_ref = test_pack["ref"]
 
-    # Step 1: Create three timers with different intervals
-    print("\n[STEP 1] Creating three interval timers...")
+    # Step 1: Create actions and three timers with different intervals
+    print("\n[STEP 1] Creating actions and three interval timer rules...")
 
     timers = []
 
     # Timer A: 3 seconds
     trigger_a = f"timer_3s_{unique_ref()}"
+    action_a = create_echo_action(
+        client=client, pack_ref=pack_ref, message="Timer A tick", suffix="_3s"
+    )["ref"]
     create_interval_timer(
-        client=client, pack_ref=pack_ref, trigger_ref=trigger_a, interval=3
+        client=client, pack_ref=pack_ref, trigger_ref=trigger_a, interval=3, action_ref=action_a
     )
-    timers.append({"trigger": trigger_a, "interval": 3, "name": "Timer A"})
+    timers.append({"trigger": trigger_a, "interval": 3, "name": "Timer A", "action_ref": action_a})
     print(f"✓ Timer A created: {trigger_a} (3 seconds)")
 
     # Timer B: 5 seconds
     trigger_b = f"timer_5s_{unique_ref()}"
+    action_b = create_echo_action(
+        client=client, pack_ref=pack_ref, message="Timer B tick", suffix="_5s"
+    )["ref"]
     create_interval_timer(
-        client=client, pack_ref=pack_ref, trigger_ref=trigger_b, interval=5
+        client=client, pack_ref=pack_ref, trigger_ref=trigger_b, interval=5, action_ref=action_b
     )
-    timers.append({"trigger": trigger_b, "interval": 5, "name": "Timer B"})
+    timers.append({"trigger": trigger_b, "interval": 5, "name": "Timer B", "action_ref": action_b})
     print(f"✓ Timer B created: {trigger_b} (5 seconds)")
 
     # Timer C: 7 seconds
     trigger_c = f"timer_7s_{unique_ref()}"
-    create_interval_timer(
-        client=client, pack_ref=pack_ref, trigger_ref=trigger_c, interval=7
-    )
-    timers.append({"trigger": trigger_c, "interval": 7, "name": "Timer C"})
-    print(f"✓ Timer C created: {trigger_c} (7 seconds)")
-
-    # Step 2: Create actions for each timer
-    print("\n[STEP 2] Creating actions for each timer...")
-
-    action_a = create_echo_action(
-        client=client, pack_ref=pack_ref, message="Timer A tick", suffix="_3s"
-    )
-    print(f"✓ Action A created: {action_a}")
-
-    action_b = create_echo_action(
-        client=client, pack_ref=pack_ref, message="Timer B tick", suffix="_5s"
-    )
-    print(f"✓ Action B created: {action_b}")
-
     action_c = create_echo_action(
         client=client, pack_ref=pack_ref, message="Timer C tick", suffix="_7s"
+    )["ref"]
+    create_interval_timer(
+        client=client, pack_ref=pack_ref, trigger_ref=trigger_c, interval=7, action_ref=action_c
     )
-    print(f"✓ Action C created: {action_c}")
+    timers.append({"trigger": trigger_c, "interval": 7, "name": "Timer C", "action_ref": action_c})
+    print(f"✓ Timer C created: {trigger_c} (7 seconds)")
 
     actions = [
         {"ref": action_a, "name": "Action A"},
@@ -92,26 +83,8 @@ def test_multiple_concurrent_timers(client: AttuneClient, test_pack):
         {"ref": action_c, "name": "Action C"},
     ]
 
-    # Step 3: Create rules linking timers to actions
-    print("\n[STEP 3] Creating rules...")
-
-    rule_ids = []
-
-    for i, (timer, action) in enumerate(zip(timers, actions)):
-        rule_data = {
-            "name": f"Concurrent Timer Rule {i + 1} {unique_ref()}",
-            "trigger": timer["trigger"],
-            "action": action["ref"],
-            "enabled": True,
-        }
-        rule_response = client.create_rule(rule_data)
-        rule_ids.append(rule_response["id"])
-        print(
-            f"✓ Rule {i + 1} created: {timer['name']} → {action['name']} (every {timer['interval']}s)"
-        )
-
-    # Step 4: Run for 21 seconds and monitor
-    print("\n[STEP 4] Running for 21 seconds...")
+    # Step 2: Run for 21 seconds and monitor
+    print("\n[STEP 2] Running for 21 seconds...")
     print("  Monitoring timer executions...")
 
     test_duration = 21
@@ -128,7 +101,7 @@ def test_multiple_concurrent_timers(client: AttuneClient, test_pack):
         snapshot = {"time": elapsed, "counts": {}}
 
         for action in actions:
-            executions = client.list_executions(action=action["ref"])
+            executions = client.list_executions(action_ref=action["ref"])
             snapshot["counts"][action["name"]] = len(executions)
 
         snapshots.append(snapshot)
@@ -141,9 +114,9 @@ def test_multiple_concurrent_timers(client: AttuneClient, test_pack):
     print("\n[STEP 5] Verifying execution counts...")
 
     final_counts = {
-        "Action A": len(client.list_executions(action=action_a)),
-        "Action B": len(client.list_executions(action=action_b)),
-        "Action C": len(client.list_executions(action=action_c)),
+        "Action A": len(client.list_executions(action_ref=action_a)),
+        "Action B": len(client.list_executions(action_ref=action_b)),
+        "Action C": len(client.list_executions(action_ref=action_c)),
     }
 
     expected_counts = {
@@ -257,30 +230,22 @@ def test_many_concurrent_timers(client: AttuneClient, test_pack):
 
     for i in range(num_timers):
         trigger_ref = f"multi_timer_{i}_{unique_ref()}"
-        create_interval_timer(
-            client=client, pack_ref=pack_ref, trigger_ref=trigger_ref, interval=2
-        )
-
         action_ref = create_echo_action(
             client=client,
             pack_ref=pack_ref,
             message=f"Timer {i} tick",
             suffix=f"_multi{i}",
-        )
+        )["ref"]
 
-        rule_data = {
-            "name": f"Multi Timer Rule {i} {unique_ref()}",
-            "trigger": trigger_ref,
-            "action": action_ref,
-            "enabled": True,
-        }
-        rule = client.create_rule(rule_data)
+        timer = create_interval_timer(
+            client=client, pack_ref=pack_ref, trigger_ref=trigger_ref, interval=2, action_ref=action_ref
+        )
 
         timers_and_actions.append(
             {
-                "trigger": trigger_ref,
-                "action": action_ref,
-                "rule_id": rule["id"],
+                "trigger_ref": trigger_ref,
+                "action_ref": action_ref,
+                "rule_id": timer["rule"]["id"],
                 "index": i,
             }
         )
@@ -298,7 +263,7 @@ def test_many_concurrent_timers(client: AttuneClient, test_pack):
     total_executions = 0
 
     for timer_info in timers_and_actions:
-        executions = client.list_executions(action=timer_info["action"])
+        executions = client.list_executions(action_ref=timer_info["action_ref"])
         count = len(executions)
         total_executions += count
 
@@ -354,26 +319,18 @@ def test_timer_precision_under_load(client: AttuneClient, test_pack):
 
     for i in range(3):
         trigger_ref = f"precision_timer_{i}_{unique_ref()}"
-        create_interval_timer(
-            client=client, pack_ref=pack_ref, trigger_ref=trigger_ref, interval=2
-        )
-        triggers.append(trigger_ref)
-
         action_ref = create_echo_action(
             client=client,
             pack_ref=pack_ref,
             message=f"Precision timer {i}",
             suffix=f"_prec{i}",
-        )
+        )["ref"]
         actions.append(action_ref)
 
-        rule_data = {
-            "name": f"Precision Test Rule {i} {unique_ref()}",
-            "trigger": trigger_ref,
-            "action": action_ref,
-            "enabled": True,
-        }
-        client.create_rule(rule_data)
+        create_interval_timer(
+            client=client, pack_ref=pack_ref, trigger_ref=trigger_ref, interval=2, action_ref=action_ref
+        )
+        triggers.append(trigger_ref)
 
         print(f"✓ Timer {i} created")
 
@@ -390,7 +347,7 @@ def test_timer_precision_under_load(client: AttuneClient, test_pack):
         elapsed = time.time() - start_time
 
         # Count executions for first timer
-        execs = client.list_executions(action=actions[0])
+        execs = client.list_executions(action_ref=actions[0])
         count = len(execs)
 
         expected = int(elapsed / 2)

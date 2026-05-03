@@ -241,7 +241,6 @@ async fn test_pack_scoped_artifact_permissions_enforce_owner_refs() {
             name: Some("Allowed Artifact".to_string()),
             description: None,
             content_type: Some("text/plain".to_string()),
-            execution: None,
             data: None,
         },
     )
@@ -261,7 +260,6 @@ async fn test_pack_scoped_artifact_permissions_enforce_owner_refs() {
             name: Some("Blocked Artifact".to_string()),
             description: None,
             content_type: Some("text/plain".to_string()),
-            execution: None,
             data: None,
         },
     )
@@ -690,7 +688,6 @@ mod artifact_authz_tests {
                 name: Some("test artifact".to_string()),
                 description: None,
                 content_type: Some("text/plain".to_string()),
-                execution: None,
                 data: None,
             },
         )

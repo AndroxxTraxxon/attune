@@ -9,7 +9,7 @@ Duration: ~20 seconds
 """
 
 import pytest
-from helpers.client import AttuneClient
+from helpers import AttuneClient
 from helpers.fixtures import unique_ref
 
 
@@ -120,9 +120,9 @@ def test_viewer_role_permissions(client: AttuneClient):
         action_data = {
             "ref": f"test_action_{unique_ref()}",
             "name": "Test Action",
-            "runner_type": "python",
-            "entry_point": "main.py",
-            "pack": "core",
+            "runtime_ref": "core.python",
+            "entrypoint": "main.py",
+            "pack_ref": "core",
         }
         action_response = viewer_client.create_action(action_data)
         print(
@@ -278,9 +278,9 @@ def test_admin_role_permissions(client: AttuneClient):
         action_data = {
             "ref": f"admin_test_action_{unique_ref()}",
             "name": "Admin Test Action",
-            "runner_type": "python",
-            "entry_point": "main.py",
-            "pack": "core",
+            "runtime_ref": "core.python",
+            "entrypoint": "main.py",
+            "pack_ref": "core",
             "enabled": True,
         }
         action_response = client.create_action(action_data)

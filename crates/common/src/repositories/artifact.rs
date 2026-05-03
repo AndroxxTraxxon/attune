@@ -795,9 +795,17 @@ impl ArtifactVersionRepository {
         });
 
         let query = format!(
-            "INSERT INTO artifact_version \
+            "WITH artifact_lock AS ( \
+                 SELECT pg_advisory_xact_lock($1) \
+             ), next_version AS ( \
+                 SELECT COALESCE(MAX(version), 0) + 1 AS version \
+                 FROM artifact_version, artifact_lock \
+                 WHERE artifact = $1 \
+             ) \
+             INSERT INTO artifact_version \
                  (artifact, version, execution, content_type, size_bytes, content, content_json, file_path, meta, created_by) \
-             VALUES ($1, next_artifact_version($1), $2, $3, $4, $5, $6, $7, $8, $9) \
+             SELECT $1, next_version.version, $2, $3, $4, $5, $6, $7, $8, $9 \
+             FROM next_version \
              RETURNING {}",
             artifact_version::SELECT_COLUMNS_WITH_CONTENT
         );
@@ -881,7 +889,20 @@ impl ArtifactVersionRepository {
             created_by,
         };
 
-        let mut version = Self::create(executor, input).await?;
+        let mut version = loop {
+            match Self::create(executor, input.clone()).await {
+                Ok(version) => break version,
+                Err(crate::error::Error::Database(sqlx::Error::Database(db_err)))
+                    if db_err.code().as_deref() == Some("23505")
+                        && db_err.constraint().is_some_and(|constraint| {
+                            constraint == "uq_artifact_version_artifact_version"
+                        }) =>
+                {
+                    continue;
+                }
+                Err(err) => return Err(err),
+            }
+        };
         let file_path = compute_file_path(artifact_ref, version.version, &content_type);
         Self::update_file_path(executor, version.id, &file_path).await?;
         version.file_path = Some(file_path);

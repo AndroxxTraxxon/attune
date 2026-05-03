@@ -20,6 +20,8 @@ use super::{Create, Delete, FindById, FindByRef, List, Patch, Repository, Update
 pub struct TriggerSearchFilters {
     /// Filter by pack ID
     pub pack: Option<Id>,
+    /// Filter by sensor ID
+    pub sensor: Option<Id>,
     /// Filter by enabled status
     pub enabled: Option<bool>,
     pub limit: u32,
@@ -44,8 +46,6 @@ pub struct TriggerSearchResult {
 pub struct SensorSearchFilters {
     /// Filter by pack ID
     pub pack: Option<Id>,
-    /// Filter by trigger ID
-    pub trigger: Option<Id>,
     /// Filter by enabled status
     pub enabled: Option<bool>,
     pub limit: u32,
@@ -81,6 +81,8 @@ pub struct CreateTriggerInput {
     pub enabled: bool,
     pub param_schema: Option<JsonSchema>,
     pub out_schema: Option<JsonSchema>,
+    pub sensor: Option<Id>,
+    pub sensor_ref: Option<String>,
     pub is_adhoc: bool,
 }
 
@@ -92,6 +94,8 @@ pub struct UpdateTriggerInput {
     pub enabled: Option<bool>,
     pub param_schema: Option<Patch<JsonSchema>>,
     pub out_schema: Option<Patch<JsonSchema>>,
+    pub sensor: Option<Patch<Id>>,
+    pub sensor_ref: Option<Patch<String>>,
 }
 
 #[async_trait::async_trait]
@@ -104,7 +108,7 @@ impl FindById for TriggerRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, enabled,
                    param_schema, out_schema, webhook_enabled, webhook_key, webhook_config,
-                   is_adhoc, created, updated
+                   sensor, sensor_ref, is_adhoc, created, updated
             FROM trigger
             WHERE id = $1
             "#,
@@ -127,7 +131,7 @@ impl FindByRef for TriggerRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, enabled,
                    param_schema, out_schema, webhook_enabled, webhook_key, webhook_config,
-                   is_adhoc, created, updated
+                   sensor, sensor_ref, is_adhoc, created, updated
             FROM trigger
             WHERE ref = $1
             "#,
@@ -150,7 +154,7 @@ impl List for TriggerRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, enabled,
                    param_schema, out_schema, webhook_enabled, webhook_key, webhook_config,
-                   is_adhoc, created, updated
+                   sensor, sensor_ref, is_adhoc, created, updated
             FROM trigger
             ORDER BY ref ASC
             "#,
@@ -173,11 +177,11 @@ impl Create for TriggerRepository {
         let trigger = sqlx::query_as::<_, Trigger>(
             r#"
             INSERT INTO trigger (ref, pack, pack_ref, label, description, enabled,
-                                 param_schema, out_schema, is_adhoc)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                                 param_schema, out_schema, sensor, sensor_ref, is_adhoc)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id, ref, pack, pack_ref, label, description, enabled,
                       param_schema, out_schema, webhook_enabled, webhook_key, webhook_config,
-                      is_adhoc, created, updated
+                      sensor, sensor_ref, is_adhoc, created, updated
             "#,
         )
         .bind(&input.r#ref)
@@ -188,6 +192,8 @@ impl Create for TriggerRepository {
         .bind(input.enabled)
         .bind(&input.param_schema)
         .bind(&input.out_schema)
+        .bind(input.sensor)
+        .bind(&input.sensor_ref)
         .bind(input.is_adhoc)
         .fetch_one(executor)
         .await
@@ -269,6 +275,30 @@ impl Update for TriggerRepository {
             has_updates = true;
         }
 
+        if let Some(sensor) = &input.sensor {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("sensor = ");
+            match sensor {
+                Patch::Set(value) => query.push_bind(Some(*value)),
+                Patch::Clear => query.push_bind(Option::<Id>::None),
+            };
+            has_updates = true;
+        }
+
+        if let Some(sensor_ref) = &input.sensor_ref {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("sensor_ref = ");
+            match sensor_ref {
+                Patch::Set(value) => query.push_bind(Some(value.clone())),
+                Patch::Clear => query.push_bind(Option::<String>::None),
+            };
+            has_updates = true;
+        }
+
         if !has_updates {
             // No updates requested, fetch and return existing entity
             return Self::get_by_id(executor, id).await;
@@ -276,7 +306,7 @@ impl Update for TriggerRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(" RETURNING id, ref, pack, pack_ref, label, description, enabled, param_schema, out_schema, webhook_enabled, webhook_key, webhook_config, is_adhoc, created, updated");
+        query.push(" RETURNING id, ref, pack, pack_ref, label, description, enabled, param_schema, out_schema, webhook_enabled, webhook_key, webhook_config, sensor, sensor_ref, is_adhoc, created, updated");
 
         let trigger = query
             .build_query_as::<Trigger>()
@@ -350,7 +380,7 @@ impl TriggerRepository {
     where
         E: Executor<'e, Database = Postgres> + Copy + 'e,
     {
-        let select_cols = "id, ref, pack, pack_ref, label, description, enabled, param_schema, out_schema, webhook_enabled, webhook_key, webhook_config, is_adhoc, created, updated";
+        let select_cols = "id, ref, pack, pack_ref, label, description, enabled, param_schema, out_schema, webhook_enabled, webhook_key, webhook_config, sensor, sensor_ref, is_adhoc, created, updated";
 
         let mut qb: QueryBuilder<'_, Postgres> =
             QueryBuilder::new(format!("SELECT {select_cols} FROM trigger"));
@@ -378,6 +408,9 @@ impl TriggerRepository {
 
         if let Some(pack_id) = filters.pack {
             push_condition!("pack = ", pack_id);
+        }
+        if let Some(sensor_id) = filters.sensor {
+            push_condition!("sensor = ", sensor_id);
         }
         if let Some(enabled) = filters.enabled {
             push_condition!("enabled = ", enabled);
@@ -411,7 +444,7 @@ impl TriggerRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, enabled,
                    param_schema, out_schema, webhook_enabled, webhook_key, webhook_config,
-                   is_adhoc, created, updated
+                   sensor, sensor_ref, is_adhoc, created, updated
             FROM trigger
             WHERE pack = $1
             ORDER BY ref ASC
@@ -433,12 +466,56 @@ impl TriggerRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, enabled,
                    param_schema, out_schema, webhook_enabled, webhook_key, webhook_config,
-                   is_adhoc, created, updated
+                   sensor, sensor_ref, is_adhoc, created, updated
             FROM trigger
             WHERE enabled = true
             ORDER BY ref ASC
             "#,
         )
+        .fetch_all(executor)
+        .await?;
+
+        Ok(triggers)
+    }
+
+    /// Find triggers that belong to a specific sensor
+    pub async fn find_by_sensor<'e, E>(executor: E, sensor_id: Id) -> Result<Vec<Trigger>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let triggers = sqlx::query_as::<_, Trigger>(
+            r#"
+            SELECT id, ref, pack, pack_ref, label, description, enabled,
+                   param_schema, out_schema, webhook_enabled, webhook_key, webhook_config,
+                   sensor, sensor_ref, is_adhoc, created, updated
+            FROM trigger
+            WHERE sensor = $1
+            ORDER BY ref ASC
+            "#,
+        )
+        .bind(sensor_id)
+        .fetch_all(executor)
+        .await?;
+
+        Ok(triggers)
+    }
+
+    /// Find triggers that belong to a specific sensor by sensor ref
+    pub async fn find_by_sensor_ref<'e, E>(executor: E, sensor_ref: &str) -> Result<Vec<Trigger>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let triggers = sqlx::query_as::<_, Trigger>(
+            r#"
+            SELECT id, ref, pack, pack_ref, label, description, enabled,
+                   param_schema, out_schema, webhook_enabled, webhook_key, webhook_config,
+                   sensor, sensor_ref, is_adhoc, created, updated
+            FROM trigger
+            WHERE sensor_ref = $1
+            ORDER BY ref ASC
+            "#,
+        )
+        .bind(sensor_ref)
         .fetch_all(executor)
         .await?;
 
@@ -457,7 +534,7 @@ impl TriggerRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, enabled,
                    param_schema, out_schema, webhook_enabled, webhook_key, webhook_config,
-                   is_adhoc, created, updated
+                   sensor, sensor_ref, is_adhoc, created, updated
             FROM trigger
             WHERE webhook_key = $1
             "#,
@@ -670,8 +747,6 @@ pub struct CreateSensorInput {
     pub runtime: Id,
     pub runtime_ref: String,
     pub runtime_version_constraint: Option<String>,
-    pub trigger: Id,
-    pub trigger_ref: String,
     pub enabled: bool,
     pub param_schema: Option<JsonSchema>,
     pub config: Option<JsonValue>,
@@ -686,8 +761,6 @@ pub struct UpdateSensorInput {
     pub runtime: Option<Id>,
     pub runtime_ref: Option<String>,
     pub runtime_version_constraint: Option<Patch<String>>,
-    pub trigger: Option<Id>,
-    pub trigger_ref: Option<String>,
     pub enabled: Option<bool>,
     pub param_schema: Option<Patch<JsonSchema>>,
     pub config: Option<JsonValue>,
@@ -703,7 +776,7 @@ impl FindById for SensorRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
                    runtime, runtime_ref, runtime_version_constraint,
-                   trigger, trigger_ref, enabled,
+                   enabled,
                    param_schema, config, created, updated
             FROM sensor
             WHERE id = $1
@@ -727,7 +800,7 @@ impl FindByRef for SensorRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
                    runtime, runtime_ref, runtime_version_constraint,
-                   trigger, trigger_ref, enabled,
+                   enabled,
                    param_schema, config, created, updated
             FROM sensor
             WHERE ref = $1
@@ -751,7 +824,7 @@ impl List for SensorRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
                    runtime, runtime_ref, runtime_version_constraint,
-                   trigger, trigger_ref, enabled,
+                   enabled,
                    param_schema, config, created, updated
             FROM sensor
             ORDER BY ref ASC
@@ -776,12 +849,11 @@ impl Create for SensorRepository {
             r#"
             INSERT INTO sensor (ref, pack, pack_ref, label, description, entrypoint,
                                 runtime, runtime_ref, runtime_version_constraint,
-                                trigger, trigger_ref, enabled,
-                                param_schema, config)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                                enabled, param_schema, config)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING id, ref, pack, pack_ref, label, description, entrypoint,
                       runtime, runtime_ref, runtime_version_constraint,
-                      trigger, trigger_ref, enabled,
+                      enabled,
                       param_schema, config, created, updated
             "#,
         )
@@ -794,8 +866,6 @@ impl Create for SensorRepository {
         .bind(input.runtime)
         .bind(&input.runtime_ref)
         .bind(&input.runtime_version_constraint)
-        .bind(input.trigger)
-        .bind(&input.trigger_ref)
         .bind(input.enabled)
         .bind(&input.param_schema)
         .bind(&input.config)
@@ -885,24 +955,6 @@ impl Update for SensorRepository {
             has_updates = true;
         }
 
-        if let Some(trigger) = input.trigger {
-            if has_updates {
-                query.push(", ");
-            }
-            query.push("trigger = ");
-            query.push_bind(trigger);
-            has_updates = true;
-        }
-
-        if let Some(trigger_ref) = &input.trigger_ref {
-            if has_updates {
-                query.push(", ");
-            }
-            query.push("trigger_ref = ");
-            query.push_bind(trigger_ref);
-            has_updates = true;
-        }
-
         if let Some(param_schema) = &input.param_schema {
             if has_updates {
                 query.push(", ");
@@ -931,7 +983,7 @@ impl Update for SensorRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(" RETURNING id, ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_ref, runtime_version_constraint, trigger, trigger_ref, enabled, param_schema, config, created, updated");
+        query.push(" RETURNING id, ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_ref, runtime_version_constraint, enabled, param_schema, config, created, updated");
 
         let sensor = query.build_query_as::<Sensor>().fetch_one(executor).await?;
 
@@ -993,7 +1045,7 @@ impl SensorRepository {
     where
         E: Executor<'e, Database = Postgres> + Copy + 'e,
     {
-        let select_cols = "id, ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_ref, runtime_version_constraint, trigger, trigger_ref, enabled, param_schema, config, created, updated";
+        let select_cols = "id, ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_ref, runtime_version_constraint, enabled, param_schema, config, created, updated";
 
         let mut qb: QueryBuilder<'_, Postgres> =
             QueryBuilder::new(format!("SELECT {select_cols} FROM sensor"));
@@ -1022,9 +1074,6 @@ impl SensorRepository {
         if let Some(pack_id) = filters.pack {
             push_condition!("pack = ", pack_id);
         }
-        if let Some(trigger_id) = filters.trigger {
-            push_condition!("trigger = ", trigger_id);
-        }
         if let Some(enabled) = filters.enabled {
             push_condition!("enabled = ", enabled);
         }
@@ -1048,29 +1097,6 @@ impl SensorRepository {
         Ok(SensorSearchResult { rows, total })
     }
 
-    /// Find sensors by trigger ID
-    pub async fn find_by_trigger<'e, E>(executor: E, trigger_id: Id) -> Result<Vec<Sensor>>
-    where
-        E: Executor<'e, Database = Postgres> + 'e,
-    {
-        let sensors = sqlx::query_as::<_, Sensor>(
-            r#"
-            SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_ref, runtime_version_constraint,
-                   trigger, trigger_ref, enabled,
-                   param_schema, config, created, updated
-            FROM sensor
-            WHERE trigger = $1
-            ORDER BY ref ASC
-            "#,
-        )
-        .bind(trigger_id)
-        .fetch_all(executor)
-        .await?;
-
-        Ok(sensors)
-    }
-
     /// Find enabled sensors
     pub async fn find_enabled<'e, E>(executor: E) -> Result<Vec<Sensor>>
     where
@@ -1080,7 +1106,7 @@ impl SensorRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
                    runtime, runtime_ref, runtime_version_constraint,
-                   trigger, trigger_ref, enabled,
+                   enabled,
                    param_schema, config, created, updated
             FROM sensor
             WHERE enabled = true
@@ -1102,7 +1128,7 @@ impl SensorRepository {
             r#"
             SELECT id, ref, pack, pack_ref, label, description, entrypoint,
                    runtime, runtime_ref, runtime_version_constraint,
-                   trigger, trigger_ref, enabled,
+                   enabled,
                    param_schema, config, created, updated
             FROM sensor
             WHERE pack = $1

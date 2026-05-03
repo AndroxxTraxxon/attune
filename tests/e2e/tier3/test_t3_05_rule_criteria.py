@@ -11,7 +11,7 @@ Duration: ~20 seconds
 import time
 
 import pytest
-from helpers.client import AttuneClient
+from helpers import AttuneClient
 from helpers.fixtures import create_echo_action, create_webhook_trigger, unique_ref
 from helpers.polling import wait_for_event_count, wait_for_execution_count
 
@@ -49,6 +49,8 @@ def test_rule_criteria_basic_filtering(client: AttuneClient, test_pack):
         pack_ref=pack_ref,
         trigger_ref=trigger_ref,
     )
+    trigger_ref = trigger_response["ref"]
+    webhook_url = trigger_response["webhook_url"]
 
     print(f"✓ Webhook trigger created: {trigger_ref}")
 
@@ -59,7 +61,7 @@ def test_rule_criteria_basic_filtering(client: AttuneClient, test_pack):
         pack_ref=pack_ref,
         message="Info level action triggered",
         suffix="_info",
-    )
+    )["ref"]
     print(f"✓ Info action created: {action_info}")
 
     action_error = create_echo_action(
@@ -67,7 +69,7 @@ def test_rule_criteria_basic_filtering(client: AttuneClient, test_pack):
         pack_ref=pack_ref,
         message="Error level action triggered",
         suffix="_error",
-    )
+    )["ref"]
     print(f"✓ Error action created: {action_error}")
 
     # Step 3: Create rules with criteria
@@ -77,10 +79,10 @@ def test_rule_criteria_basic_filtering(client: AttuneClient, test_pack):
     rule_info_data = {
         "name": f"Info Level Rule {unique_ref()}",
         "description": "Fires only for info level events",
-        "trigger": trigger_ref,
-        "action": action_info,
+        "trigger_ref": trigger_ref,
+        "action_ref": action_info,
         "enabled": True,
-        "criteria": "{{ event.payload.level == 'info' }}",
+        "conditions": {"expression": "{{ event.payload.level == 'info' }}"},
     }
 
     rule_info_response = client.create_rule(rule_info_data)
@@ -92,10 +94,10 @@ def test_rule_criteria_basic_filtering(client: AttuneClient, test_pack):
     rule_error_data = {
         "name": f"Error Level Rule {unique_ref()}",
         "description": "Fires only for error level events",
-        "trigger": trigger_ref,
-        "action": action_error,
+        "trigger_ref": trigger_ref,
+        "action_ref": action_error,
         "enabled": True,
-        "criteria": "{{ event.payload.level == 'error' }}",
+        "conditions": {"expression": "{{ event.payload.level == 'error' }}"},
     }
 
     rule_error_response = client.create_rule(rule_error_data)
@@ -112,18 +114,18 @@ def test_rule_criteria_basic_filtering(client: AttuneClient, test_pack):
         "timestamp": time.time(),
     }
 
-    client.post_webhook(trigger_ref, info_payload)
+    client.post_webhook(webhook_url, info_payload)
     print(f"✓ Webhook POST sent with level='info'")
 
     # Wait for event
     time.sleep(2)
-    events_after_info = client.list_events(trigger=trigger_ref)
+    events_after_info = client.list_events(trigger_ref=trigger_ref)
     print(f"  Events created: {len(events_after_info)}")
 
     # Check executions
     time.sleep(3)
-    info_executions = client.list_executions(action=action_info)
-    error_executions = client.list_executions(action=action_error)
+    info_executions = client.list_executions(action_ref=action_info)
+    error_executions = client.list_executions(action_ref=action_error)
 
     print(f"  Info action executions: {len(info_executions)}")
     print(f"  Error action executions: {len(error_executions)}")
@@ -147,13 +149,13 @@ def test_rule_criteria_basic_filtering(client: AttuneClient, test_pack):
         "timestamp": time.time(),
     }
 
-    client.post_webhook(trigger_ref, error_payload)
+    client.post_webhook(webhook_url, error_payload)
     print(f"✓ Webhook POST sent with level='error'")
 
     # Wait and check executions
     time.sleep(3)
-    info_executions_after = client.list_executions(action=action_info)
-    error_executions_after = client.list_executions(action=action_error)
+    info_executions_after = client.list_executions(action_ref=action_info)
+    error_executions_after = client.list_executions(action_ref=action_error)
 
     info_count_increase = len(info_executions_after) - len(info_executions)
     error_count_increase = len(error_executions_after) - len(error_executions)
@@ -180,13 +182,13 @@ def test_rule_criteria_basic_filtering(client: AttuneClient, test_pack):
         "timestamp": time.time(),
     }
 
-    client.post_webhook(trigger_ref, debug_payload)
+    client.post_webhook(webhook_url, debug_payload)
     print(f"✓ Webhook POST sent with level='debug'")
 
     # Wait and check executions
     time.sleep(3)
-    info_executions_final = client.list_executions(action=action_info)
-    error_executions_final = client.list_executions(action=action_error)
+    info_executions_final = client.list_executions(action_ref=action_info)
+    error_executions_final = client.list_executions(action_ref=action_error)
 
     info_count_increase2 = len(info_executions_final) - len(info_executions_after)
     error_count_increase2 = len(error_executions_final) - len(error_executions_after)
@@ -242,15 +244,17 @@ def test_rule_criteria_numeric_comparison(client: AttuneClient, test_pack):
     print("\n[STEP 1] Creating webhook and actions...")
     trigger_ref = f"numeric_webhook_{unique_ref()}"
 
-    create_webhook_trigger(client=client, pack_ref=pack_ref, trigger_ref=trigger_ref)
+    trigger_response = create_webhook_trigger(client=client, pack_ref=pack_ref, trigger_ref=trigger_ref)
+    trigger_ref = trigger_response["ref"]
+    webhook_url = trigger_response["webhook_url"]
     print(f"✓ Webhook trigger created: {trigger_ref}")
 
     action_low = create_echo_action(
         client=client, pack_ref=pack_ref, message="Low priority", suffix="_low"
-    )
+    )["ref"]
     action_high = create_echo_action(
         client=client, pack_ref=pack_ref, message="High priority", suffix="_high"
-    )
+    )["ref"]
     print(f"✓ Actions created")
 
     # Step 2: Create rules with numeric criteria
@@ -259,10 +263,10 @@ def test_rule_criteria_numeric_comparison(client: AttuneClient, test_pack):
     # Low priority: priority <= 3
     rule_low_data = {
         "name": f"Low Priority Rule {unique_ref()}",
-        "trigger": trigger_ref,
-        "action": action_low,
+        "trigger_ref": trigger_ref,
+        "action_ref": action_low,
         "enabled": True,
-        "criteria": "{{ event.payload.priority <= 3 }}",
+        "conditions": {"expression": "{{ event.payload.priority <= 3 }}"},
     }
     rule_low = client.create_rule(rule_low_data)
     print(f"✓ Low priority rule created (priority <= 3)")
@@ -270,43 +274,43 @@ def test_rule_criteria_numeric_comparison(client: AttuneClient, test_pack):
     # High priority: priority >= 7
     rule_high_data = {
         "name": f"High Priority Rule {unique_ref()}",
-        "trigger": trigger_ref,
-        "action": action_high,
+        "trigger_ref": trigger_ref,
+        "action_ref": action_high,
         "enabled": True,
-        "criteria": "{{ event.payload.priority >= 7 }}",
+        "conditions": {"expression": "{{ event.payload.priority >= 7 }}"},
     }
     rule_high = client.create_rule(rule_high_data)
     print(f"✓ High priority rule created (priority >= 7)")
 
     # Step 3: Test with priority=2 (should trigger low only)
     print("\n[STEP 3] Testing priority=2 (low threshold)...")
-    client.post_webhook(trigger_ref, {"priority": 2, "message": "Low priority event"})
+    client.post_webhook(webhook_url, {"priority": 2, "message": "Low priority event"})
     time.sleep(3)
 
-    low_execs_1 = client.list_executions(action=action_low)
-    high_execs_1 = client.list_executions(action=action_high)
+    low_execs_1 = client.list_executions(action_ref=action_low)
+    high_execs_1 = client.list_executions(action_ref=action_high)
     print(f"  Low action executions: {len(low_execs_1)}")
     print(f"  High action executions: {len(high_execs_1)}")
 
     # Step 4: Test with priority=9 (should trigger high only)
     print("\n[STEP 4] Testing priority=9 (high threshold)...")
-    client.post_webhook(trigger_ref, {"priority": 9, "message": "High priority event"})
+    client.post_webhook(webhook_url, {"priority": 9, "message": "High priority event"})
     time.sleep(3)
 
-    low_execs_2 = client.list_executions(action=action_low)
-    high_execs_2 = client.list_executions(action=action_high)
+    low_execs_2 = client.list_executions(action_ref=action_low)
+    high_execs_2 = client.list_executions(action_ref=action_high)
     print(f"  Low action executions: {len(low_execs_2)}")
     print(f"  High action executions: {len(high_execs_2)}")
 
     # Step 5: Test with priority=5 (should trigger neither)
     print("\n[STEP 5] Testing priority=5 (middle - no match)...")
     client.post_webhook(
-        trigger_ref, {"priority": 5, "message": "Medium priority event"}
+        webhook_url, {"priority": 5, "message": "Medium priority event"}
     )
     time.sleep(3)
 
-    low_execs_3 = client.list_executions(action=action_low)
-    high_execs_3 = client.list_executions(action=action_high)
+    low_execs_3 = client.list_executions(action_ref=action_low)
+    high_execs_3 = client.list_executions(action_ref=action_high)
     print(f"  Low action executions: {len(low_execs_3)}")
     print(f"  High action executions: {len(high_execs_3)}")
 
@@ -341,14 +345,16 @@ def test_rule_criteria_complex_expressions(client: AttuneClient, test_pack):
     # Step 1: Setup
     print("\n[STEP 1] Creating webhook and action...")
     trigger_ref = f"complex_webhook_{unique_ref()}"
-    create_webhook_trigger(client=client, pack_ref=pack_ref, trigger_ref=trigger_ref)
+    trigger_response = create_webhook_trigger(client=client, pack_ref=pack_ref, trigger_ref=trigger_ref)
+    trigger_ref = trigger_response["ref"]
+    webhook_url = trigger_response["webhook_url"]
 
     action_ref = create_echo_action(
         client=client,
         pack_ref=pack_ref,
         message="Complex criteria matched",
         suffix="_complex",
-    )
+    )["ref"]
     print(f"✓ Setup complete")
 
     # Step 2: Create rule with complex criteria
@@ -362,10 +368,10 @@ def test_rule_criteria_complex_expressions(client: AttuneClient, test_pack):
 
     rule_data = {
         "name": f"Complex Criteria Rule {unique_ref()}",
-        "trigger": trigger_ref,
-        "action": action_ref,
+        "trigger_ref": trigger_ref,
+        "action_ref": action_ref,
         "enabled": True,
-        "criteria": complex_criteria,
+        "conditions": {"expression": complex_criteria},
     }
     rule = client.create_rule(rule_data)
     print(f"✓ Rule created with complex criteria")
@@ -374,11 +380,11 @@ def test_rule_criteria_complex_expressions(client: AttuneClient, test_pack):
     # Step 3: Test case 1 - Matches first condition
     print("\n[STEP 3] Test: error + priority=8 (should match)...")
     client.post_webhook(
-        trigger_ref, {"level": "error", "priority": 8, "environment": "staging"}
+        webhook_url, {"level": "error", "priority": 8, "environment": "staging"}
     )
     time.sleep(3)
 
-    execs_1 = client.list_executions(action=action_ref)
+    execs_1 = client.list_executions(action_ref=action_ref)
     print(f"  Executions: {len(execs_1)}")
     if len(execs_1) >= 1:
         print(f"✓ Matched first condition (error AND priority>5)")
@@ -386,11 +392,11 @@ def test_rule_criteria_complex_expressions(client: AttuneClient, test_pack):
     # Step 4: Test case 2 - Matches second condition
     print("\n[STEP 4] Test: production env (should match)...")
     client.post_webhook(
-        trigger_ref, {"level": "info", "priority": 2, "environment": "production"}
+        webhook_url, {"level": "info", "priority": 2, "environment": "production"}
     )
     time.sleep(3)
 
-    execs_2 = client.list_executions(action=action_ref)
+    execs_2 = client.list_executions(action_ref=action_ref)
     print(f"  Executions: {len(execs_2)}")
     if len(execs_2) > len(execs_1):
         print(f"✓ Matched second condition (environment='production')")
@@ -398,11 +404,11 @@ def test_rule_criteria_complex_expressions(client: AttuneClient, test_pack):
     # Step 5: Test case 3 - Matches neither
     print("\n[STEP 5] Test: info + priority=3 + staging (should NOT match)...")
     client.post_webhook(
-        trigger_ref, {"level": "info", "priority": 3, "environment": "staging"}
+        webhook_url, {"level": "info", "priority": 3, "environment": "staging"}
     )
     time.sleep(3)
 
-    execs_3 = client.list_executions(action=action_ref)
+    execs_3 = client.list_executions(action_ref=action_ref)
     print(f"  Executions: {len(execs_3)}")
     if len(execs_3) == len(execs_2):
         print(f"✓ Did not match (neither condition satisfied)")
@@ -436,14 +442,16 @@ def test_rule_criteria_list_membership(client: AttuneClient, test_pack):
     # Step 1: Setup
     print("\n[STEP 1] Creating webhook and action...")
     trigger_ref = f"list_webhook_{unique_ref()}"
-    create_webhook_trigger(client=client, pack_ref=pack_ref, trigger_ref=trigger_ref)
+    trigger_response = create_webhook_trigger(client=client, pack_ref=pack_ref, trigger_ref=trigger_ref)
+    trigger_ref = trigger_response["ref"]
+    webhook_url = trigger_response["webhook_url"]
 
     action_ref = create_echo_action(
         client=client,
         pack_ref=pack_ref,
         message="List criteria matched",
         suffix="_list",
-    )
+    )["ref"]
     print(f"✓ Setup complete")
 
     # Step 2: Create rule checking list membership
@@ -454,10 +462,10 @@ def test_rule_criteria_list_membership(client: AttuneClient, test_pack):
 
     rule_data = {
         "name": f"List Membership Rule {unique_ref()}",
-        "trigger": trigger_ref,
-        "action": action_ref,
+        "trigger_ref": trigger_ref,
+        "action_ref": action_ref,
         "enabled": True,
-        "criteria": list_criteria,
+        "conditions": {"expression": list_criteria},
     }
     rule = client.create_rule(rule_data)
     print(f"✓ Rule created")
@@ -466,31 +474,31 @@ def test_rule_criteria_list_membership(client: AttuneClient, test_pack):
     # Step 3: Test with matching status
     print("\n[STEP 3] Test: status='critical' (should match)...")
     client.post_webhook(
-        trigger_ref, {"status": "critical", "message": "Critical alert"}
+        webhook_url, {"status": "critical", "message": "Critical alert"}
     )
     time.sleep(3)
 
-    execs_1 = client.list_executions(action=action_ref)
+    execs_1 = client.list_executions(action_ref=action_ref)
     print(f"  Executions: {len(execs_1)}")
     if len(execs_1) >= 1:
         print(f"✓ Matched list criteria (status='critical')")
 
     # Step 4: Test with non-matching status
     print("\n[STEP 4] Test: status='low' (should NOT match)...")
-    client.post_webhook(trigger_ref, {"status": "low", "message": "Low priority alert"})
+    client.post_webhook(webhook_url, {"status": "low", "message": "Low priority alert"})
     time.sleep(3)
 
-    execs_2 = client.list_executions(action=action_ref)
+    execs_2 = client.list_executions(action_ref=action_ref)
     print(f"  Executions: {len(execs_2)}")
     if len(execs_2) == len(execs_1):
         print(f"✓ Did not match (status='low' not in list)")
 
     # Step 5: Test with another matching status
     print("\n[STEP 5] Test: status='urgent' (should match)...")
-    client.post_webhook(trigger_ref, {"status": "urgent", "message": "Urgent alert"})
+    client.post_webhook(webhook_url, {"status": "urgent", "message": "Urgent alert"})
     time.sleep(3)
 
-    execs_3 = client.list_executions(action=action_ref)
+    execs_3 = client.list_executions(action_ref=action_ref)
     print(f"  Executions: {len(execs_3)}")
     if len(execs_3) > len(execs_2):
         print(f"✓ Matched list criteria (status='urgent')")

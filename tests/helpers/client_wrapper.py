@@ -1,16 +1,17 @@
 """
 Wrapper for Generated API Client
 
-This module provides a backward-compatible wrapper around the auto-generated
-OpenAPI client, maintaining the same interface as the original AttuneClient
-while using the generated client internally.
-
-This allows tests to gradually migrate to the generated client without
-requiring immediate changes to all test code.
+This module provides test-oriented helpers around the auto-generated OpenAPI
+client while keeping requests aligned with the current API contract.
 """
 
 import os
+import re
+import subprocess
+import tempfile
 from typing import Any, Optional
+
+import requests
 
 from generated_client import AuthenticatedClient, Client
 from generated_client.api.actions import (
@@ -180,14 +181,128 @@ def unwrap_item(response: Any) -> Optional[dict]:
     return result
 
 
+def qualify_ref(pack_ref: Optional[str], ref: Optional[str]) -> Optional[str]:
+    if ref and pack_ref and "." not in ref:
+        return f"{pack_ref}.{ref}"
+    return ref
+
+
+def safe_ref_part(value: Optional[str], fallback: str = "item") -> str:
+    if not value:
+        return fallback
+    slug = re.sub(r"[^a-zA-Z0-9_]+", "_", value.strip()).strip("_").lower()
+    return slug or fallback
+
+
+def _json_or_empty(response: Any) -> Any:
+    if not getattr(response, "text", ""):
+        return {}
+    return response.json()
+
+
+class TestResponse:
+    """Response facade that exposes parsed API JSON consistently in tests."""
+
+    def __init__(self, response: Any):
+        self._response = response
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._response, name)
+
+    def json(self) -> Any:
+        if not getattr(self._response, "text", ""):
+            return {}
+        body = self._response.json()
+        if isinstance(body, dict):
+            body = dict(body)
+            if "data" not in body and "items" in body:
+                body["data"] = body["items"]
+            data = body.get("data")
+            if isinstance(data, dict) and "key" not in data and "ref" in data:
+                data = dict(data)
+                data["key"] = data["ref"]
+                if data.get("webhook_enabled") is False and "webhook_key" not in data:
+                    data["webhook_key"] = None
+                body["data"] = data
+            elif isinstance(data, dict) and data.get("webhook_enabled") is False and "webhook_key" not in data:
+                data = dict(data)
+                data["webhook_key"] = None
+                body["data"] = data
+            if isinstance(data, dict):
+                data = self._normalize_item(data)
+                body["data"] = data
+                result = data.get("result")
+                if isinstance(result, dict) and isinstance(result.get("data"), dict):
+                    normalized_result = dict(result)
+                    for key, value in result["data"].items():
+                        normalized_result.setdefault(key, value)
+                    data = dict(data)
+                    data["result"] = normalized_result
+                    body["data"] = data
+            elif isinstance(data, list):
+                body["data"] = [
+                    self._normalize_item(item)
+                    for item in data
+                ]
+        return body
+
+    def __getitem__(self, key: str) -> Any:
+        return self.json()[key]
+
+    def _normalize_item(self, item: Any) -> Any:
+        if not isinstance(item, dict):
+            return item
+        normalized = dict(item)
+        if "key" not in normalized and "ref" in normalized:
+            normalized["key"] = normalized["ref"]
+        if "rule_id" not in normalized and "rule" in normalized:
+            normalized["rule_id"] = normalized["rule"]
+        if "event_id" not in normalized and "event" in normalized:
+            normalized["event_id"] = normalized["event"]
+        if "updated" not in normalized and ("resolved_at" in normalized or "event" in normalized or "rule" in normalized):
+            normalized["updated"] = normalized.get("resolved_at") or normalized.get("created")
+        return normalized
+
+
+class TestSession:
+    """requests-like session backed by the same auth headers as AttuneClient."""
+
+    def __init__(self, owner: "AttuneClient"):
+        self._owner = owner
+        self._session = requests.Session()
+
+    @property
+    def headers(self):
+        return self._session.headers
+
+    def request(self, method: str, url: str, **kwargs) -> TestResponse:
+        if url.startswith("/"):
+            url = f"{self._owner.base_url}{url}"
+        response = self._session.request(method, url, **kwargs)
+        return TestResponse(response)
+
+    def get(self, url: str, **kwargs) -> TestResponse:
+        return self.request("GET", url, **kwargs)
+
+    def post(self, url: str, **kwargs) -> TestResponse:
+        return self.request("POST", url, **kwargs)
+
+    def put(self, url: str, **kwargs) -> TestResponse:
+        return self.request("PUT", url, **kwargs)
+
+    def patch(self, url: str, **kwargs) -> TestResponse:
+        return self.request("PATCH", url, **kwargs)
+
+    def delete(self, url: str, **kwargs) -> TestResponse:
+        return self.request("DELETE", url, **kwargs)
+
+
 class AttuneClient:
     """
-    Backward-compatible wrapper for generated Attune API client
-
-    This class wraps the auto-generated OpenAPI client to maintain
-    compatibility with existing test code while using type-safe
-    generated API calls internally.
+    Test wrapper for the generated Attune API client.
     """
+
+    _auth_cache: dict[tuple[str, str], dict] = {}
 
     def __init__(
         self,
@@ -203,9 +318,10 @@ class AttuneClient:
             timeout: Request timeout in seconds
             auto_login: Whether to auto-login with default credentials
         """
-        self.base_url = base_url or os.getenv("ATTUNE_API_URL", "http://localhost:8080")
+        self.base_url = (base_url or os.getenv("ATTUNE_API_URL", "http://localhost:8080")).rstrip("/")
         self.timeout = timeout
         self.auto_login_flag = auto_login
+        self.session = TestSession(self)
 
         # Initialize unauthenticated clients
         # Note: Generated API functions include full paths like "/api/v1/packs"
@@ -290,6 +406,17 @@ class AttuneClient:
         login_email = login or self.default_login
         login_password = password or self.default_password
 
+        cache_enabled = os.getenv("ATTUNE_E2E_REUSE_AUTH", "true").lower() not in {
+            "0",
+            "false",
+            "no",
+        }
+        cache_key = (self.base_url, login_email)
+        if cache_enabled and cache_key in self._auth_cache:
+            data = dict(self._auth_cache[cache_key])
+            self._apply_auth_data(data)
+            return data
+
         request = LoginRequest(
             login=login_email,
             password=login_password,
@@ -301,22 +428,26 @@ class AttuneClient:
             result = to_dict(response)
             if isinstance(result, dict) and "data" in result:
                 data = result["data"]
-                self.access_token = data.get("access_token")
-                self.refresh_token = data.get("refresh_token")
-                self.user_info = data.get("user")
-
-                # Create authenticated client
-                # Note: base_url should just be host since generated API includes full paths
-                self.auth_client = AuthenticatedClient(
-                    base_url=self.base_url,
-                    token=self.access_token,
-                    timeout=float(self.timeout),
-                    verify_ssl=False,
-                )
-
+                if cache_enabled:
+                    self._auth_cache[cache_key] = dict(data)
+                self._apply_auth_data(data)
                 return data
 
         raise Exception("Login failed")
+
+    def _apply_auth_data(self, data: dict) -> None:
+        self.access_token = data.get("access_token")
+        self.refresh_token = data.get("refresh_token")
+        self.user_info = data.get("user")
+
+        # Note: base_url should just be host since generated API includes full paths.
+        self.auth_client = AuthenticatedClient(
+            base_url=self.base_url,
+            token=self.access_token,
+            timeout=float(self.timeout),
+            verify_ssl=False,
+        )
+        self.session.headers.update({"Authorization": f"Bearer {self.access_token}"})
 
     def logout(self):
         """Logout and clear tokens"""
@@ -324,6 +455,7 @@ class AttuneClient:
         self.access_token = None
         self.refresh_token = None
         self.user_info = None
+        self.session.headers.pop("Authorization", None)
 
     def health(self) -> dict:
         """Check API health"""
@@ -341,8 +473,7 @@ class AttuneClient:
 
     def get_pack(self, pack_id: int) -> dict:
         """Get pack by ID - Note: API uses ref, so need to lookup by ref"""
-        # The generated API uses ref, not ID
-        # This is a compatibility shim - we need to list and find by ID
+        # The generated API uses ref, so ID lookups scan the current list first.
         packs = self.list_packs()
         for pack in packs:
             if pack.get("id") == pack_id:
@@ -356,27 +487,58 @@ class AttuneClient:
 
     def create_pack(
         self,
-        ref: str,
-        label: str,
+        ref: str | dict,
+        label: Optional[str] = None,
         description: Optional[str] = None,
         version: str = "1.0.0",
         author: Optional[str] = None,
         **kwargs,
     ) -> dict:
         """Create a new pack"""
-        request = CreatePackRequest(
-            ref=ref,
-            label=label,
-            description=description,
-            version=version,
-            author=author,
-        )
+        if isinstance(ref, dict):
+            data = ref
+            ref = data.get("ref")
+            label = label or data.get("label") or data.get("name")
+            description = description or data.get("description")
+            version = data.get("version", version)
+            author = author or data.get("author")
+            kwargs = {**data, **kwargs}
 
-        response = gen_create_pack.sync(client=self._get_client(), body=request)
+        if not ref or not label:
+            raise ValueError("Missing required arguments: ref and label")
 
-        return unwrap_item(response)
+        payload = {
+            "ref": ref,
+            "label": label,
+            "version": version,
+        }
+        if description is not None:
+            payload["description"] = description
 
-        raise Exception("Failed to create pack")
+        for key in (
+            "conf_schema",
+            "config",
+            "dependencies",
+            "runtime_deps",
+            "tags",
+            "is_standard",
+        ):
+            if key in kwargs and kwargs[key] is not None:
+                payload[key] = kwargs[key]
+
+        meta = dict(kwargs.get("meta") or {})
+        if author:
+            meta.setdefault("author", author)
+        if meta:
+            payload["meta"] = meta
+
+        response = self._request("POST", "/api/v1/packs", json=payload)
+        if response.status_code in (200, 201):
+            data = response.json()
+            if "data" in data:
+                return data["data"]
+            return data
+        raise Exception(f"Failed to create pack: {response.status_code} {response.text}")
 
     def register_pack(
         self, path: str, skip_tests: bool = True, force: bool = False
@@ -454,9 +616,12 @@ class AttuneClient:
         # Not implemented in wrapper yet
         raise NotImplementedError("reload_pack not yet implemented")
 
-    def delete_pack(self, pack_id: int):
+    def delete_pack(self, pack_id: int | str):
         """Delete a pack"""
-        # Need to get pack ref first
+        if isinstance(pack_id, str):
+            gen_delete_pack.sync(ref=pack_id, client=self._get_client())
+            return
+
         pack = self.get_pack(pack_id)
         if pack:
             gen_delete_pack.sync(ref=pack["ref"], client=self._get_client())
@@ -467,12 +632,33 @@ class AttuneClient:
 
     def list_actions(self, **params) -> list[dict]:
         """List all actions"""
-        response = gen_list_actions.sync(
-            client=self._get_client(),
-        )
-        items = unwrap_list(response)
+        requested_page = params.get("page")
+        per_page = min(int(params.get("limit") or params.get("per_page") or 100), 100)
+        items = []
+        page = int(requested_page or 1)
+        while True:
+            response = self._request(
+                "GET",
+                "/api/v1/actions",
+                params={"page": page, "per_page": per_page, "page_size": per_page},
+            )
+            if response.status_code != 200:
+                return []
+            data = response.json()
+            page_items = data.get("items") or data.get("data") or []
+            items.extend(page_items)
+            if requested_page:
+                break
+            pagination = data.get("pagination") if isinstance(data.get("pagination"), dict) else {}
+            total_pages = data.get("total_pages") or pagination.get("total_pages")
+            if total_pages is not None:
+                if page >= int(total_pages):
+                    break
+            elif len(page_items) < per_page:
+                break
+            page += 1
         # Client-side pack filter (API no longer supports server-side filtering)
-        pack = params.get("pack")
+        pack = params.get("pack") or params.get("pack_ref")
         if pack:
             items = [a for a in items if a.get("pack_ref") == pack or a.get("ref", "").startswith(f"{pack}.")]
         return items
@@ -492,7 +678,7 @@ class AttuneClient:
 
     def create_action(
         self,
-        ref: Optional[str] = None,
+        ref: Optional[str | dict] = None,
         label: Optional[str] = None,
         pack_ref: Optional[str] = None,
         entrypoint: Optional[str] = None,
@@ -500,46 +686,48 @@ class AttuneClient:
         param_schema: Optional[dict] = None,
         out_schema: Optional[dict] = None,
         runtime_ref: Optional[str] = None,
-        # Legacy arguments for backward compatibility
         name: Optional[str] = None,
-        runner_type: Optional[str] = None,
         data: Optional[dict] = None,
         **kwargs,
     ) -> dict:
         """Create a new action
 
-        Supports both new-style (ref, label, pack_ref, entrypoint)
-        and legacy-style (pack_ref, name, runner_type, entrypoint) arguments,
-        plus dict-style (pack_ref, data={...}) for tier 2/3 tests.
+        Supports direct keyword arguments and data={...} dictionaries that use
+        current API field names.
         """
+        if isinstance(ref, dict) and data is None:
+            data = ref
+            ref = None
+
         # Handle dict-style argument (tier 2/3 tests pass data={...})
         if data is not None:
+            ref = ref or data.get("ref")
+            label = label or data.get("label")
+            pack_ref = pack_ref or data.get("pack_ref")
+            if ref and "." in ref and not pack_ref:
+                pack_ref = ref.split(".", 1)[0]
+            ref = qualify_ref(pack_ref, ref)
             name = name or data.get("name")
+            if not name and ref and "." in ref:
+                name = ref.split(".", 1)[1]
+            label = label or (name.replace("_", " ").title() if name else None)
             description = description or data.get("description")
-            runner_type = runner_type or data.get("runner_type")
-            entrypoint = entrypoint or data.get("entry_point") or data.get("entrypoint")
-            param_schema = param_schema or data.get("parameters") or data.get("param_schema")
+            entrypoint = entrypoint or data.get("entrypoint")
+            param_schema = param_schema or data.get("param_schema")
             out_schema = out_schema or data.get("out_schema")
+            runtime_ref = runtime_ref or data.get("runtime_ref")
 
-        # Handle legacy-style arguments
         if pack_ref and name and not ref:
-            ref = f"{pack_ref}.{name}"
+            ref = f"{pack_ref}.{safe_ref_part(name)}"
             label = label or name.replace("_", " ").title()
-
-            # Map legacy runner_type to runtime_ref
-            if runner_type and not runtime_ref:
-                runtime_map = {
-                    "python3": "core.python",
-                    "python": "core.python",
-                    "shell": "core.shell",
-                    "node": "core.nodejs",
-                    "nodejs": "core.nodejs",
-                }
-                runtime_ref = runtime_map.get(runner_type, f"core.{runner_type}")
 
         # Default entrypoint if not provided
         if not entrypoint:
             entrypoint = "action.sh"
+        ref = qualify_ref(pack_ref, ref)
+        label = label or (name.replace("_", " ").title() if name else None) or (
+            ref.split(".", 1)[1].replace("_", " ").title() if ref and "." in ref else None
+        )
 
         # Validate required fields
         if not ref or not label or not pack_ref:
@@ -573,8 +761,79 @@ class AttuneClient:
             f"Failed to create action: {response.status_code} {response.text}"
         )
 
-    def delete_action(self, action_id: int):
+    def create_workflow(
+        self,
+        pack_ref: str,
+        name: str,
+        tasks: list,
+        *,
+        label: str = None,
+        description: str = None,
+        version: str = "1.0.0",
+        param_schema: dict = None,
+        out_schema: dict = None,
+        tags: list = None,
+        vars: list = None,
+        output_map: dict = None,
+    ) -> dict:
+        """Create a workflow via POST /api/v1/workflows.
+
+        This creates both a workflow_definition record and a companion
+        action record so the workflow can be executed like any action.
+
+        Args:
+            pack_ref: Pack the workflow belongs to
+            name: Workflow name (used to build ref as {pack_ref}.{name})
+            tasks: List of task dicts with name, action, input, next, etc.
+            label: Human-readable label (defaults to name titlecased)
+            description: Workflow description
+            version: Semantic version string
+            param_schema: Flat parameter schema dict
+            out_schema: Flat output schema dict
+            tags: List of tag strings
+            vars: Workflow variables list
+            output_map: Output mapping dict
+        """
+        ref = f"{pack_ref}.{name}"
+        label = label or name.replace("_", " ").title()
+
+        definition = {"version": version, "tasks": tasks}
+        if vars:
+            definition["vars"] = vars
+        if output_map:
+            definition["output_map"] = output_map
+
+        payload = {
+            "ref": ref,
+            "pack_ref": pack_ref,
+            "label": label,
+            "description": description or f"Workflow: {label}",
+            "version": version,
+            "definition": definition,
+        }
+        if param_schema:
+            payload["param_schema"] = param_schema
+        if out_schema:
+            payload["out_schema"] = out_schema
+        if tags:
+            payload["tags"] = tags
+
+        response = self._request("POST", "/api/v1/workflows", json=payload)
+        if response.status_code in (200, 201):
+            data = response.json()
+            if "data" in data:
+                return data["data"]
+            return data
+        raise Exception(
+            f"Failed to create workflow: {response.status_code} {response.text}"
+        )
+
+    def delete_action(self, action_id: int | str):
         """Delete an action"""
+        if isinstance(action_id, str):
+            gen_delete_action.sync(ref=action_id, client=self._get_client())
+            return
+
         action = self.get_action(action_id)
         if action:
             gen_delete_action.sync(ref=action["ref"], client=self._get_client())
@@ -629,7 +888,6 @@ class AttuneClient:
         description: Optional[str] = None,
         param_schema: Optional[dict] = None,
         out_schema: Optional[dict] = None,
-        # Legacy arguments for backward compatibility
         name: Optional[str] = None,
         trigger_type: Optional[str] = None,
         parameters: Optional[dict] = None,
@@ -637,16 +895,13 @@ class AttuneClient:
     ) -> dict:
         """Create a new trigger
 
-        Supports both new-style (ref, label, pack_ref) and legacy-style (pack_ref, name) arguments.
+        Supports direct keyword arguments that match the current trigger API.
         """
-        # Handle legacy-style arguments
         if pack_ref and name:
-            # Build ref from pack_ref and name
             ref = f"{pack_ref}.{name}"
             label = name.replace("_", " ").title()
 
-            if parameters:
-                param_schema = parameters
+        ref = qualify_ref(pack_ref, ref)
 
         # Validate required fields
         if not ref or not label or not pack_ref:
@@ -691,18 +946,10 @@ class AttuneClient:
     ) -> dict:
         """Enable webhooks for a trigger
 
-        Supports both trigger_ref and trigger_id arguments for backward compatibility.
+        Requires a trigger reference.
         """
-        # Handle legacy trigger_id argument
-        if trigger_id and not trigger_ref:
-            trigger = self.get_trigger(trigger_id)
-            if trigger:
-                trigger_ref = trigger["ref"]
-            else:
-                raise Exception(f"Trigger {trigger_id} not found")
-
         if not trigger_ref:
-            raise ValueError("Either trigger_ref or trigger_id must be provided")
+            raise ValueError("trigger_ref is required")
 
         response = self._request(
             "POST", f"/api/v1/triggers/{trigger_ref}/webhooks/enable"
@@ -710,8 +957,10 @@ class AttuneClient:
         if response.status_code in (200, 201):
             data = response.json()
             if "data" in data:
-                return data["data"]
-            return data
+                trigger = data["data"]
+            else:
+                trigger = data
+            return trigger
         raise Exception(
             f"Failed to enable webhook: {response.status_code} {response.text}"
         )
@@ -723,18 +972,10 @@ class AttuneClient:
     ) -> dict:
         """Disable webhooks for a trigger
 
-        Supports both trigger_ref and trigger_id arguments for backward compatibility.
+        Requires a trigger reference.
         """
-        # Handle legacy trigger_id argument
-        if trigger_id and not trigger_ref:
-            trigger = self.get_trigger(trigger_id)
-            if trigger:
-                trigger_ref = trigger["ref"]
-            else:
-                raise Exception(f"Trigger {trigger_id} not found")
-
         if not trigger_ref:
-            raise ValueError("Either trigger_ref or trigger_id must be provided")
+            raise ValueError("trigger_ref is required")
 
         response = self._request(
             "POST", f"/api/v1/triggers/{trigger_ref}/webhooks/disable"
@@ -752,29 +993,19 @@ class AttuneClient:
         self,
         trigger_ref: Optional[str] = None,
         payload: Optional[dict] = None,
-        trigger_id: Optional[int] = None,
         auto_enable: bool = True,
     ) -> dict:
         """Fire a webhook trigger
 
-        Supports both trigger_ref and trigger_id arguments for backward compatibility.
+        Requires a trigger reference.
 
         Args:
             trigger_ref: Trigger reference
             payload: Webhook payload
-            trigger_id: Trigger ID (legacy)
             auto_enable: Automatically enable webhooks if not enabled (default: True)
         """
-        # Handle legacy trigger_id argument
-        if trigger_id and not trigger_ref:
-            trigger = self.get_trigger(trigger_id)
-            if trigger:
-                trigger_ref = trigger["ref"]
-            else:
-                raise Exception(f"Trigger {trigger_id} not found")
-
         if not trigger_ref:
-            raise ValueError("Either trigger_ref or trigger_id must be provided")
+            raise ValueError("trigger_ref is required")
 
         # Get the trigger to check if webhooks are enabled
         trigger = self.get_trigger_by_ref(trigger_ref)
@@ -830,29 +1061,24 @@ class AttuneClient:
 
     def create_sensor(
         self,
-        trigger_id: int,
+        trigger_types: Optional[list] = None,
         enabled: bool = True,
         parameters: Optional[dict] = None,
         **kwargs,
     ) -> dict:
         """Create a new sensor"""
-        # Get trigger to obtain trigger_ref
-        trigger = self.get_trigger(trigger_id)
-        trigger_ref = trigger.get("ref")
-
         # Extract required fields from kwargs or use defaults
-        ref = kwargs.get("ref", f"sensor_{trigger_id}")
+        ref = kwargs.get("ref", "test_sensor")
         pack_ref = kwargs.get("pack_ref", "core")
         runtime_ref = kwargs.get("runtime_ref", "python3")
-        label = kwargs.get("label", f"Sensor for {trigger_ref}")
+        label = kwargs.get("label", f"Sensor {ref}")
         entrypoint = kwargs.get("entrypoint", "internal://sensor")
-        description = kwargs.get("description", f"Sensor for trigger {trigger_ref}")
+        description = kwargs.get("description", f"Sensor {ref}")
         param_schema = kwargs.get("param_schema")
         config = kwargs.get("config")
 
         request = CreateSensorRequest(
             ref=ref,
-            trigger_ref=trigger_ref,
             pack_ref=pack_ref,
             runtime_ref=runtime_ref,
             label=label,
@@ -866,17 +1092,6 @@ class AttuneClient:
         response = gen_create_sensor.sync(client=self._get_client(), body=request)
 
         return unwrap_item(response)
-
-        # Get more detailed error information
-        try:
-            error_response = self._request(
-                "POST", "/api/v1/sensors", json=request.to_dict()
-            )
-            error_msg = f"Failed to create sensor: {error_response.status_code} - {error_response.text}"
-        except Exception as e:
-            error_msg = f"Failed to create sensor: {str(e)}"
-
-        raise Exception(error_msg)
 
     def delete_sensor(self, sensor_id: int):
         """Delete a sensor"""
@@ -892,8 +1107,34 @@ class AttuneClient:
 
     def list_rules(self, **params) -> list[dict]:
         """List all rules"""
-        response = gen_list_rules.sync(client=self._get_client())
-        return unwrap_list(response)
+        per_page = params.get("per_page", params.get("limit", 100))
+        page = params.get("page", 1)
+        items: list[dict] = []
+
+        while True:
+            response = self._request(
+                "GET",
+                "/api/v1/rules",
+                params={"page": page, "per_page": per_page},
+            )
+            if response.status_code != 200:
+                return items
+            payload = response.json()
+            page_items = payload.get("data", payload.get("items", []))
+            if not isinstance(page_items, list):
+                return items
+            items.extend(page_items)
+
+            pagination = payload.get("pagination", {})
+            total_pages = payload.get("total_pages") or pagination.get("total_pages")
+            if total_pages is not None:
+                if page >= int(total_pages):
+                    break
+            elif len(page_items) < per_page:
+                break
+            page += 1
+
+        return items
 
     def get_rule(self, rule_id: int) -> dict:
         """Get rule by ID"""
@@ -911,55 +1152,84 @@ class AttuneClient:
 
     def create_rule(
         self,
-        ref: Optional[str] = None,
+        ref: Optional[str | dict] = None,
         label: Optional[str] = None,
         pack_ref: Optional[str] = None,
         trigger_ref: Optional[str] = None,
         action_ref: Optional[str] = None,
         enabled: bool = True,
         description: Optional[str] = None,
-        criteria: Optional[str] = None,
-        action_parameters: Optional[dict] = None,
-        # Legacy arguments for backward compatibility
+        action_params: Optional[dict] = None,
+        trigger_params: Optional[dict] = None,
         name: Optional[str] = None,
-        trigger_id: Optional[int] = None,
         data: Optional[dict] = None,
         **kwargs,
     ) -> dict:
         """Create a new rule
 
-        Supports new-style keyword args, legacy-style, and data={...} dict.
+        Supports current rule API keyword args and data={...} dictionaries.
         """
+        if isinstance(ref, dict) and data is None:
+            data = ref
+            ref = None
+
         # Handle dict-style argument
         if data is not None:
+            ref = ref or data.get("ref")
             name = name or data.get("name")
+            label = label or data.get("label")
+            pack_ref = pack_ref or data.get("pack_ref")
+            if ref and "." in ref and not pack_ref:
+                pack_ref = ref.split(".", 1)[0]
+            ref = qualify_ref(pack_ref, ref)
+            if not name and ref and "." in ref:
+                name = ref.split(".", 1)[1]
             description = description or data.get("description")
             trigger_ref = trigger_ref or data.get("trigger_ref")
             action_ref = action_ref or data.get("action_ref")
+            if isinstance(trigger_ref, dict):
+                trigger_ref = trigger_ref.get("ref")
+            if isinstance(action_ref, dict):
+                action_ref = action_ref.get("ref")
+            if not pack_ref and isinstance(action_ref, str) and "." in action_ref:
+                pack_ref = action_ref.split(".", 1)[0]
+            if not pack_ref and isinstance(trigger_ref, str) and "." in trigger_ref:
+                pack_ref = trigger_ref.split(".", 1)[0]
+            trigger_ref = qualify_ref(pack_ref, trigger_ref)
+            action_ref = qualify_ref(pack_ref, action_ref)
+            label = label or (name.replace("_", " ").title() if name else None)
             enabled = data.get("enabled", enabled)
-            criteria = criteria or data.get("criteria")
-            action_parameters = action_parameters or data.get(
-                "action_parameters"
-            ) or data.get("action_params")
+            action_params = action_params or data.get("action_params")
+            trigger_params = trigger_params or data.get("trigger_params")
+            if data.get("conditions") is not None:
+                kwargs["conditions"] = data["conditions"]
 
-        # Handle legacy-style arguments
         if pack_ref and name and not ref:
-            ref = f"{pack_ref}.{name}"
+            ref = f"{pack_ref}.{safe_ref_part(name)}"
             label = label or name.replace("_", " ").title()
 
-            # If trigger_id is provided, get the trigger to find trigger_ref
-            if trigger_id and not trigger_ref:
-                trigger = self.get_trigger(trigger_id)
-                if trigger:
-                    trigger_ref = trigger["ref"]
-                else:
-                    raise Exception(f"Trigger {trigger_id} not found")
+
+        if isinstance(trigger_ref, dict):
+            trigger_ref = trigger_ref.get("ref")
+        if isinstance(action_ref, dict):
+            action_ref = action_ref.get("ref")
+        if not pack_ref and isinstance(action_ref, str) and "." in action_ref:
+            pack_ref = action_ref.split(".", 1)[0]
+        if not pack_ref and isinstance(trigger_ref, str) and "." in trigger_ref:
+            pack_ref = trigger_ref.split(".", 1)[0]
+        trigger_ref = qualify_ref(pack_ref, trigger_ref)
+        action_ref = qualify_ref(pack_ref, action_ref)
+        label = label or (name.replace("_", " ").title() if name else None) or (
+            ref.split(".", 1)[1].replace("_", " ").title() if ref and "." in ref else None
+        )
+        if pack_ref and name and not ref:
+            ref = f"{pack_ref}.{safe_ref_part(name)}"
 
         # Validate required fields
         if not ref or not label or not pack_ref or not trigger_ref or not action_ref:
             raise ValueError(
                 "Missing required arguments: ref, label, pack_ref, trigger_ref, and action_ref "
-                "(or pack_ref, name, trigger_id, and action_ref)"
+                "(or pack_ref, name, trigger_ref, and action_ref)"
             )
 
         # Use plain POST request instead of generated client to handle API schema changes
@@ -973,15 +1243,15 @@ class AttuneClient:
             "description": description or f"Rule: {label}",
         }
 
-        if criteria:
-            payload["criteria"] = criteria
-        if action_parameters:
-            payload["action_params"] = action_parameters
+        if kwargs.get("conditions") is not None:
+            payload["conditions"] = kwargs["conditions"]
+        explicit_action_params = kwargs.get("action_params", action_params)
+        if explicit_action_params is not None:
+            payload["action_params"] = explicit_action_params
 
-        # Include trigger_parameters if provided (required for triggers with param_schema)
-        trigger_parameters = kwargs.get("trigger_parameters")
-        if trigger_parameters:
-            payload["trigger_params"] = trigger_parameters
+        explicit_trigger_params = kwargs.get("trigger_params", trigger_params)
+        if explicit_trigger_params is not None:
+            payload["trigger_params"] = explicit_trigger_params
 
         response = self._request("POST", "/api/v1/rules", json=payload)
         if response.status_code in (200, 201):
@@ -1032,7 +1302,6 @@ class AttuneClient:
             enrich: If True, fetch full payload for each event (slow for large lists).
                     If False, return list response as-is (has rule, created, trigger fields).
         """
-        # Map trigger_id to trigger for backward compatibility
         trigger = params.get("trigger_id") or params.get("trigger")
         response = gen_list_events.sync(
             client=self._get_client(),
@@ -1043,6 +1312,12 @@ class AttuneClient:
             per_page=params.get("limit"),
         )
         items = unwrap_list(response)
+
+        # Client-side rule_id filter (API doesn't support rule_id param)
+        rule_id = params.get("rule_id")
+        if rule_id is not None:
+            items = [e for e in items if e.get("rule") == rule_id]
+
         if not enrich:
             return items
         # Enrich events with full payload (list endpoint only returns summaries)
@@ -1101,6 +1376,14 @@ class AttuneClient:
             query_params["action_ref"] = params["action_ref"]
         if params.get("status"):
             query_params["status"] = params["status"]
+        if params.get("enforcement_id"):
+            query_params["enforcement"] = params["enforcement_id"]
+        if params.get("enforcement"):
+            query_params["enforcement"] = params["enforcement"]
+        if params.get("parent"):
+            query_params["parent"] = params["parent"]
+        if params.get("parent_id"):
+            query_params["parent"] = params["parent_id"]
         if params.get("page"):
             query_params["page"] = params["page"]
         per_page = params.get("limit") or params.get("per_page")
@@ -1149,6 +1432,19 @@ class AttuneClient:
             f"Failed to create execution: {response.status_code} {response.text}"
         )
 
+    def execute_action(self, data: dict | str, parameters: Optional[dict] = None, **kwargs) -> dict:
+        """Create and queue an execution."""
+        if isinstance(data, dict):
+            action_ref = data.get("action_ref") or data.get("action")
+            parameters = data.get("parameters", parameters)
+            env_vars = data.get("env_vars")
+        else:
+            action_ref = data
+            env_vars = kwargs.get("env_vars")
+        if isinstance(action_ref, dict):
+            action_ref = action_ref.get("ref")
+        return self.create_execution(action_ref=action_ref, parameters=parameters, env_vars=env_vars)
+
     def cancel_execution(self, execution_id: int) -> dict:
         """Cancel an execution"""
         response = self._request(
@@ -1184,7 +1480,8 @@ class AttuneClient:
         else:
             path = webhook_url
 
-        response = self._request("POST", path, json={"payload": payload or {}})
+        body = payload if isinstance(payload, dict) and "payload" in payload else {"payload": payload or {}}
+        response = self._request("POST", path, json=body)
         if response.status_code in (200, 201, 202):
             return response.json() if response.text else {}
         raise Exception(
@@ -1257,6 +1554,13 @@ class AttuneClient:
 
     def get_inquiry(self, inquiry_id: int) -> dict:
         """Get inquiry by ID"""
+        resp = self._request("GET", f"/api/v1/inquiries/{inquiry_id}")
+        if resp.status_code == 200:
+            data = resp.json()
+            if "data" in data:
+                return data["data"]
+            return data
+        # Fallback to list scan
         inquiries = self.list_inquiries(limit=1000)
         for inquiry in inquiries:
             if inquiry.get("id") == inquiry_id:
@@ -1287,12 +1591,19 @@ class AttuneClient:
     def list_secrets(self, **params) -> list[dict]:
         """List all secrets/keys"""
         response = gen_list_keys.sync(client=self._get_client())
-        return unwrap_list(response)
+        secrets = unwrap_list(response)
+        for secret in secrets:
+            if "key" not in secret and "ref" in secret:
+                secret["key"] = secret["ref"]
+        return secrets
 
     def get_secret(self, key_name: str, **params) -> Optional[dict]:
         """Get secret by key name"""
         response = gen_get_key.sync(ref=key_name, client=self._get_client())
-        return unwrap_item(response)
+        secret = unwrap_item(response)
+        if secret and "key" not in secret and "ref" in secret:
+            secret["key"] = secret["ref"]
+        return secret
 
     def datastore_get(self, key: str, **params) -> Optional[str]:
         """Get value from datastore"""
@@ -1348,7 +1659,7 @@ class AttuneClient:
             if secret.get("id") == key_id:
                 request = UpdateKeyRequest(value=params.get("value"))
                 response = gen_update_key.sync(
-                    ref=secret["key"], client=self._get_client(), body=request
+                    ref=secret.get("key") or secret["ref"], client=self._get_client(), body=request
                 )
                 if response:
                     result = to_dict(response)
@@ -1361,10 +1672,10 @@ class AttuneClient:
         secrets = self.list_secrets()
         for secret in secrets:
             if secret.get("id") == key_id:
-                gen_delete_key.sync(ref=secret["key"], client=self._get_client())
+                gen_delete_key.sync(ref=secret.get("key") or secret["ref"], client=self._get_client())
                 return
 
-    # Aliases for tier 2 test compatibility
+    # Datastore-style convenience helpers backed by key storage.
     def get_datastore_item(self, key: str, **params) -> Optional[dict]:
         """Get datastore item (alias for get_secret)"""
         return self.get_secret(key)
@@ -1374,16 +1685,14 @@ class AttuneClient:
         return self.datastore_set(key, value, **params)
 
     # ========================================================================
-    # Compatibility helpers
+    # Raw request helpers
     # ========================================================================
 
     def _request(self, method: str, path: str, **kwargs):
-        """Raw request method for backward compatibility"""
-        # This is for any edge cases that need raw access
+        """Raw request method for tests that need endpoint-level access."""
         client = self._get_client()
-        url = f"{path}"
-        response = client.get_httpx_client().request(method, url, **kwargs)
-        return response
+        response = client.get_httpx_client().request(method, path, **kwargs)
+        return TestResponse(response)
 
     def get(self, path: str, **kwargs):
         """GET request"""
@@ -1392,6 +1701,61 @@ class AttuneClient:
     def post(self, path: str, **kwargs):
         """POST request"""
         return self._request("POST", path, **kwargs)
+
+    def upload_action_files(self, action_ref: str | dict, files: dict[str, str]) -> dict:
+        """Copy ad-hoc test action files into the running API container."""
+        ref = action_ref.get("ref") if isinstance(action_ref, dict) else action_ref
+        if not ref:
+            return {"uploaded": []}
+
+        action = self.get_action_by_ref(ref)
+        pack_ref = (action or {}).get("pack_ref") or (ref.split(".", 1)[0] if "." in ref else "test_pack")
+        uploaded = []
+        for filename, content in files.items():
+            uploaded.append(filename)
+            self._copy_action_file_to_running_api(pack_ref, filename, content)
+
+        return {"uploaded": uploaded}
+
+    def _copy_action_file_to_running_api(self, pack_ref: str, filename: str, content: str) -> None:
+        container = os.getenv("ATTUNE_API_CONTAINER", "attune-api")
+        with tempfile.NamedTemporaryFile("w", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "mkdir",
+                    "-p",
+                    f"/opt/attune/packs/{pack_ref}/actions",
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            subprocess.run(
+                [
+                    "docker",
+                    "cp",
+                    tmp_path,
+                    f"{container}:/opt/attune/packs/{pack_ref}/actions/{filename}",
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        except Exception:
+            pass
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     def put(self, path: str, **kwargs):
         """PUT request"""

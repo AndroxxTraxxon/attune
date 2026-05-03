@@ -22,7 +22,31 @@ use attune_common::{
         FindById, List,
     },
     template_resolver::{resolve_templates, TemplateContext},
+    workflow::expression::{eval_expression, is_truthy, EvalContext, EvalResult},
 };
+
+struct EventConditionContext {
+    event: serde_json::Value,
+}
+
+impl EvalContext for EventConditionContext {
+    fn resolve_variable(&self, name: &str) -> EvalResult<serde_json::Value> {
+        match name {
+            "event" => Ok(self.event.clone()),
+            other => Err(
+                attune_common::workflow::expression::EvalError::VariableNotFound(other.to_string()),
+            ),
+        }
+    }
+
+    fn call_workflow_function(
+        &self,
+        _name: &str,
+        _args: &[serde_json::Value],
+    ) -> EvalResult<Option<serde_json::Value>> {
+        Ok(None)
+    }
+}
 
 /// Event processor that handles event-to-rule matching
 pub struct EventProcessor {
@@ -259,9 +283,16 @@ impl EventProcessor {
         };
 
         // If rule has no conditions, it always matches
-        if rule.conditions.is_null() || rule.conditions.as_array().is_none_or(|a| a.is_empty()) {
+        if rule.conditions.is_null()
+            || rule.conditions.as_object().is_some_and(|o| o.is_empty())
+            || rule.conditions.as_array().is_some_and(|a| a.is_empty())
+        {
             debug!("Rule {} has no conditions, matching by default", rule.r#ref);
             return Ok(true);
+        }
+
+        if let Some(criteria) = rule.conditions.get("expression").and_then(|v| v.as_str()) {
+            return Ok(Self::evaluate_criteria_expression(criteria, event, payload));
         }
 
         // Parse conditions array
@@ -291,6 +322,38 @@ impl EventProcessor {
         );
 
         Ok(matches)
+    }
+
+    fn evaluate_criteria_expression(
+        criteria: &str,
+        event: &Event,
+        payload: &serde_json::Value,
+    ) -> bool {
+        let expression = criteria
+            .trim()
+            .strip_prefix("{{")
+            .and_then(|s| s.strip_suffix("}}"))
+            .map(str::trim)
+            .unwrap_or_else(|| criteria.trim());
+        let context = EventConditionContext {
+            event: serde_json::json!({
+                "id": event.id,
+                "trigger": event.trigger_ref,
+                "trigger_ref": event.trigger_ref,
+                "payload": payload,
+                "created": event.created.to_rfc3339(),
+            }),
+        };
+        match eval_expression(expression, &context) {
+            Ok(value) => is_truthy(&value),
+            Err(error) => {
+                warn!(
+                    "Failed to evaluate rule criteria '{}' for event {}: {}",
+                    criteria, event.id, error
+                );
+                false
+            }
+        }
     }
 
     /// Evaluate a single condition (simplified implementation)

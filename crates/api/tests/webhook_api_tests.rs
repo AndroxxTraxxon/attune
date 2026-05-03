@@ -67,6 +67,8 @@ async fn create_test_trigger(
         enabled: true,
         param_schema: None,
         out_schema: None,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: false,
     };
 

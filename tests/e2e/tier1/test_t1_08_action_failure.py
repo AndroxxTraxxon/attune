@@ -63,7 +63,7 @@ class TestActionFailureHandling:
         print("\n[3/5] Creating rule...")
         rule = create_rule(
             client=client,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             action_ref=action_ref,
             pack_ref=pack_ref,
             enabled=True,
@@ -72,7 +72,7 @@ class TestActionFailureHandling:
 
         # Step 4: Fire webhook to trigger execution
         print("\n[4/5] Triggering action execution...")
-        client.fire_webhook(trigger_id=trigger["id"], payload={"test": "failure_test"})
+        client.fire_webhook(trigger_ref=trigger["ref"], payload={"test": "failure_test"})
         print(f"✓ Webhook fired")
 
         # Wait for execution to be created
@@ -148,7 +148,7 @@ class TestActionFailureHandling:
         trigger = create_webhook_trigger(client=client, pack_ref=pack_ref)
         rule = create_rule(
             client=client,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             action_ref=action["ref"],
             pack_ref=pack_ref,
         )
@@ -158,7 +158,7 @@ class TestActionFailureHandling:
         # Trigger 3 executions
         print(f"\nTriggering 3 executions...")
         for i in range(3):
-            client.fire_webhook(trigger_id=trigger["id"], payload={"run": i + 1})
+            client.fire_webhook(trigger_ref=trigger["ref"], payload={"run": i + 1})
             print(f"  ✓ Execution {i + 1} triggered")
             time.sleep(0.5)
 
@@ -215,13 +215,13 @@ class TestActionFailureHandling:
             trigger = create_webhook_trigger(client=client, pack_ref=pack_ref)
             rule = create_rule(
                 client=client,
-                trigger_id=trigger["id"],
+                trigger_ref=trigger["ref"],
                 action_ref=action["ref"],
                 pack_ref=pack_ref,
             )
 
             # Execute
-            client.fire_webhook(trigger_id=trigger["id"], payload={})
+            client.fire_webhook(trigger_ref=trigger["ref"], payload={})
 
             # Wait for execution
             executions = wait_for_execution_count(
@@ -266,12 +266,12 @@ class TestActionFailureHandling:
         trigger = create_webhook_trigger(client=client, pack_ref=pack_ref)
         rule = create_rule(
             client=client,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             action_ref=action["ref"],
             pack_ref=pack_ref,
         )
 
-        client.fire_webhook(trigger_id=trigger["id"], payload={})
+        client.fire_webhook(trigger_ref=trigger["ref"], payload={})
 
         executions = wait_for_execution_count(
             client=client, expected_count=1, action_ref=action["ref"], timeout=15
@@ -329,13 +329,13 @@ class TestActionFailureHandling:
 
         fail_rule = create_rule(
             client=client,
-            trigger_id=fail_trigger["id"],
+            trigger_ref=fail_trigger["ref"],
             action_ref=failing_action["ref"],
             pack_ref=pack_ref,
         )
         success_rule = create_rule(
             client=client,
-            trigger_id=success_trigger["id"],
+            trigger_ref=success_trigger["ref"],
             action_ref=success_action["ref"],
             pack_ref=pack_ref,
         )
@@ -343,7 +343,7 @@ class TestActionFailureHandling:
 
         # Execute failing action
         print("\n[3/4] Executing failing action...")
-        client.fire_webhook(trigger_id=fail_trigger["id"], payload={})
+        client.fire_webhook(trigger_ref=fail_trigger["ref"], payload={})
 
         fail_executions = wait_for_execution_count(
             client=client,
@@ -367,7 +367,7 @@ class TestActionFailureHandling:
         # Execute succeeding action
         print("\n[4/4] Executing succeeding action...")
         client.fire_webhook(
-            trigger_id=success_trigger["id"], payload={"message": "test"}
+            trigger_ref=success_trigger["ref"], payload={"message": "test"}
         )
 
         success_executions = wait_for_execution_count(

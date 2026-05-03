@@ -119,17 +119,15 @@ impl RuleLifecycleListener {
             );
         }
 
-        // Load existing active rules from API. The timer sensor handles all
-        // four timer trigger types, so fetch each one separately and start
-        // any rules that are enabled.
-        const TIMER_TRIGGER_REFS: &[&str] = &[
+        // Load existing active rules from API for all timer trigger types
+        const ALL_TIMER_TRIGGER_REFS: &[&str] = &[
             "core.intervaltimer",
             "core.crontimer",
             "core.datetimetimer",
             "core.rruletimer",
         ];
 
-        for trigger_ref in TIMER_TRIGGER_REFS {
+        for trigger_ref in ALL_TIMER_TRIGGER_REFS {
             info!(
                 "Fetching existing active rules for trigger '{}'",
                 trigger_ref
@@ -207,21 +205,23 @@ impl RuleLifecycleListener {
                                 Some(event) => {
                                     // Filter by trigger type - only process timer events
                                     let trigger_type = event.trigger_type();
-                                    if matches!(
+                                    let is_timer_type = matches!(
                                         trigger_type,
                                         "core.timer"
                                             | "core.intervaltimer"
                                             | "core.crontimer"
                                             | "core.datetimetimer"
                                             | "core.rruletimer"
-                                    ) {
+                                    );
+
+                                    if is_timer_type {
                                         if let Err(e) = self.handle_event(event).await {
                                             error!("Failed to handle event: {}", e);
                                         }
                                     } else {
                                         debug!(
-                                            "Ignoring event for trigger type '{}'",
-                                            event.trigger_type()
+                                            "Ignoring event for non-timer trigger type '{}'",
+                                            trigger_type
                                         );
                                     }
                                 }

@@ -1,0 +1,74 @@
+# Timer Sensor
+# Monitors all timer-based triggers (interval, cron, datetime, rrule)
+
+ref: core.timer_sensor
+label: "Timer Sensor"
+description: "Built-in sensor that fires timer events based on intervals, cron expressions, specific datetimes, and recurrence rules"
+enabled: true
+
+# Sensor runner type
+runner_type: native
+
+# Entry point for sensor execution
+entry_point: attune-core-timer-sensor
+
+# All trigger types this sensor monitors
+trigger_types:
+  - core.intervaltimer
+  - core.crontimer
+  - core.datetimetimer
+  - core.rruletimer
+
+# Sensor configuration schema (StackStorm-style flat format)
+parameters:
+  check_interval_seconds:
+    type: integer
+    description: "How often to check if triggers should fire (in seconds)"
+    default: 1
+    minimum: 1
+    maximum: 60
+
+# Poll interval (how often the sensor checks for events)
+poll_interval: 1
+
+# Tags for categorization
+tags:
+  - timer
+  - interval
+  - cron
+  - datetime
+  - rrule
+  - system
+  - builtin
+
+# Metadata
+meta:
+  builtin: true
+  system: true
+  description: |
+    The timer sensor is a built-in system sensor that fires events based on
+    various timer configurations: regular intervals, cron expressions,
+    specific datetimes, and RRULE recurrence rules.
+
+# Documentation
+examples:
+  - description: "Interval timer - fires every 10 seconds"
+    trigger_type: core.intervaltimer
+    trigger_config:
+      unit: "seconds"
+      interval: 10
+
+  - description: "Cron timer - fires at 9 AM every Monday"
+    trigger_type: core.crontimer
+    trigger_config:
+      expression: "0 9 * * MON"
+
+  - description: "Datetime timer - fires once at a specific time"
+    trigger_type: core.datetimetimer
+    trigger_config:
+      fire_at: "2025-12-31T23:59:00Z"
+
+  - description: "RRULE timer - fires according to an iCal recurrence rule"
+    trigger_type: core.rruletimer
+    trigger_config:
+      rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0"

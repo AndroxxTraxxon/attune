@@ -30,7 +30,7 @@ async fn test_create_sensor_minimal() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "webhook")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "webhook")
         .create(&pool)
         .await
         .unwrap();
@@ -46,8 +46,6 @@ async fn test_create_sensor_minimal() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "webhook_sensor",
     )
     .create(&pool)
@@ -60,8 +58,6 @@ async fn test_create_sensor_minimal() {
     assert_eq!(sensor.pack_ref, Some(pack.r#ref));
     assert_eq!(sensor.runtime, runtime.id);
     assert_eq!(sensor.runtime_ref, runtime.r#ref);
-    assert_eq!(sensor.trigger, trigger.id);
-    assert_eq!(sensor.trigger_ref, trigger.r#ref);
     assert!(sensor.enabled);
     assert_eq!(sensor.param_schema, None);
     assert!(sensor.created.timestamp() > 0);
@@ -78,7 +74,7 @@ async fn test_create_sensor_with_param_schema() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -108,8 +104,6 @@ async fn test_create_sensor_with_param_schema() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "polling_sensor",
     )
     .with_param_schema(param_schema.clone())
@@ -125,7 +119,7 @@ async fn test_create_sensor_with_param_schema() {
 async fn test_create_sensor_without_pack() {
     let pool = create_test_pool().await.unwrap();
 
-    let trigger = TriggerFixture::new_unique(None, None, "webhook")
+    let _trigger = TriggerFixture::new_unique(None, None, "webhook")
         .create(&pool)
         .await
         .unwrap();
@@ -140,8 +134,6 @@ async fn test_create_sensor_without_pack() {
         None,
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "system_sensor",
     )
     .create(&pool)
@@ -162,7 +154,7 @@ async fn test_create_sensor_duplicate_ref_fails() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -184,8 +176,6 @@ async fn test_create_sensor_duplicate_ref_fails() {
         runtime: runtime.id,
         runtime_ref: runtime.r#ref.clone(),
         runtime_version_constraint: None,
-        trigger: trigger.id,
-        trigger_ref: trigger.r#ref.clone(),
         enabled: true,
         param_schema: None,
         config: None,
@@ -212,7 +202,7 @@ async fn test_create_sensor_invalid_ref_format_fails() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -240,8 +230,6 @@ async fn test_create_sensor_invalid_ref_format_fails() {
             runtime: runtime.id,
             runtime_ref: runtime.r#ref.clone(),
             runtime_version_constraint: None,
-            trigger: trigger.id,
-            trigger_ref: trigger.r#ref.clone(),
             enabled: true,
             param_schema: None,
             config: None,
@@ -261,7 +249,7 @@ async fn test_create_sensor_invalid_ref_format_fails() {
 async fn test_create_sensor_invalid_pack_fails() {
     let pool = create_test_pool().await.unwrap();
 
-    let trigger = TriggerFixture::new_unique(None, None, "event")
+    let _trigger = TriggerFixture::new_unique(None, None, "event")
         .create(&pool)
         .await
         .unwrap();
@@ -281,40 +269,6 @@ async fn test_create_sensor_invalid_pack_fails() {
         runtime: runtime.id,
         runtime_ref: runtime.r#ref.clone(),
         runtime_version_constraint: None,
-        trigger: trigger.id,
-        trigger_ref: trigger.r#ref.clone(),
-        enabled: true,
-        param_schema: None,
-        config: None,
-    };
-
-    let result = SensorRepository::create(&pool, input).await;
-    assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), Error::Database(_)));
-}
-
-#[tokio::test]
-#[ignore = "integration test — requires database"]
-async fn test_create_sensor_invalid_trigger_fails() {
-    let pool = create_test_pool().await.unwrap();
-
-    let runtime = RuntimeFixture::new_unique(None, None, "python3")
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let input = CreateSensorInput {
-        r#ref: "invalid.sensor".to_string(),
-        pack: None,
-        pack_ref: None,
-        label: "Invalid Trigger Sensor".to_string(),
-        description: Some("Test sensor".to_string()),
-        entrypoint: "sensors/invalid.py".to_string(),
-        runtime: runtime.id,
-        runtime_ref: runtime.r#ref.clone(),
-        runtime_version_constraint: None,
-        trigger: 99999, // Non-existent trigger
-        trigger_ref: "invalid.trigger".to_string(),
         enabled: true,
         param_schema: None,
         config: None,
@@ -330,11 +284,6 @@ async fn test_create_sensor_invalid_trigger_fails() {
 async fn test_create_sensor_invalid_runtime_fails() {
     let pool = create_test_pool().await.unwrap();
 
-    let trigger = TriggerFixture::new_unique(None, None, "event")
-        .create(&pool)
-        .await
-        .unwrap();
-
     let input = CreateSensorInput {
         r#ref: "invalid.sensor".to_string(),
         pack: None,
@@ -345,8 +294,6 @@ async fn test_create_sensor_invalid_runtime_fails() {
         runtime: 99999, // Non-existent runtime
         runtime_ref: "invalid.runtime".to_string(),
         runtime_version_constraint: None,
-        trigger: trigger.id,
-        trigger_ref: trigger.r#ref.clone(),
         enabled: true,
         param_schema: None,
         config: None,
@@ -371,7 +318,7 @@ async fn test_find_by_id_exists() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -386,8 +333,6 @@ async fn test_find_by_id_exists() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "find_sensor",
     )
     .create(&pool)
@@ -424,7 +369,7 @@ async fn test_get_by_id_exists() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -439,8 +384,6 @@ async fn test_get_by_id_exists() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "get_sensor",
     )
     .create(&pool)
@@ -473,7 +416,7 @@ async fn test_find_by_ref_exists() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -488,8 +431,6 @@ async fn test_find_by_ref_exists() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "ref_sensor",
     )
     .create(&pool)
@@ -527,7 +468,7 @@ async fn test_get_by_ref_exists() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -542,8 +483,6 @@ async fn test_get_by_ref_exists() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "getref_sensor",
     )
     .create(&pool)
@@ -578,7 +517,7 @@ async fn test_list_all_sensors() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -594,8 +533,6 @@ async fn test_list_all_sensors() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "sensor_a",
     )
     .create(&pool)
@@ -607,8 +544,6 @@ async fn test_list_all_sensors() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "sensor_b",
     )
     .create(&pool)
@@ -651,7 +586,7 @@ async fn test_update_label() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -666,8 +601,6 @@ async fn test_update_label() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "update_sensor",
     )
     .create(&pool)
@@ -704,7 +637,7 @@ async fn test_update_description() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -719,8 +652,6 @@ async fn test_update_description() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "desc_sensor",
     )
     .create(&pool)
@@ -752,7 +683,7 @@ async fn test_update_entrypoint() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -767,8 +698,6 @@ async fn test_update_entrypoint() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "entry_sensor",
     )
     .create(&pool)
@@ -797,7 +726,7 @@ async fn test_update_enabled_status() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -812,8 +741,6 @@ async fn test_update_enabled_status() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "enabled_sensor",
     )
     .with_enabled(true)
@@ -857,7 +784,7 @@ async fn test_update_param_schema() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -872,8 +799,6 @@ async fn test_update_param_schema() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "schema_sensor",
     )
     .create(&pool)
@@ -912,7 +837,7 @@ async fn test_update_multiple_fields() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -927,8 +852,6 @@ async fn test_update_multiple_fields() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "multi_sensor",
     )
     .create(&pool)
@@ -968,7 +891,7 @@ async fn test_update_no_changes() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -983,8 +906,6 @@ async fn test_update_no_changes() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "nochange_sensor",
     )
     .create(&pool)
@@ -1036,7 +957,7 @@ async fn test_delete_existing_sensor() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -1051,8 +972,6 @@ async fn test_delete_existing_sensor() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "delete_sensor",
     )
     .create(&pool)
@@ -1088,7 +1007,7 @@ async fn test_delete_sensor_when_pack_deleted() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -1103,8 +1022,6 @@ async fn test_delete_sensor_when_pack_deleted() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "cascade_sensor",
     )
     .create(&pool)
@@ -1124,7 +1041,7 @@ async fn test_delete_sensor_when_pack_deleted() {
 
 #[tokio::test]
 #[ignore = "integration test — requires database"]
-async fn test_delete_sensor_when_trigger_deleted() {
+async fn test_delete_sensor_nullifies_trigger_sensor_ref() {
     let pool = create_test_pool().await.unwrap();
 
     let pack = PackFixture::new_unique("trigger_cascade_pack")
@@ -1147,23 +1064,41 @@ async fn test_delete_sensor_when_trigger_deleted() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "trigger_cascade_sensor",
     )
     .create(&pool)
     .await
     .unwrap();
 
-    // Delete the trigger
-    use attune_common::repositories::{trigger::TriggerRepository, Delete as _};
-    TriggerRepository::delete(&pool, trigger.id).await.unwrap();
-
-    // Sensor should also be deleted due to CASCADE
-    let result = SensorRepository::find_by_id(&pool, sensor.id)
+    // Link trigger to sensor
+    use attune_common::repositories::trigger::TriggerRepository;
+    let update_input = attune_common::repositories::trigger::UpdateTriggerInput {
+        label: None,
+        description: None,
+        enabled: None,
+        param_schema: None,
+        out_schema: None,
+        sensor: Some(attune_common::repositories::Patch::Set(sensor.id)),
+        sensor_ref: Some(attune_common::repositories::Patch::Set(
+            sensor.r#ref.clone(),
+        )),
+    };
+    let updated_trigger = TriggerRepository::update(&pool, trigger.id, update_input)
         .await
         .unwrap();
-    assert!(result.is_none());
+    assert_eq!(updated_trigger.sensor, Some(sensor.id));
+
+    // Delete the sensor
+    use attune_common::repositories::Delete as _;
+    SensorRepository::delete(&pool, sensor.id).await.unwrap();
+
+    // Trigger should still exist but with sensor set to NULL (ON DELETE SET NULL)
+    let result = TriggerRepository::find_by_id(&pool, trigger.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(result.sensor.is_none());
+    assert!(result.sensor_ref.is_none());
 }
 
 #[tokio::test]
@@ -1176,7 +1111,7 @@ async fn test_delete_sensor_when_runtime_deleted() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -1191,8 +1126,6 @@ async fn test_delete_sensor_when_runtime_deleted() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "runtime_cascade_sensor",
     )
     .create(&pool)
@@ -1214,102 +1147,9 @@ async fn test_delete_sensor_when_runtime_deleted() {
 // Specialized Query Tests
 // ============================================================================
 
-#[tokio::test]
-#[ignore = "integration test — requires database"]
-async fn test_find_by_trigger() {
-    let pool = create_test_pool().await.unwrap();
-
-    let pack = PackFixture::new_unique("trigger_find_pack")
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let trigger1 = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event1")
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let trigger2 = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event2")
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let runtime = RuntimeFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "python3")
-        .create(&pool)
-        .await
-        .unwrap();
-
-    // Create sensors for trigger1
-    let sensor1 = SensorFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        runtime.id,
-        runtime.r#ref.clone(),
-        trigger1.id,
-        trigger1.r#ref.clone(),
-        "sensor1",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
-
-    let sensor2 = SensorFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        runtime.id,
-        runtime.r#ref.clone(),
-        trigger1.id,
-        trigger1.r#ref.clone(),
-        "sensor2",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
-
-    // Create sensor for trigger2
-    let _sensor3 = SensorFixture::new_unique(
-        Some(pack.id),
-        Some(pack.r#ref.clone()),
-        runtime.id,
-        runtime.r#ref.clone(),
-        trigger2.id,
-        trigger2.r#ref.clone(),
-        "sensor3",
-    )
-    .create(&pool)
-    .await
-    .unwrap();
-
-    let sensors = SensorRepository::find_by_trigger(&pool, trigger1.id)
-        .await
-        .unwrap();
-
-    assert_eq!(sensors.len(), 2);
-    assert!(sensors.iter().any(|s| s.id == sensor1.id));
-    assert!(sensors.iter().any(|s| s.id == sensor2.id));
-}
-
-#[tokio::test]
-#[ignore = "integration test — requires database"]
-async fn test_find_by_trigger_no_sensors() {
-    let pool = create_test_pool().await.unwrap();
-
-    let pack = PackFixture::new_unique("empty_trigger_pack")
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
-        .create(&pool)
-        .await
-        .unwrap();
-
-    let sensors = SensorRepository::find_by_trigger(&pool, trigger.id)
-        .await
-        .unwrap();
-
-    assert_eq!(sensors.len(), 0);
-}
+// Note: test_find_by_trigger removed — the relationship is now trigger→sensor
+// (trigger.sensor FK), so the equivalent query is TriggerRepository::find_by_sensor.
+// See trigger_repository_tests.rs for those tests.
 
 #[tokio::test]
 #[ignore = "integration test — requires database"]
@@ -1321,7 +1161,7 @@ async fn test_find_enabled() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -1337,8 +1177,6 @@ async fn test_find_enabled() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "enabled_sensor",
     )
     .with_enabled(true)
@@ -1352,8 +1190,6 @@ async fn test_find_enabled() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "disabled_sensor",
     )
     .with_enabled(false)
@@ -1378,7 +1214,7 @@ async fn test_find_enabled_empty() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -1394,8 +1230,6 @@ async fn test_find_enabled_empty() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "disabled",
     )
     .with_enabled(false)
@@ -1423,12 +1257,12 @@ async fn test_find_by_pack() {
         .await
         .unwrap();
 
-    let trigger1 = TriggerFixture::new_unique(Some(pack1.id), Some(pack1.r#ref.clone()), "event1")
+    let _trigger1 = TriggerFixture::new_unique(Some(pack1.id), Some(pack1.r#ref.clone()), "event1")
         .create(&pool)
         .await
         .unwrap();
 
-    let trigger2 = TriggerFixture::new_unique(Some(pack2.id), Some(pack2.r#ref.clone()), "event2")
+    let _trigger2 = TriggerFixture::new_unique(Some(pack2.id), Some(pack2.r#ref.clone()), "event2")
         .create(&pool)
         .await
         .unwrap();
@@ -1449,8 +1283,6 @@ async fn test_find_by_pack() {
         Some(pack1.r#ref.clone()),
         runtime1.id,
         runtime1.r#ref.clone(),
-        trigger1.id,
-        trigger1.r#ref.clone(),
         "pack1_sensor1",
     )
     .create(&pool)
@@ -1462,8 +1294,6 @@ async fn test_find_by_pack() {
         Some(pack1.r#ref.clone()),
         runtime1.id,
         runtime1.r#ref.clone(),
-        trigger1.id,
-        trigger1.r#ref.clone(),
         "pack1_sensor2",
     )
     .create(&pool)
@@ -1476,8 +1306,6 @@ async fn test_find_by_pack() {
         Some(pack2.r#ref.clone()),
         runtime2.id,
         runtime2.r#ref.clone(),
-        trigger2.id,
-        trigger2.r#ref.clone(),
         "pack2_sensor",
     )
     .create(&pool)
@@ -1525,7 +1353,7 @@ async fn test_created_timestamp_set_automatically() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -1542,8 +1370,6 @@ async fn test_created_timestamp_set_automatically() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "timestamp_sensor",
     )
     .create(&pool)
@@ -1567,7 +1393,7 @@ async fn test_updated_timestamp_changes_on_update() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -1582,8 +1408,6 @@ async fn test_updated_timestamp_changes_on_update() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "update_time_sensor",
     )
     .create(&pool)
@@ -1618,7 +1442,7 @@ async fn test_updated_timestamp_unchanged_on_read() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -1633,8 +1457,6 @@ async fn test_updated_timestamp_unchanged_on_read() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "read_time_sensor",
     )
     .create(&pool)
@@ -1669,7 +1491,7 @@ async fn test_param_schema_complex_structure() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -1716,8 +1538,6 @@ async fn test_param_schema_complex_structure() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "complex_sensor",
     )
     .with_param_schema(complex_schema.clone())
@@ -1744,7 +1564,7 @@ async fn test_param_schema_can_be_null() {
         .await
         .unwrap();
 
-    let trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
+    let _trigger = TriggerFixture::new_unique(Some(pack.id), Some(pack.r#ref.clone()), "event")
         .create(&pool)
         .await
         .unwrap();
@@ -1759,8 +1579,6 @@ async fn test_param_schema_can_be_null() {
         Some(pack.r#ref.clone()),
         runtime.id,
         runtime.r#ref.clone(),
-        trigger.id,
-        trigger.r#ref.clone(),
         "null_schema_sensor",
     )
     .create(&pool)

@@ -38,6 +38,11 @@ pub struct CreateActionRequest {
     #[schema(example = 1)]
     pub runtime: Option<i64>,
 
+    /// Optional runtime reference for this action
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "core.python", nullable = true)]
+    pub runtime_ref: Option<String>,
+
     /// Optional semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0")
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(example = ">=3.12", nullable = true)]
@@ -85,6 +90,10 @@ pub struct UpdateActionRequest {
     /// Runtime ID
     #[schema(example = 1)]
     pub runtime: Option<i64>,
+
+    /// Runtime reference
+    #[schema(example = "core.python", nullable = true)]
+    pub runtime_ref: Option<String>,
 
     /// Optional semver version constraint patch for the runtime.
     pub runtime_version_constraint: Option<RuntimeVersionConstraintPatch>,
@@ -444,6 +453,7 @@ mod tests {
             description: Some("Test description".to_string()),
             entrypoint: "/actions/test.py".to_string(),
             runtime: None,
+            runtime_ref: None,
             runtime_version_constraint: None,
             required_worker_runtimes: BTreeMap::new(),
             param_schema: None,
@@ -463,6 +473,7 @@ mod tests {
             description: Some("Test description".to_string()),
             entrypoint: "/actions/test.py".to_string(),
             runtime: None,
+            runtime_ref: None,
             runtime_version_constraint: None,
             required_worker_runtimes: BTreeMap::new(),
             param_schema: None,
@@ -480,6 +491,7 @@ mod tests {
             description: None,
             entrypoint: None,
             runtime: None,
+            runtime_ref: None,
             runtime_version_constraint: None,
             required_worker_runtimes: None,
             param_schema: None,

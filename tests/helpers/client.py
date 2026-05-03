@@ -601,8 +601,7 @@ class AttuneClient:
     def create_sensor(
         self,
         ref: str = None,
-        trigger_id: int = None,
-        trigger_ref: str = None,
+        trigger_types: List[str] = None,
         label: str = None,
         description: str = "",
         entrypoint: str = "internal://timer",
@@ -617,8 +616,7 @@ class AttuneClient:
 
         Args:
             ref: Unique reference (e.g., "pack.sensor_name")
-            trigger_id: Trigger ID this sensor monitors
-            trigger_ref: Trigger reference
+            trigger_types: List of trigger refs this sensor emits events for
             label: Human-readable label
             description: Sensor description
             entrypoint: Entry point (default: internal://timer for timers)
@@ -669,15 +667,15 @@ class AttuneClient:
 
             config_json = json.dumps(config) if config else None
 
-            # Insert sensor
+            # Insert sensor (without trigger — relationship is trigger→sensor now)
             cur.execute(
                 """
                 INSERT INTO attune.sensor
                 (ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_ref,
-                 trigger, trigger_ref, enabled, config)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                 enabled, config)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                 RETURNING id, ref, pack, pack_ref, label, description, entrypoint,
-                          runtime, runtime_ref, trigger, trigger_ref, enabled,
+                          runtime, runtime_ref, enabled,
                           config, created, updated
             """,
                 (
@@ -689,15 +687,12 @@ class AttuneClient:
                     entrypoint,
                     runtime_id,
                     full_runtime_ref,
-                    trigger_id,
-                    trigger_ref,
                     enabled,
                     config_json,
                 ),
             )
 
             row = cur.fetchone()
-            conn.commit()
 
             # Convert to dict
             sensor = {
@@ -710,13 +705,21 @@ class AttuneClient:
                 "entrypoint": row[6],
                 "runtime": row[7],
                 "runtime_ref": row[8],
-                "trigger": row[9],
-                "trigger_ref": row[10],
-                "enabled": row[11],
-                "config": row[12],
-                "created": row[13].isoformat() if row[13] else None,
-                "updated": row[14].isoformat() if row[14] else None,
+                "enabled": row[9],
+                "config": row[10],
+                "created": row[11].isoformat() if row[11] else None,
+                "updated": row[12].isoformat() if row[12] else None,
             }
+
+            # Link triggers to this sensor
+            if trigger_types:
+                for tref in trigger_types:
+                    cur.execute(
+                        "UPDATE attune.trigger SET sensor = %s, sensor_ref = %s WHERE ref = %s",
+                        (sensor["id"], ref, tref),
+                    )
+
+            conn.commit()
 
             return sensor
 
@@ -802,10 +805,8 @@ class AttuneClient:
             trigger = self.get_trigger(trigger_id)
             trigger_ref = trigger["ref"]
 
-        # Map legacy fields to new schema
         if not conditions and criteria:
-            # Simple string criteria - wrap in basic condition
-            conditions = {"criteria": criteria}
+            conditions = {"expression": criteria}
 
         if not action_params:
             action_params = action_parameters or {}

@@ -11,7 +11,7 @@ Duration: ~20 seconds
 import time
 
 import pytest
-from helpers.client import AttuneClient
+from helpers import AttuneClient
 from helpers.fixtures import create_webhook_trigger, unique_ref
 from helpers.polling import (
     wait_for_execution_completion,
@@ -51,23 +51,23 @@ def test_large_log_output_truncation(client: AttuneClient, test_pack):
 
     # Step 2: Create action that generates large logs
     print("\n[STEP 2] Creating action with large log output...")
-    action_ref = f"log_limit_action_{unique_ref()}"
+    action_ref = f"{pack_ref}.log_limit_action_{unique_ref()}"
     action_payload = {
         "ref": action_ref,
-        "pack": pack_ref,
-        "name": "Large Log Action",
+        "pack_ref": pack_ref,
+        "label": "Large Log Action",
         "description": "Generates large log output to test limits",
-        "runner_type": "python",
-        "entry_point": """
-# Generate large log output (>1MB)
-for i in range(50000):
-    print(f"Log line {i}: " + "A" * 100)
-
-print("Finished generating large logs")
+        "runtime_ref": "core.shell",
+        "entrypoint": """
+i=0
+while [ "$i" -lt 50000 ]; do
+  printf 'Log line %s: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\\n' "$i"
+  i=$((i + 1))
+done
+echo "Finished generating large logs"
 """,
-        "enabled": True,
     }
-    action_response = client.post("/actions", json=action_payload)
+    action_response = client.post("/api/v1/actions", json=action_payload)
     assert action_response.status_code == 201, (
         f"Failed to create action: {action_response.text}"
     )
@@ -76,15 +76,16 @@ print("Finished generating large logs")
 
     # Step 3: Create rule
     print("\n[STEP 3] Creating rule...")
-    rule_ref = f"log_limit_rule_{unique_ref()}"
+    rule_ref = f"{pack_ref}.log_limit_rule_{unique_ref()}"
     rule_payload = {
         "ref": rule_ref,
-        "pack": pack_ref,
-        "trigger": trigger["ref"],
-        "action": action["ref"],
+        "pack_ref": pack_ref,
+        "label": "Large Log Rule",
+        "trigger_ref": trigger["ref"],
+        "action_ref": action["ref"],
         "enabled": True,
     }
-    rule_response = client.post("/rules", json=rule_payload)
+    rule_response = client.post("/api/v1/rules", json=rule_payload)
     assert rule_response.status_code == 201, (
         f"Failed to create rule: {rule_response.text}"
     )
@@ -93,19 +94,21 @@ print("Finished generating large logs")
 
     # Step 4: Trigger webhook
     print("\n[STEP 4] Triggering webhook...")
-    webhook_url = f"/webhooks/{trigger['ref']}"
-    webhook_response = client.post(webhook_url, json={"test": "large_logs"})
+    webhook_url = trigger["webhook_url"]
+    webhook_response = client.post(webhook_url, json={"payload": {"test": "large_logs"}})
     assert webhook_response.status_code == 200
     print(f"✓ Webhook triggered")
 
     # Step 5: Wait for execution
     print("\n[STEP 5] Waiting for execution with large logs...")
-    wait_for_execution_count(client, expected_count=1, timeout=15)
-    executions = client.get("/executions").json()["data"]
+    wait_for_execution_count(
+        client, expected_count=1, action_ref=action["ref"], timeout=15
+    )
+    executions = client.list_executions(action_ref=action["ref"], limit=1000)
     execution_id = executions[0]["id"]
 
     execution = wait_for_execution_completion(client, execution_id, timeout=15)
-    print(f"✓ Execution completed: {execution['status']}")
+    print(f"✓ Execution succeeded: {execution['status']}")
 
     # Step 6: Verify log truncation
     print("\n[STEP 6] Verifying log size limits...")
@@ -172,27 +175,21 @@ def test_stderr_log_capture(client: AttuneClient, test_pack):
 
     # Step 2: Create action that writes to stdout and stderr
     print("\n[STEP 2] Creating action with stdout/stderr output...")
-    action_ref = f"stderr_action_{unique_ref()}"
+    action_ref = f"{pack_ref}.stderr_action_{unique_ref()}"
     action_payload = {
         "ref": action_ref,
-        "pack": pack_ref,
-        "name": "Stdout/Stderr Action",
+        "pack_ref": pack_ref,
+        "label": "Stdout/Stderr Action",
         "description": "Writes to both stdout and stderr",
-        "runner_type": "python",
-        "entry_point": """
-import sys
-
-print("This is stdout line 1")
-print("This is stdout line 2", file=sys.stderr)
-print("This is stdout line 3")
-print("This is stderr line 2", file=sys.stderr)
-
-sys.stdout.flush()
-sys.stderr.flush()
+        "runtime_ref": "core.shell",
+        "entrypoint": """
+echo "This is stdout line 1"
+echo "This is stderr line 1" >&2
+echo "This is stdout line 2"
+echo "This is stderr line 2" >&2
 """,
-        "enabled": True,
     }
-    action_response = client.post("/actions", json=action_payload)
+    action_response = client.post("/api/v1/actions", json=action_payload)
     assert action_response.status_code == 201, (
         f"Failed to create action: {action_response.text}"
     )
@@ -201,38 +198,41 @@ sys.stderr.flush()
 
     # Step 3: Create rule
     print("\n[STEP 3] Creating rule...")
-    rule_ref = f"stderr_rule_{unique_ref()}"
+    rule_ref = f"{pack_ref}.stderr_rule_{unique_ref()}"
     rule_payload = {
         "ref": rule_ref,
-        "pack": pack_ref,
-        "trigger": trigger["ref"],
-        "action": action["ref"],
+        "pack_ref": pack_ref,
+        "label": "Stdout Stderr Rule",
+        "trigger_ref": trigger["ref"],
+        "action_ref": action["ref"],
         "enabled": True,
     }
-    rule_response = client.post("/rules", json=rule_payload)
+    rule_response = client.post("/api/v1/rules", json=rule_payload)
     assert rule_response.status_code == 201
     rule = rule_response.json()["data"]
     print(f"✓ Created rule")
 
     # Step 4: Trigger webhook
     print("\n[STEP 4] Triggering webhook...")
-    webhook_url = f"/webhooks/{trigger['ref']}"
-    webhook_response = client.post(webhook_url, json={"test": "stderr"})
+    webhook_url = trigger["webhook_url"]
+    webhook_response = client.post(webhook_url, json={"payload": {"test": "stderr"}})
     assert webhook_response.status_code == 200
     print(f"✓ Webhook triggered")
 
     # Step 5: Wait for execution
     print("\n[STEP 5] Waiting for execution...")
-    wait_for_execution_count(client, expected_count=1, timeout=10)
-    executions = client.get("/executions").json()["data"]
+    wait_for_execution_count(
+        client, expected_count=1, action_ref=action["ref"], timeout=10
+    )
+    executions = client.list_executions(action_ref=action["ref"], limit=1000)
     execution_id = executions[0]["id"]
 
     execution = wait_for_execution_completion(client, execution_id, timeout=10)
-    print(f"✓ Execution completed: {execution['status']}")
+    print(f"✓ Execution succeeded: {execution['status']}")
 
     # Step 6: Verify stdout and stderr are captured
     print("\n[STEP 6] Verifying stdout/stderr capture...")
-    assert execution["status"] == "succeeded", (
+    assert execution["status"] == "completed", (
         f"Expected succeeded, got {execution['status']}"
     )
 
@@ -290,23 +290,23 @@ def test_log_line_count_limits(client: AttuneClient, test_pack):
 
     # Step 2: Create action that generates many lines
     print("\n[STEP 2] Creating action with many log lines...")
-    action_ref = f"log_lines_action_{unique_ref()}"
+    action_ref = f"{pack_ref}.log_lines_action_{unique_ref()}"
     action_payload = {
         "ref": action_ref,
-        "pack": pack_ref,
-        "name": "Many Lines Action",
+        "pack_ref": pack_ref,
+        "label": "Many Lines Action",
         "description": "Generates many log lines",
-        "runner_type": "python",
-        "entry_point": """
-# Generate 10,000 short log lines
-for i in range(10000):
-    print(f"Line {i}")
-
-print("All lines printed")
+        "runtime_ref": "core.shell",
+        "entrypoint": """
+i=0
+while [ "$i" -lt 10000 ]; do
+  echo "Line $i"
+  i=$((i + 1))
+done
+echo "All lines printed"
 """,
-        "enabled": True,
     }
-    action_response = client.post("/actions", json=action_payload)
+    action_response = client.post("/api/v1/actions", json=action_payload)
     assert action_response.status_code == 201, (
         f"Failed to create action: {action_response.text}"
     )
@@ -315,38 +315,41 @@ print("All lines printed")
 
     # Step 3: Create rule
     print("\n[STEP 3] Creating rule...")
-    rule_ref = f"log_lines_rule_{unique_ref()}"
+    rule_ref = f"{pack_ref}.log_lines_rule_{unique_ref()}"
     rule_payload = {
         "ref": rule_ref,
-        "pack": pack_ref,
-        "trigger": trigger["ref"],
-        "action": action["ref"],
+        "pack_ref": pack_ref,
+        "label": "Many Lines Rule",
+        "trigger_ref": trigger["ref"],
+        "action_ref": action["ref"],
         "enabled": True,
     }
-    rule_response = client.post("/rules", json=rule_payload)
+    rule_response = client.post("/api/v1/rules", json=rule_payload)
     assert rule_response.status_code == 201
     rule = rule_response.json()["data"]
     print(f"✓ Created rule")
 
     # Step 4: Trigger webhook
     print("\n[STEP 4] Triggering webhook...")
-    webhook_url = f"/webhooks/{trigger['ref']}"
-    webhook_response = client.post(webhook_url, json={"test": "many_lines"})
+    webhook_url = trigger["webhook_url"]
+    webhook_response = client.post(webhook_url, json={"payload": {"test": "many_lines"}})
     assert webhook_response.status_code == 200
     print(f"✓ Webhook triggered")
 
     # Step 5: Wait for execution
     print("\n[STEP 5] Waiting for execution...")
-    wait_for_execution_count(client, expected_count=1, timeout=15)
-    executions = client.get("/executions").json()["data"]
+    wait_for_execution_count(
+        client, expected_count=1, action_ref=action["ref"], timeout=15
+    )
+    executions = client.list_executions(action_ref=action["ref"], limit=1000)
     execution_id = executions[0]["id"]
 
     execution = wait_for_execution_completion(client, execution_id, timeout=15)
-    print(f"✓ Execution completed: {execution['status']}")
+    print(f"✓ Execution succeeded: {execution['status']}")
 
     # Step 6: Verify execution succeeded despite many lines
     print("\n[STEP 6] Verifying high line count handling...")
-    assert execution["status"] == "succeeded", (
+    assert execution["status"] == "completed", (
         f"Expected succeeded, got {execution['status']}"
     )
 
@@ -398,31 +401,20 @@ def test_binary_output_handling(client: AttuneClient, test_pack):
 
     # Step 2: Create action with binary output
     print("\n[STEP 2] Creating action with binary output...")
-    action_ref = f"binary_action_{unique_ref()}"
+    action_ref = f"{pack_ref}.binary_action_{unique_ref()}"
     action_payload = {
         "ref": action_ref,
-        "pack": pack_ref,
-        "name": "Binary Output Action",
+        "pack_ref": pack_ref,
+        "label": "Binary Output Action",
         "description": "Outputs binary data",
-        "runner_type": "python",
-        "entry_point": """
-import sys
-
-print("Before binary data")
-
-# Write some binary data (will be converted to string representation)
-try:
-    # Python 3 - sys.stdout is text mode by default
-    binary_bytes = bytes([0xFF, 0xFE, 0xFD, 0xFC])
-    print(f"Binary bytes: {binary_bytes.hex()}")
-except Exception as e:
-    print(f"Binary handling: {e}")
-
-print("After binary data")
+        "runtime_ref": "core.shell",
+        "entrypoint": """
+echo "Before binary data"
+printf 'Binary bytes: fffefdfc\\n'
+echo "After binary data"
 """,
-        "enabled": True,
     }
-    action_response = client.post("/actions", json=action_payload)
+    action_response = client.post("/api/v1/actions", json=action_payload)
     assert action_response.status_code == 201, (
         f"Failed to create action: {action_response.text}"
     )
@@ -431,38 +423,41 @@ print("After binary data")
 
     # Step 3: Create rule
     print("\n[STEP 3] Creating rule...")
-    rule_ref = f"binary_rule_{unique_ref()}"
+    rule_ref = f"{pack_ref}.binary_rule_{unique_ref()}"
     rule_payload = {
         "ref": rule_ref,
-        "pack": pack_ref,
-        "trigger": trigger["ref"],
-        "action": action["ref"],
+        "pack_ref": pack_ref,
+        "label": "Binary Output Rule",
+        "trigger_ref": trigger["ref"],
+        "action_ref": action["ref"],
         "enabled": True,
     }
-    rule_response = client.post("/rules", json=rule_payload)
+    rule_response = client.post("/api/v1/rules", json=rule_payload)
     assert rule_response.status_code == 201
     rule = rule_response.json()["data"]
     print(f"✓ Created rule")
 
     # Step 4: Trigger webhook
     print("\n[STEP 4] Triggering webhook...")
-    webhook_url = f"/webhooks/{trigger['ref']}"
-    webhook_response = client.post(webhook_url, json={"test": "binary"})
+    webhook_url = trigger["webhook_url"]
+    webhook_response = client.post(webhook_url, json={"payload": {"test": "binary"}})
     assert webhook_response.status_code == 200
     print(f"✓ Webhook triggered")
 
     # Step 5: Wait for execution
     print("\n[STEP 5] Waiting for execution...")
-    wait_for_execution_count(client, expected_count=1, timeout=10)
-    executions = client.get("/executions").json()["data"]
+    wait_for_execution_count(
+        client, expected_count=1, action_ref=action["ref"], timeout=10
+    )
+    executions = client.list_executions(action_ref=action["ref"], limit=1000)
     execution_id = executions[0]["id"]
 
     execution = wait_for_execution_completion(client, execution_id, timeout=10)
-    print(f"✓ Execution completed: {execution['status']}")
+    print(f"✓ Execution succeeded: {execution['status']}")
 
     # Step 6: Verify execution succeeded
     print("\n[STEP 6] Verifying binary output handling...")
-    assert execution["status"] == "succeeded", (
+    assert execution["status"] == "completed", (
         f"Expected succeeded, got {execution['status']}"
     )
 

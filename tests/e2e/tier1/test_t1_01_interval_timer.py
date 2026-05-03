@@ -11,13 +11,13 @@ Test Flow:
 4. Create rule linking timer → action
 5. Wait for 3 trigger events (15 seconds)
 6. Verify 3 enforcements created
-7. Verify 3 executions completed successfully
+7. Verify 3 executions succeeded successfully
 
 Success Criteria:
 - Timer fires every 5 seconds (±500ms tolerance)
 - Each timer event creates enforcement
 - Each enforcement creates execution
-- All executions reach 'succeeded' status
+- All executions reach 'completed' status
 - Action output captured in execution results
 - No errors in any service logs
 """
@@ -69,7 +69,7 @@ class TestIntervalTimerAutomation:
             interval_seconds=interval_seconds,
             pack_ref=pack_ref,
             action_ref="core.echo",
-            action_parameters={
+            action_params={
                 "message": f"Timer fired at interval {interval_seconds}s"
             },
         )
@@ -90,7 +90,7 @@ class TestIntervalTimerAutomation:
         events = wait_for_event_count(
             client=client,
             expected_count=expected_executions,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             rule_id=rule["id"],
             created_after=rule_creation_time,
             timeout=test_duration,
@@ -125,8 +125,8 @@ class TestIntervalTimerAutomation:
                     f"Event interval {interval:.1f}s outside tolerance (expected {interval_seconds}s ±1.5s)"
                 )
 
-        # Step 3: Verify executions completed successfully
-        print(f"\n[3/3] Verifying {expected_executions} executions completed...")
+        # Step 3: Verify executions succeeded successfully
+        print(f"\n[3/3] Verifying {expected_executions} executions succeeded...")
 
         executions = wait_for_execution_count(
             client=client,
@@ -173,16 +173,16 @@ class TestIntervalTimerAutomation:
 
         # Allow 1 failure due to artifact version race condition
         assert succeeded_count >= expected_executions - 1, (
-            f"Too many failures: only {succeeded_count}/{expected_executions} completed"
+            f"Too many failures: only {succeeded_count}/{expected_executions} succeeded"
         )
 
-        print(f"\n✓ {succeeded_count}/{expected_executions} executions completed successfully")
+        print(f"\n✓ {succeeded_count}/{expected_executions} executions succeeded successfully")
 
         # Final verification
         print("\n=== Test Summary ===")
         print(f"✓ Trigger created and firing every {interval_seconds}s")
         print(f"✓ {len(events)} events generated")
-        print(f"✓ {succeeded_count} executions completed successfully")
+        print(f"✓ {succeeded_count} executions succeeded successfully")
         print(f"✓ Total test duration: {time.time() - start_time:.1f}s")
         print(f"✓ Test PASSED")
 
@@ -218,7 +218,7 @@ class TestIntervalTimerAutomation:
         events = wait_for_event_count(
             client=client,
             expected_count=expected_fires,
-            trigger_id=trigger["id"],
+            trigger_ref=trigger["ref"],
             rule_id=rule["id"],
             created_after=rule_creation_time,
             timeout=test_duration,

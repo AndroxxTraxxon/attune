@@ -57,6 +57,7 @@ pub async fn list_triggers(
 ) -> ApiResult<impl IntoResponse> {
     let filters = TriggerSearchFilters {
         pack: None,
+        sensor: None,
         enabled: None,
         limit: pagination.limit(),
         offset: pagination.offset(),
@@ -90,6 +91,7 @@ pub async fn list_enabled_triggers(
 ) -> ApiResult<impl IntoResponse> {
     let filters = TriggerSearchFilters {
         pack: None,
+        sensor: None,
         enabled: Some(true),
         limit: pagination.limit(),
         offset: pagination.offset(),
@@ -133,6 +135,7 @@ pub async fn list_triggers_by_pack(
 
     let filters = TriggerSearchFilters {
         pack: Some(pack.id),
+        sensor: None,
         enabled: None,
         limit: pagination.limit(),
         offset: pagination.offset(),
@@ -229,6 +232,8 @@ pub async fn create_trigger(
         enabled: request.enabled,
         param_schema: request.param_schema,
         out_schema: request.out_schema,
+        sensor: None,
+        sensor_ref: None,
         is_adhoc: true, // Triggers created via API are ad-hoc (not from pack installation)
     };
 
@@ -288,6 +293,8 @@ pub async fn update_trigger(
             TriggerJsonPatch::Set(value) => Patch::Set(value),
             TriggerJsonPatch::Clear => Patch::Clear,
         }),
+        sensor: None,
+        sensor_ref: None,
     };
 
     let trigger = TriggerRepository::update(&state.db, existing_trigger.id, update_input).await?;
@@ -365,11 +372,8 @@ pub async fn enable_trigger(
 
     // Update trigger to enabled
     let update_input = UpdateTriggerInput {
-        label: None,
-        description: None,
         enabled: Some(true),
-        param_schema: None,
-        out_schema: None,
+        ..Default::default()
     };
 
     let trigger = TriggerRepository::update(&state.db, existing_trigger.id, update_input).await?;
@@ -408,11 +412,8 @@ pub async fn disable_trigger(
 
     // Update trigger to disabled
     let update_input = UpdateTriggerInput {
-        label: None,
-        description: None,
         enabled: Some(false),
-        param_schema: None,
-        out_schema: None,
+        ..Default::default()
     };
 
     let trigger = TriggerRepository::update(&state.db, existing_trigger.id, update_input).await?;
@@ -447,7 +448,6 @@ pub async fn list_sensors(
 ) -> ApiResult<impl IntoResponse> {
     let filters = SensorSearchFilters {
         pack: None,
-        trigger: None,
         enabled: None,
         limit: pagination.limit(),
         offset: pagination.offset(),
@@ -481,7 +481,6 @@ pub async fn list_enabled_sensors(
 ) -> ApiResult<impl IntoResponse> {
     let filters = SensorSearchFilters {
         pack: None,
-        trigger: None,
         enabled: Some(true),
         limit: pagination.limit(),
         offset: pagination.offset(),
@@ -525,7 +524,6 @@ pub async fn list_sensors_by_pack(
 
     let filters = SensorSearchFilters {
         pack: Some(pack.id),
-        trigger: None,
         enabled: None,
         limit: pagination.limit(),
         offset: pagination.offset(),
@@ -563,13 +561,12 @@ pub async fn list_sensors_by_trigger(
     Query(pagination): Query<PaginationParams>,
 ) -> ApiResult<impl IntoResponse> {
     // Verify trigger exists
-    let trigger = TriggerRepository::find_by_ref(&state.db, &trigger_ref)
+    let _trigger = TriggerRepository::find_by_ref(&state.db, &trigger_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Trigger '{}' not found", trigger_ref)))?;
 
     let filters = SensorSearchFilters {
         pack: None,
-        trigger: Some(trigger.id),
         enabled: None,
         limit: pagination.limit(),
         offset: pagination.offset(),
@@ -659,7 +656,7 @@ pub async fn create_sensor(
         })?;
 
     // Verify trigger exists and get its ID
-    let trigger = TriggerRepository::find_by_ref(&state.db, &request.trigger_ref)
+    let _trigger = TriggerRepository::find_by_ref(&state.db, &request.trigger_ref)
         .await?
         .ok_or_else(|| {
             ApiError::NotFound(format!("Trigger '{}' not found", request.trigger_ref))
@@ -676,8 +673,6 @@ pub async fn create_sensor(
         runtime: runtime.id,
         runtime_ref: runtime.r#ref.clone(),
         runtime_version_constraint: None,
-        trigger: trigger.id,
-        trigger_ref: trigger.r#ref.clone(),
         enabled: request.enabled,
         param_schema: request.param_schema,
         config: request.config,
@@ -729,8 +724,6 @@ pub async fn update_sensor(
         runtime: None,
         runtime_ref: None,
         runtime_version_constraint: None,
-        trigger: None,
-        trigger_ref: None,
         enabled: request.enabled,
         param_schema: request.param_schema.map(|patch| match patch {
             SensorJsonPatch::Set(value) => Patch::Set(value),
@@ -818,8 +811,6 @@ pub async fn enable_sensor(
         runtime: None,
         runtime_ref: None,
         runtime_version_constraint: None,
-        trigger: None,
-        trigger_ref: None,
         enabled: Some(true),
         param_schema: None,
         config: None,
@@ -865,8 +856,6 @@ pub async fn disable_sensor(
         runtime: None,
         runtime_ref: None,
         runtime_version_constraint: None,
-        trigger: None,
-        trigger_ref: None,
         enabled: Some(false),
         param_schema: None,
         config: None,
