@@ -180,6 +180,10 @@ jobs:
               rust="true"; helm="true"; web="true"; docker_dist="true"
             else
               while IFS= read -r f; do
+                if [ "$f" = ".gitea/workflows/publish.yml" ]; then
+                  rust="true"; helm="true"; web="true"; docker_dist="true"
+                  continue
+                fi
                 if printf '%s' "$f" | grep -qE '^(crates/|Cargo\.toml$|Cargo\.lock$|docker/Dockerfile\.(runtime|agent|agent-package)$)'; then
                   rust="true"
                 fi
