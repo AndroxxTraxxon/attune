@@ -686,6 +686,7 @@ async fn login_with_password(api_url: &str, login: &str, password: &str) -> Resu
 
 fn build_config(cli: &Cli) -> Result<CliConfig> {
     let mut config = CliConfig::load_with_profile(cli.profile.as_deref()).unwrap_or_default();
+    ensure_current_profile_exists(&mut config);
 
     if let Some(auth_token) = &cli.auth_token {
         config.current_profile_mut()?.auth_token = Some(auth_token.clone());
@@ -700,6 +701,22 @@ fn build_config(cli: &Cli) -> Result<CliConfig> {
     }
 
     Ok(config)
+}
+
+fn ensure_current_profile_exists(config: &mut CliConfig) {
+    if config.profiles.contains_key(&config.current_profile) {
+        return;
+    }
+
+    let default_config = CliConfig::default();
+    let fallback_profile = default_config
+        .profiles
+        .get("default")
+        .expect("default CLI config must include a default profile")
+        .clone();
+    config
+        .profiles
+        .insert(config.current_profile.clone(), fallback_profile);
 }
 
 fn selected_auth_mode(cli: &Cli, config: &CliConfig) -> Result<AuthMode> {
@@ -971,5 +988,21 @@ mod tests {
         let config = build_config(&cli).expect("config should build");
         let mode = selected_auth_mode(&cli, &config).expect("auth mode");
         assert!(matches!(mode, AuthMode::ExecutionToken));
+    }
+
+    #[test]
+    fn ensure_current_profile_exists_inserts_missing_profile() {
+        let mut config = CliConfig {
+            current_profile: "missing".to_string(),
+            ..CliConfig::default()
+        };
+        config.profiles.clear();
+
+        ensure_current_profile_exists(&mut config);
+
+        let profile = config.current_profile().expect("profile should exist");
+        assert_eq!(profile.api_url, "http://localhost:8080");
+        assert_eq!(profile.auth_token, None);
+        assert_eq!(profile.refresh_token, None);
     }
 }
