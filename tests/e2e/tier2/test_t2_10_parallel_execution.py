@@ -1,562 +1,216 @@
 """
-T2.10: Parallel Execution (with-items)
+T2.10: with_items workflow execution
 
-Tests that multiple child executions run concurrently when using with-items,
-validating concurrent execution capability and proper resource management.
-
-Test validates:
-- All child executions start immediately
-- Total time ~N seconds (parallel) not N*M seconds (sequential)
-- Worker handles concurrent executions
-- No resource contention issues
-- All children complete successfully
-- Concurrency limits honored
+Tests that workflow with_items expansion creates one child execution per item and
+honors the current concurrency field.
 """
 
 import time
+from datetime import datetime
 
-import pytest
 from helpers import AttuneClient
 from helpers.fixtures import unique_ref
 from helpers.polling import wait_for_execution_status
 
 
-@pytest.mark.skip(reason="with_items parallel execution needs investigation")
+def _create_item_action(client: AttuneClient, pack_ref: str, name_prefix: str) -> dict:
+    return client.create_action(
+        pack_ref=pack_ref,
+        data={
+            "name": f"{name_prefix}_{unique_ref()}",
+            "description": "Processes one with_items item",
+            "runtime_ref": "core.shell",
+            "entrypoint": (
+                'echo "Processing item: $item"; '
+                'sleep "${sleep_seconds:-1}"; '
+                'echo "Completed item: $item"; '
+                "printf '{\"item\":\"%s\",\"success\":true}\\n' \"$item\""
+            ),
+            "enabled": True,
+            "param_schema": {
+                "item": {"type": "string", "required": True},
+                "sleep_seconds": {"type": "integer", "required": False},
+            },
+        },
+    )
+
+
+def _create_with_items_workflow(
+    client: AttuneClient,
+    pack_ref: str,
+    action_ref: str,
+    name_prefix: str,
+    concurrency: int,
+) -> dict:
+    return client.create_workflow(
+        pack_ref=pack_ref,
+        name=f"{name_prefix}_{unique_ref()}",
+        label=name_prefix.replace("_", " ").title(),
+        description="Workflow with with_items expansion",
+        param_schema={
+            "items": {"type": "array", "required": True},
+            "sleep_seconds": {"type": "integer", "required": False},
+        },
+        tasks=[
+            {
+                "name": "process_items",
+                "action": action_ref,
+                "with_items": "{{ parameters.items }}",
+                "input": {
+                    "item": "{{ item }}",
+                    "sleep_seconds": "{{ parameters.sleep_seconds }}",
+                },
+                "concurrency": concurrency,
+            }
+        ],
+    )
+
+
+def _execute_and_get_children(
+    client: AttuneClient,
+    workflow_ref: str,
+    items: list[str],
+    *,
+    sleep_seconds: int = 1,
+    timeout: int = 120,
+) -> tuple[dict, list[dict], float]:
+    start_time = time.time()
+    execution = client.create_execution(
+        action_ref=workflow_ref,
+        parameters={"items": items, "sleep_seconds": sleep_seconds},
+    )
+    execution_id = execution["id"]
+    result = wait_for_execution_status(
+        client=client,
+        execution_id=execution_id,
+        expected_status="completed",
+        timeout=timeout,
+    )
+    elapsed = time.time() - start_time
+    child_summaries = client.list_executions(parent=execution_id, limit=max(len(items) + 5, 20))
+    children = [client.get_execution(child["id"]) for child in child_summaries]
+    return result, children, elapsed
+
+
+def _assert_all_items_completed(children: list[dict], expected_count: int):
+    assert len(children) == expected_count, (
+        f"Expected {expected_count} child executions, got {len(children)}"
+    )
+    failed = [child for child in children if child["status"] != "completed"]
+    assert failed == [], f"Expected all child executions to complete, got {failed}"
+
+
+def _parse_time(value: str | None) -> datetime:
+    assert value, "Execution timestamp is missing"
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _execution_windows(children: list[dict]) -> list[tuple[datetime, datetime]]:
+    windows = []
+    for child in children:
+        start = _parse_time(child.get("started_at"))
+        end = _parse_time(child.get("updated"))
+        assert end >= start, f"Execution {child['id']} ended before it started"
+        windows.append((start, end))
+    return windows
+
+
+def _max_concurrent(children: list[dict]) -> int:
+    events = []
+    for start, end in _execution_windows(children):
+        events.append((start, 1))
+        events.append((end, -1))
+
+    current = 0
+    maximum = 0
+    for _timestamp, delta in sorted(events, key=lambda item: (item[0], -item[1])):
+        current += delta
+        maximum = max(maximum, current)
+    return maximum
+
+
 def test_parallel_execution_basic(client: AttuneClient, test_pack):
-    """
-    Test basic parallel execution with with-items.
-
-    Flow:
-    1. Create action with 5-second sleep
-    2. Configure workflow with with-items on array of 5 items
-    3. Configure concurrency: unlimited (all parallel)
-    4. Execute workflow
-    5. Measure total execution time
-    6. Verify ~5 seconds total (not 25 seconds sequential)
-    7. Verify all 5 children ran concurrently
-    """
-    print("\n" + "=" * 80)
-    print("TEST: Parallel Execution with with-items (T2.10)")
-    print("=" * 80)
-
     pack_ref = test_pack["ref"]
-
-    # ========================================================================
-    # STEP 1: Create action that sleeps
-    # ========================================================================
-    print("\n[STEP 1] Creating action that sleeps 3 seconds...")
-
-    sleep_script = """#!/usr/bin/env python3
-import sys
-import time
-import json
-
-params = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {}
-item = params.get('item', 'unknown')
-
-print(f'Processing item: {item}')
-time.sleep(3)
-print(f'Completed item: {item}')
-sys.exit(0)
-"""
-
-    action = client.create_action(
-        pack_ref=pack_ref,
-        data={
-            "name": f"parallel_action_{unique_ref()}",
-            "description": "Action that processes items in parallel",
-            "runtime_ref": "core.shell",
-            "entrypoint": "echo.sh",
-            "enabled": True,
-            "parameters": {"item": {"type": "string", "required": True}},
-        },
-    )
-    action_ref = action["ref"]
-    print(f"✓ Created action: {action_ref}")
-    print(f"  Sleep duration: 3 seconds per item")
-
-    # ========================================================================
-    # STEP 2: Create workflow with with-items
-    # ========================================================================
-    print("\n[STEP 2] Creating workflow with with-items...")
-
     items = ["item1", "item2", "item3", "item4", "item5"]
-
-    workflow = client.create_action(
-        pack_ref=pack_ref,
-        data={
-            "name": f"parallel_workflow_{unique_ref()}",
-            "description": "Workflow with parallel with-items",
-            "runner_type": "workflow",
-            "entrypoint": "",
-            "enabled": True,
-            "parameters": {},
-            "workflow_definition": {
-                "tasks": [
-                    {
-                        "name": "process_items",
-                        "action": action_ref,
-                        "with_items": items,
-                        "concurrency": 0,  # 0 or unlimited = no limit
-                    }
-                ]
-            },
-        },
+    action = _create_item_action(client, pack_ref, "parallel_action")
+    workflow = _create_with_items_workflow(
+        client,
+        pack_ref,
+        action["ref"],
+        "parallel_workflow",
+        concurrency=len(items),
     )
-    workflow_ref = workflow["ref"]
-    print(f"✓ Created workflow: {workflow_ref}")
-    print(f"  Items: {items}")
-    print(f"  Concurrency: unlimited (all parallel)")
-    print(f"  Expected time: ~3 seconds (parallel)")
-    print(f"  Sequential would be: ~15 seconds")
 
-    # ========================================================================
-    # STEP 3: Execute workflow
-    # ========================================================================
-    print("\n[STEP 3] Executing workflow...")
-
-    start_time = time.time()
-    workflow_execution = client.create_execution(action_ref=workflow_ref, parameters={})
-    workflow_execution_id = workflow_execution["id"]
-    print(f"✓ Workflow execution created: ID={workflow_execution_id}")
-
-    # ========================================================================
-    # STEP 4: Wait for workflow to complete
-    # ========================================================================
-    print("\n[STEP 4] Waiting for workflow to complete...")
-
-    result = wait_for_execution_status(
-        client=client,
-        execution_id=workflow_execution_id,
-        expected_status="completed",
-        timeout=20,
+    result, children, _elapsed = _execute_and_get_children(
+        client, workflow["ref"], items, sleep_seconds=1
     )
-    end_time = time.time()
-    total_time = end_time - start_time
 
-    print(f"✓ Workflow succeeded: status={result['status']}")
-    print(f"  Total execution time: {total_time:.1f}s")
-
-    # ========================================================================
-    # STEP 5: Verify child executions
-    # ========================================================================
-    print("\n[STEP 5] Verifying child executions...")
-
-    all_executions = client.list_executions(limit=100)
-    child_executions = [
-        ex
-        for ex in all_executions
-        if ex.get("parent") == workflow_execution_id
-    ]
-
-    print(f"  Found {len(child_executions)} child executions")
-    assert len(child_executions) >= len(items), (
-        f"❌ Expected at least {len(items)} children, got {len(child_executions)}"
-    )
-    print(f"  ✓ All {len(items)} items processed")
-
-    # Check all succeeded
-    failed_children = [ex for ex in child_executions if ex["status"] not in ("completed", "completed")]
-    assert len(failed_children) == 0, f"❌ {len(failed_children)} children failed"
-    print(f"  ✓ All children succeeded")
-
-    # ========================================================================
-    # STEP 6: Verify timing suggests parallel execution
-    # ========================================================================
-    print("\n[STEP 6] Verifying parallel execution timing...")
-
-    sequential_time = 3 * len(items)  # 3s per item, 5 items = 15s
-    parallel_time = 3  # All run at once = 3s
-
-    print(f"  Sequential time would be: {sequential_time}s")
-    print(f"  Parallel time should be: ~{parallel_time}s")
-    print(f"  Actual time: {total_time:.1f}s")
-
-    if total_time < 8:
-        print(f"  ✓ Timing suggests parallel execution: {total_time:.1f}s < 8s")
-    else:
-        print(f"  ⚠ Timing suggests sequential: {total_time:.1f}s >= 8s")
-        print(f"    (Parallel execution may not be implemented yet)")
-
-    # ========================================================================
-    # STEP 7: Validate success criteria
-    # ========================================================================
-    print("\n[STEP 7] Validating success criteria...")
-
-    assert result["status"] in ("completed", "completed"), "❌ Workflow should succeed"
-    print("  ✓ Workflow succeeded")
-
-    assert len(child_executions) >= len(items), "❌ All items should execute"
-    print(f"  ✓ All {len(items)} items executed")
-
-    assert len(failed_children) == 0, "❌ All children should succeed"
-    print("  ✓ All children succeeded")
-
-    # ========================================================================
-    # FINAL SUMMARY
-    # ========================================================================
-    print("\n" + "=" * 80)
-    print("TEST SUMMARY: Parallel Execution with with-items")
-    print("=" * 80)
-    print(f"✓ Workflow with with-items: {workflow_ref}")
-    print(f"✓ Items processed: {len(items)}")
-    print(f"✓ Total time: {total_time:.1f}s")
-    print(f"✓ Expected parallel time: ~3s")
-    print(f"✓ Expected sequential time: ~15s")
-    print(f"✓ All children succeeded successfully")
-    print("\n✅ TEST PASSED: Parallel execution works correctly!")
-    print("=" * 80 + "\n")
+    assert result["status"] == "completed"
+    _assert_all_items_completed(children, len(items))
+    assert _max_concurrent(children) > 1, "Expected with_items children to overlap"
 
 
-@pytest.mark.skip(reason="with_items parallel execution needs investigation")
 def test_parallel_execution_with_concurrency_limit(client: AttuneClient, test_pack):
-    """
-    Test parallel execution with concurrency limit.
-
-    Flow:
-    1. Create workflow with 10 items
-    2. Set concurrency limit: 3
-    3. Verify at most 3 run at once
-    4. Verify all 10 complete
-    """
-    print("\n" + "=" * 80)
-    print("TEST: Parallel Execution - Concurrency Limit")
-    print("=" * 80)
-
     pack_ref = test_pack["ref"]
-
-    # ========================================================================
-    # STEP 1: Create action
-    # ========================================================================
-    print("\n[STEP 1] Creating action...")
-
-    action = client.create_action(
-        pack_ref=pack_ref,
-        data={
-            "name": f"limited_parallel_{unique_ref()}",
-            "description": "Action for limited parallelism test",
-            "runtime_ref": "core.shell",
-            "entrypoint": "echo.sh",
-            "enabled": True,
-            "parameters": {"item": {"type": "string", "required": True}},
-        },
+    items = [f"item{i}" for i in range(1, 11)]
+    action = _create_item_action(client, pack_ref, "limited_parallel")
+    workflow = _create_with_items_workflow(
+        client,
+        pack_ref,
+        action["ref"],
+        "limited_workflow",
+        concurrency=3,
     )
-    action_ref = action["ref"]
-    print(f"✓ Created action: {action_ref}")
 
-    # ========================================================================
-    # STEP 2: Create workflow with concurrency limit
-    # ========================================================================
-    print("\n[STEP 2] Creating workflow with concurrency limit...")
-
-    items = [f"item{i}" for i in range(1, 11)]  # 10 items
-
-    workflow = client.create_action(
-        pack_ref=pack_ref,
-        data={
-            "name": f"limited_workflow_{unique_ref()}",
-            "description": "Workflow with concurrency limit",
-            "runner_type": "workflow",
-            "entrypoint": "",
-            "enabled": True,
-            "parameters": {},
-            "workflow_definition": {
-                "tasks": [
-                    {
-                        "name": "process_items",
-                        "action": action_ref,
-                        "with_items": items,
-                        "concurrency": 3,  # Max 3 at once
-                    }
-                ]
-            },
-        },
+    result, children, _elapsed = _execute_and_get_children(
+        client, workflow["ref"], items, sleep_seconds=1
     )
-    workflow_ref = workflow["ref"]
-    print(f"✓ Created workflow: {workflow_ref}")
-    print(f"  Items: {len(items)}")
-    print(f"  Concurrency limit: 3")
 
-    # ========================================================================
-    # STEP 3: Execute workflow
-    # ========================================================================
-    print("\n[STEP 3] Executing workflow...")
-
-    start_time = time.time()
-    workflow_execution = client.create_execution(action_ref=workflow_ref, parameters={})
-    workflow_execution_id = workflow_execution["id"]
-    print(f"✓ Workflow execution created: ID={workflow_execution_id}")
-
-    # ========================================================================
-    # STEP 4: Wait for completion
-    # ========================================================================
-    print("\n[STEP 4] Waiting for workflow to complete...")
-
-    result = wait_for_execution_status(
-        client=client,
-        execution_id=workflow_execution_id,
-        expected_status="completed",
-        timeout=30,
-    )
-    end_time = time.time()
-    total_time = end_time - start_time
-
-    print(f"✓ Workflow succeeded: status={result['status']}")
-    print(f"  Total time: {total_time:.1f}s")
-
-    # ========================================================================
-    # STEP 5: Verify all items processed
-    # ========================================================================
-    print("\n[STEP 5] Verifying all items processed...")
-
-    all_executions = client.list_executions(limit=150)
-    child_executions = [
-        ex
-        for ex in all_executions
-        if ex.get("parent") == workflow_execution_id
-    ]
-
-    print(f"  Found {len(child_executions)} child executions")
-    assert len(child_executions) >= len(items), (
-        f"❌ Expected at least {len(items)}, got {len(child_executions)}"
-    )
-    print(f"  ✓ All {len(items)} items processed")
-
-    # ========================================================================
-    # FINAL SUMMARY
-    # ========================================================================
-    print("\n" + "=" * 80)
-    print("TEST SUMMARY: Concurrency Limit")
-    print("=" * 80)
-    print(f"✓ Workflow: {workflow_ref}")
-    print(f"✓ Items: {len(items)}")
-    print(f"✓ Concurrency limit: 3")
-    print(f"✓ All items processed: {len(child_executions)}")
-    print(f"✓ Total time: {total_time:.1f}s")
-    print("\n✅ TEST PASSED: Concurrency limit works correctly!")
-    print("=" * 80 + "\n")
+    assert result["status"] == "completed"
+    _assert_all_items_completed(children, len(items))
+    max_concurrent = _max_concurrent(children)
+    assert max_concurrent > 1, "Expected concurrency-limited children to overlap"
+    assert max_concurrent <= 3, f"Expected concurrency limit 3, got {max_concurrent}"
 
 
-@pytest.mark.skip(reason="with_items parallel execution needs investigation")
 def test_parallel_execution_sequential_mode(client: AttuneClient, test_pack):
-    """
-    Test with-items in sequential mode (concurrency: 1).
-
-    Flow:
-    1. Create workflow with concurrency: 1
-    2. Verify items execute one at a time
-    3. Verify total time equals sum of individual times
-    """
-    print("\n" + "=" * 80)
-    print("TEST: Parallel Execution - Sequential Mode")
-    print("=" * 80)
-
     pack_ref = test_pack["ref"]
-
-    # ========================================================================
-    # STEP 1: Create action
-    # ========================================================================
-    print("\n[STEP 1] Creating action...")
-
-    action = client.create_action(
-        pack_ref=pack_ref,
-        data={
-            "name": f"sequential_{unique_ref()}",
-            "description": "Action for sequential test",
-            "runtime_ref": "core.shell",
-            "entrypoint": "echo.sh",
-            "enabled": True,
-            "parameters": {"item": {"type": "string", "required": True}},
-        },
-    )
-    action_ref = action["ref"]
-    print(f"✓ Created action: {action_ref}")
-
-    # ========================================================================
-    # STEP 2: Create workflow with concurrency: 1
-    # ========================================================================
-    print("\n[STEP 2] Creating workflow with concurrency: 1...")
-
     items = ["item1", "item2", "item3"]
-
-    workflow = client.create_action(
-        pack_ref=pack_ref,
-        data={
-            "name": f"sequential_workflow_{unique_ref()}",
-            "description": "Workflow with sequential execution",
-            "runner_type": "workflow",
-            "entrypoint": "",
-            "enabled": True,
-            "parameters": {},
-            "workflow_definition": {
-                "tasks": [
-                    {
-                        "name": "process_items",
-                        "action": action_ref,
-                        "with_items": items,
-                        "concurrency": 1,  # Sequential
-                    }
-                ]
-            },
-        },
+    action = _create_item_action(client, pack_ref, "sequential_action")
+    workflow = _create_with_items_workflow(
+        client,
+        pack_ref,
+        action["ref"],
+        "sequential_workflow",
+        concurrency=1,
     )
-    workflow_ref = workflow["ref"]
-    print(f"✓ Created workflow: {workflow_ref}")
-    print(f"  Items: {len(items)}")
-    print(f"  Concurrency: 1 (sequential)")
 
-    # ========================================================================
-    # STEP 3: Execute and verify
-    # ========================================================================
-    print("\n[STEP 3] Executing workflow...")
-
-    start_time = time.time()
-    workflow_execution = client.create_execution(action_ref=workflow_ref, parameters={})
-    workflow_execution_id = workflow_execution["id"]
-    print(f"✓ Workflow execution created: ID={workflow_execution_id}")
-
-    result = wait_for_execution_status(
-        client=client,
-        execution_id=workflow_execution_id,
-        expected_status="completed",
-        timeout=20,
+    result, children, elapsed = _execute_and_get_children(
+        client, workflow["ref"], items, sleep_seconds=1
     )
-    end_time = time.time()
-    total_time = end_time - start_time
 
-    print(f"✓ Workflow succeeded: status={result['status']}")
-    print(f"  Total time: {total_time:.1f}s")
-
-    # ========================================================================
-    # FINAL SUMMARY
-    # ========================================================================
-    print("\n" + "=" * 80)
-    print("TEST SUMMARY: Sequential Mode")
-    print("=" * 80)
-    print(f"✓ Workflow with concurrency: 1")
-    print(f"✓ Items processed sequentially: {len(items)}")
-    print(f"✓ Total time: {total_time:.1f}s")
-    print("\n✅ TEST PASSED: Sequential mode works correctly!")
-    print("=" * 80 + "\n")
+    assert result["status"] == "completed"
+    _assert_all_items_completed(children, len(items))
+    assert _max_concurrent(children) == 1, "Expected sequential with_items execution"
+    assert elapsed >= 3, f"Expected sequential execution to take at least 3s, took {elapsed:.1f}s"
 
 
-@pytest.mark.skip(reason="with_items parallel execution needs investigation")
 def test_parallel_execution_large_batch(client: AttuneClient, test_pack):
-    """
-    Test parallel execution with large number of items.
-
-    Flow:
-    1. Create workflow with 20 items
-    2. Execute with concurrency: 10
-    3. Verify all complete successfully
-    4. Verify worker handles large batch
-    """
-    print("\n" + "=" * 80)
-    print("TEST: Parallel Execution - Large Batch")
-    print("=" * 80)
-
     pack_ref = test_pack["ref"]
-
-    # ========================================================================
-    # STEP 1: Create action
-    # ========================================================================
-    print("\n[STEP 1] Creating action...")
-
-    action = client.create_action(
-        pack_ref=pack_ref,
-        data={
-            "name": f"large_batch_{unique_ref()}",
-            "description": "Action for large batch test",
-            "runtime_ref": "core.shell",
-            "entrypoint": "echo.sh",
-            "enabled": True,
-            "parameters": {"item": {"type": "string", "required": True}},
-        },
+    items = [f"item{i:02d}" for i in range(1, 21)]
+    action = _create_item_action(client, pack_ref, "large_batch")
+    workflow = _create_with_items_workflow(
+        client,
+        pack_ref,
+        action["ref"],
+        "large_batch_workflow",
+        concurrency=10,
     )
-    action_ref = action["ref"]
-    print(f"✓ Created action: {action_ref}")
 
-    # ========================================================================
-    # STEP 2: Create workflow with many items
-    # ========================================================================
-    print("\n[STEP 2] Creating workflow with 20 items...")
-
-    items = [f"item{i:02d}" for i in range(1, 21)]  # 20 items
-
-    workflow = client.create_action(
-        pack_ref=pack_ref,
-        data={
-            "name": f"large_batch_workflow_{unique_ref()}",
-            "description": "Workflow with large batch",
-            "runner_type": "workflow",
-            "entrypoint": "",
-            "enabled": True,
-            "parameters": {},
-            "workflow_definition": {
-                "tasks": [
-                    {
-                        "name": "process_items",
-                        "action": action_ref,
-                        "with_items": items,
-                        "concurrency": 10,  # 10 at once
-                    }
-                ]
-            },
-        },
+    result, children, _elapsed = _execute_and_get_children(
+        client, workflow["ref"], items, sleep_seconds=1
     )
-    workflow_ref = workflow["ref"]
-    print(f"✓ Created workflow: {workflow_ref}")
-    print(f"  Items: {len(items)}")
-    print(f"  Concurrency: 10")
 
-    # ========================================================================
-    # STEP 3: Execute workflow
-    # ========================================================================
-    print("\n[STEP 3] Executing workflow with large batch...")
-
-    workflow_execution = client.create_execution(action_ref=workflow_ref, parameters={})
-    workflow_execution_id = workflow_execution["id"]
-    print(f"✓ Workflow execution created: ID={workflow_execution_id}")
-
-    result = wait_for_execution_status(
-        client=client,
-        execution_id=workflow_execution_id,
-        expected_status="completed",
-        timeout=40,
-    )
-    print(f"✓ Workflow succeeded: status={result['status']}")
-
-    # ========================================================================
-    # STEP 4: Verify all items processed
-    # ========================================================================
-    print("\n[STEP 4] Verifying all items processed...")
-
-    all_executions = client.list_executions(limit=150)
-    child_executions = [
-        ex
-        for ex in all_executions
-        if ex.get("parent") == workflow_execution_id
-    ]
-
-    print(f"  Found {len(child_executions)} child executions")
-    assert len(child_executions) >= len(items), (
-        f"❌ Expected {len(items)}, got {len(child_executions)}"
-    )
-    print(f"  ✓ All {len(items)} items processed")
-
-    succeeded = [ex for ex in child_executions if ex["status"] in ("completed", "completed")]
-    print(f"  ✓ Succeeded: {len(succeeded)}/{len(child_executions)}")
-
-    # ========================================================================
-    # FINAL SUMMARY
-    # ========================================================================
-    print("\n" + "=" * 80)
-    print("TEST SUMMARY: Large Batch Processing")
-    print("=" * 80)
-    print(f"✓ Workflow: {workflow_ref}")
-    print(f"✓ Items processed: {len(items)}")
-    print(f"✓ Concurrency: 10")
-    print(f"✓ All items succeeded successfully")
-    print(f"✓ Worker handled large batch")
-    print("\n✅ TEST PASSED: Large batch processing works correctly!")
-    print("=" * 80 + "\n")
+    assert result["status"] == "completed"
+    _assert_all_items_completed(children, len(items))
+    assert _max_concurrent(children) > 1, "Expected large batch children to overlap"

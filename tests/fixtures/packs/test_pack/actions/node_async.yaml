@@ -1,0 +1,6 @@
+name: node_async
+description: "Node.js action that uses async/await"
+enabled: true
+runner_type: node
+entry_point: node_async.js
+parameters: {}

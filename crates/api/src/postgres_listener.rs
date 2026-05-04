@@ -12,6 +12,7 @@ const NOTIFICATION_CHANNELS: &[&str] = &[
     "enforcement_status_changed",
     "inquiry_created",
     "inquiry_responded",
+    "inquiry_timeout",
     "workflow_execution_status_changed",
     "artifact_created",
     "artifact_updated",

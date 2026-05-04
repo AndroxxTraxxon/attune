@@ -43,11 +43,12 @@ class TestIdentityPermissions:
         assert resp.status_code == 201, resp.text
         identity_id = resp.json()["data"]["id"]
 
-        # List identities — our new one should be present
-        resp = s.get(f"{base}/api/v1/identities", timeout=10)
+        # Verify the created identity directly. The list endpoint is paginated
+        # and a reused E2E stack can contain enough identities that this new
+        # row is not guaranteed to appear on the first page.
+        resp = s.get(f"{base}/api/v1/identities/{identity_id}", timeout=10)
         assert resp.status_code == 200
-        logins = [i["login"] for i in resp.json()["data"]]
-        assert login in logins
+        assert resp.json()["data"]["login"] == login
 
         # Update identity
         resp = s.put(

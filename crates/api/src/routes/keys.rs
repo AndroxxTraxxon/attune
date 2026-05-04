@@ -19,12 +19,12 @@ use attune_common::repositories::{
 };
 use attune_common::{
     models::{key::Key, OwnerType},
-    rbac::{Action, AuthorizationContext, Resource},
+    rbac::{Action, AuthorizationContext, Grant, Resource},
 };
 
 use crate::auth::{jwt::TokenType, RequireAuth};
 use crate::{
-    authz::{AuthorizationCheck, AuthorizationService},
+    authz::AuthorizationService,
     dto::{
         common::{PaginatedResponse, PaginationParams},
         key::{CreateKeyRequest, KeyQueryParams, KeyResponse, KeySummary, UpdateKeyRequest},
@@ -79,10 +79,7 @@ pub async fn list_keys(
             ));
         }
 
-        rows.retain(|key| {
-            let ctx = key_authorization_context(identity_id, key);
-            AuthorizationService::is_allowed(&grants, Resource::Keys, Action::Read, &ctx)
-        });
+        rows.retain(|key| key_action_allowed(&grants, Action::Read, identity_id, key));
     }
 
     let paginated_keys: Vec<KeySummary> = rows.into_iter().map(KeySummary::from).collect();
@@ -128,34 +125,16 @@ pub async fn get_key(
             .identity_id()
             .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
         let authz = AuthorizationService::new(state.db.clone());
+        let grants = authz.effective_grants(&user.0).await?;
 
-        // Basic read check — hide behind 404 to prevent enumeration.
-        authz
-            .authorize(
-                &user.0,
-                AuthorizationCheck {
-                    resource: Resource::Keys,
-                    action: Action::Read,
-                    context: key_authorization_context(identity_id, &key),
-                },
-            )
-            .await
-            .map_err(|_| ApiError::NotFound(format!("Key '{}' not found", key_ref)))?;
+        if !key_action_allowed(&grants, Action::Read, identity_id, &key) {
+            return Err(ApiError::NotFound(format!("Key '{}' not found", key_ref)));
+        }
 
         // For encrypted keys, separately check Keys::Decrypt.
         // Failing this is not an error — we just return the value as null.
         if key.encrypted {
-            authz
-                .authorize(
-                    &user.0,
-                    AuthorizationCheck {
-                        resource: Resource::Keys,
-                        action: Action::Decrypt,
-                        context: key_authorization_context(identity_id, &key),
-                    },
-                )
-                .await
-                .is_ok()
+            key_action_allowed(&grants, Action::Decrypt, identity_id, &key)
         } else {
             true
         }
@@ -230,16 +209,19 @@ pub async fn create_key(
         ctx.encrypted = Some(request.encrypted);
         ctx.target_ref = Some(request.r#ref.clone());
 
-        authz
-            .authorize(
-                &user.0,
-                AuthorizationCheck {
-                    resource: Resource::Keys,
-                    action: Action::Create,
-                    context: ctx,
-                },
-            )
-            .await?;
+        let grants = authz.effective_grants(&user.0).await?;
+        let create_allowed = if request.owner_type == OwnerType::Identity
+            && request.owner_identity != Some(identity_id)
+        {
+            constrained_key_grant_allows(&grants, Action::Create, &ctx)
+        } else {
+            AuthorizationService::is_allowed(&grants, Resource::Keys, Action::Create, &ctx)
+        };
+        if !create_allowed {
+            return Err(ApiError::Forbidden(
+                "Insufficient permissions: keys:create".to_string(),
+            ));
+        }
     }
 
     // Check if key with same ref already exists
@@ -413,16 +395,12 @@ pub async fn update_key(
             .identity_id()
             .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
         let authz = AuthorizationService::new(state.db.clone());
-        authz
-            .authorize(
-                &user.0,
-                AuthorizationCheck {
-                    resource: Resource::Keys,
-                    action: Action::Update,
-                    context: key_authorization_context(identity_id, &existing),
-                },
-            )
-            .await?;
+        let grants = authz.effective_grants(&user.0).await?;
+        if !key_action_allowed(&grants, Action::Update, identity_id, &existing) {
+            return Err(ApiError::Forbidden(
+                "Insufficient permissions: keys:update".to_string(),
+            ));
+        }
     }
 
     // Handle value update with encryption
@@ -523,16 +501,12 @@ pub async fn delete_key(
             .identity_id()
             .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
         let authz = AuthorizationService::new(state.db.clone());
-        authz
-            .authorize(
-                &user.0,
-                AuthorizationCheck {
-                    resource: Resource::Keys,
-                    action: Action::Delete,
-                    context: key_authorization_context(identity_id, &key),
-                },
-            )
-            .await?;
+        let grants = authz.effective_grants(&user.0).await?;
+        if !key_action_allowed(&grants, Action::Delete, identity_id, &key) {
+            return Err(ApiError::Forbidden(
+                "Insufficient permissions: keys:delete".to_string(),
+            ));
+        }
     }
 
     // Delete the key
@@ -572,6 +546,36 @@ fn key_authorization_context(identity_id: i64, key: &Key) -> AuthorizationContex
     );
     ctx.encrypted = Some(key.encrypted);
     ctx
+}
+
+fn key_action_allowed(grants: &[Grant], action: Action, identity_id: i64, key: &Key) -> bool {
+    let ctx = key_authorization_context(identity_id, key);
+    if key.owner_type == OwnerType::Identity && key.owner_identity != Some(identity_id) {
+        return constrained_key_grant_allows(grants, action, &ctx);
+    }
+
+    AuthorizationService::is_allowed(grants, Resource::Keys, action, &ctx)
+}
+
+fn constrained_key_grant_allows(
+    grants: &[Grant],
+    action: Action,
+    ctx: &AuthorizationContext,
+) -> bool {
+    grants.iter().any(|grant| {
+        let Some(constraints) = &grant.constraints else {
+            return false;
+        };
+        let owner_scoped = constraints.owner.is_some()
+            || constraints.owner_types.is_some()
+            || constraints.owner_refs.is_some()
+            || constraints.refs.is_some()
+            || constraints.ids.is_some();
+        grant.resource == Resource::Keys
+            && grant.actions.contains(&action)
+            && owner_scoped
+            && grant.allows(Resource::Keys, action, ctx)
+    })
 }
 
 fn requested_key_owner_ref(request: &CreateKeyRequest) -> Option<String> {

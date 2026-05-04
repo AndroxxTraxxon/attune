@@ -1,0 +1,6 @@
+name: python_requests
+description: "Python action that imports requests"
+enabled: true
+runner_type: python
+entry_point: python_requests.py
+parameters: {}

@@ -1,16 +1,6 @@
-"""
-T2.8: Retry Policy Execution
+"""T2.8: workflow task retry policy contracts.
 
-Tests that failed actions are retried according to retry policy configuration,
-with exponential backoff and proper tracking of retry attempts.
-
-Test validates:
-- Actions retry after failure
-- Exponential backoff applied correctly
-- Retry count tracked in execution metadata
-- Max retries honored (stops after limit)
-- Eventual success after retries
-- Retry delays follow backoff configuration
+These tests describe and verify the retry behavior for workflow tasks.
 """
 
 import time
@@ -21,502 +11,261 @@ from helpers.fixtures import unique_ref
 from helpers.polling import wait_for_execution_status
 
 
-@pytest.mark.skip(reason="Requires stateful action that fails then succeeds")
-def test_retry_policy_basic(client: AttuneClient, test_pack):
-    """
-    Test basic retry policy with exponential backoff.
-
-    Flow:
-    1. Create action that fails first 2 times, succeeds on 3rd
-    2. Configure retry policy: max_attempts=3, delay=2s, backoff=2.0
-    3. Execute action
-    4. Verify execution retries
-    5. Verify delays between retries follow backoff
-    6. Verify eventual success
-    """
-    print("\n" + "=" * 80)
-    print("TEST: Retry Policy Execution (T2.8)")
-    print("=" * 80)
-
-    pack_ref = test_pack["ref"]
-
-    # ========================================================================
-    # STEP 1: Create action that fails initially then succeeds
-    # ========================================================================
-    print("\n[STEP 1] Creating action with retry behavior...")
-
-    # This action uses a counter file to track attempts
-    # Fails on attempts 1-2, succeeds on attempt 3
-    retry_script = """#!/usr/bin/env python3
-import os
-import sys
-import tempfile
-
-# Use temp file to track attempts across retries
-counter_file = os.path.join(tempfile.gettempdir(), 'retry_test_{unique}.txt')
-
-# Read current attempt count
-if os.path.exists(counter_file):
-    with open(counter_file, 'r') as f:
-        attempt = int(f.read().strip())
-else:
-    attempt = 0
-
-# Increment attempt
-attempt += 1
-with open(counter_file, 'w') as f:
-    f.write(str(attempt))
-
-print(f'Attempt {{attempt}}')
-
-# Fail on attempts 1 and 2, succeed on attempt 3+
-if attempt < 3:
-    print(f'Failing attempt {{attempt}}')
-    sys.exit(1)
-else:
-    print(f'Success on attempt {{attempt}}')
-    # Clean up counter file
-    os.remove(counter_file)
-    sys.exit(0)
-""".replace("{unique}", unique_ref())
-
-    action = client.create_action(
+def _create_attempt_action(
+    client: AttuneClient,
+    pack_ref: str,
+    *,
+    name_prefix: str,
+    succeed_on_attempt: int,
+) -> dict:
+    marker_name = f"attune_retry_{unique_ref()}.count"
+    entrypoint = f"""
+set -eu
+marker="${{ATTUNE_ARTIFACTS_DIR:-/tmp}}/{marker_name}"
+if [ -f "$marker" ]; then
+  attempt="$(cat "$marker")"
+else
+  attempt=0
+fi
+attempt=$((attempt + 1))
+printf '%s' "$attempt" > "$marker"
+printf '{{"attempt":%s,"succeed_on_attempt":{succeed_on_attempt}}}\\n' "$attempt"
+if [ "$attempt" -lt {succeed_on_attempt} ]; then
+  echo "transient failure on attempt $attempt" >&2
+  exit 1
+fi
+rm -f "$marker"
+"""
+    return client.create_action(
         pack_ref=pack_ref,
         data={
-            "name": f"retry_action_{unique_ref()}",
-            "description": "Action that requires retries",
+            "name": f"{name_prefix}_{unique_ref()}",
+            "description": f"Attempt-counting action that succeeds on attempt {succeed_on_attempt}",
             "runtime_ref": "core.shell",
-            "entrypoint": 'echo "Action failed intentionally" >&2; exit 1',
+            "entrypoint": entrypoint,
             "enabled": True,
             "parameters": {},
-            "metadata": {
-                "retry_policy": {
-                    "max_attempts": 3,
-                    "delay_seconds": 2,
-                    "backoff_multiplier": 2.0,
-                    "max_delay_seconds": 60,
-                }
-            },
         },
     )
-    action_ref = action["ref"]
-    print(f"✓ Created action: {action_ref}")
-    print(f"  Retry policy: max_attempts=3, delay=2s, backoff=2.0")
 
-    # ========================================================================
-    # STEP 2: Execute action
-    # ========================================================================
-    print("\n[STEP 2] Executing action...")
 
-    start_time = time.time()
-    execution = client.create_execution(action_ref=action_ref, parameters={})
-    execution_id = execution["id"]
-    print(f"✓ Execution created: ID={execution_id}")
+def _create_always_failing_action(
+    client: AttuneClient,
+    pack_ref: str,
+    *,
+    name_prefix: str,
+) -> dict:
+    entrypoint = """
+set -eu
+echo '{"error":"transient connection failure"}' >&2
+exit 1
+"""
+    return client.create_action(
+        pack_ref=pack_ref,
+        data={
+            "name": f"{name_prefix}_{unique_ref()}",
+            "description": "Always-failing retriable action",
+            "runtime_ref": "core.shell",
+            "entrypoint": entrypoint,
+            "enabled": True,
+            "parameters": {},
+        },
+    )
 
-    # ========================================================================
-    # STEP 3: Wait for execution to complete (after retries)
-    # ========================================================================
-    print("\n[STEP 3] Waiting for execution to complete (with retries)...")
-    print("  Note: This may take ~6 seconds (2s + 4s delays)")
 
-    # Give it enough time for retries (2s + 4s + processing = ~10s)
+def _child_executions(client: AttuneClient, parent_id: int) -> list[dict]:
+    summaries = [
+        client.get_execution(execution["id"])
+        for execution in client.list_executions(parent=parent_id, limit=100)
+        if execution.get("parent") == parent_id
+    ]
+    return sorted(summaries, key=lambda execution: execution["created"])
+
+
+def _task_children(client: AttuneClient, parent_id: int, task_name: str) -> list[dict]:
+    children = _child_executions(client, parent_id)
+    return [
+        child
+        for child in children
+        if (child.get("workflow_task") or {}).get("task_name") == task_name
+    ]
+
+
+@pytest.mark.tier2
+@pytest.mark.workflow
+def test_retry_policy_eventual_success_preserves_lineage(client: AttuneClient, test_pack):
+    """A transiently failing workflow task should retry and eventually succeed."""
+    pack_ref = test_pack["ref"]
+    action = _create_attempt_action(
+        client,
+        pack_ref,
+        name_prefix="retry_eventual_success",
+        succeed_on_attempt=3,
+    )
+    workflow = client.create_workflow(
+        pack_ref=pack_ref,
+        name=f"retry_eventual_success_{unique_ref()}",
+        label="Retry Eventual Success",
+        description="Task succeeds on the third total attempt",
+        tasks=[
+            {
+                "name": "flaky_task",
+                "action": action["ref"],
+                "retry": {"count": 2, "delay": 1, "backoff": "constant"},
+            }
+        ],
+    )
+
+    execution = client.create_execution(action_ref=workflow["ref"], parameters={})
     result = wait_for_execution_status(
         client=client,
-        execution_id=execution_id,
+        execution_id=execution["id"],
+        expected_status="completed",
+        timeout=20,
+    )
+
+    attempts = _task_children(client, execution["id"], "flaky_task")
+    assert result["status"] == "completed"
+    assert len(attempts) == 3
+    assert [attempt["status"] for attempt in attempts] == ["failed", "failed", "completed"]
+    assert [attempt["workflow_task"]["retry_count"] for attempt in attempts] == [0, 1, 2]
+    assert all(attempt["parent"] == execution["id"] for attempt in attempts)
+    assert all(attempt["action_ref"] == action["ref"] for attempt in attempts)
+    assert attempts[1]["original_execution"] == attempts[0]["id"]
+    assert attempts[2]["original_execution"] == attempts[0]["id"]
+
+
+@pytest.mark.tier2
+@pytest.mark.workflow
+def test_retry_policy_exhaustion_fails_workflow_after_declared_attempts(
+    client: AttuneClient, test_pack
+):
+    """Retry exhaustion should fail the workflow after initial attempt + count retries."""
+    pack_ref = test_pack["ref"]
+    action = _create_always_failing_action(
+        client,
+        pack_ref,
+        name_prefix="retry_exhaustion",
+    )
+    workflow = client.create_workflow(
+        pack_ref=pack_ref,
+        name=f"retry_exhaustion_{unique_ref()}",
+        label="Retry Exhaustion",
+        description="Task exhausts two retries then fails the workflow",
+        tasks=[
+            {
+                "name": "always_fails",
+                "action": action["ref"],
+                "retry": {"count": 2, "delay": 1, "backoff": "constant"},
+            }
+        ],
+    )
+
+    execution = client.create_execution(action_ref=workflow["ref"], parameters={})
+    result = wait_for_execution_status(
+        client=client,
+        execution_id=execution["id"],
+        expected_status="failed",
+        timeout=20,
+    )
+
+    attempts = _task_children(client, execution["id"], "always_fails")
+    assert result["status"] == "failed"
+    assert len(attempts) == 3
+    assert all(attempt["status"] == "failed" for attempt in attempts)
+    assert [attempt["workflow_task"]["retry_count"] for attempt in attempts] == [0, 1, 2]
+    assert attempts[-1]["workflow_task"]["max_retries"] == 2
+    assert attempts[-1]["result"]["error"]
+
+
+@pytest.mark.tier2
+@pytest.mark.workflow
+def test_retry_policy_no_retry_on_success(client: AttuneClient, test_pack):
+    """A successful first attempt must not create retry executions."""
+    pack_ref = test_pack["ref"]
+    action = _create_attempt_action(
+        client,
+        pack_ref,
+        name_prefix="retry_success_first_try",
+        succeed_on_attempt=1,
+    )
+    workflow = client.create_workflow(
+        pack_ref=pack_ref,
+        name=f"retry_success_first_try_{unique_ref()}",
+        label="Retry Success First Try",
+        description="Retry policy should be inert when the first attempt succeeds",
+        tasks=[
+            {
+                "name": "succeeds_immediately",
+                "action": action["ref"],
+                "retry": {"count": 3, "delay": 1, "backoff": "exponential"},
+            }
+        ],
+    )
+
+    started = time.monotonic()
+    execution = client.create_execution(action_ref=workflow["ref"], parameters={})
+    result = wait_for_execution_status(
+        client=client,
+        execution_id=execution["id"],
         expected_status="completed",
         timeout=15,
     )
-    end_time = time.time()
-    total_time = end_time - start_time
+    elapsed = time.monotonic() - started
 
-    print(f"✓ Execution succeeded: status={result['status']}")
-    print(f"  Total time: {total_time:.1f}s")
-
-    # ========================================================================
-    # STEP 4: Verify execution details
-    # ========================================================================
-    print("\n[STEP 4] Verifying execution details...")
-
-    execution_details = client.get_execution(execution_id)
-
-    # Check status
-    assert execution_details["status"] in ("completed", "completed"), (
-        f"❌ Expected status 'completed', got '{execution_details['status']}'"
-    )
-    print(f"  ✓ Status: {execution_details['status']}")
-
-    # Check retry metadata if available
-    metadata = execution_details.get("metadata", {})
-    if "retry_count" in metadata:
-        retry_count = metadata["retry_count"]
-        print(f"  ✓ Retry count: {retry_count}")
-        assert retry_count <= 3, f"❌ Too many retries: {retry_count}"
-    else:
-        print("  ℹ Retry count not in metadata (may not be implemented yet)")
-
-    # Verify timing - should take at least 6 seconds (2s + 4s delays)
-    if total_time >= 6:
-        print(f"  ✓ Timing suggests retries occurred: {total_time:.1f}s")
-    else:
-        print(
-            f"  ⚠ Execution succeeded quickly: {total_time:.1f}s (may not have retried)"
-        )
-
-    # ========================================================================
-    # FINAL SUMMARY
-    # ========================================================================
-    print("\n" + "=" * 80)
-    print("TEST SUMMARY: Retry Policy Execution")
-    print("=" * 80)
-    print(f"✓ Action created with retry policy: {action_ref}")
-    print(f"✓ Execution succeeded successfully: {execution_id}")
-    print(f"✓ Expected retries: 2 failures, 1 success")
-    print(f"✓ Total execution time: {total_time:.1f}s")
-    print(f"✓ Retry policy configuration validated")
-    print("\n✅ TEST PASSED: Retry policy works correctly!")
-    print("=" * 80 + "\n")
+    attempts = _task_children(client, execution["id"], "succeeds_immediately")
+    assert result["status"] == "completed"
+    assert len(attempts) == 1
+    assert attempts[0]["status"] == "completed"
+    assert attempts[0]["workflow_task"]["retry_count"] == 0
+    assert attempts[0].get("original_execution") is None
+    assert elapsed < 3
 
 
-def test_retry_policy_max_attempts_exhausted(client: AttuneClient, test_pack):
-    """
-    Test that action fails permanently after max retry attempts exhausted.
-
-    Flow:
-    1. Create action that always fails
-    2. Configure retry policy: max_attempts=3
-    3. Execute action
-    4. Verify execution retries 3 times
-    5. Verify final status is 'failed'
-    """
-    print("\n" + "=" * 80)
-    print("TEST: Retry Policy - Max Attempts Exhausted")
-    print("=" * 80)
-
+@pytest.mark.tier2
+@pytest.mark.workflow
+def test_retry_policy_exponential_backoff_delays_retries(
+    client: AttuneClient, test_pack
+):
+    """Exponential backoff should delay retries by the configured schedule."""
     pack_ref = test_pack["ref"]
-
-    # ========================================================================
-    # STEP 1: Create action that always fails
-    # ========================================================================
-    print("\n[STEP 1] Creating action that always fails...")
-
-    always_fail_script = """#!/usr/bin/env python3
-import sys
-print('This action always fails')
-sys.exit(1)
-"""
-
-    action = client.create_action(
-        pack_ref=pack_ref,
-        data={
-            "name": f"always_fail_{unique_ref()}",
-            "description": "Action that always fails",
-            "runtime_ref": "core.shell",
-            "entrypoint": "fail.py",
-            "enabled": True,
-            "parameters": {},
-            "metadata": {
-                "retry_policy": {
-                    "max_attempts": 3,
-                    "delay_seconds": 1,
-                    "backoff_multiplier": 1.5,
-                    "max_delay_seconds": 10,
-                }
-            },
-        },
+    action = _create_attempt_action(
+        client,
+        pack_ref,
+        name_prefix="retry_backoff",
+        succeed_on_attempt=4,
     )
-    action_ref = action["ref"]
-    print(f"✓ Created action: {action_ref}")
-    print(f"  Retry policy: max_attempts=3")
+    workflow = client.create_workflow(
+        pack_ref=pack_ref,
+        name=f"retry_backoff_{unique_ref()}",
+        label="Retry Exponential Backoff",
+        description="Task uses 1s, 2s, 4s exponential retry delays",
+        tasks=[
+            {
+                "name": "backoff_task",
+                "action": action["ref"],
+                "retry": {
+                    "count": 3,
+                    "delay": 1,
+                    "backoff": "exponential",
+                    "max_delay": 10,
+                },
+            }
+        ],
+    )
 
-    # ========================================================================
-    # STEP 2: Execute action
-    # ========================================================================
-    print("\n[STEP 2] Executing action...")
-
-    start_time = time.time()
-    execution = client.create_execution(action_ref=action_ref, parameters={})
-    execution_id = execution["id"]
-    print(f"✓ Execution created: ID={execution_id}")
-
-    # ========================================================================
-    # STEP 3: Wait for execution to fail permanently
-    # ========================================================================
-    print("\n[STEP 3] Waiting for execution to fail after retries...")
-    print("  Note: This may take ~4 seconds (1s + 1.5s + 2.25s delays)")
-
+    started = time.monotonic()
+    execution = client.create_execution(action_ref=workflow["ref"], parameters={})
     result = wait_for_execution_status(
         client=client,
-        execution_id=execution_id,
-        expected_status="failed",
-        timeout=10,
-    )
-    end_time = time.time()
-    total_time = end_time - start_time
-
-    print(f"✓ Execution failed permanently: status={result['status']}")
-    print(f"  Total time: {total_time:.1f}s")
-
-    # ========================================================================
-    # STEP 4: Verify max attempts honored
-    # ========================================================================
-    print("\n[STEP 4] Verifying max attempts honored...")
-
-    execution_details = client.get_execution(execution_id)
-
-    assert execution_details["status"] == "failed", (
-        f"❌ Expected status 'failed', got '{execution_details['status']}'"
-    )
-    print(f"  ✓ Final status: {execution_details['status']}")
-
-    # Check retry metadata
-    metadata = execution_details.get("metadata", {})
-    if "retry_count" in metadata:
-        retry_count = metadata["retry_count"]
-        print(f"  ✓ Retry count: {retry_count}")
-        assert retry_count == 3, f"❌ Expected exactly 3 attempts, got {retry_count}"
-    else:
-        print("  ℹ Retry count not in metadata")
-
-    # ========================================================================
-    # FINAL SUMMARY
-    # ========================================================================
-    print("\n" + "=" * 80)
-    print("TEST SUMMARY: Max Attempts Exhausted")
-    print("=" * 80)
-    print(f"✓ Action always fails: {action_ref}")
-    print(f"✓ Max attempts: 3")
-    print(f"✓ Execution failed permanently: {execution_id}")
-    print(f"✓ Retry limit honored")
-    print("\n✅ TEST PASSED: Max retry attempts work correctly!")
-    print("=" * 80 + "\n")
-
-
-def test_retry_policy_no_retry_on_success(client: AttuneClient, test_pack):
-    """
-    Test that successful actions don't retry.
-    """
-    print("\n" + "=" * 80)
-    print("TEST: Retry Policy - No Retry on Success")
-    print("=" * 80)
-
-    pack_ref = test_pack["ref"]
-
-    # ========================================================================
-    # STEP 1: Create action that succeeds immediately
-    # ========================================================================
-    print("\n[STEP 1] Creating action that succeeds...")
-
-    success_script = """#!/usr/bin/env python3
-import sys
-print('Success!')
-sys.exit(0)
-"""
-
-    action = client.create_action(
-        pack_ref=pack_ref,
-        data={
-            "name": f"immediate_success_{unique_ref()}",
-            "description": "Action that succeeds immediately",
-            "runtime_ref": "core.shell",
-            "entrypoint": 'echo "Success!"; echo \'{"success":true}\'',
-            "enabled": True,
-            "parameters": {},
-            "metadata": {
-                "retry_policy": {
-                    "max_attempts": 3,
-                    "delay_seconds": 2,
-                    "backoff_multiplier": 2.0,
-                }
-            },
-        },
-    )
-    action_ref = action["ref"]
-    print(f"✓ Created action: {action_ref}")
-
-    # ========================================================================
-    # STEP 2: Execute action
-    # ========================================================================
-    print("\n[STEP 2] Executing action...")
-
-    start_time = time.time()
-    execution = client.create_execution(action_ref=action_ref, parameters={})
-    execution_id = execution["id"]
-    print(f"✓ Execution created: ID={execution_id}")
-
-    # ========================================================================
-    # STEP 3: Wait for execution to complete
-    # ========================================================================
-    print("\n[STEP 3] Waiting for execution to complete...")
-
-    result = wait_for_execution_status(
-        client=client,
-        execution_id=execution_id,
-        expected_status="completed",
-        timeout=10,
-    )
-    end_time = time.time()
-    total_time = end_time - start_time
-
-    print(f"✓ Execution succeeded: status={result['status']}")
-    print(f"  Total time: {total_time:.1f}s")
-
-    # ========================================================================
-    # STEP 4: Verify no retries occurred
-    # ========================================================================
-    print("\n[STEP 4] Verifying no retries occurred...")
-
-    # Execution should complete quickly (< 2 seconds)
-    assert total_time < 3, (
-        f"❌ Execution took too long ({total_time:.1f}s), may have retried"
-    )
-    print(f"  ✓ Execution succeeded quickly: {total_time:.1f}s")
-
-    execution_details = client.get_execution(execution_id)
-    metadata = execution_details.get("metadata", {})
-
-    if "retry_count" in metadata:
-        retry_count = metadata["retry_count"]
-        assert retry_count == 0 or retry_count == 1, (
-            f"❌ Unexpected retry count: {retry_count}"
-        )
-        print(f"  ✓ Retry count: {retry_count} (no retries)")
-    else:
-        print("  ✓ No retry metadata (success on first attempt)")
-
-    # ========================================================================
-    # FINAL SUMMARY
-    # ========================================================================
-    print("\n" + "=" * 80)
-    print("TEST SUMMARY: No Retry on Success")
-    print("=" * 80)
-    print(f"✓ Action succeeded immediately")
-    print(f"✓ No retries occurred")
-    print(f"✓ Execution time: {total_time:.1f}s")
-    print("\n✅ TEST PASSED: Successful actions don't retry!")
-    print("=" * 80 + "\n")
-
-
-@pytest.mark.skip(reason="Requires stateful action that fails then succeeds")
-def test_retry_policy_exponential_backoff(client: AttuneClient, test_pack):
-    """
-    Test that retry delays follow exponential backoff pattern.
-    """
-    print("\n" + "=" * 80)
-    print("TEST: Retry Policy - Exponential Backoff")
-    print("=" * 80)
-
-    pack_ref = test_pack["ref"]
-
-    # ========================================================================
-    # STEP 1: Create action that fails multiple times
-    # ========================================================================
-    print("\n[STEP 1] Creating action for backoff testing...")
-
-    # Fails 4 times, succeeds on 5th attempt
-    backoff_script = """#!/usr/bin/env python3
-import os
-import sys
-import tempfile
-import time
-
-counter_file = os.path.join(tempfile.gettempdir(), 'backoff_test_{unique}.txt')
-
-if os.path.exists(counter_file):
-    with open(counter_file, 'r') as f:
-        attempt = int(f.read().strip())
-else:
-    attempt = 0
-
-attempt += 1
-with open(counter_file, 'w') as f:
-    f.write(str(attempt))
-
-print(f'Attempt {{attempt}} at {{time.time()}}')
-
-if attempt < 5:
-    print(f'Failing attempt {{attempt}}')
-    sys.exit(1)
-else:
-    print(f'Success on attempt {{attempt}}')
-    os.remove(counter_file)
-    sys.exit(0)
-""".replace("{unique}", unique_ref())
-
-    action = client.create_action(
-        pack_ref=pack_ref,
-        data={
-            "name": f"backoff_action_{unique_ref()}",
-            "description": "Action for testing backoff",
-            "runtime_ref": "core.shell",
-            "entrypoint": 'echo "Action failed intentionally" >&2; exit 1',
-            "enabled": True,
-            "parameters": {},
-            "metadata": {
-                "retry_policy": {
-                    "max_attempts": 5,
-                    "delay_seconds": 1,
-                    "backoff_multiplier": 2.0,
-                    "max_delay_seconds": 10,
-                }
-            },
-        },
-    )
-    action_ref = action["ref"]
-    print(f"✓ Created action: {action_ref}")
-    print(f"  Retry policy:")
-    print(f"    - Initial delay: 1s")
-    print(f"    - Backoff multiplier: 2.0")
-    print(f"    - Expected delays: 1s, 2s, 4s, 8s")
-    print(f"    - Total expected time: ~15s")
-
-    # ========================================================================
-    # STEP 2: Execute and time
-    # ========================================================================
-    print("\n[STEP 2] Executing action and measuring timing...")
-
-    start_time = time.time()
-    execution = client.create_execution(action_ref=action_ref, parameters={})
-    execution_id = execution["id"]
-    print(f"✓ Execution created: ID={execution_id}")
-
-    # Wait for completion (needs time for all retries)
-    result = wait_for_execution_status(
-        client=client,
-        execution_id=execution_id,
+        execution_id=execution["id"],
         expected_status="completed",
         timeout=25,
     )
-    end_time = time.time()
-    total_time = end_time - start_time
+    elapsed = time.monotonic() - started
 
-    print(f"✓ Execution succeeded: status={result['status']}")
-    print(f"  Total time: {total_time:.1f}s")
-
-    # ========================================================================
-    # STEP 3: Verify backoff timing
-    # ========================================================================
-    print("\n[STEP 3] Verifying exponential backoff...")
-
-    # With delays of 1s, 2s, 4s, 8s, total should be ~15s minimum
-    expected_min_time = 15
-
-    if total_time >= expected_min_time:
-        print(f"  ✓ Timing consistent with exponential backoff: {total_time:.1f}s")
-    else:
-        print(
-            f"  ⚠ Execution faster than expected: {total_time:.1f}s < {expected_min_time}s"
-        )
-        print(f"    (Retry policy may not be fully implemented)")
-
-    # ========================================================================
-    # FINAL SUMMARY
-    # ========================================================================
-    print("\n" + "=" * 80)
-    print("TEST SUMMARY: Exponential Backoff")
-    print("=" * 80)
-    print(f"✓ Action with 5 attempts: {action_ref}")
-    print(f"✓ Backoff pattern: 1s → 2s → 4s → 8s")
-    print(f"✓ Total execution time: {total_time:.1f}s")
-    print(f"✓ Expected minimum: {expected_min_time}s")
-    print("\n✅ TEST PASSED: Exponential backoff works correctly!")
-    print("=" * 80 + "\n")
+    attempts = _task_children(client, execution["id"], "backoff_task")
+    assert result["status"] == "completed"
+    assert len(attempts) == 4
+    assert [attempt["workflow_task"]["retry_count"] for attempt in attempts] == [0, 1, 2, 3]
+    assert elapsed >= 7

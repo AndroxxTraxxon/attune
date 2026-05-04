@@ -23,7 +23,6 @@ from helpers.polling import (
 )
 
 
-@pytest.mark.skip(reason="Nested workflow orchestration timing out - needs investigation")
 def test_nested_workflow_execution(client: AttuneClient, test_pack):
     """
     Test that workflows can call child workflows, creating proper execution hierarchy.
@@ -66,30 +65,25 @@ def test_nested_workflow_execution(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 2] Creating child workflow action...")
 
-    child_workflow_action = client.create_action(
+    child_workflow_name = f"child_workflow_{unique_ref()}"
+    child_workflow_action = client.create_workflow(
         pack_ref=pack_ref,
-        data={
-            "name": f"child_workflow_{unique_ref()}",
-            "description": "Child workflow with 2 tasks",
-            "runner_type": "workflow",
-            "entrypoint": "",
-            "enabled": True,
-            "parameters": {},
-            "workflow_definition": {
-                "tasks": [
-                    {
-                        "name": "child_task_1",
-                        "action": task1_action["ref"],
-                        "input": {},
-                    },
-                    {
-                        "name": "child_task_2",
-                        "action": task2_action["ref"],
-                        "input": {},
-                    },
-                ]
+        name=child_workflow_name,
+        label="Child workflow",
+        description="Child workflow with 2 tasks",
+        tasks=[
+            {
+                "name": "child_task_1",
+                "action": task1_action["ref"],
+                "input": {},
+                "next": [{"when": "{{ succeeded() }}", "do": ["child_task_2"]}],
             },
-        },
+            {
+                "name": "child_task_2",
+                "action": task2_action["ref"],
+                "input": {},
+            },
+        ],
     )
     child_workflow_ref = child_workflow_action["ref"]
     print(f"✓ Created child workflow: {child_workflow_ref}")
@@ -100,25 +94,19 @@ def test_nested_workflow_execution(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 3] Creating parent workflow action...")
 
-    parent_workflow_action = client.create_action(
+    parent_workflow_name = f"parent_workflow_{unique_ref()}"
+    parent_workflow_action = client.create_workflow(
         pack_ref=pack_ref,
-        data={
-            "name": f"parent_workflow_{unique_ref()}",
-            "description": "Parent workflow that calls child workflow",
-            "runner_type": "workflow",
-            "entrypoint": "",
-            "enabled": True,
-            "parameters": {},
-            "workflow_definition": {
-                "tasks": [
-                    {
-                        "name": "call_child_workflow",
-                        "action": child_workflow_ref,
-                        "input": {},
-                    }
-                ]
-            },
-        },
+        name=parent_workflow_name,
+        label="Parent workflow",
+        description="Parent workflow that calls child workflow",
+        tasks=[
+            {
+                "name": "call_child_workflow",
+                "action": child_workflow_ref,
+                "input": {},
+            }
+        ],
     )
     parent_workflow_ref = parent_workflow_action["ref"]
     print(f"✓ Created parent workflow: {parent_workflow_ref}")
@@ -153,21 +141,14 @@ def test_nested_workflow_execution(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 6] Verifying execution hierarchy...")
 
-    # Get all executions for this test
-    all_executions = client.list_executions(limit=100)
-
-    # Filter to our executions (parent and children)
-    our_executions = [
-        ex
-        for ex in all_executions
-        if ex["id"] == parent
-        or ex.get("parent") == parent
-    ]
+    parent_exec = client.get_execution(parent)
+    child_executions = client.list_executions(parent=parent, limit=20)
+    our_executions = [parent_exec] + child_executions
 
     print(f"  Found {len(our_executions)} total executions")
 
     # Build execution tree
-    parent_exec = None
+    parent_exec = parent_exec
     child_workflow_exec = None
     grandchild_execs = []
 
@@ -189,11 +170,7 @@ def test_nested_workflow_execution(client: AttuneClient, test_pack):
 
     # Find grandchildren (task executions under child workflow)
     child_workflow_id = child_workflow_exec["id"]
-    grandchild_execs = [
-        ex
-        for ex in all_executions
-        if ex.get("parent") == child_workflow_id
-    ]
+    grandchild_execs = client.list_executions(parent=child_workflow_id, limit=20)
 
     print(f"     Found {len(grandchild_execs)} grandchild executions:")
     for gc in grandchild_execs:
@@ -277,7 +254,6 @@ def test_nested_workflow_execution(client: AttuneClient, test_pack):
     print("=" * 80 + "\n")
 
 
-@pytest.mark.skip(reason="Nested workflow orchestration timing out - needs investigation")
 def test_deeply_nested_workflow(client: AttuneClient, test_pack):
     """
     Test deeper nesting: 3 levels of workflows (great-grandchildren).
@@ -312,25 +288,19 @@ def test_deeply_nested_workflow(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 2] Creating grandchild workflow (level 2)...")
 
-    grandchild_workflow = client.create_action(
+    grandchild_workflow_name = f"grandchild_wf_{unique_ref()}"
+    grandchild_workflow = client.create_workflow(
         pack_ref=pack_ref,
-        data={
-            "name": f"grandchild_wf_{unique_ref()}",
-            "description": "Grandchild workflow (level 2)",
-            "runner_type": "workflow",
-            "entrypoint": "",
-            "enabled": True,
-            "parameters": {},
-            "workflow_definition": {
-                "tasks": [
-                    {
-                        "name": "call_leaf",
-                        "action": leaf_action["ref"],
-                        "input": {},
-                    }
-                ]
-            },
-        },
+        name=grandchild_workflow_name,
+        label="Grandchild workflow",
+        description="Grandchild workflow (level 2)",
+        tasks=[
+            {
+                "name": "call_leaf",
+                "action": leaf_action["ref"],
+                "input": {},
+            }
+        ],
     )
     print(f"✓ Created grandchild workflow: {grandchild_workflow['ref']}")
 
@@ -339,25 +309,19 @@ def test_deeply_nested_workflow(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 3] Creating child workflow (level 1)...")
 
-    child_workflow = client.create_action(
+    child_workflow_name = f"child_wf_{unique_ref()}"
+    child_workflow = client.create_workflow(
         pack_ref=pack_ref,
-        data={
-            "name": f"child_wf_{unique_ref()}",
-            "description": "Child workflow (level 1)",
-            "runner_type": "workflow",
-            "entrypoint": "",
-            "enabled": True,
-            "parameters": {},
-            "workflow_definition": {
-                "tasks": [
-                    {
-                        "name": "call_grandchild",
-                        "action": grandchild_workflow["ref"],
-                        "input": {},
-                    }
-                ]
-            },
-        },
+        name=child_workflow_name,
+        label="Child workflow",
+        description="Child workflow (level 1)",
+        tasks=[
+            {
+                "name": "call_grandchild",
+                "action": grandchild_workflow["ref"],
+                "input": {},
+            }
+        ],
     )
     print(f"✓ Created child workflow: {child_workflow['ref']}")
 
@@ -366,25 +330,19 @@ def test_deeply_nested_workflow(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 4] Creating root workflow (level 0)...")
 
-    root_workflow = client.create_action(
+    root_workflow_name = f"root_wf_{unique_ref()}"
+    root_workflow = client.create_workflow(
         pack_ref=pack_ref,
-        data={
-            "name": f"root_wf_{unique_ref()}",
-            "description": "Root workflow (level 0)",
-            "runner_type": "workflow",
-            "entrypoint": "",
-            "enabled": True,
-            "parameters": {},
-            "workflow_definition": {
-                "tasks": [
-                    {
-                        "name": "call_child",
-                        "action": child_workflow["ref"],
-                        "input": {},
-                    }
-                ]
-            },
-        },
+        name=root_workflow_name,
+        label="Root workflow",
+        description="Root workflow (level 0)",
+        tasks=[
+            {
+                "name": "call_child",
+                "action": child_workflow["ref"],
+                "input": {},
+            }
+        ],
     )
     print(f"✓ Created root workflow: {root_workflow['ref']}")
 
@@ -417,15 +375,11 @@ def test_deeply_nested_workflow(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 7] Verifying 4-level execution hierarchy...")
 
-    all_executions = client.list_executions(limit=100)
-
     # Build hierarchy by following parent chain
     def find_children(parent_id):
-        return [
-            ex for ex in all_executions if ex.get("parent") == parent_id
-        ]
+        return client.list_executions(parent=parent_id, limit=20)
 
-    level0 = [ex for ex in all_executions if ex["id"] == root_execution_id][0]
+    level0 = client.get_execution(root_execution_id)
     level1 = find_children(level0["id"])
     level2 = []
     for l1 in level1:

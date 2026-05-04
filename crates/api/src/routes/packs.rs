@@ -11,14 +11,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use validator::Validate;
 
-use attune_common::models::pack_test::PackTestResult;
+use attune_common::models::{pack_test::PackTestResult, Pack};
 use attune_common::mq::{MessageEnvelope, MessageType, PackRegisteredPayload};
-use attune_common::rbac::{Action, AuthorizationContext, Resource};
+use attune_common::rbac::{Action, AuthorizationContext, Grant, Resource};
 use attune_common::repositories::{
     pack::{CreatePackInput, UpdatePackInput},
     work_queue::WorkQueueRepository,
-    Create, Delete, FindById, FindByRef, PackRepository, PackTestRepository, Pagination, Patch,
-    Update,
+    Create, Delete, FindById, FindByRef, List, PackRepository, PackTestRepository, Patch, Update,
 };
 use attune_common::workflow::{PackWorkflowService, PackWorkflowServiceConfig};
 
@@ -54,25 +53,29 @@ use crate::{
 )]
 pub async fn list_packs(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Query(pagination): Query<PaginationParams>,
 ) -> ApiResult<impl IntoResponse> {
-    // Convert to repository pagination (0-based)
-    let repo_pagination = Pagination::new(
-        (pagination.page.saturating_sub(1)) as i64,
-        pagination.limit() as i64,
-    );
+    let mut packs = PackRepository::list(&state.db).await?;
 
-    // Get packs from repository with pagination
-    let packs = PackRepository::list_paginated(&state.db, repo_pagination).await?;
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let grants = authz.effective_grants(&user).await?;
+        packs.retain(|pack| pack_action_allowed(&grants, Action::Read, identity_id, pack));
+    }
 
-    // Get total count for pagination
-    let total = PackRepository::count(&state.db).await?;
+    let total = packs.len() as u64;
+    let limit = pagination.limit() as usize;
+    let offset = pagination.page.saturating_sub(1) as usize * limit;
+    let packs = packs.into_iter().skip(offset).take(limit);
 
     // Convert to summaries
-    let summaries: Vec<PackSummary> = packs.into_iter().map(PackSummary::from).collect();
+    let summaries: Vec<PackSummary> = packs.map(PackSummary::from).collect();
 
-    let response = PaginatedResponse::new(summaries, &pagination, total as u64);
+    let response = PaginatedResponse::new(summaries, &pagination, total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -93,12 +96,23 @@ pub async fn list_packs(
 )]
 pub async fn get_pack(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Path(pack_ref): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
     let pack = PackRepository::find_by_ref(&state.db, &pack_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", pack_ref)))?;
+
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        let grants = authz.effective_grants(&user).await?;
+        if !pack_action_allowed(&grants, Action::Read, identity_id, &pack) {
+            return Err(ApiError::NotFound(format!("Pack '{}' not found", pack_ref)));
+        }
+    }
 
     let response = ApiResponse::new(PackResponse::from(pack));
 
@@ -134,10 +148,12 @@ pub async fn create_pack(
         )));
     }
 
+    let mut creator_identity = None;
     if user.claims.token_type == crate::auth::jwt::TokenType::Access {
         let identity_id = user
             .identity_id()
             .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        creator_identity = Some(identity_id);
         let authz = AuthorizationService::new(state.db.clone());
         let mut ctx = AuthorizationContext::new(identity_id);
         ctx.target_ref = Some(request.r#ref.clone());
@@ -169,7 +185,12 @@ pub async fn create_pack(
         installers: serde_json::json!({}),
     };
 
-    let pack = PackRepository::create(&state.db, pack_input).await?;
+    let mut pack = PackRepository::create(&state.db, pack_input).await?;
+    if let Some(identity_id) = creator_identity {
+        if !pack.is_standard {
+            pack = PackRepository::set_installed_by(&state.db, pack.id, identity_id).await?;
+        }
+    }
 
     // Auto-sync workflows after pack creation
     let packs_base_dir = PathBuf::from(&state.config.packs_base_dir);
@@ -243,19 +264,24 @@ pub async fn update_pack(
             .identity_id()
             .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
         let authz = AuthorizationService::new(state.db.clone());
-        let mut ctx = AuthorizationContext::new(identity_id);
-        ctx.target_id = Some(existing_pack.id);
-        ctx.target_ref = Some(existing_pack.r#ref.clone());
-        authz
-            .authorize(
-                &user,
-                AuthorizationCheck {
-                    resource: Resource::Packs,
-                    action: Action::Update,
-                    context: ctx,
-                },
-            )
-            .await?;
+        let grants = authz.effective_grants(&user).await?;
+        if !pack_action_allowed(&grants, Action::Update, identity_id, &existing_pack) {
+            return Err(ApiError::Forbidden(
+                "Not authorized to update pack".to_string(),
+            ));
+        }
+        if existing_pack.installed_by == Some(identity_id) || existing_pack.installed_by.is_none() {
+            authz
+                .authorize(
+                    &user,
+                    AuthorizationCheck {
+                        resource: Resource::Packs,
+                        action: Action::Update,
+                        context: pack_authorization_context(identity_id, &existing_pack),
+                    },
+                )
+                .await?;
+        }
     }
 
     // Create update input
@@ -344,19 +370,24 @@ pub async fn delete_pack(
             .identity_id()
             .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
         let authz = AuthorizationService::new(state.db.clone());
-        let mut ctx = AuthorizationContext::new(identity_id);
-        ctx.target_id = Some(pack.id);
-        ctx.target_ref = Some(pack.r#ref.clone());
-        authz
-            .authorize(
-                &user,
-                AuthorizationCheck {
-                    resource: Resource::Packs,
-                    action: Action::Delete,
-                    context: ctx,
-                },
-            )
-            .await?;
+        let grants = authz.effective_grants(&user).await?;
+        if !pack_action_allowed(&grants, Action::Delete, identity_id, &pack) {
+            return Err(ApiError::Forbidden(
+                "Not authorized to delete pack".to_string(),
+            ));
+        }
+        if pack.installed_by == Some(identity_id) || pack.installed_by.is_none() {
+            authz
+                .authorize(
+                    &user,
+                    AuthorizationCheck {
+                        resource: Resource::Packs,
+                        action: Action::Delete,
+                        context: pack_authorization_context(identity_id, &pack),
+                    },
+                )
+                .await?;
+        }
     }
 
     // Remove pack-owned queue definitions first.
@@ -2703,6 +2734,48 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/packs/{ref}/test", axum::routing::post(test_pack))
         .route("/packs/{ref}/tests", get(get_pack_test_history))
         .route("/packs/{ref}/tests/latest", get(get_pack_latest_test))
+}
+
+fn pack_authorization_context(identity_id: i64, pack: &Pack) -> AuthorizationContext {
+    let mut ctx = AuthorizationContext::new(identity_id);
+    ctx.target_id = Some(pack.id);
+    ctx.target_ref = Some(pack.r#ref.clone());
+    ctx.pack_ref = Some(pack.r#ref.clone());
+    ctx.owner_identity_id = pack.installed_by;
+    ctx
+}
+
+fn pack_action_allowed(grants: &[Grant], action: Action, identity_id: i64, pack: &Pack) -> bool {
+    if pack.is_standard {
+        return true;
+    }
+
+    let ctx = pack_authorization_context(identity_id, pack);
+    if pack.installed_by.is_some() && pack.installed_by != Some(identity_id) {
+        return constrained_pack_grant_allows(grants, action, &ctx);
+    }
+
+    AuthorizationService::is_allowed(grants, Resource::Packs, action, &ctx)
+}
+
+fn constrained_pack_grant_allows(
+    grants: &[Grant],
+    action: Action,
+    ctx: &AuthorizationContext,
+) -> bool {
+    grants.iter().any(|grant| {
+        let Some(constraints) = &grant.constraints else {
+            return false;
+        };
+        let pack_scoped = constraints.owner.is_some()
+            || constraints.pack_refs.is_some()
+            || constraints.refs.is_some()
+            || constraints.ids.is_some();
+        grant.resource == Resource::Packs
+            && grant.actions.contains(&action)
+            && pack_scoped
+            && grant.allows(Resource::Packs, action, ctx)
+    })
 }
 
 #[cfg(test)]

@@ -240,7 +240,6 @@ class TestWebhookHMAC:
 class TestWebhookRateLimit:
     """Rate limiting tests."""
 
-    @pytest.mark.xfail(reason="Rate limiting not yet implemented (TODO in server code)")
     def test_rate_limit_enforced(self, client):
         """Exceeding rate limit returns 429."""
         trigger_ref, webhook_key = _setup_webhook_trigger(client)

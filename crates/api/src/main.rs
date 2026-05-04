@@ -14,7 +14,7 @@ use clap::Parser;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use attune_api::{postgres_listener, AppState, Server};
+use attune_api::{inquiry_timeout, postgres_listener, AppState, Server};
 
 #[derive(Parser, Debug)]
 #[command(name = "attune-api")]
@@ -216,6 +216,12 @@ async fn main() -> Result<()> {
     });
 
     info!("PostgreSQL notification listener started");
+
+    let timeout_db = database.pool().clone();
+    tokio::spawn(async move {
+        inquiry_timeout::start_inquiry_timeout_monitor(timeout_db).await;
+    });
+    info!("Inquiry timeout monitor started");
 
     // Create and start server
     let server = Server::new(state.clone());

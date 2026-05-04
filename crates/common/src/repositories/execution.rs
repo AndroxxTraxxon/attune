@@ -124,6 +124,10 @@ pub struct ExecutionWithRefs {
     pub worker: Option<Id>,
     pub status: ExecutionStatus,
     pub result: Option<JsonDict>,
+    pub retry_count: i32,
+    pub max_retries: Option<i32>,
+    pub retry_reason: Option<String>,
+    pub original_execution: Option<Id>,
     pub started_at: Option<DateTime<Utc>>,
     #[sqlx(json, default)]
     pub workflow_task: Option<WorkflowTaskMetadata>,
@@ -141,7 +145,8 @@ pub struct ExecutionWithRefs {
 /// Rust struct, so `SELECT *` must never be used.
 pub const SELECT_COLUMNS: &str = "\
     id, action, action_ref, config, env_vars, parent, enforcement, \
-    executor, worker, status, result, started_at, workflow_task, created, updated";
+    executor, worker, status, result, retry_count, max_retries, retry_reason, \
+    original_execution, started_at, workflow_task, created, updated";
 
 pub struct ExecutionRepository;
 
@@ -276,6 +281,44 @@ impl Update for ExecutionRepository {
 }
 
 impl ExecutionRepository {
+    pub async fn create_retry<'e, E>(
+        executor: E,
+        input: CreateExecutionInput,
+        retry_count: i32,
+        max_retries: Option<i32>,
+        retry_reason: Option<String>,
+        original_execution: Id,
+    ) -> Result<Execution>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let sql = format!(
+            "INSERT INTO execution \
+             (action, action_ref, config, env_vars, parent, enforcement, executor, worker, status, result, workflow_task, retry_count, max_retries, retry_reason, original_execution) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+             RETURNING {SELECT_COLUMNS}"
+        );
+        sqlx::query_as::<_, Execution>(&sql)
+            .bind(input.action)
+            .bind(&input.action_ref)
+            .bind(&input.config)
+            .bind(&input.env_vars)
+            .bind(input.parent)
+            .bind(input.enforcement)
+            .bind(input.executor)
+            .bind(input.worker)
+            .bind(input.status)
+            .bind(&input.result)
+            .bind(sqlx::types::Json(&input.workflow_task))
+            .bind(retry_count)
+            .bind(max_retries)
+            .bind(&retry_reason)
+            .bind(original_execution)
+            .fetch_one(executor)
+            .await
+            .map_err(Into::into)
+    }
+
     pub async fn find_top_level_by_enforcement<'e, E>(
         executor: E,
         enforcement_id: Id,

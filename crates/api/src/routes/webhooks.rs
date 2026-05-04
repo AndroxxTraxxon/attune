@@ -540,12 +540,24 @@ pub async fn receive_webhook(
             get_webhook_config_i64(&trigger, "rate_limit/requests"),
             get_webhook_config_i64(&trigger, "rate_limit/window_seconds"),
         ) {
-            // Note: Rate limit checking would need to be implemented with a time-series approach
-            // For now, we skip this check as the repository function was removed
-            let allowed = true; // TODO: Implement proper rate limiting
+            if max_requests <= 0 || window_seconds <= 0 {
+                tracing::warn!(
+                    trigger_ref = %trigger.r#ref,
+                    max_requests,
+                    window_seconds,
+                    "Ignoring invalid webhook rate limit configuration"
+                );
+            } else {
+                let recent_requests = TriggerRepository::count_recent_webhook_requests(
+                    &state.db,
+                    trigger.id,
+                    &webhook_key,
+                    source_ip.as_deref(),
+                    window_seconds as i32,
+                )
+                .await?;
 
-            if !allowed {
-                {
+                if recent_requests >= max_requests {
                     let _ = log_webhook_event(
                         &state,
                         &trigger,

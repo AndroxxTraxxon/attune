@@ -13,7 +13,11 @@
 
 use anyhow::Result;
 use attune_common::{
-    models::{enums::ExecutionStatus, execution::WorkflowTaskMetadata, Action, Execution, Runtime},
+    models::{
+        enums::{ExecutionStatus, InquiryStatus},
+        execution::WorkflowTaskMetadata,
+        Action, Execution, Runtime,
+    },
     mq::{
         Consumer, ExecutionCompletedPayload, ExecutionRequestedPayload, MessageEnvelope,
         MessageType, MqError, Publisher,
@@ -21,11 +25,12 @@ use attune_common::{
     repositories::{
         action::ActionRepository,
         execution::{CreateExecutionInput, ExecutionRepository, UpdateExecutionInput},
+        inquiry::{CreateInquiryInput, InquiryRepository},
         runtime::{RuntimeRepository, WorkerRepository},
         workflow::{
             CreateWorkflowExecutionInput, WorkflowDefinitionRepository, WorkflowExecutionRepository,
         },
-        FindById, FindByRef, Update,
+        Create, FindById, FindByRef, Update,
     },
     runtime_detection::{normalize_runtime_name, runtime_aliases_contain},
     version_matching::matches_constraint,
@@ -43,7 +48,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::policy_enforcer::{PolicyEnforcer, SchedulingPolicyOutcome};
 use crate::workflow::context::{TaskOutcome, WorkflowContext};
-use crate::workflow::graph::TaskGraph;
+use crate::workflow::graph::{BackoffStrategy, TaskGraph};
 use crate::workflow::log::WorkflowLogger;
 
 /// Extract workflow parameters from an execution's `config` field.
@@ -238,6 +243,22 @@ struct PendingExecutionRequested {
     parent_id: i64,
     enforcement_id: Option<i64>,
     config: Option<JsonValue>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingExecutionCompleted {
+    execution_id: i64,
+    action_id: i64,
+    action_ref: String,
+    status: ExecutionStatus,
+    result: Option<JsonValue>,
+    completed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct WorkflowAdvanceOutcome {
+    execution_requests: Vec<PendingExecutionRequested>,
+    completed_execution: Option<PendingExecutionCompleted>,
 }
 
 /// Execution scheduler that routes executions to workers
@@ -1233,6 +1254,13 @@ impl ExecutionScheduler {
             );
         }
 
+        if child_execution.status == ExecutionStatus::Requested && action_ref == "core.ask" {
+            let mut conn = pool.acquire().await?;
+            Self::create_core_ask_inquiry(&mut conn, &child_execution, task_node, &rendered_input)
+                .await?;
+            return Ok(());
+        }
+
         if child_execution.status == ExecutionStatus::Requested {
             // If the task's action is itself a workflow, the recursive
             // `process_execution_requested` call will detect that and orchestrate
@@ -1256,6 +1284,202 @@ impl ExecutionScheduler {
                 child_execution.id, task_node.name
             );
         }
+
+        Ok(())
+    }
+
+    /// If a failed workflow child has retry attempts remaining, create and
+    /// publish the next attempt and leave workflow advancement paused until that
+    /// retry reaches a terminal state.
+    pub async fn maybe_retry_workflow_task(
+        pool: &PgPool,
+        publisher: &Publisher,
+        execution: &Execution,
+    ) -> Result<bool> {
+        if !matches!(
+            execution.status,
+            ExecutionStatus::Failed | ExecutionStatus::Timeout
+        ) {
+            return Ok(false);
+        }
+
+        let Some(workflow_task) = execution.workflow_task.as_ref() else {
+            return Ok(false);
+        };
+
+        if workflow_task.retry_count >= workflow_task.max_retries {
+            return Ok(false);
+        }
+
+        let workflow_execution =
+            WorkflowExecutionRepository::find_by_id(pool, workflow_task.workflow_execution)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Workflow execution {} not found for retry of execution {}",
+                        workflow_task.workflow_execution,
+                        execution.id
+                    )
+                })?;
+
+        let graph: TaskGraph = serde_json::from_value(workflow_execution.task_graph.clone())
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to deserialize task graph for workflow_execution {}: {}",
+                    workflow_task.workflow_execution,
+                    e
+                )
+            })?;
+
+        let Some(task_node) = graph.nodes.get(&workflow_task.task_name) else {
+            warn!(
+                "Workflow task '{}' not found in workflow_execution {}, cannot retry execution {}",
+                workflow_task.task_name, workflow_task.workflow_execution, execution.id
+            );
+            return Ok(false);
+        };
+
+        let Some(retry_config) = task_node.retry.as_ref() else {
+            return Ok(false);
+        };
+
+        let next_retry_count = workflow_task.retry_count + 1;
+        if next_retry_count > retry_config.count as i32 {
+            return Ok(false);
+        }
+
+        let base_delay = retry_config.delay;
+        let mut delay_seconds = match retry_config.backoff {
+            BackoffStrategy::Constant => base_delay,
+            BackoffStrategy::Linear => base_delay.saturating_mul(next_retry_count as u32),
+            BackoffStrategy::Exponential => {
+                base_delay.saturating_mul(2_u32.saturating_pow((next_retry_count - 1) as u32))
+            }
+        };
+        if let Some(max_delay) = retry_config.max_delay {
+            delay_seconds = delay_seconds.min(max_delay);
+        }
+
+        let mut retry_metadata = workflow_task.clone();
+        retry_metadata.retry_count = next_retry_count;
+        retry_metadata.max_retries = retry_config.count as i32;
+        retry_metadata.next_retry_at =
+            Some(Utc::now() + chrono::Duration::seconds(delay_seconds as i64));
+        retry_metadata.started_at = None;
+        retry_metadata.completed_at = None;
+        retry_metadata.duration_ms = None;
+        retry_metadata.timed_out = false;
+
+        let original_execution = execution.original_execution.unwrap_or(execution.id);
+        let retry_execution = ExecutionRepository::create_retry(
+            pool,
+            CreateExecutionInput {
+                action: execution.action,
+                action_ref: execution.action_ref.clone(),
+                config: execution.config.clone(),
+                env_vars: execution.env_vars.clone(),
+                parent: execution.parent,
+                enforcement: execution.enforcement,
+                executor: execution.executor,
+                worker: None,
+                status: ExecutionStatus::Requested,
+                result: None,
+                workflow_task: Some(retry_metadata),
+            },
+            next_retry_count,
+            Some(retry_config.count as i32),
+            Some(format!("{:?}", execution.status).to_lowercase()),
+            original_execution,
+        )
+        .await?;
+
+        info!(
+            "Scheduled retry execution {} for workflow task '{}' after {}s ({}/{})",
+            retry_execution.id,
+            workflow_task.task_name,
+            delay_seconds,
+            next_retry_count,
+            retry_config.count
+        );
+
+        if delay_seconds > 0 {
+            tokio::time::sleep(Duration::from_secs(delay_seconds as u64)).await;
+        }
+
+        let payload = ExecutionRequestedPayload {
+            execution_id: retry_execution.id,
+            action_id: retry_execution.action,
+            action_ref: retry_execution.action_ref.clone(),
+            parent_id: retry_execution.parent,
+            enforcement_id: retry_execution.enforcement,
+            config: retry_execution.config.clone(),
+        };
+        let envelope = MessageEnvelope::new(MessageType::ExecutionRequested, payload)
+            .with_source("executor-scheduler");
+        publisher.publish_envelope(&envelope).await?;
+
+        Ok(true)
+    }
+
+    async fn create_core_ask_inquiry(
+        conn: &mut PgConnection,
+        child_execution: &Execution,
+        task_node: &crate::workflow::graph::TaskNode,
+        rendered_input: &JsonValue,
+    ) -> Result<()> {
+        let prompt = rendered_input
+            .get("prompt")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("Approval required")
+            .to_string();
+        let response_schema = rendered_input.get("response_schema").cloned();
+        let assigned_to = rendered_input
+            .get("assigned_to")
+            .and_then(JsonValue::as_i64);
+        let timeout_at = task_node
+            .timeout
+            .map(|seconds| Utc::now() + chrono::Duration::seconds(seconds as i64));
+
+        let inquiry = InquiryRepository::create(
+            &mut *conn,
+            CreateInquiryInput {
+                execution: child_execution.id,
+                prompt,
+                response_schema,
+                assigned_to,
+                status: InquiryStatus::Pending,
+                response: None,
+                timeout_at,
+            },
+        )
+        .await?;
+
+        let result = serde_json::json!({
+            "inquiry_id": inquiry.id,
+            "status": "pending"
+        });
+        let mut workflow_task = child_execution.workflow_task.clone();
+        if let Some(metadata) = workflow_task.as_mut() {
+            metadata.started_at = Some(Utc::now());
+        }
+
+        ExecutionRepository::update(
+            &mut *conn,
+            child_execution.id,
+            UpdateExecutionInput {
+                status: Some(ExecutionStatus::Running),
+                result: Some(result),
+                started_at: Some(Utc::now()),
+                workflow_task,
+                ..Default::default()
+            },
+        )
+        .await?;
+
+        info!(
+            "Created inquiry {} for core.ask workflow execution {}",
+            inquiry.id, child_execution.id
+        );
 
         Ok(())
     }
@@ -1389,6 +1613,12 @@ impl ExecutionScheduler {
                 "Reusing child execution {} for workflow task '{}' (workflow_execution {})",
                 child_execution.id, task_node.name, workflow_execution_id
             );
+        }
+
+        if child_execution.status == ExecutionStatus::Requested && action_ref == "core.ask" {
+            Self::create_core_ask_inquiry(&mut *conn, &child_execution, task_node, &rendered_input)
+                .await?;
+            return Ok(());
         }
 
         if child_execution.status == ExecutionStatus::Requested {
@@ -1866,6 +2096,39 @@ impl ExecutionScheduler {
         Ok(())
     }
 
+    async fn publish_execution_completed_payload(
+        publisher: &Publisher,
+        pending: PendingExecutionCompleted,
+    ) -> Result<()> {
+        let envelope = MessageEnvelope::new(
+            MessageType::ExecutionCompleted,
+            ExecutionCompletedPayload {
+                execution_id: pending.execution_id,
+                action_id: pending.action_id,
+                action_ref: pending.action_ref,
+                status: match pending.status {
+                    ExecutionStatus::Completed => "completed".to_string(),
+                    ExecutionStatus::Failed => "failed".to_string(),
+                    ExecutionStatus::Timeout => "timeout".to_string(),
+                    ExecutionStatus::Cancelled => "cancelled".to_string(),
+                    other => format!("{:?}", other).to_lowercase(),
+                },
+                result: pending.result,
+                completed_at: pending.completed_at,
+            },
+        )
+        .with_source("executor-scheduler");
+
+        publisher.publish_envelope(&envelope).await?;
+
+        debug!(
+            "Published synthetic ExecutionCompleted for workflow execution {}",
+            envelope.payload.execution_id
+        );
+
+        Ok(())
+    }
+
     async fn publish_execution_requested_with_conn(
         conn: &mut PgConnection,
         execution_id: i64,
@@ -2098,11 +2361,11 @@ impl ExecutionScheduler {
                     .await;
 
             match advance_result {
-                Ok(pending_messages) => {
+                Ok(outcome) => {
                     sqlx::query("COMMIT").execute(&mut *lock_conn).await?;
 
                     if let Some(l) = logger.as_ref() {
-                        for pending in &pending_messages {
+                        for pending in &outcome.execution_requests {
                             // We avoid logging task inputs; only metadata.
                             // The pending message references a child execution
                             // we just created — fetch its workflow_task name.
@@ -2129,8 +2392,12 @@ impl ExecutionScheduler {
                         }
                     }
 
-                    for pending in pending_messages {
+                    for pending in outcome.execution_requests {
                         Self::publish_execution_requested_payload(publisher, pending).await?;
+                    }
+
+                    if let Some(completed) = outcome.completed_execution {
+                        Self::publish_execution_completed_payload(publisher, completed).await?;
                     }
 
                     Ok(())
@@ -2177,10 +2444,10 @@ impl ExecutionScheduler {
         conn: &mut PgConnection,
         round_robin_counter: &AtomicUsize,
         execution: &Execution,
-    ) -> Result<Vec<PendingExecutionRequested>> {
+    ) -> Result<WorkflowAdvanceOutcome> {
         let workflow_task = match &execution.workflow_task {
             Some(wt) => wt,
-            None => return Ok(vec![]), // Not a workflow task, nothing to do
+            None => return Ok(WorkflowAdvanceOutcome::default()), // Not a workflow task, nothing to do
         };
 
         let workflow_execution_id = workflow_task.workflow_execution;
@@ -2218,10 +2485,11 @@ impl ExecutionScheduler {
                 "Workflow execution {} already in terminal state {:?}, skipping advance",
                 workflow_execution_id, workflow_execution.status
             );
-            return Ok(vec![]);
+            return Ok(WorkflowAdvanceOutcome::default());
         }
 
         let mut pending_messages = Vec::new();
+        let mut pending_completed_execution = None;
 
         let parent_execution =
             ExecutionRepository::find_by_id(&mut *conn, workflow_execution.execution)
@@ -2282,7 +2550,10 @@ impl ExecutionScheduler {
                 );
             }
 
-            return Ok(pending_messages);
+            return Ok(WorkflowAdvanceOutcome {
+                execution_requests: pending_messages,
+                completed_execution: None,
+            });
         }
 
         // Load the workflow definition so we can apply param_schema defaults
@@ -2398,7 +2669,10 @@ impl ExecutionScheduler {
                     workflow_task.task_index.unwrap_or(-1),
                     siblings_remaining.len(),
                 );
-                return Ok(pending_messages);
+                return Ok(WorkflowAdvanceOutcome {
+                    execution_requests: pending_messages,
+                    completed_execution: None,
+                });
             }
 
             // ---------------------------------------------------------
@@ -2431,7 +2705,10 @@ impl ExecutionScheduler {
                      another advance_workflow call already handled final completion, skipping",
                     task_name,
                 );
-                return Ok(pending_messages);
+                return Ok(WorkflowAdvanceOutcome {
+                    execution_requests: pending_messages,
+                    completed_execution: None,
+                });
             }
 
             // All items done — check if any failed
@@ -2723,7 +3000,7 @@ impl ExecutionScheduler {
                 None
             };
 
-            Self::complete_workflow_with_conn(
+            let completed_execution = Self::complete_workflow_with_conn(
                 &mut *conn,
                 parent_execution.id,
                 workflow_execution_id,
@@ -2732,9 +3009,28 @@ impl ExecutionScheduler {
                 output_map_result,
             )
             .await?;
+            if completed_execution.parent.is_some() {
+                let action_id = completed_execution.action.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Completed nested workflow execution {} has no action id",
+                        completed_execution.id
+                    )
+                })?;
+                pending_completed_execution = Some(PendingExecutionCompleted {
+                    execution_id: completed_execution.id,
+                    action_id,
+                    action_ref: completed_execution.action_ref.clone(),
+                    status: completed_execution.status,
+                    result: completed_execution.result.clone(),
+                    completed_at: Utc::now(),
+                });
+            }
         }
 
-        Ok(pending_messages)
+        Ok(WorkflowAdvanceOutcome {
+            execution_requests: pending_messages,
+            completed_execution: pending_completed_execution,
+        })
     }
 
     /// Count child executions that are still in progress for a workflow.
@@ -2918,7 +3214,7 @@ impl ExecutionScheduler {
         success: bool,
         error_message: Option<&str>,
         result_override: Option<JsonValue>,
-    ) -> Result<()> {
+    ) -> Result<Execution> {
         let status = if success {
             ExecutionStatus::Completed
         } else {
@@ -2955,10 +3251,16 @@ impl ExecutionScheduler {
                 error_message,
                 result_override,
             ));
-            ExecutionRepository::update(&mut *conn, parent.id, parent.into()).await?;
+            return ExecutionRepository::update(&mut *conn, parent.id, parent.into())
+                .await
+                .map_err(Into::into);
         }
 
-        Ok(())
+        Err(anyhow::anyhow!(
+            "Parent execution {} not found for workflow_execution {}",
+            parent_execution_id,
+            workflow_execution_id
+        ))
     }
 
     // -----------------------------------------------------------------------
@@ -4214,6 +4516,10 @@ mod tests {
             worker: None,
             status: ExecutionStatus::Requested,
             result: None,
+            retry_count: 0,
+            max_retries: None,
+            retry_reason: None,
+            original_execution: None,
             started_at: None,
             workflow_task: Some(attune_common::models::execution::WorkflowTaskMetadata {
                 workflow_execution: 9,
@@ -4256,6 +4562,10 @@ mod tests {
             worker: None,
             status: ExecutionStatus::Requested,
             result: None,
+            retry_count: 0,
+            max_retries: None,
+            retry_reason: None,
+            original_execution: None,
             started_at: None,
             workflow_task: None,
             created: Utc::now(),
@@ -4340,6 +4650,10 @@ mod tests {
             worker: None,
             status: ExecutionStatus::Requested,
             result: None,
+            retry_count: 0,
+            max_retries: None,
+            retry_reason: None,
+            original_execution: None,
             started_at: None,
             workflow_task: None,
             created: Utc::now(),

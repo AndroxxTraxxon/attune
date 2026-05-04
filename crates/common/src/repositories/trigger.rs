@@ -684,6 +684,41 @@ impl TriggerRepository {
 
         Ok(id)
     }
+
+    /// Count non-rate-limited webhook requests within a recent fixed window.
+    ///
+    /// This is intentionally database-backed so rate limits are enforced
+    /// consistently across multiple API instances.
+    pub async fn count_recent_webhook_requests<'e, E>(
+        executor: E,
+        trigger_id: Id,
+        webhook_key: &str,
+        source_ip: Option<&str>,
+        window_seconds: i32,
+    ) -> Result<i64>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let count = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*)
+            FROM webhook_event_log
+            WHERE trigger_id = $1
+              AND webhook_key = $2
+              AND source_ip IS NOT DISTINCT FROM $3
+              AND rate_limited = FALSE
+              AND created >= NOW() - make_interval(secs => $4)
+            "#,
+        )
+        .bind(trigger_id)
+        .bind(webhook_key)
+        .bind(source_ip)
+        .bind(window_seconds)
+        .fetch_one(executor)
+        .await?;
+
+        Ok(count)
+    }
 }
 
 /// Webhook information returned when enabling webhooks

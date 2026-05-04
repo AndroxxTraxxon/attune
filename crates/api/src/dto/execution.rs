@@ -68,6 +68,11 @@ pub struct ExecutionResponse {
     #[schema(value_type = Object, example = json!({"message_id": "1234567890.123456"}))]
     pub result: Option<JsonValue>,
 
+    /// ID of the original execution if this execution is a retry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 1, nullable = true)]
+    pub original_execution: Option<i64>,
+
     /// When the execution actually started running (worker picked it up).
     /// Null if the execution hasn't started running yet.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -129,6 +134,11 @@ pub struct ExecutionSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<Object>, nullable = true)]
     pub workflow_task: Option<WorkflowTaskMetadata>,
+
+    /// ID of the original execution if this execution is a retry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 1, nullable = true)]
+    pub original_execution: Option<i64>,
 
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
@@ -234,6 +244,7 @@ impl From<attune_common::models::execution::Execution> for ExecutionResponse {
             result: execution
                 .result
                 .map(|r| serde_json::to_value(r).unwrap_or(JsonValue::Null)),
+            original_execution: execution.original_execution,
             started_at: execution.started_at,
             workflow_task: execution.workflow_task,
             created: execution.created,
@@ -255,6 +266,7 @@ impl From<attune_common::models::execution::Execution> for ExecutionSummary {
             trigger_ref: None, // Populated separately via enforcement lookup
             started_at: execution.started_at,
             workflow_task: execution.workflow_task,
+            original_execution: execution.original_execution,
             created: execution.created,
             updated: execution.updated,
         }
@@ -275,6 +287,7 @@ impl From<ExecutionWithRefs> for ExecutionSummary {
             trigger_ref: row.trigger_ref,
             started_at: row.started_at,
             workflow_task: row.workflow_task,
+            original_execution: row.original_execution,
             created: row.created,
             updated: row.updated,
         }

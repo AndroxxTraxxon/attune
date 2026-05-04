@@ -20,7 +20,6 @@ from helpers.fixtures import create_echo_action, create_webhook_trigger, unique_
 from helpers.polling import wait_for_event_count, wait_for_execution_count
 
 
-@pytest.mark.skip(reason="Rule criteria evaluation not yet implemented")
 def test_rule_criteria_basic(client: AttuneClient, test_pack):
     """
     Test that rule criteria filters events correctly.
@@ -106,7 +105,7 @@ def test_rule_criteria_basic(client: AttuneClient, test_pack):
     # ========================================================================
     print("\n[STEP 5] Verifying event created but no execution...")
 
-    events = client.list_events(limit=10)
+    events = client.list_events(trigger_ref=trigger_ref, limit=20)
     info_events = [
         e
         for e in events
@@ -170,8 +169,7 @@ def test_rule_criteria_basic(client: AttuneClient, test_pack):
     print("\n[STEP 8] Validating success criteria...")
 
     # Criterion 1: Both webhooks created events
-    all_events = client.list_events(limit=20)
-    our_events = [e for e in all_events if e["trigger_ref"] == trigger_ref]
+    our_events = client.list_events(trigger_ref=trigger_ref, limit=20)
     assert len(our_events) >= 2, f"❌ Expected at least 2 events, got {len(our_events)}"
     print(f"  ✓ Both webhooks created events: {len(our_events)} total")
 
@@ -208,7 +206,6 @@ def test_rule_criteria_basic(client: AttuneClient, test_pack):
     print("=" * 80 + "\n")
 
 
-@pytest.mark.skip(reason="Rule criteria evaluation not yet implemented")
 def test_rule_criteria_numeric_comparison(client: AttuneClient, test_pack):
     """
     Test rule criteria with numeric comparisons.
@@ -321,7 +318,6 @@ def test_rule_criteria_numeric_comparison(client: AttuneClient, test_pack):
     print("=" * 80 + "\n")
 
 
-@pytest.mark.skip(reason="Rule criteria evaluation not yet implemented")
 def test_rule_criteria_list_membership(client: AttuneClient, test_pack):
     """
     Test rule criteria with list membership checks.
@@ -445,7 +441,6 @@ def test_rule_criteria_list_membership(client: AttuneClient, test_pack):
     print("=" * 80 + "\n")
 
 
-@pytest.mark.skip(reason="Rule criteria evaluation not yet implemented")
 def test_rule_criteria_complex_expression(client: AttuneClient, test_pack):
     """
     Test complex criteria with multiple conditions.

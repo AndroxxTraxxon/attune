@@ -1,0 +1,9 @@
+name: node_basic
+description: "Basic Node.js action"
+enabled: true
+runner_type: node
+entry_point: node_basic.js
+parameters:
+  message:
+    type: string
+    required: false

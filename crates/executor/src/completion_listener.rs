@@ -173,6 +173,25 @@ impl CompletionListener {
                     "Execution {} is a workflow task, advancing workflow",
                     execution_id
                 );
+                match ExecutionScheduler::maybe_retry_workflow_task(pool, publisher, exec).await {
+                    Ok(true) => {
+                        info!(
+                            "Execution {} scheduled a workflow retry; delaying workflow advancement",
+                            execution_id
+                        );
+                        return Ok(());
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        error!(
+                            "Failed to schedule workflow retry for execution {}: {}",
+                            execution_id, e
+                        );
+                        if let Some(mq_err) = Self::retryable_mq_error(&e) {
+                            return Err(mq_err.into());
+                        }
+                    }
+                }
                 if let Err(e) = ExecutionScheduler::advance_workflow(
                     pool,
                     publisher,
@@ -927,6 +946,10 @@ mod tests {
             worker: None,
             status,
             result,
+            retry_count: 0,
+            max_retries: None,
+            retry_reason: None,
+            original_execution: None,
             started_at: None,
             workflow_task: None,
             created: Utc::now(),
@@ -1178,6 +1201,10 @@ mod tests {
             worker: None,
             status: ExecutionStatus::Completed,
             result: None,
+            retry_count: 0,
+            max_retries: None,
+            retry_reason: None,
+            original_execution: None,
             started_at: None,
             workflow_task: None,
             created: Utc::now(),

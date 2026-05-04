@@ -345,7 +345,6 @@ def test_conditional_workflow_branching(client: AttuneClient, test_pack):
 @pytest.mark.tier3
 @pytest.mark.workflow
 @pytest.mark.orchestration
-@pytest.mark.skip(reason="Nested workflow orchestration timing out - needs investigation")
 def test_nested_workflow_with_error_handling(client: AttuneClient, test_pack):
     """
     Test nested workflow with error handling and recovery.

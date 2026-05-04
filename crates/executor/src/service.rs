@@ -363,8 +363,9 @@ impl ExecutorService {
         // Start inquiry timeout checker
         info!("Starting inquiry timeout checker...");
         let timeout_pool = self.inner.pool.clone();
+        let timeout_publisher = self.inner.publisher.clone();
         handles.push(tokio::spawn(async move {
-            InquiryHandler::timeout_check_loop(timeout_pool, 60).await;
+            InquiryHandler::timeout_check_loop(timeout_pool, timeout_publisher, 1).await;
             Ok(())
         }));
 

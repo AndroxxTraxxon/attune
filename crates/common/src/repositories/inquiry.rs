@@ -159,6 +159,26 @@ impl Delete for InquiryRepository {
 }
 
 impl InquiryRepository {
+    /// Atomically mark all expired pending inquiries as timed out.
+    pub async fn timeout_expired_pending<'e, E>(executor: E) -> Result<Vec<Inquiry>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, Inquiry>(
+            "UPDATE inquiry \
+             SET status = $1, updated = NOW() \
+             WHERE status = $2 \
+               AND timeout_at IS NOT NULL \
+               AND timeout_at <= NOW() \
+             RETURNING id, execution, prompt, response_schema, assigned_to, status, response, timeout_at, responded_at, created, updated",
+        )
+        .bind(InquiryStatus::Timeout)
+        .bind(InquiryStatus::Pending)
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+
     pub async fn find_by_status<'e, E>(executor: E, status: InquiryStatus) -> Result<Vec<Inquiry>>
     where
         E: Executor<'e, Database = Postgres> + 'e,

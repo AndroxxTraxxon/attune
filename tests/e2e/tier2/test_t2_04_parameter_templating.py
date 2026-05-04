@@ -20,7 +20,6 @@ from helpers.fixtures import create_echo_action, create_webhook_trigger, unique_
 from helpers.polling import wait_for_execution_count, wait_for_execution_status
 
 
-@pytest.mark.skip(reason="Webhook→rule→execution pipeline not reliable in test environment")
 def test_parameter_templating_trigger_data(client: AttuneClient, test_pack):
     """
     Test that action parameters can reference trigger data via templates.

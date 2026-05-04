@@ -1,0 +1,6 @@
+name: node_axios
+description: "Node.js action that imports axios"
+enabled: true
+runner_type: node
+entry_point: node_axios.js
+parameters: {}

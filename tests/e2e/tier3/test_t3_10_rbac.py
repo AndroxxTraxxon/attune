@@ -13,48 +13,80 @@ from helpers import AttuneClient
 from helpers.fixtures import unique_ref
 
 
+def _data(response):
+    assert response.status_code in (200, 201), response.text
+    body = response.json()
+    return body.get("data", body) if isinstance(body, dict) else body
+
+
+def _permission_set_id(client: AttuneClient, permission_set_ref: str) -> int:
+    permission_sets = _data(client._request("GET", "/api/v1/permissions/sets"))
+    for permission_set in permission_sets:
+        if permission_set["ref"] == permission_set_ref:
+            return permission_set["id"]
+    raise AssertionError(f"Permission set {permission_set_ref!r} not found")
+
+
+def _register_user_with_permission_role(
+    client: AttuneClient,
+    role_prefix: str,
+    permission_set_ref: str,
+) -> tuple[AttuneClient, str]:
+    login = f"{role_prefix}_{unique_ref()}@example.com"
+    password = f"{role_prefix}_password_123"
+    role = f"e2e_{role_prefix}_{unique_ref()}"
+
+    registration = client.register(
+        login=login,
+        password=password,
+        display_name=f"E2E {role_prefix.title()}",
+    )
+    identity_id = registration["user"]["id"]
+
+    permission_set_id = _permission_set_id(client, permission_set_ref)
+    _data(
+        client._request(
+            "POST",
+            f"/api/v1/permissions/sets/{permission_set_id}/roles",
+            json={"role": role},
+        )
+    )
+    _data(
+        client._request(
+            "POST",
+            f"/api/v1/identities/{identity_id}/roles",
+            json={"role": role},
+        )
+    )
+
+    role_client = AttuneClient(base_url=client.base_url)
+    role_client.login(login=login, password=password)
+    return role_client, login
+
+
+def _is_forbidden(error: Exception) -> bool:
+    message = str(error).lower()
+    return "403" in message or "forbidden" in message or "permission" in message
+
+
 @pytest.mark.tier3
 @pytest.mark.security
 @pytest.mark.rbac
 def test_viewer_role_permissions(client: AttuneClient):
     """
-    Test that viewer role can only read resources, not create/update/delete.
-
-    Note: This test assumes RBAC is implemented. If not yet implemented,
-    this test will document the expected behavior.
+     Test that viewer role can only read resources, not create/update/delete.
     """
     print("\n" + "=" * 80)
     print("T3.10a: Viewer Role Permission Test")
     print("=" * 80)
 
-    # Step 1: Create a viewer user
-    print("\n[STEP 1] Creating viewer user...")
-    viewer_username = f"viewer_{unique_ref()}"
-    viewer_email = f"{viewer_username}@example.com"
-    viewer_password = "viewer_password_123"
-
-    # Register viewer (using admin client)
-    try:
-        viewer_reg = client.register(
-            username=viewer_username,
-            email=viewer_email,
-            password=viewer_password,
-            role="viewer",  # Request viewer role
-        )
-        print(f"✓ Viewer user created: {viewer_username}")
-    except Exception as e:
-        print(f"⚠ Viewer registration failed: {e}")
-        print("  Note: RBAC may not be fully implemented yet")
-        pytest.skip("RBAC registration not available")
-
-    # Login as viewer
-    viewer_client = AttuneClient(base_url=client.base_url)
-    try:
-        viewer_client.login(username=viewer_username, password=viewer_password)
-        print(f"✓ Viewer logged in")
-    except Exception as e:
-        print(f"⚠ Viewer login failed: {e}")
-        pytest.skip("Could not login as viewer")
+    print("\n[STEP 1] Creating viewer user and assigning role...")
+    viewer_client, viewer_login = _register_user_with_permission_role(
+        client,
+        role_prefix="viewer",
+        permission_set_ref="core.viewer",
+    )
+    print(f"✓ Viewer logged in: {viewer_login}")
 
     # Step 2: Test READ operations (should succeed)
     print("\n[STEP 2] Testing READ operations (should succeed)...")
@@ -96,7 +128,7 @@ def test_viewer_role_permissions(client: AttuneClient):
     # Test creating pack
     try:
         pack_data = {
-            "ref": f"test_pack_{unique_ref()}",
+            "ref": f"viewer_test_pack_{unique_ref()}",
             "name": "Test Pack",
             "version": "1.0.0",
         }
@@ -104,11 +136,7 @@ def test_viewer_role_permissions(client: AttuneClient):
         print(f"✗ SECURITY VIOLATION: Viewer created pack: {pack_response.get('ref')}")
         create_tests.append(("create_pack", False))  # Should have failed
     except Exception as e:
-        if (
-            "403" in str(e)
-            or "forbidden" in str(e).lower()
-            or "permission" in str(e).lower()
-        ):
+        if _is_forbidden(e):
             print(f"✓ Viewer blocked from creating pack (403 Forbidden)")
             create_tests.append(("create_pack", True))
         else:
@@ -118,10 +146,10 @@ def test_viewer_role_permissions(client: AttuneClient):
     # Test creating action
     try:
         action_data = {
-            "ref": f"test_action_{unique_ref()}",
+            "ref": f"viewer_test_action_{unique_ref()}",
             "name": "Test Action",
-            "runtime_ref": "core.python",
-            "entrypoint": "main.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": "echo.sh",
             "pack_ref": "core",
         }
         action_response = viewer_client.create_action(action_data)
@@ -130,11 +158,7 @@ def test_viewer_role_permissions(client: AttuneClient):
         )
         create_tests.append(("create_action", False))
     except Exception as e:
-        if (
-            "403" in str(e)
-            or "forbidden" in str(e).lower()
-            or "permission" in str(e).lower()
-        ):
+        if _is_forbidden(e):
             print(f"✓ Viewer blocked from creating action (403 Forbidden)")
             create_tests.append(("create_action", True))
         else:
@@ -144,20 +168,19 @@ def test_viewer_role_permissions(client: AttuneClient):
     # Test creating rule
     try:
         rule_data = {
-            "name": f"Test Rule {unique_ref()}",
-            "trigger": "core.timer.interval",
-            "action": "core.echo",
+            "name": f"viewer_test_rule_{unique_ref()}",
+            "pack_ref": "core",
+            "trigger_ref": "core.intervaltimer",
+            "action_ref": "core.echo",
             "enabled": True,
+            "trigger_params": {"unit": "seconds", "interval": 60},
+            "action_params": {"message": "viewer should not create this"},
         }
         rule_response = viewer_client.create_rule(rule_data)
         print(f"✗ SECURITY VIOLATION: Viewer created rule: {rule_response.get('id')}")
         create_tests.append(("create_rule", False))
     except Exception as e:
-        if (
-            "403" in str(e)
-            or "forbidden" in str(e).lower()
-            or "permission" in str(e).lower()
-        ):
+        if _is_forbidden(e):
             print(f"✓ Viewer blocked from creating rule (403 Forbidden)")
             create_tests.append(("create_rule", True))
         else:
@@ -178,11 +201,7 @@ def test_viewer_role_permissions(client: AttuneClient):
         )
         execute_tests.append(("execute_action", False))
     except Exception as e:
-        if (
-            "403" in str(e)
-            or "forbidden" in str(e).lower()
-            or "permission" in str(e).lower()
-        ):
+        if _is_forbidden(e):
             print(f"✓ Viewer blocked from executing action (403 Forbidden)")
             execute_tests.append(("execute_action", True))
         else:
@@ -193,7 +212,7 @@ def test_viewer_role_permissions(client: AttuneClient):
     print("\n" + "=" * 80)
     print("VIEWER ROLE TEST SUMMARY")
     print("=" * 80)
-    print(f"User: {viewer_username} (role: viewer)")
+    print(f"User: {viewer_login} (role: viewer)")
     print("\nREAD Permissions (should succeed):")
     for operation, passed in read_tests:
         status = "✓" if passed else "✗"
@@ -231,9 +250,9 @@ def test_viewer_role_permissions(client: AttuneClient):
 
     print("=" * 80)
 
-    # Note: We may skip assertions if RBAC not fully implemented
-    if not create_tests and not execute_tests:
-        pytest.skip("RBAC not fully implemented yet")
+    assert all_read_passed, "Viewer should be able to read resources"
+    assert all_create_blocked, "Viewer should not be able to create resources"
+    assert all_execute_blocked, "Viewer should not be able to execute actions"
 
 
 @pytest.mark.tier3
@@ -278,8 +297,8 @@ def test_admin_role_permissions(client: AttuneClient):
         action_data = {
             "ref": f"admin_test_action_{unique_ref()}",
             "name": "Admin Test Action",
-            "runtime_ref": "core.python",
-            "entrypoint": "main.py",
+            "runtime_ref": "core.shell",
+            "entrypoint": "echo.sh",
             "pack_ref": "core",
             "enabled": True,
         }
@@ -339,32 +358,13 @@ def test_executor_role_permissions(client: AttuneClient):
     print("T3.10c: Executor Role Permission Test")
     print("=" * 80)
 
-    # Step 1: Create executor user
-    print("\n[STEP 1] Creating executor user...")
-    executor_username = f"executor_{unique_ref()}"
-    executor_email = f"{executor_username}@example.com"
-    executor_password = "executor_password_123"
-
-    try:
-        executor_reg = client.register(
-            username=executor_username,
-            email=executor_email,
-            password=executor_password,
-            role="executor",
-        )
-        print(f"✓ Executor user created: {executor_username}")
-    except Exception as e:
-        print(f"⚠ Executor registration not available: {e}")
-        pytest.skip("Executor role not implemented yet")
-
-    # Login as executor
-    executor_client = AttuneClient(base_url=client.base_url)
-    try:
-        executor_client.login(username=executor_username, password=executor_password)
-        print(f"✓ Executor logged in")
-    except Exception as e:
-        print(f"⚠ Executor login failed: {e}")
-        pytest.skip("Could not login as executor")
+    print("\n[STEP 1] Creating executor user and assigning role...")
+    executor_client, executor_login = _register_user_with_permission_role(
+        client,
+        role_prefix="executor",
+        permission_set_ref="core.executor",
+    )
+    print(f"✓ Executor logged in: {executor_login}")
 
     # Step 2: Test EXECUTE permissions (should succeed)
     print("\n[STEP 2] Testing EXECUTE permissions (should succeed)...")
@@ -396,7 +396,7 @@ def test_executor_role_permissions(client: AttuneClient):
         print(f"✗ VIOLATION: Executor created pack: {pack_response['ref']}")
         create_tests.append(("create_pack", False))
     except Exception as e:
-        if "403" in str(e) or "forbidden" in str(e).lower():
+        if _is_forbidden(e):
             print(f"✓ Executor blocked from creating pack")
             create_tests.append(("create_pack", True))
         else:
@@ -420,7 +420,7 @@ def test_executor_role_permissions(client: AttuneClient):
     print("\n" + "=" * 80)
     print("EXECUTOR ROLE TEST SUMMARY")
     print("=" * 80)
-    print(f"User: {executor_username} (role: executor)")
+    print(f"User: {executor_login} (role: executor)")
     print("\nEXECUTE Permissions (should succeed):")
     for operation, passed in execute_tests:
         status = "✓" if passed else "✗"
@@ -449,6 +449,10 @@ def test_executor_role_permissions(client: AttuneClient):
 
     print("=" * 80)
 
+    assert all_execute_ok, "Executor should be able to execute actions"
+    assert all_create_blocked, "Executor should not be able to create packs"
+    assert all_read_ok, "Executor should be able to read actions"
+
 
 @pytest.mark.tier3
 @pytest.mark.security
@@ -470,30 +474,33 @@ def test_role_permissions_summary():
             "actions": ["create", "read", "update", "delete", "execute"],
             "rules": ["create", "read", "update", "delete"],
             "triggers": ["create", "read", "update", "delete"],
-            "executions": ["read", "cancel"],
-            "datastore": ["read", "write", "delete"],
-            "secrets": ["create", "read", "update", "delete"],
-            "users": ["create", "read", "update", "delete"],
+            "executions": ["read", "update", "cancel"],
+            "events": ["read"],
+            "enforcements": ["read"],
+            "inquiries": ["read", "create", "update", "delete", "respond"],
+            "keys": ["create", "read", "update", "delete", "decrypt"],
+            "artifacts": ["create", "read", "update", "delete"],
+            "identities": ["create", "read", "update", "delete"],
+            "permissions": ["create", "read", "update", "delete", "manage"],
         },
         "editor": {
             "packs": ["create", "read", "update"],
             "actions": ["create", "read", "update", "execute"],
             "rules": ["create", "read", "update"],
             "triggers": ["create", "read", "update"],
-            "executions": ["read", "execute", "cancel"],
-            "datastore": ["read", "write"],
-            "secrets": ["read", "update"],
-            "users": ["read"],
+            "executions": ["read", "cancel"],
+            "queues": ["create", "read", "update", "delete"],
+            "keys": ["read", "update", "decrypt"],
+            "artifacts": ["read"],
         },
         "executor": {
             "packs": ["read"],
             "actions": ["read", "execute"],
             "rules": ["read"],
             "triggers": ["read"],
-            "executions": ["read", "execute"],
-            "datastore": ["read"],
-            "secrets": ["read"],
-            "users": [],
+            "executions": ["read"],
+            "keys": ["read"],
+            "artifacts": ["read"],
         },
         "viewer": {
             "packs": ["read"],
@@ -501,9 +508,9 @@ def test_role_permissions_summary():
             "rules": ["read"],
             "triggers": ["read"],
             "executions": ["read"],
-            "datastore": ["read"],
-            "secrets": [],
-            "users": [],
+            "queues": ["read"],
+            "keys": ["read"],
+            "artifacts": ["read"],
         },
     }
 

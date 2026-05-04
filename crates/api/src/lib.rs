@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod authz;
 pub mod dto;
+pub mod inquiry_timeout;
 pub mod middleware;
 pub mod openapi;
 pub mod postgres_listener;

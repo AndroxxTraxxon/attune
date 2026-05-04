@@ -1,0 +1,6 @@
+name: python_multi_deps
+description: "Python action that imports multiple dependencies"
+enabled: true
+runner_type: python
+entry_point: python_multi_deps.py
+parameters: {}

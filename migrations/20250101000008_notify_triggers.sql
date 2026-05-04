@@ -270,6 +270,31 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Function to notify on inquiry timeout
+CREATE OR REPLACE FUNCTION notify_inquiry_timeout()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    -- Only notify when status changes to 'timeout'
+    IF TG_OP = 'UPDATE' AND NEW.status = 'timeout' AND OLD.status != 'timeout' THEN
+        payload := json_build_object(
+            'entity_type', 'inquiry',
+            'entity_id', NEW.id,
+            'id', NEW.id,
+            'execution', NEW.execution,
+            'status', NEW.status,
+            'timeout_at', NEW.timeout_at,
+            'updated', NEW.updated
+        );
+
+        PERFORM pg_notify('inquiry_timeout', payload::text);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Trigger on inquiry table for creation
 CREATE TRIGGER inquiry_created_notify
     AFTER INSERT ON inquiry
@@ -282,8 +307,14 @@ CREATE TRIGGER inquiry_responded_notify
     FOR EACH ROW
     EXECUTE FUNCTION notify_inquiry_responded();
 
+CREATE TRIGGER inquiry_timeout_notify
+    AFTER UPDATE ON inquiry
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_inquiry_timeout();
+
 COMMENT ON FUNCTION notify_inquiry_created() IS 'Sends inquiry creation notifications via PostgreSQL LISTEN/NOTIFY';
 COMMENT ON FUNCTION notify_inquiry_responded() IS 'Sends inquiry response notifications via PostgreSQL LISTEN/NOTIFY';
+COMMENT ON FUNCTION notify_inquiry_timeout() IS 'Sends inquiry timeout notifications via PostgreSQL LISTEN/NOTIFY';
 
 -- ============================================================================
 -- WORKFLOW EXECUTION NOTIFICATIONS

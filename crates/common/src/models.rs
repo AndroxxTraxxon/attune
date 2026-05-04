@@ -1314,6 +1314,10 @@ pub mod execution {
         pub worker: Option<Id>,
         pub status: ExecutionStatus,
         pub result: Option<JsonDict>,
+        pub retry_count: i32,
+        pub max_retries: Option<i32>,
+        pub retry_reason: Option<String>,
+        pub original_execution: Option<Id>,
 
         /// When the execution actually started running (worker picked it up).
         /// Set when status transitions to `Running`. Used to compute accurate

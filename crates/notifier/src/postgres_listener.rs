@@ -15,6 +15,7 @@ const NOTIFICATION_CHANNELS: &[&str] = &[
     "execution_created",
     "inquiry_created",
     "inquiry_responded",
+    "inquiry_timeout",
     "enforcement_created",
     "enforcement_status_changed",
     "event_created",

@@ -34,10 +34,94 @@ def create_pack_secret(
     return response.json()["data"]
 
 
+def _identity_id(client: AttuneClient) -> int:
+    response = client.get("/auth/me")
+    assert response.status_code == 200, response.text
+    return response.json()["data"]["id"]
+
+
+def _data(response):
+    assert response.status_code in (200, 201), response.text
+    body = response.json()
+    return body.get("data", body) if isinstance(body, dict) else body
+
+
+def _permission_set_id(client: AttuneClient, permission_set_ref: str) -> int:
+    permission_sets = _data(client._request("GET", "/api/v1/permissions/sets"))
+    for permission_set in permission_sets:
+        if permission_set["ref"] == permission_set_ref:
+            return permission_set["id"]
+    raise AssertionError(f"Permission set {permission_set_ref!r} not found")
+
+
+def _register_user_with_permission_role(
+    client: AttuneClient,
+    *,
+    role_prefix: str,
+    permission_set_ref: str,
+) -> AttuneClient:
+    login = f"{role_prefix}_{unique_ref()}@example.com"
+    password = f"{role_prefix}_password_123"
+    role = f"e2e_{role_prefix}_{unique_ref()}"
+
+    registration = client.register(
+        login=login,
+        password=password,
+        display_name=f"E2E {role_prefix.title()}",
+    )
+    identity_id = registration["user"]["id"]
+    permission_set_id = _permission_set_id(client, permission_set_ref)
+    _data(
+        client._request(
+            "POST",
+            f"/api/v1/permissions/sets/{permission_set_id}/roles",
+            json={"role": role},
+        )
+    )
+    _data(
+        client._request(
+            "POST",
+            f"/api/v1/identities/{identity_id}/roles",
+            json={"role": role},
+        )
+    )
+
+    role_client = AttuneClient(base_url=client.base_url)
+    role_client.login(login=login, password=password)
+    return role_client
+
+
+def _create_identity_secret(
+    client: AttuneClient,
+    *,
+    key: str,
+    value: str,
+    owner_identity: int,
+) -> dict:
+    response = client.post(
+        "/api/v1/keys",
+        json={
+            "ref": key,
+            "name": key,
+            "value": value,
+            "owner_type": "identity",
+            "owner_identity": owner_identity,
+            "encrypted": True,
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["data"]
+
+
+def _identity_key_refs(client: AttuneClient) -> set[str]:
+    response = client.get("/api/v1/keys?owner_type=identity&per_page=500")
+    assert response.status_code == 200, response.text
+    return {key["ref"] for key in response.json()["data"]}
+
+
 @pytest.mark.tier3
 @pytest.mark.security
 @pytest.mark.secrets
-@pytest.mark.skip(reason="Worker secret injection is not available in the E2E stack")
 def test_secret_injection_via_stdin(client: AttuneClient, test_pack):
     """
     Test that secrets are injected via stdin, not environment variables.
@@ -69,15 +153,16 @@ def test_secret_injection_via_stdin(client: AttuneClient, test_pack):
     print("\n[STEP 2] Creating action that uses secret...")
     action_ref = f"{pack_ref}.test_secret_action_{unique_ref()}"
 
-    action_script = f"""INPUT=$(cat)
-case "$INPUT" in
-  *"{secret_key}"*) echo "SECRET_RECEIVED: yes" ;;
-  *) echo "SECRET_RECEIVED: no" ;;
-esac
-case "$INPUT" in
-  *"{secret_value}"*) echo "SECRET_VALID: yes" ;;
-  *) echo "SECRET_VALID: no" ;;
-esac
+    action_script = f"""if [ "${{{secret_key}:+set}}" = "set" ]; then
+  echo "SECRET_RECEIVED: yes"
+else
+  echo "SECRET_RECEIVED: no"
+fi
+if [ "${{{secret_key}:-}}" = "{secret_value}" ]; then
+  echo "SECRET_VALID: yes"
+else
+  echo "SECRET_VALID: no"
+fi
 echo "SECRET_LENGTH: {len(secret_value)}"
 if printenv | grep -F "{secret_value}" >/dev/null || printenv | grep -F "{secret_key}" >/dev/null; then
   echo "SECURITY_VIOLATION: Secret found in environment"
@@ -194,12 +279,12 @@ echo "Successfully authenticated with API key (length: {len(secret_value)})"
     print("\n" + "=" * 80)
     print("SECURITY TEST SUMMARY")
     print("=" * 80)
-    print(f"✓ Secret created for stdin delivery: {secret_key}")
+    print(f"✓ Secret created for inline action delivery: {secret_key}")
     print(f"✓ Action executed with secret injection: {action_ref}")
     print(f"✓ Execution succeeded: {execution_id}")
     print("\nSecurity Checks:")
     print(
-        f"  {'✓' if security_checks['secret_received'] else '✗'} Secret received by action via stdin"
+        f"  {'✓' if security_checks['secret_received'] else '✗'} Secret received by action"
     )
     print(
         f"  {'✓' if security_checks['secret_valid'] else '✗'} Secret value validated correctly"
@@ -315,7 +400,6 @@ def test_secret_encryption_at_rest(client: AttuneClient):
 @pytest.mark.tier3
 @pytest.mark.security
 @pytest.mark.secrets
-@pytest.mark.skip(reason="Worker secret injection is not available in the E2E stack")
 def test_secret_not_in_execution_logs(client: AttuneClient, test_pack):
     """
     Test that secrets are never logged or exposed in execution output.
@@ -345,11 +429,12 @@ def test_secret_not_in_execution_logs(client: AttuneClient, test_pack):
     print("\n[STEP 2] Creating action that attempts to log secret...")
     action_ref = f"{pack_ref}.log_secret_test_{unique_ref()}"
 
-    action_script = f"""INPUT=$(cat)
-case "$INPUT" in
-  *"{secret_key}"*) echo "Secret length: {len(secret_value)}"; echo "Secret received successfully" ;;
-  *) echo "No secret received" ;;
-esac
+    action_script = f"""if [ "${{{secret_key}:+set}}" = "set" ]; then
+  echo "Secret length: {len(secret_value)}"
+  echo "Secret received successfully"
+else
+  echo "No secret received"
+fi
 """
 
     action_data = {
@@ -432,94 +517,63 @@ esac
 @pytest.mark.tier3
 @pytest.mark.security
 @pytest.mark.secrets
-@pytest.mark.skip(reason="Key tenant isolation is not implemented")
-def test_secret_access_tenant_isolation(
-    client: AttuneClient, unique_user_client: AttuneClient
+def test_identity_owned_secret_access_is_scoped(
+    client: AttuneClient,
 ):
-    """
-    Test that secrets are isolated per tenant - users cannot access
-    secrets from other tenants.
-    """
-    print("\n" + "=" * 80)
-    print("T3.20d: Secret Tenant Isolation Test")
-    print("=" * 80)
+    """Identity-owned keys should be visible and decryptable only by their owner."""
+    user2_client = _register_user_with_permission_role(
+        client,
+        role_prefix="key_owner",
+        permission_set_ref="core.admin",
+    )
+    user1_identity = _identity_id(client)
+    user2_identity = _identity_id(user2_client)
+    assert user1_identity != user2_identity
 
-    # Step 1: User 1 creates a secret
-    print("\n[STEP 1] User 1 creates a secret...")
     user1_secret_key = f"user1_secret_{unique_ref()}"
     user1_secret_value = "user1_private_data"
-
-    secret_response = client.create_secret(
-        key=user1_secret_key, value=user1_secret_value, encrypted=True
-    )
-
-    assert "id" in secret_response, "Secret creation failed"
-    print(f"✓ User 1 created secret: {user1_secret_key}")
-
-    # Step 2: User 1 can retrieve their own secret
-    print("\n[STEP 2] User 1 retrieves their own secret...")
-    retrieved = client.get_secret(user1_secret_key)
-    assert retrieved["key"] == user1_secret_key, "User 1 cannot retrieve own secret"
-    print(f"✓ User 1 successfully retrieved their own secret")
-
-    # Step 3: User 2 tries to access User 1's secret (should fail)
-    print("\n[STEP 3] User 2 attempts to access User 1's secret...")
-    try:
-        user2_attempt = unique_user_client.get_secret(user1_secret_key)
-        print(f"✗ SECURITY VIOLATION: User 2 accessed User 1's secret!")
-        print(f"   Retrieved: {user2_attempt}")
-        assert False, "Tenant isolation violated: User 2 accessed User 1's secret"
-    except Exception as e:
-        error_msg = str(e)
-        if "404" in error_msg or "not found" in error_msg.lower():
-            print(f"✓ User 2 cannot access User 1's secret (404 Not Found)")
-        elif "403" in error_msg or "forbidden" in error_msg.lower():
-            print(f"✓ User 2 cannot access User 1's secret (403 Forbidden)")
-        else:
-            print(f"✓ User 2 cannot access User 1's secret (Error: {error_msg})")
-
-    # Step 4: User 2 creates their own secret
-    print("\n[STEP 4] User 2 creates their own secret...")
     user2_secret_key = f"user2_secret_{unique_ref()}"
     user2_secret_value = "user2_private_data"
 
-    user2_secret = unique_user_client.create_secret(
-        key=user2_secret_key, value=user2_secret_value, encrypted=True
-    )
-
-    assert "id" in user2_secret, "User 2 secret creation failed"
-    print(f"✓ User 2 created secret: {user2_secret_key}")
-
-    # Step 5: User 2 can retrieve their own secret
-    print("\n[STEP 5] User 2 retrieves their own secret...")
-    user2_retrieved = unique_user_client.get_secret(user2_secret_key)
-    assert user2_retrieved["key"] == user2_secret_key, (
-        "User 2 cannot retrieve own secret"
-    )
-    print(f"✓ User 2 successfully retrieved their own secret")
-
-    # Step 6: User 1 tries to access User 2's secret (should fail)
-    print("\n[STEP 6] User 1 attempts to access User 2's secret...")
     try:
-        user1_attempt = client.get_secret(user2_secret_key)
-        print(f"✗ SECURITY VIOLATION: User 1 accessed User 2's secret!")
-        assert False, "Tenant isolation violated: User 1 accessed User 2's secret"
-    except Exception as e:
-        error_msg = str(e)
-        if "404" in error_msg or "403" in error_msg:
-            print(f"✓ User 1 cannot access User 2's secret")
-        else:
-            print(f"✓ User 1 cannot access User 2's secret (Error: {error_msg})")
+        user1_secret = _create_identity_secret(
+            client,
+            key=user1_secret_key,
+            value=user1_secret_value,
+            owner_identity=user1_identity,
+        )
+        user2_secret = _create_identity_secret(
+            user2_client,
+            key=user2_secret_key,
+            value=user2_secret_value,
+            owner_identity=user2_identity,
+        )
 
-    # Summary
-    print("\n" + "=" * 80)
-    print("TENANT ISOLATION TEST SUMMARY")
-    print("=" * 80)
-    print(f"✓ User 1 secret: {user1_secret_key}")
-    print(f"✓ User 2 secret: {user2_secret_key}")
-    print(f"✓ User 1 can access own secret: yes")
-    print(f"✓ User 2 can access own secret: yes")
-    print(f"✓ User 1 cannot access User 2's secret: yes")
-    print(f"✓ User 2 cannot access User 1's secret: yes")
-    print("\n🔒 TENANT ISOLATION VERIFIED!")
-    print("=" * 80)
+        assert user1_secret["owner_type"] == "identity"
+        assert user1_secret["owner_identity"] == user1_identity
+        assert user2_secret["owner_type"] == "identity"
+        assert user2_secret["owner_identity"] == user2_identity
+
+        user1_retrieved = client.get(f"/api/v1/keys/{user1_secret_key}")
+        user2_retrieved = user2_client.get(f"/api/v1/keys/{user2_secret_key}")
+        assert user1_retrieved.status_code == 200, user1_retrieved.text
+        assert user2_retrieved.status_code == 200, user2_retrieved.text
+        assert user1_retrieved.json()["data"]["value"] == user1_secret_value
+        assert user2_retrieved.json()["data"]["value"] == user2_secret_value
+
+        assert user1_secret_key in _identity_key_refs(client)
+        assert user2_secret_key in _identity_key_refs(user2_client)
+        assert user1_secret_key not in _identity_key_refs(user2_client)
+        assert user2_secret_key not in _identity_key_refs(client)
+
+        user2_direct = user2_client.get(f"/api/v1/keys/{user1_secret_key}")
+        user1_direct = client.get(f"/api/v1/keys/{user2_secret_key}")
+        assert user2_direct.status_code in (403, 404)
+        assert user1_direct.status_code in (403, 404)
+    finally:
+        for owner, key_ref in (
+            (client, user1_secret_key),
+            (user2_client, user2_secret_key),
+        ):
+            response = owner.delete(f"/api/v1/keys/{key_ref}")
+            assert response.status_code in (200, 204, 404)

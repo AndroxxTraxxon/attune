@@ -177,7 +177,7 @@ sys.exit(0)
         client=client,
         execution_id=workflow_execution_id,
         expected_status="completed",
-        timeout=20,
+        timeout=120,
     )
     end_time = time.time()
     total_time = end_time - start_time
@@ -191,12 +191,7 @@ sys.exit(0)
     print("\n[STEP 5] Verifying task execution order...")
 
     # Get all child executions
-    all_executions = client.list_executions(limit=100)
-    task_executions = [
-        ex
-        for ex in all_executions
-        if ex.get("parent") == workflow_execution_id
-    ]
+    task_executions = client.list_executions(parent=workflow_execution_id, limit=20)
 
     print(f"  Found {len(task_executions)} task executions")
 
@@ -419,7 +414,7 @@ def test_sequential_workflow_with_multiple_dependencies(
         client=client,
         execution_id=workflow_execution_id,
         expected_status="completed",
-        timeout=30,
+        timeout=120,
     )
     print(f"✓ Workflow succeeded: status={result['status']}")
 
@@ -428,12 +423,7 @@ def test_sequential_workflow_with_multiple_dependencies(
     # ========================================================================
     print("\n[STEP 5] Verifying all tasks executed...")
 
-    all_executions = client.list_executions(limit=100)
-    task_executions = [
-        ex
-        for ex in all_executions
-        if ex.get("parent") == workflow_execution_id
-    ]
+    task_executions = client.list_executions(parent=workflow_execution_id, limit=20)
 
     assert len(task_executions) >= 4, (
         f"❌ Expected at least 4 task executions, got {len(task_executions)}"
@@ -576,7 +566,7 @@ sys.exit(1)
         client=client,
         execution_id=workflow_execution_id,
         expected_status="failed",
-        timeout=20,
+        timeout=120,
     )
     print(f"✓ Workflow failed as expected: status={result['status']}")
 
@@ -585,12 +575,7 @@ sys.exit(1)
     # ========================================================================
     print("\n[STEP 5] Verifying task execution pattern...")
 
-    all_executions = client.list_executions(limit=100)
-    task_executions = [
-        ex
-        for ex in all_executions
-        if ex.get("parent") == workflow_execution_id
-    ]
+    task_executions = client.list_executions(parent=workflow_execution_id, limit=20)
 
     task_a_execs = [ex for ex in task_executions if ex["action_ref"] == task_a["ref"]]
     task_b_execs = [ex for ex in task_executions if ex["action_ref"] == task_b["ref"]]

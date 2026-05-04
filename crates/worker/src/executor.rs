@@ -370,6 +370,12 @@ impl ActionExecutor {
 
         // Prepare standard environment variables
         let mut env = HashMap::new();
+        let execution_timeout = execution
+            .workflow_task
+            .as_ref()
+            .and_then(|metadata| metadata.timeout_seconds)
+            .and_then(|timeout| u64::try_from(timeout).ok())
+            .filter(|timeout| *timeout > 0);
 
         // Standard execution context variables (see docs/QUICKREF-execution-environment.md)
         env.insert("ATTUNE_EXEC_ID".to_string(), execution.id.to_string());
@@ -407,10 +413,9 @@ impl ActionExecutor {
         // one of those paths; we fall back to the system identity (1) and log
         // a warning so the regression is visible.
         let identity_id = resolve_execution_identity(execution.executor, execution.id);
-        // Default timeout is 300s; add 60s grace period for cleanup.
-        // The actual `timeout` variable is computed later in this function,
-        // but the token TTL just needs a reasonable upper bound.
-        let token_ttl = Some(360_i64);
+        // Add a 60s grace period beyond the process timeout for cleanup and
+        // callback reporting.
+        let token_ttl = Some((execution_timeout.unwrap_or(300) + 60) as i64);
         match generate_execution_token(
             identity_id,
             execution.id,
@@ -483,9 +488,9 @@ impl ActionExecutor {
         // Determine entry point from action
         let entry_point = action.entrypoint.clone();
 
-        // Default timeout: 5 minutes (300 seconds)
-        // In the future, this could come from action metadata or execution config
-        let timeout = Some(300_u64);
+        // Default timeout: 5 minutes (300 seconds). Workflow task executions can
+        // override this via execution.timeout_seconds.
+        let timeout = Some(execution_timeout.unwrap_or(300));
 
         // Load runtime information if specified
         let runtime_record = if let Some(runtime_id) = action.runtime {

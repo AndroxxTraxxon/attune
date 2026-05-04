@@ -346,6 +346,23 @@ impl PackRepository {
         Ok(count.0)
     }
 
+    /// Stamp the identity that created or installed this pack.
+    pub async fn set_installed_by<'e, E>(executor: E, id: i64, installed_by: i64) -> Result<Pack>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "UPDATE pack SET installed_by = $2, updated = NOW() WHERE id = $1 RETURNING {}",
+            PACK_COLUMNS
+        );
+        sqlx::query_as::<_, Pack>(&query)
+            .bind(id)
+            .bind(installed_by)
+            .fetch_one(executor)
+            .await
+            .map_err(Into::into)
+    }
+
     /// Find packs by tag
     pub async fn find_by_tag<'e, E>(executor: E, tag: &str) -> Result<Vec<Pack>>
     where

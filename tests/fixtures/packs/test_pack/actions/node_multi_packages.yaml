@@ -1,0 +1,6 @@
+name: node_multi_packages
+description: "Node.js action that imports multiple packages"
+enabled: true
+runner_type: node
+entry_point: node_multi_packages.js
+parameters: {}
