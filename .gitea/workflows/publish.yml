@@ -374,6 +374,10 @@ jobs:
 
       - name: Setup ORAS
         uses: oras-project/setup-oras@v1
+        with:
+          # ORAS 1.3.x requests wildcard registry token scopes that Gitea/Forgejo
+          # registries can reject even when repository pull/push credentials are valid.
+          version: 1.2.3
 
       - name: Log in to registry for artifacts
         shell: bash
@@ -786,6 +790,10 @@ jobs:
 
       - name: Setup ORAS
         uses: oras-project/setup-oras@v1
+        with:
+          # Keep pull behavior aligned with the push job and avoid ORAS 1.3.x
+          # wildcard token-scope requests against Gitea/Forgejo registries.
+          version: 1.2.3
 
       - name: Setup Docker Buildx
         if: needs.metadata.outputs.registry_plain_http != 'true'
