@@ -106,6 +106,90 @@ pub struct InstallPackRequest {
     pub skip_deps: bool,
 }
 
+/// API-managed pack registry index configuration.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PackRegistryIndexResponse {
+    pub id: i64,
+    pub name: Option<String>,
+    pub url: String,
+    pub position: i32,
+    pub enabled: bool,
+    #[schema(value_type = Object)]
+    pub headers: JsonValue,
+    pub created: DateTime<Utc>,
+    pub updated: DateTime<Utc>,
+}
+
+impl From<attune_common::models::PackRegistryIndex> for PackRegistryIndexResponse {
+    fn from(index: attune_common::models::PackRegistryIndex) -> Self {
+        Self {
+            id: index.id,
+            name: index.name,
+            url: index.url,
+            position: index.position,
+            enabled: index.enabled,
+            headers: index.headers,
+            created: index.created,
+            updated: index.updated,
+        }
+    }
+}
+
+/// Request to add a configured pack registry index.
+#[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
+pub struct CreatePackRegistryIndexRequest {
+    #[schema(example = "Attune Community")]
+    pub name: Option<String>,
+    #[validate(length(min = 1))]
+    #[schema(example = "https://registry.example.com/attune/index.json")]
+    pub url: String,
+    /// Optional explicit search order position. Omit to append to the end.
+    #[schema(example = 0)]
+    pub position: Option<i32>,
+    #[serde(default = "default_true")]
+    #[schema(example = true)]
+    pub enabled: bool,
+    #[serde(default = "default_empty_object")]
+    #[schema(value_type = Object)]
+    pub headers: JsonValue,
+}
+
+/// Request to update a configured pack registry index.
+#[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
+pub struct UpdatePackRegistryIndexRequest {
+    #[schema(nullable = true)]
+    pub name: Option<Option<String>>,
+    #[validate(length(min = 1))]
+    pub url: Option<String>,
+    pub position: Option<i32>,
+    pub enabled: Option<bool>,
+    #[schema(value_type = Object, nullable = true)]
+    pub headers: Option<JsonValue>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct BrowsePackIndexQuery {
+    pub q: Option<String>,
+    pub registry_id: Option<i64>,
+    #[serde(default)]
+    pub include_disabled: bool,
+}
+
+/// Indexed pack summary with the registry it was resolved from.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct IndexedPackResponse {
+    pub pack: attune_common::pack_registry::PackIndexEntry,
+    pub registry: PackRegistryIndexSummary,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PackRegistryIndexSummary {
+    pub id: Option<i64>,
+    pub name: Option<String>,
+    pub url: String,
+    pub position: i32,
+}
+
 /// Response for pack install/register operations with test results
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PackInstallResponse {

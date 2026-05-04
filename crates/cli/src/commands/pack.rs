@@ -158,6 +158,11 @@ pub enum PackCommands {
         #[arg(short, long)]
         registry: Option<String>,
     },
+    /// Manage configured pack indices and browse indexed packs
+    Index {
+        #[command(subcommand)]
+        command: PackIndexApiCommands,
+    },
     /// Calculate checksum of a pack directory or archive
     Checksum {
         /// Path to pack directory or archive file
@@ -229,6 +234,52 @@ pub enum PackCommands {
     },
 }
 
+#[derive(Subcommand)]
+pub enum PackIndexApiCommands {
+    /// List configured pack indices
+    List,
+    /// Add a configured pack index
+    Add {
+        /// Index URL (https://, http://, or file://)
+        url: String,
+        /// Human-readable name
+        #[arg(short, long)]
+        name: Option<String>,
+        /// Search order position; lower values are checked first. Omit to append.
+        #[arg(short, long)]
+        position: Option<i32>,
+        /// Add the index disabled
+        #[arg(long)]
+        disabled: bool,
+    },
+    /// Update a configured pack index
+    Update {
+        id: i64,
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        clear_name: bool,
+        #[arg(short, long)]
+        position: Option<i32>,
+        #[arg(long)]
+        enabled: Option<bool>,
+    },
+    /// Delete a configured pack index
+    Delete { id: i64 },
+    /// Browse packs from configured indices
+    Browse {
+        /// Optional search text
+        query: Option<String>,
+    },
+    /// Show an indexed pack summary
+    Show {
+        /// Pack ref to look up using configured index order
+        pack_ref: String,
+    },
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Pack {
     id: i64,
@@ -291,6 +342,51 @@ struct InstallPackRequest {
     force: bool,
     skip_tests: bool,
     skip_deps: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PackRegistryIndexResponse {
+    id: i64,
+    name: Option<String>,
+    url: String,
+    position: i32,
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct CreatePackRegistryIndexRequest {
+    name: Option<String>,
+    url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    position: Option<i32>,
+    enabled: bool,
+    headers: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdatePackRegistryIndexRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    position: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct IndexedPackResponse {
+    pack: serde_json::Value,
+    registry: IndexedPackRegistry,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct IndexedPackRegistry {
+    id: Option<i64>,
+    name: Option<String>,
+    url: String,
+    position: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -394,6 +490,9 @@ pub async fn handle_pack_command(
         PackCommands::Registries => handle_registries(output_format).await,
         PackCommands::Search { keyword, registry } => {
             handle_search(profile, keyword, registry, output_format).await
+        }
+        PackCommands::Index { command } => {
+            handle_index_api(profile, command, api_url, output_format).await
         }
         PackCommands::Update {
             pack_ref,
@@ -1351,6 +1450,253 @@ async fn handle_registries(output_format: OutputFormat) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn handle_index_api(
+    profile: &Option<String>,
+    command: PackIndexApiCommands,
+    api_url: &Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let config = CliConfig::load_with_profile(profile.as_deref())?;
+    let mut client = ApiClient::from_config(&config, api_url);
+
+    match command {
+        PackIndexApiCommands::List => {
+            let indices: Vec<PackRegistryIndexResponse> = client.get("/pack-indices").await?;
+            print_pack_indices(&indices, output_format)?;
+        }
+        PackIndexApiCommands::Add {
+            url,
+            name,
+            position,
+            disabled,
+        } => {
+            let request = CreatePackRegistryIndexRequest {
+                name,
+                url,
+                position,
+                enabled: !disabled,
+                headers: serde_json::json!({}),
+            };
+            let index: PackRegistryIndexResponse = client.post("/pack-indices", &request).await?;
+            match output_format {
+                OutputFormat::Json | OutputFormat::Yaml => {
+                    output::print_output(&index, output_format)?
+                }
+                OutputFormat::Table => {
+                    output::print_success(&format!("Added pack index {}", index.id));
+                    print_pack_indices(&[index], output_format)?;
+                }
+            }
+        }
+        PackIndexApiCommands::Update {
+            id,
+            url,
+            name,
+            clear_name,
+            position,
+            enabled,
+        } => {
+            let request = UpdatePackRegistryIndexRequest {
+                name: if clear_name {
+                    Some(None)
+                } else {
+                    name.map(Some)
+                },
+                url,
+                position,
+                enabled,
+            };
+            let index: PackRegistryIndexResponse =
+                client.put(&format!("/pack-indices/{id}"), &request).await?;
+            match output_format {
+                OutputFormat::Json | OutputFormat::Yaml => {
+                    output::print_output(&index, output_format)?
+                }
+                OutputFormat::Table => {
+                    output::print_success(&format!("Updated pack index {id}"));
+                    print_pack_indices(&[index], output_format)?;
+                }
+            }
+        }
+        PackIndexApiCommands::Delete { id } => {
+            client
+                .delete_no_response(&format!("/pack-indices/{id}"))
+                .await?;
+            if output_format == OutputFormat::Table {
+                output::print_success(&format!("Deleted pack index {id}"));
+            }
+        }
+        PackIndexApiCommands::Browse { query } => {
+            let path = if let Some(query) = query {
+                format!("/pack-indices/packs?q={}", urlencoding::encode(&query))
+            } else {
+                "/pack-indices/packs".to_string()
+            };
+            let packs: Vec<IndexedPackResponse> = client.get(&path).await?;
+            print_indexed_packs(&packs, output_format)?;
+        }
+        PackIndexApiCommands::Show { pack_ref } => {
+            let pack: IndexedPackResponse = client
+                .get(&format!(
+                    "/pack-indices/packs/{}",
+                    urlencoding::encode(&pack_ref)
+                ))
+                .await?;
+            match output_format {
+                OutputFormat::Json | OutputFormat::Yaml => {
+                    output::print_output(&pack, output_format)?
+                }
+                OutputFormat::Table => print_indexed_pack_detail(&pack),
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn print_pack_indices(
+    indices: &[PackRegistryIndexResponse],
+    output_format: OutputFormat,
+) -> Result<()> {
+    match output_format {
+        OutputFormat::Json | OutputFormat::Yaml => {
+            output::print_output(&indices.to_vec(), output_format)?
+        }
+        OutputFormat::Table => {
+            use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+            let mut table = Table::new();
+            table.load_preset(UTF8_FULL);
+            table.set_header(vec![
+                Cell::new("ID").fg(Color::Green),
+                Cell::new("Position").fg(Color::Green),
+                Cell::new("Name").fg(Color::Green),
+                Cell::new("URL").fg(Color::Green),
+                Cell::new("Enabled").fg(Color::Green),
+            ]);
+            for index in indices {
+                table.add_row(vec![
+                    Cell::new(index.id),
+                    Cell::new(index.position),
+                    Cell::new(index.name.as_deref().unwrap_or("-")),
+                    Cell::new(&index.url),
+                    Cell::new(if index.enabled { "yes" } else { "no" }),
+                ]);
+            }
+            println!("{table}");
+        }
+    }
+    Ok(())
+}
+
+fn print_indexed_packs(packs: &[IndexedPackResponse], output_format: OutputFormat) -> Result<()> {
+    match output_format {
+        OutputFormat::Json | OutputFormat::Yaml => {
+            output::print_output(&packs.to_vec(), output_format)?
+        }
+        OutputFormat::Table => {
+            use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+            let mut table = Table::new();
+            table.load_preset(UTF8_FULL);
+            table.set_header(vec![
+                Cell::new("Ref").fg(Color::Green),
+                Cell::new("Version").fg(Color::Green),
+                Cell::new("Label").fg(Color::Green),
+                Cell::new("Install").fg(Color::Green),
+                Cell::new("Index").fg(Color::Green),
+            ]);
+            for indexed in packs {
+                let pack = &indexed.pack;
+                let methods = pack
+                    .get("install_sources")
+                    .and_then(|sources| sources.as_array())
+                    .map(|sources| {
+                        sources
+                            .iter()
+                            .filter_map(|source| source.get("type").and_then(|v| v.as_str()))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .unwrap_or_default();
+                table.add_row(vec![
+                    Cell::new(pack.get("ref").and_then(|v| v.as_str()).unwrap_or("-")),
+                    Cell::new(pack.get("version").and_then(|v| v.as_str()).unwrap_or("-")),
+                    Cell::new(pack.get("label").and_then(|v| v.as_str()).unwrap_or("-")),
+                    Cell::new(methods),
+                    Cell::new(
+                        indexed
+                            .registry
+                            .name
+                            .as_deref()
+                            .unwrap_or(indexed.registry.url.as_str()),
+                    ),
+                ]);
+            }
+            println!("{table}");
+            output::print_success(&format!("Found {} indexed pack(s)", packs.len()));
+        }
+    }
+    Ok(())
+}
+
+fn print_indexed_pack_detail(indexed: &IndexedPackResponse) {
+    let pack = &indexed.pack;
+    output::print_section(
+        pack.get("label")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Indexed Pack"),
+    );
+    output::print_key_value_table(vec![
+        (
+            "Ref",
+            pack.get("ref")
+                .and_then(|v| v.as_str())
+                .unwrap_or("-")
+                .to_string(),
+        ),
+        (
+            "Version",
+            pack.get("version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("-")
+                .to_string(),
+        ),
+        (
+            "Description",
+            pack.get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("-")
+                .to_string(),
+        ),
+        (
+            "Use case",
+            pack.get("use_case")
+                .and_then(|v| v.as_str())
+                .unwrap_or("-")
+                .to_string(),
+        ),
+        (
+            "Index",
+            indexed
+                .registry
+                .name
+                .as_deref()
+                .unwrap_or(indexed.registry.url.as_str())
+                .to_string(),
+        ),
+    ]);
+    if let Some(contents) = pack.get("contents").and_then(|v| v.as_object()) {
+        output::print_section("Contents");
+        for key in ["actions", "sensors", "triggers", "rules", "workflows"] {
+            let count = contents
+                .get(key)
+                .and_then(|value| value.as_array())
+                .map(|items| items.len())
+                .unwrap_or(0);
+            println!("  {key}: {count}");
+        }
+    }
 }
 
 async fn handle_search(

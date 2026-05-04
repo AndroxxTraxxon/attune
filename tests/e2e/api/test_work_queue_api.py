@@ -5,13 +5,75 @@ Ported from crates/api/tests/work_queue_api_tests.rs
 Tests queue lifecycle: create, enqueue, merge-patch, update, delete items.
 """
 
+import time
 import uuid
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
 
 def _uid():
     return uuid.uuid4().hex[:8]
+
+
+def _wait_for_queue_item_status(client, queue_ref, item_id, expected_status, timeout=60, poll=1):
+    """Poll a queue item until it reaches the expected status."""
+    deadline = time.time() + timeout
+    last_item = None
+    while time.time() < deadline:
+        resp = client.session.get(
+            f"{client.base_url}/api/v1/queues/{queue_ref}/items",
+            params={"per_page": 100},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        items = resp.json().get("data", [])
+        last_item = next((item for item in items if item["id"] == item_id), None)
+        if last_item and last_item["status"] == expected_status:
+            return last_item
+        if last_item and last_item["status"] in {"completed", "failed", "skipped"}:
+            raise AssertionError(
+                f"Queue item {item_id} reached terminal status "
+                f"{last_item['status']!r}, not {expected_status!r}: {last_item}"
+            )
+        time.sleep(poll)
+
+    raise TimeoutError(
+        f"Queue item {item_id} did not reach {expected_status!r} within {timeout}s "
+        f"(last item: {last_item})"
+    )
+
+
+def _wait_for_queue_execution(client, action_ref, item_id, timeout=60, poll=1):
+    """Poll executions until the queue dispatch action for the item completes."""
+    deadline = time.time() + timeout
+    last_matches = []
+    while time.time() < deadline:
+        executions = client.list_executions(action_ref=action_ref, limit=100)
+        last_matches = []
+        for execution in executions:
+            execution_detail = client.get_execution(execution["id"])
+            if (
+                (execution_detail.get("config") or {})
+                .get("queue_item", {})
+                .get("id")
+                == item_id
+            ):
+                last_matches.append(execution_detail)
+        terminal = [
+            execution
+            for execution in last_matches
+            if execution["status"] in {"completed", "failed", "timeout", "cancelled"}
+        ]
+        if terminal:
+            return terminal[0]
+        time.sleep(poll)
+
+    raise TimeoutError(
+        f"No terminal queue dispatch execution found for item {item_id} "
+        f"and action {action_ref} within {timeout}s (matches: {last_matches})"
+    )
 
 
 @pytest.mark.api
@@ -186,3 +248,124 @@ class TestWorkQueueApi:
         # Cleanup
         resp = s.delete(f"{base}/api/v1/queues/{queue_ref}", timeout=10)
         assert resp.status_code == 200
+
+    def test_enabled_queue_dispatches_item_and_applies_ack(self, client):
+        """
+        Enabled queue → enqueue item → executor leases item → worker runs action →
+        completion listener applies execution.result.queue_ack to the item.
+        """
+        uid = _uid()
+        dispatch_pack_ref = f"wq_dispatch_{uid}"
+        queue_ref = f"{dispatch_pack_ref}.dispatch_e2e"
+        action_ref = f"{dispatch_pack_ref}.queue_ack"
+
+        with TemporaryDirectory(prefix="attune-wq-dispatch-pack-") as tmp:
+            pack_dir = Path(tmp) / dispatch_pack_ref
+            actions_dir = pack_dir / "actions"
+            actions_dir.mkdir(parents=True)
+            (pack_dir / "pack.yaml").write_text(
+                "\n".join(
+                    [
+                        f"ref: {dispatch_pack_ref}",
+                        "name: Work Queue Dispatch E2E",
+                        "label: Work Queue Dispatch E2E",
+                        "description: Pack for queue dispatch E2E coverage",
+                        "version: 1.0.0",
+                        "is_standard: false",
+                    ]
+                )
+                + "\n"
+            )
+            (actions_dir / "queue_ack.yaml").write_text(
+                "\n".join(
+                    [
+                        f"ref: {action_ref}",
+                        "name: queue_ack",
+                        "label: Queue Ack",
+                        "description: Acknowledge a leased work queue item",
+                        "enabled: true",
+                        "runner_type: shell",
+                        "entry_point: queue_ack.sh",
+                        "output_format: json",
+                    ]
+                )
+                + "\n"
+            )
+            (actions_dir / "queue_ack.sh").write_text(
+                "\n".join(
+                    [
+                        "#!/usr/bin/env bash",
+                        "set -euo pipefail",
+                        "INPUT=$(cat)",
+                        "ITEM_ID=$(printf '%s' \"$INPUT\" | "
+                        "sed -n 's/.*\"queue_item\"[^{]*{[^}]*\"id\"[[:space:]]*:[[:space:]]*"
+                        "\\([0-9][0-9]*\\).*/\\1/p')",
+                        "if [ -z \"$ITEM_ID\" ]; then",
+                        "  echo \"missing queue_item.id in input: $INPUT\" >&2",
+                        "  exit 1",
+                        "fi",
+                        "printf '{\"queue_ack\":{\"version\":1,\"items\":[{\"id\":%s,"
+                        "\"status\":\"completed\",\"summary\":{\"source\":\"e2e\"}}]},"
+                        "\"seen_item_id\":%s}\\n' \"$ITEM_ID\" \"$ITEM_ID\"",
+                    ]
+                )
+                + "\n"
+            )
+            client.upload_pack(str(pack_dir), force=True)
+
+            resp = client.session.post(
+                f"{client.base_url}/api/v1/queues",
+                json={
+                    "ref": queue_ref,
+                    "pack_ref": dispatch_pack_ref,
+                    "label": "Dispatch E2E Queue",
+                    "dispatch_action_ref": action_ref,
+                    "enabled": True,
+                    "accepting_new_items": True,
+                    "batch_mode": "single",
+                    "action_params": {
+                        "queue": "{{ queue }}",
+                        "queue_item": "{{ queue_item }}",
+                        "item": "{{ item }}",
+                    },
+                    "config": {"ack_contract": {"version": 1}},
+                },
+                timeout=10,
+            )
+            assert resp.status_code == 201, resp.text
+
+            resp = client.session.post(
+                f"{client.base_url}/api/v1/queues/{queue_ref}/items",
+                json={
+                    "item_key": f"dispatch-{uid}",
+                    "payload": {"customer": "alice", "order_id": uid},
+                    "metadata": {"source": "e2e"},
+                },
+                timeout=10,
+            )
+            assert resp.status_code == 201, resp.text
+            item_id = resp.json()["data"]["id"]
+
+            item = _wait_for_queue_item_status(
+                client, queue_ref, item_id, "completed", timeout=75
+            )
+            assert item["leased_execution"] is None
+            assert item["lease_token"] is None
+            assert item["ack_summary"]["status"] == "completed"
+            assert item["ack_summary"]["summary"]["source"] == "e2e"
+
+            execution = _wait_for_queue_execution(
+                client, action_ref, item_id, timeout=10
+            )
+            assert execution["status"] == "completed"
+            assert execution["config"]["queue"]["ref"] == queue_ref
+            assert execution["config"]["queue_item"]["id"] == item_id
+            assert execution["result"]["queue_ack"]["items"][0]["id"] == item_id
+
+            client.session.put(
+                f"{client.base_url}/api/v1/queues/{queue_ref}",
+                json={"enabled": False, "accepting_new_items": False},
+                timeout=10,
+            )
+            client.session.delete(f"{client.base_url}/api/v1/queues/{queue_ref}", timeout=10)
+            client.delete_pack(dispatch_pack_ref)

@@ -37,6 +37,7 @@ use std::path::PathBuf as StdPathBuf;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use tracing::{debug, error, info, warn};
 
@@ -1054,6 +1055,13 @@ impl ActionExecutor {
             let full_path = self.artifacts_dir.join(file_path);
             let size_bytes = match tokio::fs::metadata(&full_path).await {
                 Ok(metadata) => metadata.len() as i64,
+                Err(e) if e.kind() == ErrorKind::NotFound => {
+                    debug!(
+                        "Removing unwritten artifact version {} (artifact {}): file='{}'",
+                        ver.id, ver.artifact, file_path,
+                    );
+                    0
+                }
                 Err(e) => {
                     warn!(
                         "Could not stat artifact file '{}' for version {}: {}. Setting size_bytes=0.",

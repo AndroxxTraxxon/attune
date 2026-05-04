@@ -141,7 +141,7 @@ function TextFileDetail({
   const [isWaiting, setIsWaiting] = useState(false);
   const [streamDone, setStreamDone] = useState(false);
   const preRef = useRef<HTMLPreElement>(null);
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const streamAbortRef = useRef<AbortController | null>(null);
   // Track whether the user has scrolled away from the bottom so we can
   // auto-scroll only when they're already at the end.
   const userScrolledAwayRef = useRef(false);
@@ -163,7 +163,7 @@ function TextFileDetail({
     userScrolledAwayRef.current = !atBottom;
   }, []);
 
-  // ---- SSE streaming path (used when execution is running) ----
+  // ---- Streaming path (used when execution is running) ----
   useEffect(() => {
     if (!isRunning) return;
 
@@ -174,68 +174,100 @@ function TextFileDetail({
       return;
     }
 
-    const url = `${OpenAPI.BASE}/api/v1/artifacts/${artifactId}/stream?token=${encodeURIComponent(token)}`;
-    const es = new EventSource(url);
-    eventSourceRef.current = es;
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
     setIsStreaming(true);
     setStreamDone(false);
 
-    es.addEventListener("waiting", (e: MessageEvent) => {
-      setIsWaiting(true);
-      setIsLoadingContent(false);
-      // If the message says "File found", the next event will be content
-      if (e.data?.includes("File found")) {
-        setIsWaiting(false);
-      }
-    });
-
-    es.addEventListener("content", (e: MessageEvent) => {
-      setContent(e.data);
-      setLoadError(null);
-      setIsLoadingContent(false);
-      setIsWaiting(false);
-      // Scroll after React renders the new content
-      requestAnimationFrame(scrollToBottom);
-    });
-
-    es.addEventListener("append", (e: MessageEvent) => {
-      setContent((prev) => (prev ?? "") + e.data);
-      setLoadError(null);
-      requestAnimationFrame(scrollToBottom);
-    });
-
-    es.addEventListener("done", () => {
-      setStreamDone(true);
-      setIsStreaming(false);
-      es.close();
-    });
-
-    es.addEventListener("error", (e: MessageEvent) => {
-      // SSE spec fires generic error events on connection close.
-      // Only show user-facing errors if the server sent an explicit event.
-      if (e.data) {
-        setLoadError(e.data);
-      }
-    });
-
-    es.onerror = () => {
-      // Connection dropped — EventSource will auto-reconnect, but if it
-      // reaches CLOSED state we fall back to the download endpoint.
-      if (es.readyState === EventSource.CLOSED) {
-        setIsStreaming(false);
-        // If we never got any content via SSE, fall back to download
-        setContent((prev) => {
-          if (prev === null) {
-            // Will be handled by the fetch fallback below
+    const handleStreamEvent = (eventName: string, data: string) => {
+      switch (eventName) {
+        case "waiting":
+          setIsWaiting(true);
+          setIsLoadingContent(false);
+          if (data.includes("File found")) {
+            setIsWaiting(false);
           }
-          return prev;
-        });
+          break;
+        case "content":
+          setContent(data);
+          setLoadError(null);
+          setIsLoadingContent(false);
+          setIsWaiting(false);
+          requestAnimationFrame(scrollToBottom);
+          break;
+        case "append":
+          setContent((prev) => (prev ?? "") + data);
+          setLoadError(null);
+          requestAnimationFrame(scrollToBottom);
+          break;
+        case "done":
+          setStreamDone(true);
+          setIsStreaming(false);
+          controller.abort();
+          break;
+        case "error":
+          if (data) {
+            setLoadError(data);
+          }
+          break;
       }
     };
 
+    const consumeSseBlock = (block: string) => {
+      let eventName = "message";
+      const dataLines: string[] = [];
+      for (const line of block.split(/\r?\n/)) {
+        if (line.startsWith("event:")) {
+          eventName = line.slice("event:".length).trim();
+        } else if (line.startsWith("data:")) {
+          dataLines.push(line.slice("data:".length).trimStart());
+        }
+      }
+      handleStreamEvent(eventName, dataLines.join("\n"));
+    };
+
+    void (async () => {
+      try {
+        const response = await fetch(
+          `${OpenAPI.BASE}/api/v1/artifacts/${artifactId}/stream`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: controller.signal,
+          },
+        );
+        if (!response.ok || !response.body) {
+          throw new Error(`Stream failed with status ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (!controller.signal.aborted) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let separatorIndex = buffer.search(/\r?\n\r?\n/);
+          while (separatorIndex >= 0) {
+            const block = buffer.slice(0, separatorIndex);
+            buffer = buffer.slice(buffer[separatorIndex] === "\r" ? separatorIndex + 4 : separatorIndex + 2);
+            if (block.trim()) {
+              consumeSseBlock(block);
+            }
+            separatorIndex = buffer.search(/\r?\n\r?\n/);
+          }
+        }
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          setLoadError(err instanceof Error ? err.message : "Stream failed");
+        }
+      } finally {
+        setIsStreaming(false);
+      }
+    })();
+
     return () => {
-      es.close();
-      eventSourceRef.current = null;
+      controller.abort();
+      streamAbortRef.current = null;
       setIsStreaming(false);
     };
   }, [artifactId, isRunning, scrollToBottom]);

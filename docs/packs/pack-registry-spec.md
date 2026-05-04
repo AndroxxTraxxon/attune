@@ -50,6 +50,7 @@ Each registry hosts an **index file** (typically `index.json`) that catalogs ava
       "ref": "slack",
       "label": "Slack Integration",
       "description": "Send messages, upload files, and monitor Slack channels",
+      "use_case": "Slack ChatOps actions, notifications, and message-triggered automation",
       "version": "2.1.0",
       "author": "Attune Team",
       "email": "team@attune.io",
@@ -58,7 +59,6 @@ Each registry hosts an **index file** (typically `index.json`) that catalogs ava
       "license": "Apache-2.0",
       "keywords": ["slack", "messaging", "notifications"],
       "runtime_deps": ["python3"],
-      "
       
       "install_sources": [
         {
@@ -136,6 +136,7 @@ Each registry hosts an **index file** (typically `index.json`) that catalogs ava
 | `ref` | string | Yes | Unique pack identifier (matches pack.yaml) |
 | `label` | string | Yes | Human-readable pack name |
 | `description` | string | Yes | Brief pack description |
+| `use_case` | string | No | Short browse/install summary describing what the pack is useful for |
 | `version` | string | Yes | Semantic version (latest available) |
 | `author` | string | Yes | Pack author/maintainer name |
 | `email` | string | No | Contact email |
@@ -157,6 +158,36 @@ Each registry hosts an **index file** (typically `index.json`) that catalogs ava
 | `url` | string | Yes | Source URL |
 | `ref` | string | No | Git ref (tag, branch, commit) for git type |
 | `checksum` | string | Yes | Format: "algorithm:hash" (e.g., "sha256:abc...") |
+
+### Configured Index Ordering
+
+Attune stores configured index URLs in the `pack_registry_index` table. Indices
+have an integer `position` internally; lower positions are searched first. New
+indices append to the end by default, and administrators reorder them through
+the web client's drag handle or by updating positions through the API/CLI. When
+the same pack `ref` appears in multiple enabled indices, the first enabled index
+containing that ref wins for browse/detail/install resolution.
+
+The static `pack_registry.indices` YAML configuration remains supported as a
+bootstrap fallback. API-managed indices take precedence once any rows exist in
+`pack_registry_index`.
+
+### Management API
+
+The API exposes the configured index and browse surfaces under:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/v1/pack-indices` | List API-managed indices in search order |
+| `POST /api/v1/pack-indices` | Add an index (`url`, optional `name`, `position`, `enabled`, `headers`); omitted `position` appends to the end |
+| `PUT /api/v1/pack-indices/{id}` | Update an index |
+| `DELETE /api/v1/pack-indices/{id}` | Delete an index |
+| `GET /api/v1/pack-indices/packs?q=...` | Browse de-duplicated indexed packs using first-index-wins order |
+| `GET /api/v1/pack-indices/packs/{ref}` | Show the pack entry selected by configured index order |
+
+`POST /api/v1/packs/install` accepts a pack ref (for example `slack` or
+`slack@2.1.0`) and resolves it through the same ordered indices before
+selecting the preferred install source.
 
 #### Contents Object
 

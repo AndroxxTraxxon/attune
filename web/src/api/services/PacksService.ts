@@ -153,6 +153,67 @@ export class PacksService {
             },
         });
     }
+    public static listPackIndices(): CancelablePromise<any> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/pack-indices',
+        });
+    }
+    public static createPackIndex({
+        requestBody,
+    }: {
+        requestBody: any,
+    }): CancelablePromise<any> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/pack-indices',
+            body: requestBody,
+            mediaType: 'application/json',
+        });
+    }
+    public static updatePackIndex({
+        id,
+        requestBody,
+    }: {
+        id: number,
+        requestBody: any,
+    }): CancelablePromise<any> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/api/v1/pack-indices/{id}',
+            path: {
+                'id': id,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+        });
+    }
+    public static deletePackIndex({
+        id,
+    }: {
+        id: number,
+    }): CancelablePromise<any> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/pack-indices/{id}',
+            path: {
+                'id': id,
+            },
+        });
+    }
+    public static browseIndexedPacks({
+        q,
+    }: {
+        q?: string,
+    } = {}): CancelablePromise<any> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/pack-indices/packs',
+            query: {
+                'q': q,
+            },
+        });
+    }
     /**
      * Register a pack from local filesystem
      * @returns ApiResponse_PackInstallResponse Pack registered successfully

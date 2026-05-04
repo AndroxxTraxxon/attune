@@ -17,8 +17,10 @@ use attune_common::mq::{MessageEnvelope, MessageType, PackRegisteredPayload};
 use attune_common::rbac::{Action, AuthorizationContext, Grant, Resource};
 use attune_common::repositories::{
     pack::{CreatePackInput, UpdatePackInput},
+    pack_registry_index::{CreatePackRegistryIndexInput, UpdatePackRegistryIndexInput},
     work_queue::WorkQueueRepository,
-    Create, Delete, FindById, FindByRef, List, PackRepository, PackTestRepository, Patch, Update,
+    Create, Delete, FindById, FindByRef, List, PackRegistryIndexRepository, PackRepository,
+    PackTestRepository, Patch, Update,
 };
 use attune_common::workflow::{PackWorkflowService, PackWorkflowServiceConfig};
 
@@ -28,12 +30,14 @@ use crate::{
     dto::{
         common::{PaginatedResponse, PaginationParams},
         pack::{
-            BuildPackEnvsRequest, BuildPackEnvsResponse, CreatePackRequest, DownloadPacksRequest,
+            BrowsePackIndexQuery, BuildPackEnvsRequest, BuildPackEnvsResponse,
+            CreatePackRegistryIndexRequest, CreatePackRequest, DownloadPacksRequest,
             DownloadPacksResponse, GetPackDependenciesRequest, GetPackDependenciesResponse,
-            InstallPackRequest, PackDescriptionPatch, PackInstallResponse, PackResponse,
-            PackSummary, PackWorkflowSyncResponse, PackWorkflowValidationResponse,
-            RegisterPackRequest, RegisterPacksRequest, RegisterPacksResponse, UpdatePackRequest,
-            WorkflowSyncResult,
+            IndexedPackResponse, InstallPackRequest, PackDescriptionPatch, PackInstallResponse,
+            PackRegistryIndexResponse, PackRegistryIndexSummary, PackResponse, PackSummary,
+            PackWorkflowSyncResponse, PackWorkflowValidationResponse, RegisterPackRequest,
+            RegisterPacksRequest, RegisterPacksResponse, UpdatePackRegistryIndexRequest,
+            UpdatePackRequest, WorkflowSyncResult,
         },
         ApiResponse, SuccessResponse,
     },
@@ -1592,6 +1596,307 @@ async fn register_pack_internal(
     Ok(pack.id)
 }
 
+async fn authorize_pack_registry_action(
+    state: &AppState,
+    user: &crate::auth::middleware::AuthenticatedUser,
+    action: Action,
+) -> ApiResult<()> {
+    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+        let identity_id = user
+            .identity_id()
+            .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+        let authz = AuthorizationService::new(state.db.clone());
+        authz
+            .authorize(
+                user,
+                AuthorizationCheck {
+                    resource: Resource::Packs,
+                    action,
+                    context: AuthorizationContext::new(identity_id),
+                },
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+fn headers_from_json(
+    headers: serde_json::Value,
+) -> ApiResult<std::collections::HashMap<String, String>> {
+    let mut result = std::collections::HashMap::new();
+    let Some(object) = headers.as_object() else {
+        return Err(ApiError::BadRequest(
+            "Pack index headers must be a JSON object".to_string(),
+        ));
+    };
+    for (key, value) in object {
+        let Some(value) = value.as_str() else {
+            return Err(ApiError::BadRequest(
+                "Pack index header values must be strings".to_string(),
+            ));
+        };
+        result.insert(key.clone(), value.to_string());
+    }
+    Ok(result)
+}
+
+async fn effective_pack_registry_config(
+    state: &AppState,
+    include_disabled: bool,
+) -> ApiResult<Option<attune_common::config::PackRegistryConfig>> {
+    if !state.config.pack_registry.enabled {
+        return Ok(None);
+    }
+
+    let managed = PackRegistryIndexRepository::list(&state.db).await?;
+    if managed.is_empty() {
+        return Ok(Some(state.config.pack_registry.clone()));
+    }
+
+    let mut indices = Vec::new();
+    for index in managed {
+        if !include_disabled && !index.enabled {
+            continue;
+        }
+        indices.push(attune_common::config::RegistryIndexConfig {
+            url: index.url,
+            priority: index.position as u32,
+            enabled: index.enabled,
+            name: index.name,
+            headers: headers_from_json(index.headers)?,
+        });
+    }
+
+    let mut config = state.config.pack_registry.clone();
+    config.indices = indices;
+    Ok(Some(config))
+}
+
+async fn configured_registry_summaries(
+    state: &AppState,
+    include_disabled: bool,
+) -> ApiResult<Vec<PackRegistryIndexSummary>> {
+    let managed = PackRegistryIndexRepository::list(&state.db).await?;
+    if !managed.is_empty() {
+        return Ok(managed
+            .into_iter()
+            .filter(|index| include_disabled || index.enabled)
+            .map(|index| PackRegistryIndexSummary {
+                id: Some(index.id),
+                name: index.name,
+                url: index.url,
+                position: index.position,
+            })
+            .collect());
+    }
+
+    Ok(state
+        .config
+        .pack_registry
+        .indices
+        .iter()
+        .filter(|index| include_disabled || index.enabled)
+        .map(|index| PackRegistryIndexSummary {
+            id: None,
+            name: index.name.clone(),
+            url: index.url.clone(),
+            position: index.priority as i32,
+        })
+        .collect())
+}
+
+pub async fn list_pack_indices(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+) -> ApiResult<impl IntoResponse> {
+    authorize_pack_registry_action(&state, &user, Action::Read).await?;
+    let indices = PackRegistryIndexRepository::list(&state.db).await?;
+    let response: Vec<PackRegistryIndexResponse> = indices
+        .into_iter()
+        .map(PackRegistryIndexResponse::from)
+        .collect();
+    Ok((StatusCode::OK, Json(ApiResponse::new(response))))
+}
+
+pub async fn create_pack_index(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Json(request): Json<CreatePackRegistryIndexRequest>,
+) -> ApiResult<impl IntoResponse> {
+    request.validate()?;
+    authorize_pack_registry_action(&state, &user, Action::Update).await?;
+    let index = PackRegistryIndexRepository::create(
+        &state.db,
+        CreatePackRegistryIndexInput {
+            name: request.name,
+            url: request.url,
+            position: request.position,
+            enabled: request.enabled,
+            headers: request.headers,
+        },
+    )
+    .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(ApiResponse::new(PackRegistryIndexResponse::from(index))),
+    ))
+}
+
+pub async fn update_pack_index(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(id): Path<i64>,
+    Json(request): Json<UpdatePackRegistryIndexRequest>,
+) -> ApiResult<impl IntoResponse> {
+    request.validate()?;
+    authorize_pack_registry_action(&state, &user, Action::Update).await?;
+    let index = PackRegistryIndexRepository::update(
+        &state.db,
+        id,
+        UpdatePackRegistryIndexInput {
+            name: request.name,
+            url: request.url,
+            position: request.position,
+            enabled: request.enabled,
+            headers: request.headers,
+        },
+    )
+    .await?;
+    Ok((
+        StatusCode::OK,
+        Json(ApiResponse::new(PackRegistryIndexResponse::from(index))),
+    ))
+}
+
+pub async fn delete_pack_index(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(id): Path<i64>,
+) -> ApiResult<impl IntoResponse> {
+    authorize_pack_registry_action(&state, &user, Action::Update).await?;
+    let deleted = PackRegistryIndexRepository::delete(&state.db, id).await?;
+    if !deleted {
+        return Err(ApiError::NotFound(format!("Pack index {} not found", id)));
+    }
+    Ok((
+        StatusCode::OK,
+        Json(SuccessResponse::new(format!("Pack index {} deleted", id))),
+    ))
+}
+
+pub async fn browse_indexed_packs(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Query(query): Query<BrowsePackIndexQuery>,
+) -> ApiResult<impl IntoResponse> {
+    authorize_pack_registry_action(&state, &user, Action::Read).await?;
+    let Some(config) = effective_pack_registry_config(&state, query.include_disabled).await? else {
+        return Ok((
+            StatusCode::OK,
+            Json(ApiResponse::new(Vec::<IndexedPackResponse>::new())),
+        ));
+    };
+    let client = attune_common::pack_registry::RegistryClient::new(config)
+        .map_err(|e| ApiError::InternalServerError(e.to_string()))?;
+    let summaries = configured_registry_summaries(&state, query.include_disabled).await?;
+    let selected_id = query.registry_id;
+    let query_text = query.q.unwrap_or_default().to_lowercase();
+    let mut seen = std::collections::HashSet::new();
+    let mut packs = Vec::new();
+
+    for registry in client.get_registries() {
+        let Some(summary) = summaries.iter().find(|summary| {
+            summary.url == registry.url && selected_id.is_none_or(|id| summary.id == Some(id))
+        }) else {
+            continue;
+        };
+        match client.fetch_index(&registry).await {
+            Ok(index) => {
+                for pack in index.packs {
+                    if !seen.insert(pack.pack_ref.clone()) {
+                        continue;
+                    }
+                    let matches_query = query_text.is_empty()
+                        || pack.pack_ref.to_lowercase().contains(&query_text)
+                        || pack.label.to_lowercase().contains(&query_text)
+                        || pack.description.to_lowercase().contains(&query_text)
+                        || pack
+                            .use_case
+                            .as_deref()
+                            .unwrap_or_default()
+                            .to_lowercase()
+                            .contains(&query_text)
+                        || pack
+                            .keywords
+                            .iter()
+                            .any(|keyword| keyword.to_lowercase().contains(&query_text));
+                    if matches_query {
+                        packs.push(IndexedPackResponse {
+                            pack,
+                            registry: summary.clone(),
+                        });
+                    }
+                }
+            }
+            Err(e) => tracing::warn!("Failed to fetch pack index {}: {}", registry.url, e),
+        }
+    }
+
+    Ok((StatusCode::OK, Json(ApiResponse::new(packs))))
+}
+
+pub async fn get_indexed_pack(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(pack_ref): Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    authorize_pack_registry_action(&state, &user, Action::Read).await?;
+    let Some(config) = effective_pack_registry_config(&state, false).await? else {
+        return Err(ApiError::NotFound(format!(
+            "Indexed pack '{}' not found",
+            pack_ref
+        )));
+    };
+    let client = attune_common::pack_registry::RegistryClient::new(config)
+        .map_err(|e| ApiError::InternalServerError(e.to_string()))?;
+    let summaries = configured_registry_summaries(&state, false).await?;
+
+    for registry in client.get_registries() {
+        let summary = summaries
+            .iter()
+            .find(|summary| summary.url == registry.url)
+            .cloned();
+        match client.fetch_index(&registry).await {
+            Ok(index) => {
+                if let Some(pack) = index
+                    .packs
+                    .into_iter()
+                    .find(|pack| pack.pack_ref == pack_ref)
+                {
+                    return Ok((
+                        StatusCode::OK,
+                        Json(ApiResponse::new(IndexedPackResponse {
+                            pack,
+                            registry: summary.unwrap_or(PackRegistryIndexSummary {
+                                id: None,
+                                name: registry.name,
+                                url: registry.url,
+                                position: registry.priority as i32,
+                            }),
+                        })),
+                    ));
+                }
+            }
+            Err(e) => tracing::warn!("Failed to fetch pack index {}: {}", registry.url, e),
+        }
+    }
+
+    Err(ApiError::NotFound(format!(
+        "Indexed pack '{}' not found",
+        pack_ref
+    )))
+}
+
 /// Install a pack from remote source (git repository)
 #[utoipa::path(
     post,
@@ -1645,11 +1950,7 @@ pub async fn install_pack(
     let temp_dir = std::env::temp_dir().join("attune-pack-installs");
 
     // Load registry configuration
-    let registry_config = if state.config.pack_registry.enabled {
-        Some(state.config.pack_registry.clone())
-    } else {
-        None
-    };
+    let registry_config = effective_pack_registry_config(&state, false).await?;
 
     // Create installer
     let installer = PackInstaller::new(&temp_dir, registry_config)
@@ -2263,11 +2564,7 @@ pub async fn download_packs(
         .map_err(|e| ApiError::InternalServerError(format!("Failed to create temp dir: {}", e)))?;
 
     // Create installer
-    let registry_config = if state.config.pack_registry.enabled {
-        Some(state.config.pack_registry.clone())
-    } else {
-        None
-    };
+    let registry_config = effective_pack_registry_config(&state, false).await?;
 
     let installer = PackInstaller::new(&temp_dir, registry_config)
         .await
@@ -2792,6 +3089,16 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/packs/install", axum::routing::post(install_pack))
         .route("/packs/upload", axum::routing::post(upload_pack))
         .route("/packs/download", axum::routing::post(download_packs))
+        .route(
+            "/pack-indices",
+            get(list_pack_indices).post(create_pack_index),
+        )
+        .route("/pack-indices/packs", get(browse_indexed_packs))
+        .route("/pack-indices/packs/{ref}", get(get_indexed_pack))
+        .route(
+            "/pack-indices/{id}",
+            axum::routing::put(update_pack_index).delete(delete_pack_index),
+        )
         .route(
             "/packs/dependencies",
             axum::routing::post(get_pack_dependencies),

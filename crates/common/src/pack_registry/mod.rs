@@ -14,6 +14,7 @@ pub mod storage;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use utoipa::ToSchema;
 
 // Re-export client, installer, loader, storage, and dependency utilities
 pub use client::RegistryClient;
@@ -30,7 +31,7 @@ pub use storage::{
 ///
 /// This is the top-level structure of a pack registry index file (typically index.json).
 /// It contains metadata about the registry and a list of available packs.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PackIndex {
     /// Human-readable registry name
     pub registry_name: String,
@@ -49,7 +50,7 @@ pub struct PackIndex {
 }
 
 /// Pack entry in a registry index
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PackIndexEntry {
     /// Unique pack identifier (matches pack.yaml ref)
     #[serde(rename = "ref")]
@@ -60,6 +61,10 @@ pub struct PackIndexEntry {
 
     /// Brief pack description
     pub description: String,
+
+    /// Brief use-case summary for browsing/install decisions
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_case: Option<String>,
 
     /// Semantic version (latest available)
     pub version: String,
@@ -105,7 +110,7 @@ pub struct PackIndexEntry {
 }
 
 /// Installation source for a pack
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum InstallSource {
     /// Git repository source
@@ -159,7 +164,7 @@ impl InstallSource {
 }
 
 /// Pack contents summary
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, ToSchema)]
 pub struct PackContents {
     /// List of actions
     #[serde(default)]
@@ -183,7 +188,7 @@ pub struct PackContents {
 }
 
 /// Component summary (action, sensor, trigger, etc.)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ComponentSummary {
     /// Component name
     pub name: String,
@@ -193,7 +198,7 @@ pub struct ComponentSummary {
 }
 
 /// Pack dependencies
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, ToSchema)]
 pub struct PackDependencies {
     /// Attune version requirement (semver)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -213,7 +218,7 @@ pub struct PackDependencies {
 }
 
 /// Additional pack metadata
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, ToSchema)]
 pub struct PackMeta {
     /// Download count
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -229,6 +234,7 @@ pub struct PackMeta {
 
     /// Additional custom fields
     #[serde(flatten)]
+    #[schema(value_type = Object)]
     pub extra: HashMap<String, serde_json::Value>,
 }
 

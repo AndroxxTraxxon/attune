@@ -2,27 +2,84 @@ import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useInstallPack } from "@/hooks/usePackTests";
 import {
+  useCreatePackIndex,
+  useDeletePackIndex,
+  useIndexedPacks,
+  usePackIndices,
+  useUpdatePackIndex,
+} from "@/hooks/usePacks";
+import {
   AlertCircle,
   CheckCircle,
   Loader2,
   GitBranch,
   Package,
   Info,
+  Settings,
+  X,
+  GripVertical,
 } from "lucide-react";
 
 type SourceType = "git" | "archive" | "registry";
+type IndexedPackContentKey =
+  | "actions"
+  | "sensors"
+  | "triggers"
+  | "rules"
+  | "workflows";
+
+interface PackRegistryIndex {
+  id: number;
+  name?: string | null;
+  url: string;
+  position: number;
+  enabled: boolean;
+}
+
+interface IndexedPackEntry {
+  ref: string;
+  label?: string | null;
+  description?: string | null;
+  use_case?: string | null;
+  version?: string | null;
+  contents?: Partial<Record<IndexedPackContentKey, unknown[]>>;
+}
+
+interface IndexedPackResult {
+  pack: IndexedPackEntry;
+  registry: {
+    name?: string | null;
+    url: string;
+  };
+}
 
 export default function PackInstallPage() {
   const navigate = useNavigate();
   const installPack = useInstallPack();
+  const packIndices = usePackIndices();
+  const createPackIndex = useCreatePackIndex();
+  const updatePackIndex = useUpdatePackIndex();
+  const deletePackIndex = useDeletePackIndex();
 
   const [sourceType, setSourceType] = useState<SourceType>("git");
+  const [isIndexModalOpen, setIsIndexModalOpen] = useState(false);
+  const [indexForm, setIndexForm] = useState({
+    name: "",
+    url: "",
+  });
+  const [draggedIndexId, setDraggedIndexId] = useState<number | null>(null);
+  const [packQuery, setPackQuery] = useState("");
+  const indexedPacks = useIndexedPacks(packQuery);
   const [formData, setFormData] = useState({
     source: "",
     refSpec: "",
     skipTests: false,
     skipDeps: false,
   });
+  const configuredIndices = (packIndices.data?.data ??
+    []) as PackRegistryIndex[];
+  const indexedPackResults = (indexedPacks.data?.data ??
+    []) as IndexedPackResult[];
 
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -63,6 +120,62 @@ export default function PackInstallPage() {
     } catch (err) {
       setError((err as Error).message || "Failed to install pack");
     }
+  };
+
+  const handleAddIndex = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    try {
+      await createPackIndex.mutateAsync({
+        name: indexForm.name || undefined,
+        url: indexForm.url,
+        enabled: true,
+        headers: {},
+      });
+      setIndexForm({ name: "", url: "" });
+    } catch (err) {
+      setError((err as Error).message || "Failed to add pack index");
+    }
+  };
+
+  const handleDropIndex = async (targetId: number) => {
+    if (draggedIndexId === null || draggedIndexId === targetId) {
+      setDraggedIndexId(null);
+      return;
+    }
+
+    const indices = [...configuredIndices];
+    const fromIndex = indices.findIndex((index) => index.id === draggedIndexId);
+    const toIndex = indices.findIndex((index) => index.id === targetId);
+    if (fromIndex === -1 || toIndex === -1) {
+      setDraggedIndexId(null);
+      return;
+    }
+
+    const [moved] = indices.splice(fromIndex, 1);
+    indices.splice(toIndex, 0, moved);
+    setDraggedIndexId(null);
+    setError(null);
+
+    try {
+      await Promise.all(
+        indices.map((index, position) =>
+          index.position === position
+            ? Promise.resolve()
+            : updatePackIndex.mutateAsync({
+                id: index.id,
+                data: { position },
+              }),
+        ),
+      );
+    } catch (err) {
+      setError((err as Error).message || "Failed to reorder pack indices");
+    }
+  };
+
+  const selectIndexedPack = (packRef: string) => {
+    setSourceType("registry");
+    setFormData((prev) => ({ ...prev, source: packRef, refSpec: "" }));
   };
 
   const handleChange = (
@@ -117,6 +230,14 @@ export default function PackInstallPage() {
         <p className="mt-2 text-gray-600">
           Install a pack from git, archive URL, or pack registry
         </p>
+        <button
+          type="button"
+          onClick={() => setIsIndexModalOpen(true)}
+          className="mt-4 inline-flex items-center gap-2 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium"
+        >
+          <Settings className="w-4 h-4" />
+          Manage Pack Indices
+        </button>
       </div>
 
       {/* Info Box */}
@@ -139,20 +260,15 @@ export default function PackInstallPage() {
                 <strong>Archive URL</strong> - Download from .zip or .tar.gz URL
               </li>
               <li>
-                <strong>Pack Registry</strong> - Install from configured
-                registries (coming soon)
+                <strong>Pack Registry</strong> - Browse configured indices and
+                install the first matching pack ref by index order
               </li>
             </ul>
             <div className="mt-3 pt-3 border-t border-blue-300">
               <p className="text-xs text-blue-700">
-                <strong>Local development?</strong> Use{" "}
-                <Link
-                  to="/packs/register"
-                  className="underline hover:text-blue-900 font-medium"
-                >
-                  filesystem registration
-                </Link>{" "}
-                for local pack directories.
+                <strong>Local development?</strong> Use the CLI or API directly
+                for server-side filesystem paths; browsers cannot access server
+                pack directories.
               </p>
             </div>
           </div>
@@ -219,48 +335,139 @@ export default function PackInstallPage() {
               <button
                 type="button"
                 onClick={() => setSourceType("registry")}
-                disabled
-                className="px-4 py-3 border rounded-lg text-sm font-medium border-gray-300 bg-gray-100 text-gray-400 cursor-not-allowed"
+                className={`px-4 py-3 border rounded-lg text-sm font-medium transition-colors ${
+                  sourceType === "registry"
+                    ? "border-blue-500 bg-blue-50 text-blue-700"
+                    : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                }`}
               >
                 <Package className="w-4 h-4 mx-auto mb-1" />
                 Registry
-                <span className="block text-xs mt-1">(Coming Soon)</span>
               </button>
             </div>
           </div>
 
           {/* Source Input */}
-          <div>
-            <label
-              htmlFor="source"
-              className="block text-sm font-medium text-gray-700 mb-2"
-            >
-              {getSourceLabel()} <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              id="source"
-              name="source"
-              value={formData.source}
-              onChange={handleChange}
-              placeholder={getSourcePlaceholder()}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              required
-            />
-            {sourceType === "git" && (
-              <p className="mt-2 text-sm text-gray-500">
-                Supports HTTPS and SSH URLs. Examples:
-                <br />
-                • https://github.com/username/pack-name.git
-                <br />• git@github.com:username/pack-name.git
-              </p>
-            )}
-            {sourceType === "archive" && (
-              <p className="mt-2 text-sm text-gray-500">
-                Direct URL to .zip or .tar.gz archive containing pack files
-              </p>
-            )}
-          </div>
+          {sourceType === "registry" ? (
+            <div>
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <label
+                  htmlFor="packQuery"
+                  className="block text-sm font-medium text-gray-700"
+                >
+                  Search Indexed Packs <span className="text-red-500">*</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsIndexModalOpen(true)}
+                  className="text-sm text-blue-600 hover:text-blue-800"
+                >
+                  Manage indices
+                </button>
+              </div>
+              <input
+                type="search"
+                id="packQuery"
+                value={packQuery}
+                onChange={(e) => setPackQuery(e.target.value)}
+                placeholder="Search by ref, label, keyword, or use case"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              {formData.source && (
+                <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+                  Selected pack ref:{" "}
+                  <span className="font-medium">{formData.source}</span>
+                </div>
+              )}
+              <div className="mt-3 space-y-3 max-h-96 overflow-auto">
+                {indexedPackResults.map((indexed) => {
+                  const pack = indexed.pack;
+                  const contents = pack.contents || {};
+                  const contentKeys: IndexedPackContentKey[] = [
+                    "actions",
+                    "sensors",
+                    "triggers",
+                    "rules",
+                    "workflows",
+                  ];
+                  const counts = contentKeys
+                    .map((key) => `${key}: ${(contents[key] || []).length}`)
+                    .join(" · ");
+                  return (
+                    <button
+                      key={`${indexed.registry.url}:${pack.ref}`}
+                      type="button"
+                      onClick={() => selectIndexedPack(pack.ref)}
+                      className={`w-full text-left border rounded-lg p-3 hover:bg-blue-50 ${
+                        formData.source === pack.ref
+                          ? "border-blue-500 bg-blue-50"
+                          : "border-gray-200"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="font-medium">
+                          {pack.label || pack.ref}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {pack.version}
+                        </div>
+                      </div>
+                      <div className="text-sm text-gray-600 mt-1">
+                        {pack.use_case || pack.description}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-2">
+                        {counts}
+                      </div>
+                      <div className="text-xs text-gray-400 mt-1">
+                        {indexed.registry.name || indexed.registry.url}
+                      </div>
+                    </button>
+                  );
+                })}
+                {indexedPacks.isLoading && (
+                  <p className="text-sm text-gray-500">Loading indexed packs...</p>
+                )}
+                {!indexedPacks.isLoading &&
+                  indexedPackResults.length === 0 && (
+                    <p className="text-sm text-gray-500">
+                      No indexed packs found. Add an index or adjust your search.
+                    </p>
+                  )}
+              </div>
+            </div>
+          ) : (
+            <div>
+              <label
+                htmlFor="source"
+                className="block text-sm font-medium text-gray-700 mb-2"
+              >
+                {getSourceLabel()} <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                id="source"
+                name="source"
+                value={formData.source}
+                onChange={handleChange}
+                placeholder={getSourcePlaceholder()}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                required
+              />
+              {sourceType === "git" && (
+                <p className="mt-2 text-sm text-gray-500">
+                  Supports HTTPS and SSH URLs. Examples:
+                  <br />
+                  • https://github.com/username/pack-name.git
+                  <br />• git@github.com:username/pack-name.git
+                </p>
+              )}
+              {sourceType === "archive" && (
+                <p className="mt-2 text-sm text-gray-500">
+                  Direct URL to .zip or .tar.gz archive containing pack files
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Git Reference (for git and registry sources) */}
           {showRefSpec && (
@@ -465,6 +672,139 @@ export default function PackInstallPage() {
           </div>
         </div>
       </div>
+
+      {isIndexModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-2xl max-h-[90vh] overflow-auto rounded-lg bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-200 p-5">
+              <div>
+                <h2 className="text-xl font-semibold">Configured Pack Indices</h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  Drag indices by the handle to set search order. Duplicate pack
+                  refs resolve to the first enabled index that contains the ref.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsIndexModalOpen(false)}
+                className="rounded-lg p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                aria-label="Close index configuration"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5">
+              <form onSubmit={handleAddIndex} className="space-y-3 mb-5">
+                <input
+                  type="text"
+                  value={indexForm.name}
+                  onChange={(e) =>
+                    setIndexForm((prev) => ({ ...prev, name: e.target.value }))
+                  }
+                  placeholder="Index name"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                />
+                <input
+                  type="url"
+                  value={indexForm.url}
+                  onChange={(e) =>
+                    setIndexForm((prev) => ({ ...prev, url: e.target.value }))
+                  }
+                  placeholder="https://registry.example.com/index.json"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  required
+                />
+                <button
+                  type="submit"
+                  disabled={createPackIndex.isPending}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-50"
+                >
+                  Add Index
+                </button>
+              </form>
+
+              <div className="space-y-2">
+                {configuredIndices.map((index, listIndex) => (
+                  <div
+                    key={index.id}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={() => handleDropIndex(index.id)}
+                    className={`border rounded-lg p-3 text-sm transition-colors ${
+                      draggedIndexId === index.id
+                        ? "border-blue-300 bg-blue-50"
+                        : "border-gray-200 bg-white"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 flex-1 items-start gap-3">
+                        <button
+                          type="button"
+                          draggable
+                          onDragStart={(event) => {
+                            event.dataTransfer.effectAllowed = "move";
+                            event.dataTransfer.setData(
+                              "text/plain",
+                              String(index.id),
+                            );
+                            setDraggedIndexId(index.id);
+                          }}
+                          onDragEnd={() => setDraggedIndexId(null)}
+                          className="mt-1 rounded p-1 text-gray-400 cursor-grab hover:bg-gray-100 hover:text-gray-600 active:cursor-grabbing"
+                          aria-label={`Drag to reorder ${index.name || index.url}`}
+                          title="Drag to reorder"
+                        >
+                          <GripVertical className="h-5 w-5" />
+                        </button>
+                        <div className="min-w-0">
+                          <div className="font-medium">
+                            {index.name || index.url}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {listIndex === 0
+                              ? "Checked first"
+                              : "Checked after earlier indices"}
+                          </div>
+                          <div className="text-gray-500 break-all">
+                            {index.url}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updatePackIndex.mutate({
+                              id: index.id,
+                              data: { enabled: !index.enabled },
+                            })
+                          }
+                          className="text-blue-600 hover:text-blue-800"
+                        >
+                          {index.enabled ? "Disable" : "Enable"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deletePackIndex.mutate(index.id)}
+                          className="text-red-600 hover:text-red-800"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {!packIndices.isLoading &&
+                  (packIndices.data?.data || []).length === 0 && (
+                    <p className="text-sm text-gray-500">
+                      No API-managed indices configured yet.
+                    </p>
+                  )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

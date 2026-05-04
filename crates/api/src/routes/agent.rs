@@ -27,8 +27,6 @@ pub struct BinaryDownloadParams {
     /// Target architecture (x86_64, aarch64). Defaults to x86_64.
     #[param(example = "x86_64")]
     pub arch: Option<String>,
-    /// Optional bootstrap token for authentication
-    pub token: Option<String>,
 }
 
 /// Agent binary metadata
@@ -75,11 +73,10 @@ fn validate_arch(arch: &str) -> Result<&str, (StatusCode, Json<serde_json::Value
 /// when the operator has not explicitly opted in to token authentication.
 ///
 /// When configured, the request must provide the matching token via the
-/// `X-Agent-Token` header or the `token` query parameter.
+/// `X-Agent-Token` header.
 fn validate_token(
     config: &attune_common::config::Config,
     headers: &HeaderMap,
-    query_token: &Option<String>,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     let expected_token = config
         .agent
@@ -99,12 +96,12 @@ fn validate_token(
         }
     };
 
-    // Check X-Agent-Token header first, then query param
+    // Keep bootstrap tokens out of URLs so they do not leak through access logs,
+    // browser history, or proxy referrers.
     let provided_token = headers
         .get("x-agent-token")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .or_else(|| query_token.clone());
+        .map(|s| s.to_string());
 
     match provided_token {
         Some(ref t) if bool::from(t.as_bytes().ct_eq(expected_token.as_bytes())) => Ok(()),
@@ -119,7 +116,7 @@ fn validate_token(
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({
                 "error": "Token required",
-                "message": "A bootstrap token is required. Provide via X-Agent-Token header or token query parameter.",
+                "message": "A bootstrap token is required. Provide it via the X-Agent-Token header.",
             })),
         )),
     }
@@ -148,7 +145,7 @@ pub async fn download_agent_binary(
     Query(params): Query<BinaryDownloadParams>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     // Validate bootstrap token if configured
-    validate_token(&state.config, &headers, &params.token)?;
+    validate_token(&state.config, &headers)?;
 
     let agent_config = state.config.agent.as_ref().ok_or_else(|| {
         (
@@ -380,9 +377,8 @@ mod tests {
         // SECURITY: This must fail closed (503) rather than fail open (Ok).
         let config = test_config(None);
         let headers = HeaderMap::new();
-        let query_token = None;
 
-        let result = validate_token(&config, &headers, &query_token);
+        let result = validate_token(&config, &headers);
         assert!(result.is_err());
         let (status, body) = result.unwrap_err();
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
@@ -398,9 +394,8 @@ mod tests {
             bootstrap_token: None,
         }));
         let headers = HeaderMap::new();
-        let query_token = None;
 
-        let result = validate_token(&config, &headers, &query_token);
+        let result = validate_token(&config, &headers);
         assert!(result.is_err());
         let (status, body) = result.unwrap_err();
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
@@ -418,9 +413,8 @@ mod tests {
         }));
         let mut headers = HeaderMap::new();
         headers.insert("x-agent-token", HeaderValue::from_static("anything"));
-        let query_token = Some("anything".to_string());
 
-        let result = validate_token(&config, &headers, &query_token);
+        let result = validate_token(&config, &headers);
         assert!(result.is_err());
         let (status, _body) = result.unwrap_err();
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
@@ -437,23 +431,24 @@ mod tests {
             "x-agent-token",
             HeaderValue::from_static("s3cret-bootstrap"),
         );
-        let query_token = None;
 
-        let result = validate_token(&config, &headers, &query_token);
+        let result = validate_token(&config, &headers);
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_validate_token_valid_from_query() {
+    fn test_validate_token_query_token_rejected() {
         let config = test_config(Some(AgentConfig {
             binary_dir: "/tmp/test".to_string(),
             bootstrap_token: Some("s3cret-bootstrap".to_string()),
         }));
         let headers = HeaderMap::new();
-        let query_token = Some("s3cret-bootstrap".to_string());
 
-        let result = validate_token(&config, &headers, &query_token);
-        assert!(result.is_ok());
+        let result = validate_token(&config, &headers);
+        assert!(result.is_err());
+        let (status, body) = result.unwrap_err();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body.0["error"], "Token required");
     }
 
     #[test]
@@ -464,9 +459,8 @@ mod tests {
         }));
         let mut headers = HeaderMap::new();
         headers.insert("x-agent-token", HeaderValue::from_static("wrong-token"));
-        let query_token = None;
 
-        let result = validate_token(&config, &headers, &query_token);
+        let result = validate_token(&config, &headers);
         assert!(result.is_err());
         let (status, body) = result.unwrap_err();
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -481,9 +475,8 @@ mod tests {
             bootstrap_token: Some("required-token".to_string()),
         }));
         let headers = HeaderMap::new();
-        let query_token = None;
 
-        let result = validate_token(&config, &headers, &query_token);
+        let result = validate_token(&config, &headers);
         assert!(result.is_err());
         let (status, body) = result.unwrap_err();
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -491,20 +484,15 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_token_header_takes_precedence_over_query() {
-        // When both header and query provide a token, the header value is
-        // checked first (it appears first in the or_else chain). Provide a
-        // valid token in the header and an invalid one in the query — should
-        // succeed because the header matches.
+    fn test_validate_token_header_used_for_authentication() {
         let config = test_config(Some(AgentConfig {
             binary_dir: "/tmp/test".to_string(),
             bootstrap_token: Some("the-real-token".to_string()),
         }));
         let mut headers = HeaderMap::new();
         headers.insert("x-agent-token", HeaderValue::from_static("the-real-token"));
-        let query_token = Some("wrong-token".to_string());
 
-        let result = validate_token(&config, &headers, &query_token);
+        let result = validate_token(&config, &headers);
         assert!(result.is_ok());
     }
 }

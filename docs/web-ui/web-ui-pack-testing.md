@@ -94,24 +94,14 @@ import PackTestBadge from '@/components/packs/PackTestBadge';
 />
 ```
 
-### 5. Pack Registration Page
+### 5. Remote Pack Installation Page
 
-**Location**: `/packs/register`
+**Location**: `/packs/install`
 
-Form for registering packs from local filesystem with test control options.
-
-**Form Fields**:
-- **Pack Directory Path** (required) - Absolute path to pack directory
-- **Skip Tests** (checkbox) - Skip test execution during registration
-- **Force Registration** (checkbox) - Proceed even if tests fail or pack exists
-
-**Features**:
-- Real-time validation
-- Loading state during registration
-- Success/error messages
-- Automatic redirect to pack details on success
-- Info panel explaining registration process
-- Help section with guidance
+Browser-based pack installation is limited to sources the server can fetch from
+remote locations: git repositories, archives, or configured pack registries.
+Filesystem path registration is intentionally not exposed in the web client
+because browser users cannot browse or validate server-local filesystem paths.
 
 ## API Integration
 
@@ -151,20 +141,6 @@ await executeTests.mutateAsync('core');
 // Executes tests and invalidates test queries
 ```
 
-#### `useRegisterPack()`
-
-Mutation hook for registering packs.
-
-```tsx
-const registerPack = useRegisterPack();
-
-await registerPack.mutateAsync({
-  path: '/path/to/pack',
-  force: false,
-  skipTests: false
-});
-```
-
 ## User Workflows
 
 ### View Test Results
@@ -187,36 +163,29 @@ await registerPack.mutateAsync({
 
 1. Navigate to `/packs`
 2. Click "+ Register Pack" button
-3. Fill in the pack directory path (e.g., `/home/user/packs/mypack`)
-4. Optionally check "Skip Tests" to bypass test execution
-5. Optionally check "Force Registration" to override conflicts
-6. Click "Register Pack"
-7. Wait for registration to complete
+3. Choose Git Repository, Archive URL, or Pack Registry
+4. Enter or select the remote pack source
+5. Optionally adjust install/test options
+6. Click "Install Pack"
+7. Wait for installation to complete
 8. View results and test outcomes
 9. Automatically redirected to pack details page
 
-### Register Pack with Tests Disabled
+### Install Pack with Tests Disabled
 
 Use this workflow during development:
 
-1. Navigate to `/packs/register`
-2. Enter pack path
+1. Navigate to `/packs/install`
+2. Enter or select the remote pack source
 3. **Check "Skip Tests"**
-4. Click "Register Pack"
-5. Pack is registered without validation
+4. Click "Install Pack"
+5. Pack is installed without validation
 6. Later, manually run tests from pack detail page
 
-### Force Re-registration
+### Server-side Filesystem Registration
 
-Use this to replace an existing pack:
-
-1. Navigate to `/packs/register`
-2. Enter pack path (same as existing pack)
-3. **Check "Force Registration"**
-4. Optionally check "Skip Tests" for faster iteration
-5. Click "Register Pack"
-6. Existing pack is deleted and replaced
-7. Tests run (unless skipped)
+Use the CLI or API directly when a pack directory is already available on the
+API server filesystem. The web client does not expose this flow.
 
 ## Visual Design
 
@@ -354,8 +323,7 @@ web/src/
 │   └── usePackTests.ts             # React Query hooks
 └── pages/
     └── packs/
-        ├── PackDetailPage.tsx      # Shows latest test results
-        └── PackRegisterPage.tsx    # Pack registration form
+        └── PackDetailPage.tsx      # Shows latest test results
 ```
 
 ### Adding New Components

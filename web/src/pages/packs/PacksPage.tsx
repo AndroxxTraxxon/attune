@@ -102,21 +102,6 @@ export default function PacksPage() {
                         </div>
                       </Link>
                       <Link
-                        to="/packs/register"
-                        className="flex items-start gap-3 px-4 py-3 hover:bg-gray-50 transition-colors border-t border-gray-100"
-                        onClick={() => setShowPackMenu(false)}
-                      >
-                        <Package className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">
-                            Register from Filesystem
-                          </div>
-                          <div className="text-xs text-gray-500 mt-0.5">
-                            Load pack from local directory
-                          </div>
-                        </div>
-                      </Link>
-                      <Link
                         to="/packs/install"
                         className="flex items-start gap-3 px-4 py-3 hover:bg-gray-50 transition-colors border-t border-gray-100"
                         onClick={() => setShowPackMenu(false)}
@@ -173,13 +158,6 @@ export default function PacksPage() {
                   className="text-sm text-blue-600 hover:text-blue-800"
                 >
                   Create an empty pack
-                </Link>
-                <span className="text-xs text-gray-400">or</span>
-                <Link
-                  to="/packs/register"
-                  className="text-sm text-blue-600 hover:text-blue-800"
-                >
-                  Register from filesystem
                 </Link>
                 <span className="text-xs text-gray-400">or</span>
                 <Link

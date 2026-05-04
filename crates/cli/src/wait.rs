@@ -28,7 +28,10 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use terminal_size::{terminal_size, Width};
 use tokio::net::TcpStream;
-use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{
+    connect_async, tungstenite::client::IntoClientRequest, tungstenite::Message, MaybeTlsStream,
+    WebSocketStream,
+};
 
 use crate::client::ApiClient;
 
@@ -645,7 +648,7 @@ async fn watch_execution_output(client: &mut ApiClient, ctx: WatchExecutionConte
         .get::<RestExecution>(&format!("/executions/{}", execution_id))
         .await?;
     let mut execution_notifier =
-        connect_execution_notifier(notifier_ws_url.as_deref(), &base_url, debug)
+        connect_execution_notifier(notifier_ws_url.as_deref(), &base_url, client, debug)
             .await
             .ok();
 
@@ -1119,6 +1122,7 @@ async fn apply_child_execution_update(ctx: ChildUpdateContext<'_>, child: Execut
 async fn connect_execution_notifier(
     explicit_ws_url: Option<&str>,
     api_base_url: &str,
+    client: &ApiClient,
     verbose: bool,
 ) -> Result<ExecutionNotifier> {
     let ws_base_url = explicit_ws_url
@@ -1126,8 +1130,9 @@ async fn connect_execution_notifier(
         .or_else(|| derive_notifier_url(api_base_url))
         .ok_or_else(|| anyhow::anyhow!("notifier URL not configured"))?;
     let ws_url = format!("{}/ws", ws_base_url.trim_end_matches('/'));
+    let request = build_notifier_ws_request(&ws_url, client.auth_token())?;
 
-    let (mut ws_stream, _) = tokio::time::timeout(Duration::from_secs(5), connect_async(&ws_url))
+    let (mut ws_stream, _) = tokio::time::timeout(Duration::from_secs(5), connect_async(request))
         .await
         .map_err(|_| anyhow::anyhow!("WebSocket connect timed out"))??;
 
@@ -1173,6 +1178,22 @@ async fn connect_execution_notifier(
         ws_stream,
         next_ping: Instant::now() + Duration::from_secs(15),
     })
+}
+
+fn build_notifier_ws_request(
+    ws_url: &str,
+    auth_token: Option<&str>,
+) -> Result<tokio_tungstenite::tungstenite::http::Request<()>> {
+    let mut request = ws_url.into_client_request()?;
+    request
+        .headers_mut()
+        .insert("Sec-WebSocket-Protocol", "attune.v1".parse()?);
+    if let Some(token) = auth_token.map(str::trim).filter(|token| !token.is_empty()) {
+        request
+            .headers_mut()
+            .insert("Authorization", format!("Bearer {token}").parse()?);
+    }
+    Ok(request)
 }
 
 impl ExecutionNotifier {
@@ -1333,8 +1354,9 @@ async fn wait_via_websocket(
     }
     let effective_connect_timeout = connect_timeout.min(remaining);
 
+    let request = build_notifier_ws_request(&ws_url, api_client.auth_token())?;
     let connect_result =
-        tokio::time::timeout(effective_connect_timeout, connect_async(&ws_url)).await;
+        tokio::time::timeout(effective_connect_timeout, connect_async(request)).await;
 
     let (ws_stream, _response) = match connect_result {
         Ok(Ok(pair)) => pair,

@@ -951,6 +951,7 @@ mod tests {
             pack_ref: "test".to_string(),
             label: "Test".to_string(),
             description: "Test pack".to_string(),
+            use_case: None,
             version: "1.0.0".to_string(),
             author: "Test".to_string(),
             email: None,

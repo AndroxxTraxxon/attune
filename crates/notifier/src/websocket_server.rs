@@ -6,7 +6,7 @@ use axum::{
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
         Query, State,
     },
-    http::StatusCode,
+    http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::get,
     Json, Router,
@@ -31,6 +31,8 @@ use crate::subscriber_manager::{ClientId, SubscriberManager, SubscriptionFilter}
 /// Role name that grants the holder unrestricted filter ACL (e.g. ability to
 /// subscribe to `User(other_id)` filters for arbitrary identities).
 const ADMIN_ROLE: &str = "admin";
+const WS_SELECTED_PROTOCOL: &str = "attune.v1";
+const WS_TOKEN_PROTOCOL_PREFIX: &str = "attune.jwt.";
 
 /// How often each WebSocket connection's task loop re-checks the JWT `exp`
 /// claim. A 30-second cadence bounds post-expiration liveness without adding
@@ -159,13 +161,45 @@ async fn stats_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse 
     (StatusCode::OK, Json(stats))
 }
 
-/// Extract the `token` query parameter from a query map.
-fn parse_token_query_param(query: &HashMap<String, String>) -> Option<&str> {
-    query
-        .get("token")
-        .or_else(|| query.get("access_token"))
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
+/// Extract a WebSocket JWT from secure request metadata.
+///
+/// Non-browser clients should use `Authorization: Bearer <jwt>`. Browser
+/// WebSocket clients cannot set arbitrary headers, so the web UI sends the JWT
+/// as a secondary `Sec-WebSocket-Protocol` value:
+/// `attune.v1, attune.jwt.<jwt>`. Tokens are intentionally not accepted via
+/// query string because URLs are commonly logged by proxies and access logs.
+fn extract_ws_token(headers: &HeaderMap) -> Option<String> {
+    if let Some(token) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_bearer_token)
+    {
+        return Some(token.to_string());
+    }
+
+    headers
+        .get(header::SEC_WEBSOCKET_PROTOCOL)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_token_subprotocol)
+        .map(str::to_string)
+}
+
+fn parse_bearer_token(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if value.len() <= "Bearer ".len() || !value[..7].eq_ignore_ascii_case("Bearer ") {
+        return None;
+    }
+
+    let token = value[7..].trim();
+    (!token.is_empty()).then_some(token)
+}
+
+fn parse_token_subprotocol(value: &str) -> Option<&str> {
+    value
+        .split(',')
+        .map(str::trim)
+        .find_map(|protocol| protocol.strip_prefix(WS_TOKEN_PROTOCOL_PREFIX))
+        .filter(|token| !token.is_empty())
 }
 
 /// Verify a token against the JWT config and ensure it's an allowed type.
@@ -228,13 +262,16 @@ fn is_admin(roles: &[String]) -> bool {
 /// WebSocket handler - validates JWT then upgrades HTTP connection to WebSocket
 async fn websocket_handler(
     ws: WebSocketUpgrade,
-    Query(query): Query<HashMap<String, String>>,
+    Query(_query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> axum::response::Response {
-    let token = match parse_token_query_param(&query) {
+    let token = match extract_ws_token(&headers) {
         Some(t) => t,
         None => {
-            warn!("WebSocket upgrade rejected: missing token query parameter");
+            warn!(
+                "WebSocket upgrade rejected: missing token in Authorization header or WebSocket subprotocol"
+            );
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({"error": "missing_token"})),
@@ -243,7 +280,7 @@ async fn websocket_handler(
         }
     };
 
-    let (identity_id, token_type, token_exp) = match verify_ws_token(token, &state.jwt_config) {
+    let (identity_id, token_type, token_exp) = match verify_ws_token(&token, &state.jwt_config) {
         Ok(v) => v,
         Err(reason) => {
             warn!(reason = %reason, "WebSocket upgrade rejected: token validation failed");
@@ -300,7 +337,8 @@ async fn websocket_handler(
         "WebSocket upgrade authorized"
     );
 
-    ws.on_upgrade(move |socket| handle_websocket(socket, state, identity_id, roles, token_exp))
+    ws.protocols([WS_SELECTED_PROTOCOL])
+        .on_upgrade(move |socket| handle_websocket(socket, state, identity_id, roles, token_exp))
 }
 
 /// Handle individual WebSocket connection
@@ -671,30 +709,61 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_token_query_param_present() {
-        let mut q = HashMap::new();
-        q.insert("token".to_string(), "abc.def.ghi".to_string());
-        assert_eq!(parse_token_query_param(&q), Some("abc.def.ghi"));
+    fn test_parse_bearer_token_present() {
+        assert_eq!(
+            parse_bearer_token("Bearer abc.def.ghi"),
+            Some("abc.def.ghi")
+        );
     }
 
     #[test]
-    fn test_parse_token_query_param_access_token_alias() {
-        let mut q = HashMap::new();
-        q.insert("access_token".to_string(), "x.y.z".to_string());
-        assert_eq!(parse_token_query_param(&q), Some("x.y.z"));
+    fn test_parse_bearer_token_case_insensitive_scheme() {
+        assert_eq!(parse_bearer_token("bearer x.y.z"), Some("x.y.z"));
     }
 
     #[test]
-    fn test_parse_token_query_param_missing() {
-        let q = HashMap::new();
-        assert_eq!(parse_token_query_param(&q), None);
+    fn test_parse_bearer_token_empty_rejected() {
+        assert_eq!(parse_bearer_token("Bearer   "), None);
     }
 
     #[test]
-    fn test_parse_token_query_param_empty_rejected() {
-        let mut q = HashMap::new();
-        q.insert("token".to_string(), "  ".to_string());
-        assert_eq!(parse_token_query_param(&q), None);
+    fn test_parse_token_subprotocol_present() {
+        assert_eq!(
+            parse_token_subprotocol("attune.v1, attune.jwt.abc.def.ghi"),
+            Some("abc.def.ghi")
+        );
+    }
+
+    #[test]
+    fn test_parse_token_subprotocol_missing() {
+        assert_eq!(parse_token_subprotocol("attune.v1"), None);
+    }
+
+    #[test]
+    fn test_extract_ws_token_prefers_authorization_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer header.token".parse().unwrap(),
+        );
+        headers.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            "attune.v1, attune.jwt.protocol.token".parse().unwrap(),
+        );
+        assert_eq!(extract_ws_token(&headers).as_deref(), Some("header.token"));
+    }
+
+    #[test]
+    fn test_extract_ws_token_from_subprotocol() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            "attune.v1, attune.jwt.protocol.token".parse().unwrap(),
+        );
+        assert_eq!(
+            extract_ws_token(&headers).as_deref(),
+            Some("protocol.token")
+        );
     }
 
     #[test]

@@ -316,7 +316,7 @@ pub async fn mock_execution_list(server: &MockServer) {
     Mock::given(method("GET"))
         .and(path("/api/v1/executions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": [
+            "items": [
                 {
                     "id": 1,
                     "action_ref": "core.echo",
@@ -337,7 +337,13 @@ pub async fn mock_execution_list(server: &MockServer) {
                     "created": "2024-01-01T00:00:00Z",
                     "updated": "2024-01-01T00:00:00Z"
                 }
-            ]
+            ],
+            "pagination": {
+                "page": 1,
+                "page_size": 50,
+                "has_previous": false,
+                "has_next": false
+            }
         })))
         .mount(server)
         .await;

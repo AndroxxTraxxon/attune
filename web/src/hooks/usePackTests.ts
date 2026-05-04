@@ -54,40 +54,6 @@ export function useExecutePackTests() {
   });
 }
 
-// Register pack with test execution
-export function useRegisterPack() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async ({
-      path,
-      force = false,
-      skipTests = false,
-    }: {
-      path: string;
-      force?: boolean;
-      skipTests?: boolean;
-    }) => {
-      return PacksService.registerPack({
-        requestBody: {
-          path,
-          force,
-          skip_tests: skipTests,
-        },
-      });
-    },
-    onSuccess: (data) => {
-      // Invalidate packs list and test queries
-      queryClient.invalidateQueries({ queryKey: ["packs"] });
-      if (data.data.pack.ref) {
-        queryClient.invalidateQueries({
-          queryKey: ["pack-tests", data.data.pack.ref],
-        });
-      }
-    },
-  });
-}
-
 // Install pack from remote source
 export function useInstallPack() {
   const queryClient = useQueryClient();

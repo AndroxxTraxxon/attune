@@ -88,3 +88,69 @@ export function useDeletePack() {
     },
   });
 }
+
+export function usePackIndices() {
+  return useQuery({
+    queryKey: ["pack-indices"],
+    queryFn: () => PacksService.listPackIndices(),
+    staleTime: 30000,
+  });
+}
+
+export function useCreatePackIndex() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: {
+      name?: string;
+      url: string;
+      position?: number;
+      enabled: boolean;
+      headers: Record<string, string>;
+    }) => PacksService.createPackIndex({ requestBody: data }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["pack-indices"] });
+      queryClient.invalidateQueries({ queryKey: ["indexed-packs"] });
+    },
+  });
+}
+
+export function useUpdatePackIndex() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: number;
+      data: {
+        name?: string | null;
+        url?: string;
+        position?: number;
+        enabled?: boolean;
+      };
+    }) => PacksService.updatePackIndex({ id, requestBody: data }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["pack-indices"] });
+      queryClient.invalidateQueries({ queryKey: ["indexed-packs"] });
+    },
+  });
+}
+
+export function useDeletePackIndex() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => PacksService.deletePackIndex({ id }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["pack-indices"] });
+      queryClient.invalidateQueries({ queryKey: ["indexed-packs"] });
+    },
+  });
+}
+
+export function useIndexedPacks(query?: string) {
+  return useQuery({
+    queryKey: ["indexed-packs", query],
+    queryFn: () => PacksService.browseIndexedPacks({ q: query || undefined }),
+    staleTime: 30000,
+  });
+}

@@ -40,12 +40,13 @@ interface WebSocketProviderProps {
 /**
  * WebSocketProvider maintains a single WebSocket connection for the entire application.
  *
- * **Authentication:** the notifier service requires a JWT on connect. The
- * access token from `localStorage` is appended as a `?token=…` query parameter
- * on the WebSocket URL. If no token is present, the provider waits and does
- * not connect; if the server rejects with `1008` (policy violation, treated
- * here as auth failure / closure on 401), we attempt to refresh the token
- * via the existing API client and reconnect.
+ * **Authentication:** the notifier service requires a JWT on connect. Browser
+ * WebSocket clients cannot set an `Authorization` header, so the access token
+ * from `localStorage` is sent as a secondary `Sec-WebSocket-Protocol` value.
+ * If no token is present, the provider waits and does not connect; if the
+ * server rejects with `1008` (policy violation, treated here as auth failure /
+ * closure on 401), we attempt to refresh the token via the existing API client
+ * and reconnect.
  *
  * Note: In React 18 StrictMode (development only), components mount twice to help detect
  * side effects. This may briefly create two WebSocket connections, but the first one is
@@ -76,18 +77,16 @@ export function WebSocketProvider({
   );
 
   /**
-   * Build the authenticated WebSocket URL by appending the current access
-   * token. Returns null if no token is available — caller should defer
-   * connection until the user logs in.
+   * Read the current access token. Returns null if no token is available —
+   * caller should defer connection until the user logs in.
    */
-  const buildAuthenticatedUrl = useCallback((): string | null => {
+  const getAccessToken = useCallback((): string | null => {
     const token = localStorage.getItem("access_token");
     if (!token) {
       return null;
     }
-    const sep = url.includes("?") ? "&" : "?";
-    return `${url}${sep}token=${encodeURIComponent(token)}`;
-  }, [url]);
+    return token;
+  }, []);
 
   const connect = useCallback(() => {
     // Don't reconnect if we're already connected, connecting, or explicitly disconnected
@@ -110,8 +109,8 @@ export function WebSocketProvider({
 
     const attemptConnect = () => {
       try {
-        const authedUrl = buildAuthenticatedUrl();
-        if (!authedUrl) {
+        const token = getAccessToken();
+        if (!token) {
           // No token yet — defer; the auth flow will trigger reconnect once
           // the user logs in (see `useEffect` below that watches storage).
           isConnectingRef.current = false;
@@ -119,7 +118,7 @@ export function WebSocketProvider({
         }
 
         isConnectingRef.current = true;
-        const ws = new WebSocket(authedUrl);
+        const ws = new WebSocket(url, ["attune.v1", `attune.jwt.${token}`]);
 
         ws.onopen = () => {
           setConnected(true);
@@ -226,7 +225,7 @@ export function WebSocketProvider({
     };
 
     attemptConnect();
-  }, [buildAuthenticatedUrl, reconnectInterval, maxReconnectAttempts]);
+  }, [getAccessToken, reconnectInterval, maxReconnectAttempts, url]);
 
   const disconnect = useCallback(() => {
     shouldConnectRef.current = false;

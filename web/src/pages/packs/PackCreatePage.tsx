@@ -62,9 +62,9 @@ export default function PackCreatePage() {
               </div>
             </div>
             <p className="text-xs text-blue-700 mt-3">
-              <strong>Tip:</strong> Use the "Register from Filesystem" option if
-              you have a pack directory with actions, sensors, and pack.yaml
-              metadata.
+              <strong>Tip:</strong> Use remote installation for existing pack
+              directories that are available from git, archives, or configured
+              registries.
             </p>
           </div>
         </div>

@@ -394,7 +394,7 @@ export function useWebSocketNotifications() {
       const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8081';
       const token = localStorage.getItem('access_token');
       
-      wsRef.current = new WebSocket(`${wsUrl}?token=${token}`);
+      wsRef.current = new WebSocket(wsUrl, ['attune.v1', `attune.jwt.${token}`]);
       
       wsRef.current.onopen = () => {
         console.log('WebSocket connected');

@@ -89,6 +89,40 @@ COMMENT ON COLUMN pack.installation_method IS 'Method used for installation (e.g
 COMMENT ON COLUMN pack.storage_path IS 'Filesystem path where pack files are stored';
 
 -- ============================================================================
+-- PACK REGISTRY INDEX TABLE
+-- ============================================================================
+
+CREATE TABLE pack_registry_index (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT,
+    url TEXT NOT NULL UNIQUE,
+    position INTEGER NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT pack_registry_index_url_not_empty CHECK (btrim(url) <> ''),
+    CONSTRAINT pack_registry_index_position_non_negative CHECK (position >= 0)
+);
+
+-- Indexes
+CREATE INDEX idx_pack_registry_index_order
+    ON pack_registry_index (enabled, position, id);
+
+-- Trigger
+CREATE TRIGGER update_pack_registry_index_updated
+    BEFORE UPDATE ON pack_registry_index
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_column();
+
+-- Comments
+COMMENT ON TABLE pack_registry_index IS 'Ordered API-managed pack index configuration';
+COMMENT ON COLUMN pack_registry_index.url IS 'Index file URL (https://, http://, or file://)';
+COMMENT ON COLUMN pack_registry_index.position IS 'Search order position; lower positions are checked first';
+COMMENT ON COLUMN pack_registry_index.headers IS 'Optional HTTP headers for fetching authenticated index files';
+
+-- ============================================================================
 -- RUNTIME TABLE
 -- ============================================================================
 

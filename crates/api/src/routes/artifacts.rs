@@ -15,7 +15,7 @@
 use axum::{
     body::Body,
     extract::{Multipart, Path, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse,
@@ -2103,13 +2103,6 @@ fn cleanup_empty_parents(dir: &std::path::Path, stop_at: &str) {
 // SSE file streaming
 // ============================================================================
 
-/// Query parameters for the artifact stream endpoint.
-#[derive(serde::Deserialize)]
-pub struct StreamArtifactParams {
-    /// JWT access token (SSE/EventSource cannot set Authorization header).
-    pub token: Option<String>,
-}
-
 /// Internal state machine for the `stream_artifact` SSE generator.
 ///
 /// We use `futures::stream::unfold` instead of `async_stream::stream!` to avoid
@@ -2213,7 +2206,6 @@ async fn final_read_bytes(full_path: &std::path::Path, offset: u64) -> Option<St
     tag = "artifacts",
     params(
         ("id" = i64, Path, description = "Artifact ID"),
-        ("token" = String, Query, description = "JWT access token for authentication"),
     ),
     responses(
         (status = 200, description = "SSE stream of file content", content_type = "text/event-stream"),
@@ -2224,13 +2216,19 @@ async fn final_read_bytes(full_path: &std::path::Path, offset: u64) -> Option<St
 pub async fn stream_artifact(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
-    Query(params): Query<StreamArtifactParams>,
+    headers: HeaderMap,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, ApiError> {
-    // --- auth (EventSource can't send headers, so token comes via query) ----
-    use crate::auth::jwt::validate_token;
+    // --- auth ---------------------------------------------------------------
+    use crate::auth::jwt::{extract_token_from_header, validate_token};
 
-    let token = params.token.as_ref().ok_or(ApiError::Unauthorized(
-        "Missing authentication token".to_string(),
+    let auth_header = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .ok_or(ApiError::Unauthorized(
+            "Missing authentication token".to_string(),
+        ))?;
+    let token = extract_token_from_header(auth_header).ok_or(ApiError::Unauthorized(
+        "Invalid authentication token".to_string(),
     ))?;
     let claims = validate_token(token, &state.jwt_config)
         .map_err(|_| ApiError::Unauthorized("Invalid authentication token".to_string()))?;

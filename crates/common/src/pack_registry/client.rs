@@ -361,4 +361,90 @@ mod tests {
         assert_eq!(registries[1].priority, 2);
         assert_eq!(registries[2].priority, 3);
     }
+
+    #[tokio::test]
+    async fn test_search_pack_uses_first_matching_index_by_priority() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let first = temp_dir.path().join("first.json");
+        let second = temp_dir.path().join("second.json");
+
+        tokio::fs::write(
+            &first,
+            r#"{
+                "registry_name": "First",
+                "registry_url": "file://first",
+                "version": "1.0",
+                "last_updated": "2026-05-04T00:00:00Z",
+                "packs": [{
+                    "ref": "demo",
+                    "label": "First Demo",
+                    "description": "First index wins",
+                    "use_case": "Preferred source",
+                    "version": "1.0.0",
+                    "author": "Test",
+                    "license": "Apache-2.0",
+                    "runtime_deps": [],
+                    "install_sources": [{"type": "git", "url": "https://example.com/first.git", "checksum": "sha256:first"}],
+                    "contents": {"actions": [{"name": "run", "description": "Run"}]}
+                }]
+            }"#,
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            &second,
+            r#"{
+                "registry_name": "Second",
+                "registry_url": "file://second",
+                "version": "1.0",
+                "last_updated": "2026-05-04T00:00:00Z",
+                "packs": [{
+                    "ref": "demo",
+                    "label": "Second Demo",
+                    "description": "Should not be selected",
+                    "version": "2.0.0",
+                    "author": "Test",
+                    "license": "Apache-2.0",
+                    "runtime_deps": [],
+                    "install_sources": [{"type": "archive", "url": "https://example.com/second.zip", "checksum": "sha256:second"}],
+                    "contents": {}
+                }]
+            }"#,
+        )
+        .await
+        .unwrap();
+
+        let config = PackRegistryConfig {
+            enabled: true,
+            indices: vec![
+                RegistryIndexConfig {
+                    url: format!("file://{}", second.display()),
+                    priority: 20,
+                    enabled: true,
+                    name: Some("Second".to_string()),
+                    headers: HashMap::new(),
+                },
+                RegistryIndexConfig {
+                    url: format!("file://{}", first.display()),
+                    priority: 10,
+                    enabled: true,
+                    name: Some("First".to_string()),
+                    headers: HashMap::new(),
+                },
+            ],
+            cache_ttl: 3600,
+            cache_enabled: false,
+            timeout: 120,
+            verify_checksums: true,
+            allowed_source_hosts: Vec::new(),
+            allow_http: false,
+        };
+
+        let client = RegistryClient::new(config).unwrap();
+        let (pack, registry_url) = client.search_pack("demo").await.unwrap().unwrap();
+
+        assert_eq!(pack.label, "First Demo");
+        assert_eq!(pack.use_case.as_deref(), Some("Preferred source"));
+        assert!(registry_url.ends_with("first.json"));
+    }
 }

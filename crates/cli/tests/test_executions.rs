@@ -154,7 +154,7 @@ async fn test_execution_list_with_status_filter() {
         .and(path("/api/v1/executions"))
         .and(query_param("status", "succeeded"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": [
+            "items": [
                 {
                     "id": 1,
                     "action_ref": "core.echo",
@@ -165,7 +165,13 @@ async fn test_execution_list_with_status_filter() {
                     "created": "2024-01-01T00:00:00Z",
                     "updated": "2024-01-01T00:00:00Z"
                 }
-            ]
+            ],
+            "pagination": {
+                "page": 1,
+                "page_size": 50,
+                "has_previous": false,
+                "has_next": false
+            }
         })))
         .mount(&fixture.mock_server)
         .await;
@@ -247,7 +253,7 @@ async fn test_execution_list_with_pack_filter() {
         .and(path("/api/v1/executions"))
         .and(query_param("pack_name", "core"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": [
+            "items": [
                 {
                     "id": 1,
                     "action_ref": "core.echo",
@@ -258,7 +264,13 @@ async fn test_execution_list_with_pack_filter() {
                     "created": "2024-01-01T00:00:00Z",
                     "updated": "2024-01-01T00:00:00Z"
                 }
-            ]
+            ],
+            "pagination": {
+                "page": 1,
+                "page_size": 50,
+                "has_previous": false,
+                "has_next": false
+            }
         })))
         .mount(&fixture.mock_server)
         .await;
@@ -292,7 +304,7 @@ async fn test_execution_list_with_action_filter() {
         .and(path("/api/v1/executions"))
         .and(query_param("action_ref", "core.echo"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": [
+            "items": [
                 {
                     "id": 1,
                     "action_ref": "core.echo",
@@ -303,7 +315,13 @@ async fn test_execution_list_with_action_filter() {
                     "created": "2024-01-01T00:00:00Z",
                     "updated": "2024-01-01T00:00:00Z"
                 }
-            ]
+            ],
+            "pagination": {
+                "page": 1,
+                "page_size": 50,
+                "has_previous": false,
+                "has_next": false
+            }
         })))
         .mount(&fixture.mock_server)
         .await;
@@ -338,7 +356,7 @@ async fn test_execution_list_multiple_filters() {
         .and(query_param("status", "succeeded"))
         .and(query_param("pack_name", "core"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": [
+            "items": [
                 {
                     "id": 1,
                     "action_ref": "core.echo",
@@ -349,7 +367,13 @@ async fn test_execution_list_multiple_filters() {
                     "created": "2024-01-01T00:00:00Z",
                     "updated": "2024-01-01T00:00:00Z"
                 }
-            ]
+            ],
+            "pagination": {
+                "page": 1,
+                "page_size": 50,
+                "has_previous": false,
+                "has_next": false
+            }
         })))
         .mount(&fixture.mock_server)
         .await;
@@ -427,7 +451,13 @@ async fn test_execution_list_empty_result() {
     Mock::given(method("GET"))
         .and(path("/api/v1/executions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": []
+            "items": [],
+            "pagination": {
+                "page": 1,
+                "page_size": 50,
+                "has_previous": false,
+                "has_next": false
+            }
         })))
         .mount(&fixture.mock_server)
         .await;
@@ -479,7 +509,7 @@ async fn test_execution_list_with_rule_trigger_and_top_level_filters() {
         .and(query_param("trigger_ref", "core.timer"))
         .and(query_param("top_level_only", "true"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": [
+            "items": [
                 {
                     "id": 1,
                     "action_ref": "core.echo",
@@ -492,7 +522,13 @@ async fn test_execution_list_with_rule_trigger_and_top_level_filters() {
                     "created": "2024-01-01T00:00:00Z",
                     "updated": "2024-01-01T00:00:00Z"
                 }
-            ]
+            ],
+            "pagination": {
+                "page": 1,
+                "page_size": 50,
+                "has_previous": false,
+                "has_next": false
+            }
         })))
         .mount(&fixture.mock_server)
         .await;
@@ -532,7 +568,13 @@ async fn test_execution_watch_streams_updates() {
         .and(query_param("status", "running"))
         .and(query_param("top_level_only", "true"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": []
+            "items": [],
+            "pagination": {
+                "page": 1,
+                "page_size": 50,
+                "has_previous": false,
+                "has_next": false
+            }
         })))
         .mount(&fixture.mock_server)
         .await;

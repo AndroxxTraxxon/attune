@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::Subcommand;
+use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -11,69 +11,8 @@ use crate::output::{self, OutputFormat};
 pub enum AuditCommands {
     /// List audit events with optional filters
     List {
-        /// Category (api, auth, rbac, secret, admin, execution, pack)
-        #[arg(long)]
-        category: Option<String>,
-
-        /// Exact event_type match (e.g., "auth.login.success")
-        #[arg(long)]
-        event_type: Option<String>,
-
-        /// Outcome (success, failure, denied)
-        #[arg(long)]
-        outcome: Option<String>,
-
-        /// Substring match against actor login
-        #[arg(long)]
-        actor_login: Option<String>,
-
-        /// Actor identity numeric id
-        #[arg(long)]
-        actor_identity: Option<i64>,
-
-        /// Resource type filter (e.g., "key", "execution")
-        #[arg(long)]
-        resource_type: Option<String>,
-
-        /// Resource numeric id
-        #[arg(long)]
-        resource_id: Option<i64>,
-
-        /// Resource ref filter (snapshot at event time)
-        #[arg(long)]
-        resource_ref: Option<String>,
-
-        /// HTTP method filter (GET, POST, ...)
-        #[arg(long)]
-        http_method: Option<String>,
-
-        /// HTTP status code filter (e.g., 401)
-        #[arg(long)]
-        http_status: Option<i32>,
-
-        /// Substring match on http_path
-        #[arg(long)]
-        http_path: Option<String>,
-
-        /// Request id (UUID) filter
-        #[arg(long)]
-        request_id: Option<String>,
-
-        /// ISO-8601 lower bound on `created`
-        #[arg(long)]
-        after: Option<String>,
-
-        /// ISO-8601 upper bound on `created`
-        #[arg(long)]
-        before: Option<String>,
-
-        /// Page number (default 1)
-        #[arg(long, default_value = "1")]
-        page: u32,
-
-        /// Items per page (default 50)
-        #[arg(long, default_value = "50")]
-        per_page: u32,
+        #[command(flatten)]
+        args: Box<AuditListArgs>,
     },
 
     /// Show a single audit event by id
@@ -87,6 +26,73 @@ pub enum AuditCommands {
         /// Request id (UUID)
         request_id: String,
     },
+}
+
+#[derive(Args)]
+pub struct AuditListArgs {
+    /// Category (api, auth, rbac, secret, admin, execution, pack)
+    #[arg(long)]
+    category: Option<String>,
+
+    /// Exact event_type match (e.g., "auth.login.success")
+    #[arg(long)]
+    event_type: Option<String>,
+
+    /// Outcome (success, failure, denied)
+    #[arg(long)]
+    outcome: Option<String>,
+
+    /// Substring match against actor login
+    #[arg(long)]
+    actor_login: Option<String>,
+
+    /// Actor identity numeric id
+    #[arg(long)]
+    actor_identity: Option<i64>,
+
+    /// Resource type filter (e.g., "key", "execution")
+    #[arg(long)]
+    resource_type: Option<String>,
+
+    /// Resource numeric id
+    #[arg(long)]
+    resource_id: Option<i64>,
+
+    /// Resource ref filter (snapshot at event time)
+    #[arg(long)]
+    resource_ref: Option<String>,
+
+    /// HTTP method filter (GET, POST, ...)
+    #[arg(long)]
+    http_method: Option<String>,
+
+    /// HTTP status code filter (e.g., 401)
+    #[arg(long)]
+    http_status: Option<i32>,
+
+    /// Substring match on http_path
+    #[arg(long)]
+    http_path: Option<String>,
+
+    /// Request id (UUID) filter
+    #[arg(long)]
+    request_id: Option<String>,
+
+    /// ISO-8601 lower bound on `created`
+    #[arg(long)]
+    after: Option<String>,
+
+    /// ISO-8601 upper bound on `created`
+    #[arg(long)]
+    before: Option<String>,
+
+    /// Page number (default 1)
+    #[arg(long, default_value = "1")]
+    page: u32,
+
+    /// Items per page (default 50)
+    #[arg(long, default_value = "50")]
+    per_page: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,7 +144,7 @@ pub async fn handle_audit_command(
     output_format: OutputFormat,
 ) -> Result<()> {
     match command {
-        AuditCommands::List { .. } => handle_list(profile, command, api_url, output_format).await,
+        AuditCommands::List { args } => handle_list(profile, *args, api_url, output_format).await,
         AuditCommands::Show { id } => handle_show(profile, id, api_url, output_format).await,
         AuditCommands::Chain { request_id } => {
             handle_chain(profile, request_id, api_url, output_format).await
@@ -148,11 +154,11 @@ pub async fn handle_audit_command(
 
 async fn handle_list(
     profile: &Option<String>,
-    command: AuditCommands,
+    args: AuditListArgs,
     api_url: &Option<String>,
     output_format: OutputFormat,
 ) -> Result<()> {
-    let AuditCommands::List {
+    let AuditListArgs {
         category,
         event_type,
         outcome,
@@ -169,10 +175,7 @@ async fn handle_list(
         before,
         page,
         per_page,
-    } = command
-    else {
-        unreachable!()
-    };
+    } = args;
 
     let config = CliConfig::load_with_profile(profile.as_deref())?;
     let mut client = ApiClient::from_config(&config, api_url);

@@ -14,7 +14,6 @@ const OidcCallbackPage = lazy(() => import("@/pages/auth/OidcCallbackPage"));
 const DashboardPage = lazy(() => import("@/pages/dashboard/DashboardPage"));
 const PacksPage = lazy(() => import("@/pages/packs/PacksPage"));
 const PackCreatePage = lazy(() => import("@/pages/packs/PackCreatePage"));
-const PackRegisterPage = lazy(() => import("@/pages/packs/PackRegisterPage"));
 const PackInstallPage = lazy(() => import("@/pages/packs/PackInstallPage"));
 const PackEditPage = lazy(() => import("@/pages/packs/PackEditPage"));
 const ActionsPage = lazy(() => import("@/pages/actions/ActionsPage"));
@@ -97,7 +96,6 @@ function App() {
                   <Route index element={<DashboardPage />} />
                   <Route path="packs" element={<PacksPage />} />
                   <Route path="packs/new" element={<PackCreatePage />} />
-                  <Route path="packs/register" element={<PackRegisterPage />} />
                   <Route path="packs/install" element={<PackInstallPage />} />
                   <Route path="packs/:ref" element={<PacksPage />} />
                   <Route path="packs/:ref/edit" element={<PackEditPage />} />

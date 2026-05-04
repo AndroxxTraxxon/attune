@@ -21,6 +21,7 @@ pub use inquiry::*;
 pub use key::*;
 pub use notification::*;
 pub use pack::*;
+pub use pack_registry_index::*;
 pub use pack_test::*;
 pub use rule::*;
 pub use runtime::*;
@@ -471,6 +472,22 @@ pub mod pack {
         pub installed_by: Option<Id>,
         pub installation_method: Option<String>,
         pub storage_path: Option<String>,
+        pub created: DateTime<Utc>,
+        pub updated: DateTime<Utc>,
+    }
+}
+
+pub mod pack_registry_index {
+    use super::*;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+    pub struct PackRegistryIndex {
+        pub id: Id,
+        pub name: Option<String>,
+        pub url: String,
+        pub position: i32,
+        pub enabled: bool,
+        pub headers: JsonDict,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
     }
