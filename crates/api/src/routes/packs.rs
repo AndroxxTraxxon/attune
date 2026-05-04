@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use validator::Validate;
 
+use attune_common::audit::{event_type, AuditCategory, AuditEventBuilder, AuditOutcome};
 use attune_common::models::{pack_test::PackTestResult, Pack};
 use attune_common::mq::{MessageEnvelope, MessageType, PackRegisteredPayload};
 use attune_common::rbac::{Action, AuthorizationContext, Grant, Resource};
@@ -224,6 +225,18 @@ pub async fn create_pack(
         }
     }
 
+    emit_pack_audit(
+        &state,
+        &user,
+        event_type::pack::CREATED,
+        &pack,
+        serde_json::json!({
+            "version": pack.version.as_str(),
+            "is_standard": pack.is_standard,
+            "installed_by": pack.installed_by,
+        }),
+    );
+
     let response = ApiResponse::with_message(PackResponse::from(pack), "Pack created successfully");
 
     Ok((StatusCode::CREATED, Json(response)))
@@ -336,6 +349,18 @@ pub async fn update_pack(
         }
     }
 
+    emit_pack_audit(
+        &state,
+        &user,
+        event_type::pack::UPDATED,
+        &pack,
+        serde_json::json!({
+            "version": pack.version.as_str(),
+            "is_standard": pack.is_standard,
+            "installed_by": pack.installed_by,
+        }),
+    );
+
     let response = ApiResponse::with_message(PackResponse::from(pack), "Pack updated successfully");
 
     Ok((StatusCode::OK, Json(response)))
@@ -418,6 +443,19 @@ pub async fn delete_pack(
             tracing::info!("Removed pack directory: {}", pack_dir.display());
         }
     }
+
+    emit_pack_audit(
+        &state,
+        &user,
+        event_type::pack::DELETED,
+        &pack,
+        serde_json::json!({
+            "version": pack.version.as_str(),
+            "is_standard": pack.is_standard,
+            "installed_by": pack.installed_by,
+            "storage_removed": !pack_dir.exists(),
+        }),
+    );
 
     let response = SuccessResponse::new(format!("Pack '{}' deleted successfully", pack_ref));
 
@@ -705,7 +743,7 @@ pub async fn upload_pack(
     // Register the pack in the database
     let pack_id = register_pack_internal(
         state.clone(),
-        user.claims.sub,
+        user.claims.sub.clone(),
         final_path.to_string_lossy().to_string(),
         force,
         skip_tests,
@@ -720,6 +758,19 @@ pub async fn upload_pack(
     let pack = PackRepository::find_by_id(&state.db, pack_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Pack with ID {} not found", pack_id)))?;
+
+    emit_pack_audit(
+        &state,
+        &user,
+        event_type::pack::UPLOADED,
+        &pack,
+        serde_json::json!({
+            "version": pack.version.as_str(),
+            "force": force,
+            "skip_tests": skip_tests,
+            "archive_size_bytes": pack_data.len(),
+        }),
+    );
 
     let response = ApiResponse::with_message(
         PackInstallResponse {
@@ -998,7 +1049,7 @@ pub async fn register_pack(
     // Call internal registration logic
     let pack_id = register_pack_internal(
         state.clone(),
-        user.claims.sub,
+        user.claims.sub.clone(),
         request.path.clone(),
         request.force,
         request.skip_tests,
@@ -1009,6 +1060,19 @@ pub async fn register_pack(
     let pack = PackRepository::find_by_id(&state.db, pack_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Pack with ID {} not found", pack_id)))?;
+
+    emit_pack_audit(
+        &state,
+        &user,
+        event_type::pack::REGISTERED,
+        &pack,
+        serde_json::json!({
+            "path": request.path,
+            "version": pack.version.as_str(),
+            "force": request.force,
+            "skip_tests": request.skip_tests,
+        }),
+    );
 
     let response =
         ApiResponse::with_message(PackResponse::from(pack), "Pack registered successfully");
@@ -1764,6 +1828,20 @@ pub async fn install_pack(
 
     // Clean up temp directory
     let _ = installer.cleanup(&installed.path).await;
+
+    emit_pack_audit(
+        &state,
+        &user,
+        event_type::pack::INSTALLED,
+        &pack,
+        serde_json::json!({
+            "source": request.source,
+            "ref_spec": request.ref_spec,
+            "version": pack.version.as_str(),
+            "skip_tests": request.skip_tests,
+            "checksum": checksum,
+        }),
+    );
 
     let response = PackInstallResponse {
         pack: PackResponse::from(pack),
@@ -2776,6 +2854,30 @@ fn constrained_pack_grant_allows(
             && pack_scoped
             && grant.allows(Resource::Packs, action, ctx)
     })
+}
+
+fn emit_pack_audit(
+    state: &Arc<AppState>,
+    user: &crate::auth::middleware::AuthenticatedUser,
+    event_type: &'static str,
+    pack: &Pack,
+    details: serde_json::Value,
+) {
+    let mut builder =
+        AuditEventBuilder::new(AuditCategory::Pack, event_type, AuditOutcome::Success)
+            .resource("pack")
+            .resource_id(pack.id)
+            .resource_ref(pack.r#ref.clone())
+            .with_details(details);
+
+    if let Ok(identity_id) = user.identity_id() {
+        builder = builder.actor_identity(identity_id);
+    }
+    builder = builder
+        .actor_login(user.login().to_string())
+        .actor_token_type(format!("{:?}", user.claims.token_type).to_lowercase());
+
+    state.audit_emitter.emit(builder.build());
 }
 
 #[cfg(test)]

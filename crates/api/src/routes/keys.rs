@@ -18,6 +18,7 @@ use attune_common::repositories::{
     Create, Delete, FindByRef, Update,
 };
 use attune_common::{
+    audit::{event_type, AuditCategory, AuditEventBuilder, AuditOutcome, PendingAuditEvent},
     models::{key::Key, OwnerType},
     rbac::{Action, AuthorizationContext, Grant, Resource},
 };
@@ -169,6 +170,30 @@ pub async fn get_key(
             key.value = serde_json::Value::Null;
         }
     }
+
+    emit_key_audit(
+        &state,
+        &user,
+        if key.encrypted && can_decrypt {
+            event_type::secret::KEY_DECRYPTED
+        } else {
+            event_type::secret::KEY_READ
+        },
+        AuditOutcome::Success,
+        &key,
+        serde_json::json!({
+            "encrypted": key.encrypted,
+            "decrypted": key.encrypted && can_decrypt,
+            "owner_type": key.owner_type,
+            "owner_ref": key_owner_ref(
+                key.owner_type,
+                key.owner.as_deref(),
+                key.owner_pack_ref.as_deref(),
+                key.owner_action_ref.as_deref(),
+                key.owner_sensor_ref.as_deref(),
+            ),
+        }),
+    );
 
     let response = ApiResponse::new(KeyResponse::from(key));
 
@@ -354,6 +379,26 @@ pub async fn create_key(
             })?;
     }
 
+    emit_key_audit(
+        &state,
+        &user,
+        event_type::secret::KEY_CREATED,
+        AuditOutcome::Success,
+        &key,
+        serde_json::json!({
+            "encrypted": key.encrypted,
+            "owner_type": key.owner_type,
+            "owner_ref": key_owner_ref(
+                key.owner_type,
+                key.owner.as_deref(),
+                key.owner_pack_ref.as_deref(),
+                key.owner_action_ref.as_deref(),
+                key.owner_sensor_ref.as_deref(),
+            ),
+            "value": "***",
+        }),
+    );
+
     let response = ApiResponse::with_message(KeyResponse::from(key), "Key created successfully");
 
     Ok((StatusCode::CREATED, Json(response)))
@@ -465,6 +510,27 @@ pub async fn update_key(
             })?;
     }
 
+    emit_key_audit(
+        &state,
+        &user,
+        event_type::secret::KEY_UPDATED,
+        AuditOutcome::Success,
+        &updated_key,
+        serde_json::json!({
+            "encrypted": updated_key.encrypted,
+            "owner_type": updated_key.owner_type,
+            "owner_ref": key_owner_ref(
+                updated_key.owner_type,
+                updated_key.owner.as_deref(),
+                updated_key.owner_pack_ref.as_deref(),
+                updated_key.owner_action_ref.as_deref(),
+                updated_key.owner_sensor_ref.as_deref(),
+            ),
+            "value_updated": updated_key.value != existing.value,
+            "value": "***",
+        }),
+    );
+
     let response =
         ApiResponse::with_message(KeyResponse::from(updated_key), "Key updated successfully");
 
@@ -517,6 +583,25 @@ pub async fn delete_key(
     }
 
     let response = SuccessResponse::new("Key deleted successfully");
+
+    emit_key_audit(
+        &state,
+        &user,
+        event_type::secret::KEY_DELETED,
+        AuditOutcome::Success,
+        &key,
+        serde_json::json!({
+            "encrypted": key.encrypted,
+            "owner_type": key.owner_type,
+            "owner_ref": key_owner_ref(
+                key.owner_type,
+                key.owner.as_deref(),
+                key.owner_pack_ref.as_deref(),
+                key.owner_action_ref.as_deref(),
+                key.owner_sensor_ref.as_deref(),
+            ),
+        }),
+    );
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -600,5 +685,118 @@ fn key_owner_ref(
         OwnerType::Action => owner_action_ref.map(str::to_string),
         OwnerType::Sensor => owner_sensor_ref.map(str::to_string),
         _ => owner.map(str::to_string),
+    }
+}
+
+fn emit_key_audit(
+    state: &Arc<AppState>,
+    user: &RequireAuth,
+    event_type: &'static str,
+    outcome: AuditOutcome,
+    key: &Key,
+    details: serde_json::Value,
+) {
+    state.audit_emitter.emit(build_key_audit_event(
+        user, event_type, outcome, key, details,
+    ));
+}
+
+fn build_key_audit_event(
+    user: &RequireAuth,
+    event_type: &'static str,
+    outcome: AuditOutcome,
+    key: &Key,
+    details: serde_json::Value,
+) -> PendingAuditEvent {
+    let mut builder = AuditEventBuilder::new(AuditCategory::Secret, event_type, outcome)
+        .resource("key")
+        .resource_id(key.id)
+        .resource_ref(key.r#ref.clone())
+        .with_details(details);
+
+    if let Ok(identity_id) = user.0.identity_id() {
+        builder = builder.actor_identity(identity_id);
+    }
+    builder = builder
+        .actor_login(user.0.login().to_string())
+        .actor_token_type(format!("{:?}", user.0.claims.token_type).to_lowercase());
+
+    builder.build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::{
+        jwt::{Claims, TokenType},
+        middleware::AuthenticatedUser,
+    };
+    use chrono::Utc;
+
+    fn test_user() -> RequireAuth {
+        RequireAuth(AuthenticatedUser {
+            claims: Claims {
+                sub: "42".to_string(),
+                login: "secret-reader@example.test".to_string(),
+                iat: 1,
+                exp: 999_999,
+                token_type: TokenType::Access,
+                scope: None,
+                metadata: None,
+            },
+        })
+    }
+
+    fn test_key() -> Key {
+        let now = Utc::now();
+        Key {
+            id: 123,
+            r#ref: "finance.api_token".to_string(),
+            owner_type: OwnerType::Identity,
+            owner: Some("finance".to_string()),
+            owner_identity: Some(42),
+            owner_pack: None,
+            owner_pack_ref: None,
+            owner_action: None,
+            owner_action_ref: None,
+            owner_sensor: None,
+            owner_sensor_ref: None,
+            name: "Finance API token".to_string(),
+            encrypted: true,
+            encryption_key_hash: Some("sha256:redacted".to_string()),
+            value: serde_json::json!("super-secret-token"),
+            created: now,
+            updated: now,
+        }
+    }
+
+    #[test]
+    fn key_decrypt_audit_event_redacts_secret_value() {
+        let event = build_key_audit_event(
+            &test_user(),
+            event_type::secret::KEY_DECRYPTED,
+            AuditOutcome::Success,
+            &test_key(),
+            serde_json::json!({
+                "encrypted": true,
+                "decrypted": true,
+                "owner_type": OwnerType::Identity,
+                "owner_ref": "finance",
+                "value": "***",
+            }),
+        );
+
+        assert_eq!(event.category, AuditCategory::Secret);
+        assert_eq!(event.event_type, event_type::secret::KEY_DECRYPTED);
+        assert_eq!(event.outcome, AuditOutcome::Success);
+        assert_eq!(event.actor_identity, Some(42));
+        assert_eq!(event.resource_type.as_deref(), Some("key"));
+        assert_eq!(event.resource_id, Some(123));
+        assert_eq!(event.resource_ref.as_deref(), Some("finance.api_token"));
+
+        let serialized = serde_json::to_string(&event.details.expect("details")).unwrap();
+        assert!(serialized.contains("\"value\":\"***\""));
+        assert!(!serialized.contains("super-secret-token"));
+        assert!(!serialized.contains("sha256:redacted"));
     }
 }

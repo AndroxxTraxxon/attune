@@ -41,6 +41,96 @@ pub use emitter::AuditEmitter;
 pub use repository::{AuditEventFilters, AuditRepository, AuditSearchResult};
 pub use writer::{spawn_writer, AuditWriterHandle};
 
+/// Canonical semantic audit event names.
+///
+/// Generic HTTP request audit events remain useful as a safety net, but these
+/// dotted event names are the stable compliance-facing contract for sensitive
+/// operations. Emitters should use the most specific event name available and
+/// populate actor, resource, request/correlation, outcome, and redacted details.
+pub mod event_type {
+    pub mod auth {
+        pub const LOGIN_SUCCESS: &str = "auth.login.success";
+        pub const LOGIN_FAILURE: &str = "auth.login.failure";
+        pub const REGISTER_SUCCESS: &str = "auth.register.success";
+        pub const TOKEN_REFRESH_SUCCESS: &str = "auth.token_refresh.success";
+        pub const TOKEN_REFRESH_FAILURE: &str = "auth.token_refresh.failure";
+    }
+
+    pub mod rbac {
+        pub const DENIED: &str = "rbac.denied";
+        pub const ALLOWED_PRIVILEGED: &str = "rbac.allowed.privileged";
+    }
+
+    pub mod admin {
+        pub const IDENTITY_CREATED: &str = "admin.identity.created";
+        pub const IDENTITY_UPDATED: &str = "admin.identity.updated";
+        pub const IDENTITY_DELETED: &str = "admin.identity.deleted";
+        pub const ROLE_ASSIGNMENT_CHANGED: &str = "admin.role_assignment.changed";
+        pub const PERMISSION_SET_CHANGED: &str = "admin.permission_set.changed";
+        pub const PERMISSION_ASSIGNMENT_CHANGED: &str = "admin.permission_assignment.changed";
+        pub const SECURITY_CONFIG_CHANGED: &str = "admin.security_config.changed";
+    }
+
+    pub mod secret {
+        pub const KEY_CREATED: &str = "secret.key.created";
+        pub const KEY_READ: &str = "secret.key.read";
+        pub const KEY_DECRYPTED: &str = "secret.key.decrypted";
+        pub const KEY_UPDATED: &str = "secret.key.updated";
+        pub const KEY_DELETED: &str = "secret.key.deleted";
+    }
+
+    pub mod artifact {
+        pub const CREATED: &str = "artifact.created";
+        pub const READ: &str = "artifact.read";
+        pub const DOWNLOADED: &str = "artifact.downloaded";
+        pub const UPDATED: &str = "artifact.updated";
+        pub const DELETED: &str = "artifact.deleted";
+    }
+
+    pub mod pack {
+        pub const CREATED: &str = "pack.created";
+        pub const UPLOADED: &str = "pack.uploaded";
+        pub const REGISTERED: &str = "pack.registered";
+        pub const INSTALLED: &str = "pack.installed";
+        pub const UPDATED: &str = "pack.updated";
+        pub const DELETED: &str = "pack.deleted";
+    }
+
+    pub mod definition {
+        pub const ACTION_CHANGED: &str = "definition.action.changed";
+        pub const RULE_CHANGED: &str = "definition.rule.changed";
+        pub const TRIGGER_CHANGED: &str = "definition.trigger.changed";
+        pub const SENSOR_CHANGED: &str = "definition.sensor.changed";
+        pub const WORKFLOW_CHANGED: &str = "definition.workflow.changed";
+        pub const QUEUE_CHANGED: &str = "definition.queue.changed";
+        pub const RUNTIME_CHANGED: &str = "definition.runtime.changed";
+    }
+
+    pub mod execution {
+        pub const REQUESTED: &str = "execution.requested";
+        pub const SCHEDULED: &str = "execution.scheduled";
+        pub const STARTED: &str = "execution.started";
+        pub const COMPLETED: &str = "execution.completed";
+        pub const FAILED: &str = "execution.failed";
+        pub const TIMED_OUT: &str = "execution.timed_out";
+        pub const CANCELLED: &str = "execution.cancelled";
+        pub const RETRIED: &str = "execution.retried";
+        pub const WORKFLOW_CHILD_DISPATCHED: &str = "execution.workflow_child_dispatched";
+    }
+
+    pub mod audit_log {
+        pub const READ: &str = "audit_log.read";
+        pub const EXPORTED: &str = "audit_log.exported";
+        pub const RETENTION_CHANGED: &str = "audit_log.retention_changed";
+        pub const EXPORT_CONFIG_CHANGED: &str = "audit_log.export_config_changed";
+    }
+
+    pub mod security {
+        pub const RATE_LIMITED: &str = "security.rate_limited";
+        pub const WEBHOOK_SECRET_CHANGED: &str = "security.webhook_secret.changed";
+    }
+}
+
 /// Top-level category for an audit event.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, utoipa::ToSchema,
@@ -338,5 +428,35 @@ mod tests {
             .actor_ip_str("not-an-ip")
             .build();
         assert!(evt.actor_ip.is_none());
+    }
+
+    #[test]
+    fn semantic_event_names_are_stable() {
+        assert_eq!(event_type::rbac::DENIED, "rbac.denied");
+        assert_eq!(event_type::secret::KEY_DECRYPTED, "secret.key.decrypted");
+        assert_eq!(event_type::pack::UPLOADED, "pack.uploaded");
+        assert_eq!(event_type::execution::COMPLETED, "execution.completed");
+        assert_eq!(event_type::audit_log::READ, "audit_log.read");
+    }
+
+    #[test]
+    fn redacted_params_do_not_store_secret_values() {
+        let evt = AuditEventBuilder::new(
+            AuditCategory::Secret,
+            event_type::secret::KEY_CREATED,
+            AuditOutcome::Success,
+        )
+        .with_redacted_params(&json!({
+            "api_key": "super-secret",
+            "nested": { "password": "hunter2" },
+        }))
+        .build();
+
+        let details = evt.details.expect("details");
+        let serialized = serde_json::to_string(&details).expect("serialize details");
+        assert!(!serialized.contains("super-secret"));
+        assert!(!serialized.contains("hunter2"));
+        assert!(serialized.contains("api_key"));
+        assert!(serialized.contains("password"));
     }
 }

@@ -134,6 +134,92 @@ CREATE INDEX idx_audit_event_details
     ON audit_event USING GIN (details);
 
 -- ============================================================================
+-- EXECUTION LIFECYCLE AUDIT TRIGGER
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION audit_execution_lifecycle()
+RETURNS TRIGGER AS $$
+DECLARE
+    event_name TEXT;
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        event_name := CASE NEW.status::text
+            WHEN 'requested' THEN 'execution.requested'
+            WHEN 'scheduled' THEN 'execution.scheduled'
+            WHEN 'running' THEN 'execution.started'
+            WHEN 'completed' THEN 'execution.completed'
+            WHEN 'failed' THEN 'execution.failed'
+            WHEN 'timeout' THEN 'execution.timed_out'
+            WHEN 'cancelled' THEN 'execution.cancelled'
+            ELSE 'execution.status_changed'
+        END;
+    ELSIF TG_OP = 'UPDATE' AND NEW.status IS DISTINCT FROM OLD.status THEN
+        event_name := CASE NEW.status::text
+            WHEN 'scheduled' THEN 'execution.scheduled'
+            WHEN 'running' THEN 'execution.started'
+            WHEN 'completed' THEN 'execution.completed'
+            WHEN 'failed' THEN 'execution.failed'
+            WHEN 'timeout' THEN 'execution.timed_out'
+            WHEN 'cancelled' THEN 'execution.cancelled'
+            WHEN 'canceling' THEN 'execution.canceling'
+            WHEN 'abandoned' THEN 'execution.abandoned'
+            ELSE 'execution.status_changed'
+        END;
+    ELSE
+        RETURN NEW;
+    END IF;
+
+    INSERT INTO audit_event (
+        category,
+        event_type,
+        outcome,
+        actor_identity,
+        resource_type,
+        resource_id,
+        resource_ref,
+        details,
+        correlation_chain
+    ) VALUES (
+        'execution'::audit_category_enum,
+        event_name,
+        CASE
+            WHEN NEW.status::text IN ('failed', 'timeout', 'abandoned') THEN 'failure'::audit_outcome_enum
+            ELSE 'success'::audit_outcome_enum
+        END,
+        NEW.executor,
+        'execution',
+        NEW.id,
+        NEW.action_ref,
+        jsonb_strip_nulls(jsonb_build_object(
+            'operation', lower(TG_OP),
+            'old_status', CASE WHEN TG_OP = 'UPDATE' THEN OLD.status::text ELSE NULL END,
+            'new_status', NEW.status::text,
+            'action_ref', NEW.action_ref,
+            'parent_execution_id', NEW.parent,
+            'enforcement_id', NEW.enforcement,
+            'worker_id', NEW.worker,
+            'retry_count', NEW.retry_count,
+            'max_retries', NEW.max_retries,
+            'original_execution', NEW.original_execution
+        )),
+        jsonb_strip_nulls(jsonb_build_object(
+            'execution_id', NEW.id,
+            'parent_execution_id', NEW.parent,
+            'enforcement_id', NEW.enforcement
+        ))
+    );
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_audit_execution_lifecycle ON execution;
+CREATE TRIGGER trg_audit_execution_lifecycle
+    AFTER INSERT OR UPDATE OF status ON execution
+    FOR EACH ROW
+    EXECUTE FUNCTION audit_execution_lifecycle();
+
+-- ============================================================================
 -- COMPRESSION + RETENTION
 -- ============================================================================
 

@@ -11,7 +11,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use attune_common::{
-    audit::{AuditEventFilters, AuditRepository},
+    audit::{
+        event_type, AuditCategory, AuditEventBuilder, AuditEventFilters, AuditOutcome,
+        AuditRepository,
+    },
     rbac::{Action, AuthorizationContext, Resource},
 };
 
@@ -96,6 +99,35 @@ pub async fn list_audit_events(
         PaginatedResponse::without_totals(rows, &pagination_params, result.has_next)
     };
 
+    emit_audit_log_access(
+        &state,
+        &user.0,
+        event_type::audit_log::READ,
+        None,
+        serde_json::json!({
+            "operation": "list",
+            "filters": {
+                "category": query.category,
+                "event_type": query.event_type,
+                "outcome": query.outcome,
+                "actor_identity": query.actor_identity,
+                "actor_login": query.actor_login,
+                "resource_type": query.resource_type,
+                "resource_id": query.resource_id,
+                "resource_ref": query.resource_ref,
+                "request_id": query.request_id,
+                "http_status": query.http_status,
+                "http_method": query.http_method,
+                "http_path": query.http_path,
+                "created_after": query.created_after,
+                "created_before": query.created_before,
+            },
+            "page": query.page,
+            "per_page": query.per_page,
+            "returned": response.items.len(),
+        }),
+    );
+
     Ok((StatusCode::OK, Json(response)))
 }
 
@@ -127,6 +159,16 @@ pub async fn get_audit_event(
         .ok_or_else(|| ApiError::NotFound(format!("Audit event {} not found", id)))?;
 
     let response = ApiResponse::new(AuditEventResponse::from(event));
+    emit_audit_log_access(
+        &state,
+        &user.0,
+        event_type::audit_log::READ,
+        Some(id),
+        serde_json::json!({
+            "operation": "get",
+            "audit_event_id": id,
+        }),
+    );
     Ok((StatusCode::OK, Json(response)))
 }
 
@@ -155,6 +197,18 @@ pub async fn get_audit_events_by_request(
     let events = AuditRepository::find_by_request_id(&state.db, request_id).await?;
     let rows: Vec<AuditEventResponse> = events.into_iter().map(AuditEventResponse::from).collect();
 
+    emit_audit_log_access(
+        &state,
+        &user.0,
+        event_type::audit_log::READ,
+        None,
+        serde_json::json!({
+            "operation": "by_request",
+            "request_id": request_id,
+            "returned": rows.len(),
+        }),
+    );
+
     Ok((StatusCode::OK, Json(ApiResponse::new(rows))))
 }
 
@@ -167,4 +221,29 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/audit-events/by-request/{request_id}",
             get(get_audit_events_by_request),
         )
+}
+
+fn emit_audit_log_access(
+    state: &Arc<AppState>,
+    user: &crate::auth::middleware::AuthenticatedUser,
+    event_type: &'static str,
+    resource_id: Option<i64>,
+    details: serde_json::Value,
+) {
+    let mut builder =
+        AuditEventBuilder::new(AuditCategory::Admin, event_type, AuditOutcome::Success)
+            .resource("audit_log")
+            .with_details(details);
+
+    if let Some(resource_id) = resource_id {
+        builder = builder.resource_id(resource_id);
+    }
+    if let Ok(identity_id) = user.identity_id() {
+        builder = builder.actor_identity(identity_id);
+    }
+    builder = builder
+        .actor_login(user.login().to_string())
+        .actor_token_type(format!("{:?}", user.claims.token_type).to_lowercase());
+
+    state.audit_emitter.emit(builder.build());
 }

@@ -8,6 +8,10 @@ use crate::{
     middleware::ApiError,
 };
 use attune_common::{
+    audit::{
+        event_type, AuditCategory, AuditEventBuilder, AuditOutcome, AuditRepository,
+        PendingAuditEvent,
+    },
     rbac::{Action, AuthorizationContext, Grant, Resource},
     repositories::{
         identity::{IdentityRepository, IdentityRoleAssignmentRepository, PermissionSetRepository},
@@ -74,6 +78,7 @@ impl AuthorizationService {
         let allowed = Self::is_allowed(&grants, check.resource, check.action, &check.context);
 
         if !allowed {
+            self.emit_rbac_denied(user, &check);
             return Err(ApiError::Forbidden(format!(
                 "Insufficient permissions: {}:{}",
                 resource_name(check.resource),
@@ -82,6 +87,17 @@ impl AuthorizationService {
         }
 
         Ok(())
+    }
+
+    fn emit_rbac_denied(&self, user: &AuthenticatedUser, check: &AuthorizationCheck) {
+        let pool = self.db.clone();
+        let event = build_rbac_denied_event(user, check);
+
+        tokio::spawn(async move {
+            if let Err(err) = AuditRepository::insert(&pool, event).await {
+                tracing::error!(error = %err, "failed to persist RBAC denial audit event");
+            }
+        });
     }
 
     pub async fn effective_grants(&self, user: &AuthenticatedUser) -> Result<Vec<Grant>, ApiError> {
@@ -133,6 +149,45 @@ impl AuthorizationService {
     }
 }
 
+fn build_rbac_denied_event(
+    user: &AuthenticatedUser,
+    check: &AuthorizationCheck,
+) -> PendingAuditEvent {
+    let resource = resource_name(check.resource);
+    let action = action_name(check.action);
+    let ctx = &check.context;
+    let mut builder = AuditEventBuilder::new(
+        AuditCategory::Rbac,
+        event_type::rbac::DENIED,
+        AuditOutcome::Denied,
+    )
+    .actor_identity(ctx.identity_id)
+    .actor_login(user.login().to_string())
+    .actor_token_type(format!("{:?}", user.claims.token_type).to_lowercase())
+    .resource(resource);
+    if let Some(target_id) = ctx.target_id {
+        builder = builder.resource_id(target_id);
+    }
+    if let Some(target_ref) = &ctx.target_ref {
+        builder = builder.resource_ref(target_ref.clone());
+    }
+    builder
+        .with_details(serde_json::json!({
+            "resource": resource,
+            "action": action,
+            "target_id": ctx.target_id,
+            "target_ref": ctx.target_ref,
+            "pack_ref": ctx.pack_ref,
+            "owner_identity_id": ctx.owner_identity_id,
+            "owner_type": ctx.owner_type,
+            "owner_ref": ctx.owner_ref,
+            "visibility": ctx.visibility,
+            "encrypted": ctx.encrypted,
+            "reason": "grant_not_found_or_constraints_not_matched",
+        }))
+        .build()
+}
+
 fn resource_name(resource: Resource) -> &'static str {
     match resource {
         Resource::Packs => "packs",
@@ -163,5 +218,60 @@ fn action_name(action: Action) -> &'static str {
         Action::Respond => "respond",
         Action::Manage => "manage",
         Action::Decrypt => "decrypt",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::jwt::{Claims, TokenType};
+
+    fn test_user() -> AuthenticatedUser {
+        AuthenticatedUser {
+            claims: Claims {
+                sub: "42".to_string(),
+                login: "auditor@example.test".to_string(),
+                iat: 1,
+                exp: 999_999,
+                token_type: TokenType::Access,
+                scope: None,
+                metadata: None,
+            },
+        }
+    }
+
+    #[test]
+    fn rbac_denied_audit_event_contains_decision_context() {
+        let mut ctx = AuthorizationContext::new(42);
+        ctx.target_id = Some(7);
+        ctx.target_ref = Some("secret.key".to_string());
+        ctx.owner_identity_id = Some(99);
+        ctx.encrypted = Some(true);
+
+        let event = build_rbac_denied_event(
+            &test_user(),
+            &AuthorizationCheck {
+                resource: Resource::Keys,
+                action: Action::Decrypt,
+                context: ctx,
+            },
+        );
+
+        assert_eq!(event.category, AuditCategory::Rbac);
+        assert_eq!(event.event_type, event_type::rbac::DENIED);
+        assert_eq!(event.outcome, AuditOutcome::Denied);
+        assert_eq!(event.actor_identity, Some(42));
+        assert_eq!(event.resource_type.as_deref(), Some("keys"));
+        assert_eq!(event.resource_id, Some(7));
+        assert_eq!(event.resource_ref.as_deref(), Some("secret.key"));
+
+        let details = event.details.expect("details");
+        assert_eq!(details["resource"], "keys");
+        assert_eq!(details["action"], "decrypt");
+        assert_eq!(details["owner_identity_id"], 99);
+        assert_eq!(
+            details["reason"],
+            "grant_not_found_or_constraints_not_matched"
+        );
     }
 }

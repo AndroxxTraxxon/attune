@@ -28,6 +28,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tracing::{debug, warn};
 
+use attune_common::audit::{event_type, AuditCategory, AuditEventBuilder, AuditOutcome};
 use attune_common::models::enums::{
     ArtifactType, ArtifactVisibility, OwnerType, RetentionPolicyType,
 };
@@ -238,6 +239,20 @@ pub async fn create_artifact(
 
     let artifact = ArtifactRepository::create(&state.db, input).await?;
 
+    emit_artifact_audit(
+        &state,
+        &user,
+        event_type::artifact::CREATED,
+        AuditOutcome::Success,
+        &artifact,
+        serde_json::json!({
+            "type": artifact.r#type,
+            "scope": artifact.scope,
+            "owner": artifact.owner,
+            "visibility": artifact.visibility,
+        }),
+    );
+
     Ok((
         StatusCode::CREATED,
         Json(ApiResponse::with_message(
@@ -273,6 +288,7 @@ pub async fn update_artifact(
 
     authorize_artifact_action(&state, &user, Action::Update, &artifact).await?;
 
+    let data_changed = request.data.is_some();
     let input = UpdateArtifactInput {
         r#ref: None, // Ref is immutable after creation
         scope: request.scope,
@@ -301,6 +317,21 @@ pub async fn update_artifact(
     };
 
     let updated = ArtifactRepository::update(&state.db, id, input).await?;
+
+    emit_artifact_audit(
+        &state,
+        &user,
+        event_type::artifact::UPDATED,
+        AuditOutcome::Success,
+        &updated,
+        serde_json::json!({
+            "type": updated.r#type,
+            "scope": updated.scope,
+            "owner": updated.owner,
+            "visibility": updated.visibility,
+            "data_changed": data_changed,
+        }),
+    );
 
     Ok((
         StatusCode::OK,
@@ -353,6 +384,21 @@ pub async fn delete_artifact(
             id
         )));
     }
+
+    emit_artifact_audit(
+        &state,
+        &user,
+        event_type::artifact::DELETED,
+        AuditOutcome::Success,
+        &artifact,
+        serde_json::json!({
+            "type": artifact.r#type,
+            "scope": artifact.scope,
+            "owner": artifact.owner,
+            "visibility": artifact.visibility,
+            "file_versions_deleted": file_versions.len(),
+        }),
+    );
 
     Ok((
         StatusCode::OK,
@@ -901,6 +947,20 @@ pub async fn download_version(
             ApiError::NotFound(format!("Version {} not found for artifact {}", version, id))
         })?;
 
+    emit_artifact_audit(
+        &state,
+        &user,
+        event_type::artifact::DOWNLOADED,
+        AuditOutcome::Success,
+        &artifact,
+        serde_json::json!({
+            "version": version,
+            "file_backed": ver.file_path.is_some(),
+            "content_type": ver.content_type.as_deref(),
+            "size_bytes": ver.size_bytes,
+        }),
+    );
+
     // File-backed version: read from disk
     if let Some(ref file_path) = ver.file_path {
         return serve_file_from_disk(
@@ -954,6 +1014,20 @@ pub async fn download_latest(
         .ok_or_else(|| ApiError::NotFound(format!("No versions found for artifact {}", id)))?;
 
     let version = ver.version;
+
+    emit_artifact_audit(
+        &state,
+        &user,
+        event_type::artifact::DOWNLOADED,
+        AuditOutcome::Success,
+        &artifact,
+        serde_json::json!({
+            "version": version,
+            "file_backed": ver.file_path.is_some(),
+            "content_type": ver.content_type.as_deref(),
+            "size_bytes": ver.size_bytes,
+        }),
+    );
 
     // File-backed version: read from disk
     if let Some(ref file_path) = ver.file_path {
@@ -2535,6 +2609,30 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/executions/{execution_id}/artifacts",
             get(list_artifacts_by_execution),
         )
+}
+
+fn emit_artifact_audit(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    event_type: &'static str,
+    outcome: AuditOutcome,
+    artifact: &attune_common::models::artifact::Artifact,
+    details: serde_json::Value,
+) {
+    let mut builder = AuditEventBuilder::new(AuditCategory::Secret, event_type, outcome)
+        .resource("artifact")
+        .resource_id(artifact.id)
+        .resource_ref(artifact.r#ref.clone())
+        .with_details(details);
+
+    if let Ok(identity_id) = user.identity_id() {
+        builder = builder.actor_identity(identity_id);
+    }
+    builder = builder
+        .actor_login(user.login().to_string())
+        .actor_token_type(format!("{:?}", user.claims.token_type).to_lowercase());
+
+    state.audit_emitter.emit(builder.build());
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::models::Id;
 use crate::Result;
 
-use super::{AuditCategory, AuditEvent, AuditOutcome};
+use super::{AuditCategory, AuditEvent, AuditOutcome, PendingAuditEvent};
 
 /// Filters for [`AuditRepository::search`].
 #[derive(Debug, Clone, Default)]
@@ -52,6 +52,57 @@ const SELECT_COLUMNS: &str = "id, created, category, event_type, outcome, \
     details, correlation_chain";
 
 impl AuditRepository {
+    /// Insert one pending audit event immediately.
+    ///
+    /// Most request-path emitters should use [`crate::audit::AuditEmitter`] so
+    /// writes are batched off the hot path. This direct insert is useful for
+    /// central infrastructure such as authorization failure auditing where the
+    /// caller may not have an emitter handle.
+    pub async fn insert<'e, E>(executor: E, event: PendingAuditEvent) -> Result<()>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query(
+            "INSERT INTO audit_event (\
+                category, event_type, outcome, \
+                actor_identity, actor_login, actor_token_type, actor_ip, actor_user_agent, \
+                request_id, \
+                resource_type, resource_id, resource_ref, \
+                http_method, http_path, http_status, duration_ms, \
+                details, correlation_chain\
+            ) VALUES (\
+                $1, $2, $3, \
+                $4, $5, $6, $7::inet, $8, \
+                $9, \
+                $10, $11, $12, \
+                $13, $14, $15, $16, \
+                $17, $18\
+            )",
+        )
+        .bind(event.category)
+        .bind(event.event_type)
+        .bind(event.outcome)
+        .bind(event.actor_identity)
+        .bind(event.actor_login)
+        .bind(event.actor_token_type)
+        .bind(event.actor_ip.map(|ip| ip.to_string()))
+        .bind(event.actor_user_agent)
+        .bind(event.request_id)
+        .bind(event.resource_type)
+        .bind(event.resource_id)
+        .bind(event.resource_ref)
+        .bind(event.http_method)
+        .bind(event.http_path)
+        .bind(event.http_status)
+        .bind(event.duration_ms)
+        .bind(event.details)
+        .bind(event.correlation_chain)
+        .execute(executor)
+        .await?;
+
+        Ok(())
+    }
+
     /// Look up a single audit event by its ID. Composite-PK hypertables can
     /// be queried by `id` alone; the planner will scan all chunks (rare path).
     pub async fn find_by_id<'e, E>(executor: E, id: Id) -> Result<Option<AuditEvent>>

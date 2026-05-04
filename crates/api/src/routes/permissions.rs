@@ -9,6 +9,7 @@ use std::sync::Arc;
 use validator::Validate;
 
 use attune_common::{
+    audit::{event_type, AuditCategory, AuditEventBuilder, AuditOutcome},
     models::identity::{Identity, IdentityRoleAssignment},
     rbac::{Action, AuthorizationContext, Resource},
     repositories::{
@@ -179,6 +180,21 @@ pub async fn create_identity(
     )
     .await?;
 
+    emit_admin_audit(
+        &state,
+        &user,
+        event_type::admin::IDENTITY_CREATED,
+        "identity",
+        Some(identity.id),
+        Some(identity.login.as_str()),
+        serde_json::json!({
+            "login": identity.login.as_str(),
+            "display_name": identity.display_name.as_deref(),
+            "frozen": identity.frozen,
+            "password_set": identity.password_hash.is_some(),
+        }),
+    );
+
     Ok((
         StatusCode::CREATED,
         Json(ApiResponse::new(IdentityResponse::from(identity))),
@@ -207,7 +223,7 @@ pub async fn update_identity(
 ) -> ApiResult<impl IntoResponse> {
     authorize_permissions(&state, &user, Resource::Identities, Action::Update).await?;
 
-    IdentityRepository::find_by_id(&state.db, identity_id)
+    let existing = IdentityRepository::find_by_id(&state.db, identity_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Identity '{}' not found", identity_id)))?;
 
@@ -227,6 +243,24 @@ pub async fn update_identity(
         },
     )
     .await?;
+
+    emit_admin_audit(
+        &state,
+        &user,
+        event_type::admin::IDENTITY_UPDATED,
+        "identity",
+        Some(identity.id),
+        Some(identity.login.as_str()),
+        serde_json::json!({
+            "login": identity.login.as_str(),
+            "changed_fields": {
+                "display_name": existing.display_name != identity.display_name,
+                "password": existing.password_hash != identity.password_hash,
+                "attributes": existing.attributes != identity.attributes,
+                "frozen": existing.frozen != identity.frozen,
+            },
+        }),
+    );
 
     Ok((
         StatusCode::OK,
@@ -270,6 +304,16 @@ pub async fn delete_identity(
             identity_id
         )));
     }
+
+    emit_admin_audit(
+        &state,
+        &user,
+        event_type::admin::IDENTITY_DELETED,
+        "identity",
+        Some(identity_id),
+        None,
+        serde_json::json!({ "identity_id": identity_id }),
+    );
 
     Ok((
         StatusCode::OK,
@@ -427,9 +471,25 @@ pub async fn create_permission_assignment(
         id: assignment.id,
         identity_id: assignment.identity,
         permission_set_id: assignment.permset,
-        permission_set_ref: permission_set.r#ref,
+        permission_set_ref: permission_set.r#ref.clone(),
         created: assignment.created,
     };
+
+    emit_admin_audit(
+        &state,
+        &user,
+        event_type::admin::PERMISSION_ASSIGNMENT_CHANGED,
+        "permission_assignment",
+        Some(assignment.id),
+        Some(permission_set.r#ref.as_str()),
+        serde_json::json!({
+            "operation": "created",
+            "identity_id": identity.id,
+            "identity_login": identity.login.as_str(),
+            "permission_set_id": permission_set.id,
+            "permission_set_ref": permission_set.r#ref.as_str(),
+        }),
+    );
 
     Ok((StatusCode::CREATED, Json(ApiResponse::new(response))))
 }
@@ -470,6 +530,20 @@ pub async fn delete_permission_assignment(
             assignment_id
         )));
     }
+
+    emit_admin_audit(
+        &state,
+        &user,
+        event_type::admin::PERMISSION_ASSIGNMENT_CHANGED,
+        "permission_assignment",
+        Some(existing.id),
+        None,
+        serde_json::json!({
+            "operation": "deleted",
+            "identity_id": existing.identity,
+            "permission_set_id": existing.permset,
+        }),
+    );
 
     Ok((
         StatusCode::OK,
@@ -517,6 +591,22 @@ pub async fn create_identity_role_assignment(
     )
     .await?;
 
+    emit_admin_audit(
+        &state,
+        &user,
+        event_type::admin::ROLE_ASSIGNMENT_CHANGED,
+        "identity_role_assignment",
+        Some(assignment.id),
+        Some(assignment.role.as_str()),
+        serde_json::json!({
+            "operation": "created",
+            "identity_id": assignment.identity,
+            "role": assignment.role.as_str(),
+            "source": assignment.source.as_str(),
+            "managed": assignment.managed,
+        }),
+    );
+
     Ok((
         StatusCode::CREATED,
         Json(ApiResponse::new(IdentityRoleAssignmentResponse::from(
@@ -562,6 +652,22 @@ pub async fn delete_identity_role_assignment(
     }
 
     IdentityRoleAssignmentRepository::delete(&state.db, assignment_id).await?;
+
+    emit_admin_audit(
+        &state,
+        &user,
+        event_type::admin::ROLE_ASSIGNMENT_CHANGED,
+        "identity_role_assignment",
+        Some(assignment.id),
+        Some(assignment.role.as_str()),
+        serde_json::json!({
+            "operation": "deleted",
+            "identity_id": assignment.identity,
+            "role": assignment.role.as_str(),
+            "source": assignment.source.as_str(),
+            "managed": assignment.managed,
+        }),
+    );
 
     Ok((
         StatusCode::OK,
@@ -609,6 +715,21 @@ pub async fn create_permission_set_role_assignment(
     )
     .await?;
 
+    emit_admin_audit(
+        &state,
+        &user,
+        event_type::admin::PERMISSION_SET_CHANGED,
+        "permission_set_role_assignment",
+        Some(assignment.id),
+        Some(permission_set.r#ref.as_str()),
+        serde_json::json!({
+            "operation": "created",
+            "permission_set_id": assignment.permset,
+            "permission_set_ref": permission_set.r#ref.as_str(),
+            "role": assignment.role.as_str(),
+        }),
+    );
+
     Ok((
         StatusCode::CREATED,
         Json(ApiResponse::new(PermissionSetRoleAssignmentResponse {
@@ -641,7 +762,7 @@ pub async fn delete_permission_set_role_assignment(
 ) -> ApiResult<impl IntoResponse> {
     authorize_permissions(&state, &user, Resource::Permissions, Action::Manage).await?;
 
-    PermissionSetRoleAssignmentRepository::find_by_id(&state.db, assignment_id)
+    let assignment = PermissionSetRoleAssignmentRepository::find_by_id(&state.db, assignment_id)
         .await?
         .ok_or_else(|| {
             ApiError::NotFound(format!(
@@ -651,6 +772,20 @@ pub async fn delete_permission_set_role_assignment(
         })?;
 
     PermissionSetRoleAssignmentRepository::delete(&state.db, assignment_id).await?;
+
+    emit_admin_audit(
+        &state,
+        &user,
+        event_type::admin::PERMISSION_SET_CHANGED,
+        "permission_set_role_assignment",
+        Some(assignment.id),
+        Some(assignment.role.as_str()),
+        serde_json::json!({
+            "operation": "deleted",
+            "permission_set_id": assignment.permset,
+            "role": assignment.role.as_str(),
+        }),
+    );
 
     Ok((
         StatusCode::OK,
@@ -790,6 +925,36 @@ async fn resolve_identity(
     }
 }
 
+fn emit_admin_audit(
+    state: &Arc<AppState>,
+    user: &crate::auth::middleware::AuthenticatedUser,
+    event_type: &'static str,
+    resource_type: &'static str,
+    resource_id: Option<i64>,
+    resource_ref: Option<&str>,
+    details: serde_json::Value,
+) {
+    let mut builder =
+        AuditEventBuilder::new(AuditCategory::Admin, event_type, AuditOutcome::Success)
+            .resource(resource_type)
+            .with_details(details);
+
+    if let Some(resource_id) = resource_id {
+        builder = builder.resource_id(resource_id);
+    }
+    if let Some(resource_ref) = resource_ref {
+        builder = builder.resource_ref(resource_ref.to_string());
+    }
+    if let Ok(identity_id) = user.identity_id() {
+        builder = builder.actor_identity(identity_id);
+    }
+    builder = builder
+        .actor_login(user.login().to_string())
+        .actor_token_type(format!("{:?}", user.claims.token_type).to_lowercase());
+
+    state.audit_emitter.emit(builder.build());
+}
+
 impl From<Identity> for IdentitySummary {
     fn from(value: Identity) -> Self {
         Self {
@@ -863,6 +1028,19 @@ async fn set_identity_frozen(
         },
     )
     .await?;
+
+    emit_admin_audit(
+        state,
+        user,
+        event_type::admin::IDENTITY_UPDATED,
+        "identity",
+        Some(identity_id),
+        None,
+        serde_json::json!({
+            "changed_fields": { "frozen": true },
+            "frozen": frozen,
+        }),
+    );
 
     let message = if frozen {
         "Identity frozen successfully"
