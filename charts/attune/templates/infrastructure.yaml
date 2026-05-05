@@ -129,13 +129,17 @@ spec:
           livenessProbe:
             exec:
               command: ["rabbitmq-diagnostics", "-q", "ping"]
-            initialDelaySeconds: 20
+            initialDelaySeconds: 60
             periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 6
           readinessProbe:
             exec:
               command: ["rabbitmq-diagnostics", "-q", "ping"]
-            initialDelaySeconds: 10
+            initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
           resources:
             {{- toYaml .Values.rabbitmq.resources | nindent 12 }}
           volumeMounts:

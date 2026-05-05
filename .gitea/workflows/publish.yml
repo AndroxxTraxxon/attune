@@ -348,7 +348,9 @@ jobs:
           cargo zigbuild --release \
             --target "${{ matrix.musl_target }}" \
             --bin attune-agent \
-            --bin attune-sensor-agent
+            --bin attune-sensor-agent \
+            --bin attune-mcp \
+            --bin attune
 
       - name: Assemble binary bundle
         shell: bash
@@ -364,6 +366,8 @@ jobs:
           cp "${service_output_dir}/attune-notifier" "$bundle_root/bin/"
           cp target/${{ matrix.musl_target }}/release/attune-agent "$bundle_root/agent/"
           cp target/${{ matrix.musl_target }}/release/attune-sensor-agent "$bundle_root/agent/"
+          cp target/${{ matrix.musl_target }}/release/attune-mcp "$bundle_root/agent/"
+          cp target/${{ matrix.musl_target }}/release/attune "$bundle_root/agent/"
 
           cat > "$bundle_root/metadata.json" <<EOF
           {
@@ -757,6 +761,30 @@ jobs:
               repository: attune/agent
               source_path: agent/attune-agent
               dockerfile: docker/Dockerfile.agent-package
+          - arch: amd64
+            runner_label: build-amd64
+            platform: linux/amd64
+            image:
+              name: migrations
+              repository: attune/migrations
+              source_path: ""
+              dockerfile: docker/Dockerfile.migrations-package
+          - arch: amd64
+            runner_label: build-amd64
+            platform: linux/amd64
+            image:
+              name: init-user
+              repository: attune/init-user
+              source_path: ""
+              dockerfile: docker/Dockerfile.init-user-package
+          - arch: amd64
+            runner_label: build-amd64
+            platform: linux/amd64
+            image:
+              name: init-packs
+              repository: attune/init-packs
+              source_path: ""
+              dockerfile: docker/Dockerfile.init-packs-package
           - arch: arm64
             runner_label: build-arm64
             platform: linux/arm64
@@ -789,6 +817,30 @@ jobs:
               repository: attune/agent
               source_path: agent/attune-agent
               dockerfile: docker/Dockerfile.agent-package
+          - arch: arm64
+            runner_label: build-arm64
+            platform: linux/arm64
+            image:
+              name: migrations
+              repository: attune/migrations
+              source_path: ""
+              dockerfile: docker/Dockerfile.migrations-package
+          - arch: arm64
+            runner_label: build-arm64
+            platform: linux/arm64
+            image:
+              name: init-user
+              repository: attune/init-user
+              source_path: ""
+              dockerfile: docker/Dockerfile.init-user-package
+          - arch: arm64
+            runner_label: build-arm64
+            platform: linux/arm64
+            image:
+              name: init-packs
+              repository: attune/init-packs
+              source_path: ""
+              dockerfile: docker/Dockerfile.init-packs-package
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -890,6 +942,10 @@ jobs:
             agent)
               cp dist/artifact/agent/attune-agent dist/attune-agent
               cp dist/artifact/agent/attune-sensor-agent dist/attune-sensor-agent
+              cp dist/artifact/agent/attune-mcp dist/attune-mcp
+              cp dist/artifact/agent/attune dist/attune
+              ;;
+            migrations|init-user|init-packs)
               ;;
             *)
               echo "Unsupported image: ${{ matrix.image.name }}"
@@ -1099,6 +1155,9 @@ jobs:
           - attune/executor
           - attune/notifier
           - attune/agent
+          - attune/migrations
+          - attune/init-user
+          - attune/init-packs
           - attune/web
     steps:
       - name: Setup Docker Buildx

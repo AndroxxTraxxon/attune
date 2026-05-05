@@ -10,20 +10,18 @@ This repository now includes:
 
 The workflow publishes these images to the Gitea OCI registry:
 
-- `attune-api`
-- `attune-executor`
-- `attune-worker`
-- `attune-sensor`
-- `attune-notifier`
-- `attune-web`
-- `attune-migrations`
-- `attune-init-user`
-- `attune-init-packs`
-- `attune-agent`
+- `attune/api`
+- `attune/executor`
+- `attune/notifier`
+- `attune/agent`
+- `attune/web`
+- `attune/migrations`
+- `attune/init-user`
+- `attune/init-packs`
 
-The Helm chart is pushed as an OCI chart to:
+The Helm chart is pushed to Gitea's Helm package registry:
 
-- `oci://<registry>/<namespace>/helm/attune`
+- `https://<gitea-host>/api/packages/<namespace>/helm`
 
 ## Required Gitea Repository Configuration
 
@@ -54,7 +52,7 @@ Tag behavior:
 
 Chart packaging behavior:
 
-- branch pushes package the chart as `0.0.0-dev.<run_number>`
+- branch pushes package the chart as `0.0.0-edge.<run_number>`
 - release tags package the chart with the tag version, for example `0.3.0`
 
 ## Helm Install Flow
@@ -71,10 +69,19 @@ For a plain HTTP internal registry:
 helm registry login gitea-http.gitea.svc.cluster.local --username <user> --plain-http
 ```
 
+Add the Helm package repository:
+
+```bash
+helm repo add attune https://gitea.example.com/api/packages/<namespace>/helm \
+  --username <user> \
+  --password <token>
+helm repo update
+```
+
 Install the chart:
 
 ```bash
-helm install attune oci://gitea.example.com/<namespace>/helm/attune \
+helm install attune attune/attune \
   --version 0.3.0 \
   --set global.imageRegistry=gitea.example.com \
   --set global.imageNamespace=<namespace> \
@@ -86,8 +93,8 @@ helm install attune oci://gitea.example.com/<namespace>/helm/attune \
 For a branch build:
 
 ```bash
-helm install attune oci://gitea.example.com/<namespace>/helm/attune \
-  --version 0.0.0-dev.<run_number> \
+helm install attune attune/attune \
+  --version 0.0.0-edge.<run_number> \
   --set global.imageRegistry=gitea.example.com \
   --set global.imageNamespace=<namespace> \
   --set global.imageTag=edge

@@ -58,6 +58,15 @@ spec:
           volumeMounts:
             - name: packs
               mountPath: /opt/attune/packs
+        - name: wait-for-rabbitmq
+          image: busybox:1.36
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              until nc -z {{ include "attune.rabbitmqServiceName" . }} {{ .Values.rabbitmq.port }}; do
+                echo "waiting for rabbitmq";
+                sleep 2;
+              done
       containers:
         - name: api
           image: {{ include "attune.image" (dict "root" . "image" .Values.images.api) }}
@@ -344,6 +353,14 @@ spec:
             periodSeconds: 15
           resources:
             {{- toYaml .Values.web.resources | nindent 12 }}
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d/attune.conf
+              subPath: nginx.conf
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: {{ include "attune.fullname" . }}-config
 {{- if .Values.mcp.enabled }}
 ---
 apiVersion: v1

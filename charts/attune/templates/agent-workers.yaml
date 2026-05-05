@@ -51,9 +51,12 @@ spec:
             - |
               cp /usr/local/bin/attune-agent /opt/attune/agent/attune-agent
               cp /usr/local/bin/attune-sensor-agent /opt/attune/agent/attune-sensor-agent
-              cp /usr/local/bin/attune-mcp /opt/attune/agent/attune-mcp
-              cp /usr/local/bin/attune /opt/attune/agent/attune
-              chmod +x /opt/attune/agent/attune /opt/attune/agent/attune-agent /opt/attune/agent/attune-sensor-agent /opt/attune/agent/attune-mcp
+              for optional_binary in attune-mcp attune; do
+                if [ -x "/usr/local/bin/${optional_binary}" ]; then
+                  cp "/usr/local/bin/${optional_binary}" "/opt/attune/agent/${optional_binary}"
+                fi
+              done
+              chmod +x /opt/attune/agent/attune-agent /opt/attune/agent/attune-sensor-agent /opt/attune/agent/attune-mcp /opt/attune/agent/attune 2>/dev/null || true
           volumeMounts:
             - name: agent-bin
               mountPath: /opt/attune/agent
@@ -81,6 +84,15 @@ spec:
           volumeMounts:
             - name: packs
               mountPath: /opt/attune/packs
+        - name: wait-for-rabbitmq
+          image: busybox:1.36
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              until nc -z {{ include "attune.rabbitmqServiceName" $ }} {{ $.Values.rabbitmq.port }}; do
+                echo "waiting for rabbitmq";
+                sleep 2;
+              done
       containers:
         - name: worker
           image: {{ .image | quote }}
@@ -192,9 +204,12 @@ spec:
             - |
               cp /usr/local/bin/attune-agent /opt/attune/agent/attune-agent
               cp /usr/local/bin/attune-sensor-agent /opt/attune/agent/attune-sensor-agent
-              cp /usr/local/bin/attune-mcp /opt/attune/agent/attune-mcp
-              cp /usr/local/bin/attune /opt/attune/agent/attune
-              chmod +x /opt/attune/agent/attune /opt/attune/agent/attune-agent /opt/attune/agent/attune-sensor-agent /opt/attune/agent/attune-mcp
+              for optional_binary in attune-mcp attune; do
+                if [ -x "/usr/local/bin/${optional_binary}" ]; then
+                  cp "/usr/local/bin/${optional_binary}" "/opt/attune/agent/${optional_binary}"
+                fi
+              done
+              chmod +x /opt/attune/agent/attune-agent /opt/attune/agent/attune-sensor-agent /opt/attune/agent/attune-mcp /opt/attune/agent/attune 2>/dev/null || true
           volumeMounts:
             - name: agent-bin
               mountPath: /opt/attune/agent
@@ -222,6 +237,15 @@ spec:
           volumeMounts:
             - name: packs
               mountPath: /opt/attune/packs
+        - name: wait-for-rabbitmq
+          image: busybox:1.36
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              until nc -z {{ include "attune.rabbitmqServiceName" $ }} {{ $.Values.rabbitmq.port }}; do
+                echo "waiting for rabbitmq";
+                sleep 2;
+              done
       containers:
         - name: sensor
           image: {{ .image | quote }}

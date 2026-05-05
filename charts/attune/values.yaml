@@ -116,19 +116,19 @@ images:
     tag: ""
     pullPolicy: IfNotPresent
   migrations:
-    repository: attune-migrations
+    repository: attune/migrations
     tag: ""
     pullPolicy: IfNotPresent
   initUser:
-    repository: attune-init-user
+    repository: attune/init-user
     tag: ""
     pullPolicy: IfNotPresent
   initPacks:
-    repository: attune-init-packs
+    repository: attune/init-packs
     tag: ""
     pullPolicy: IfNotPresent
   agent:
-    repository: attune-agent
+    repository: attune/agent
     tag: ""
     pullPolicy: IfNotPresent
 
