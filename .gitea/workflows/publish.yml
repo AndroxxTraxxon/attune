@@ -387,7 +387,7 @@ jobs:
           registry_username="${REGISTRY_USERNAME:-${{ github.actor }}}"
           registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
           artifact_file="attune-binaries-${{ matrix.arch }}.tar.gz"
-          package_name="${ARTIFACT_REPOSITORY}-${{ matrix.arch }}"
+          package_name="$(basename "${ARTIFACT_REPOSITORY}")-${{ matrix.arch }}"
           package_version="rust-binaries-${{ needs.metadata.outputs.image_tag }}"
           package_url="${{ needs.metadata.outputs.gitea_base_url }}/api/packages/${{ needs.metadata.outputs.namespace }}/generic/${package_name}/${package_version}/${artifact_file}"
 
@@ -846,7 +846,7 @@ jobs:
           registry_username="${REGISTRY_USERNAME:-${{ github.actor }}}"
           registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
           artifact_file="attune-binaries-${{ matrix.arch }}.tar.gz"
-          package_name="${ARTIFACT_REPOSITORY}-${{ matrix.arch }}"
+          package_name="$(basename "${ARTIFACT_REPOSITORY}")-${{ matrix.arch }}"
           package_version="rust-binaries-${{ needs.metadata.outputs.image_tag }}"
           package_url="${{ needs.metadata.outputs.gitea_base_url }}/api/packages/${{ needs.metadata.outputs.namespace }}/generic/${package_name}/${package_version}/${artifact_file}"
 
