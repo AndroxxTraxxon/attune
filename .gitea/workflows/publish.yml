@@ -376,14 +376,7 @@ jobs:
 
           tar -C dist/bundle/${{ matrix.arch }} -czf "dist/attune-binaries-${{ matrix.arch }}.tar.gz" .
 
-      - name: Setup ORAS
-        uses: oras-project/setup-oras@v1
-        with:
-          # ORAS 1.3.x requests wildcard registry token scopes that Gitea/Forgejo
-          # registries can reject even when repository pull/push credentials are valid.
-          version: 1.2.3
-
-      - name: Log in to registry for artifacts
+      - name: Publish binary bundle generic package
         shell: bash
         env:
           REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
@@ -393,47 +386,55 @@ jobs:
           set -euo pipefail
           registry_username="${REGISTRY_USERNAME:-${{ github.actor }}}"
           registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
-          login_args=()
+          artifact_file="attune-binaries-${{ matrix.arch }}.tar.gz"
+          package_name="${ARTIFACT_REPOSITORY}-${{ matrix.arch }}"
+          package_version="rust-binaries-${{ needs.metadata.outputs.image_tag }}"
+          package_url="${{ needs.metadata.outputs.gitea_base_url }}/api/packages/${{ needs.metadata.outputs.namespace }}/generic/${package_name}/${package_version}/${artifact_file}"
 
           if [ -z "$registry_password" ]; then
             echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
             exit 1
           fi
 
-          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
-            login_args+=(--plain-http)
-          fi
-
-          oras login "${{ needs.metadata.outputs.registry }}" \
-            "${login_args[@]}" \
-            --username "$registry_username" \
-            --password "$registry_password"
-
-      - name: Push binary bundle artifact
-        shell: bash
-        run: |
-          set -euo pipefail
-          push_args=()
-          artifact_file="attune-binaries-${{ matrix.arch }}.tar.gz"
-          artifact_ref="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/${ARTIFACT_REPOSITORY}-${{ matrix.arch }}:rust-binaries-${{ needs.metadata.outputs.image_tag }}"
-
-          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
-            push_args+=(--plain-http)
-          fi
-
           cp "dist/${artifact_file}" "${artifact_file}"
 
-          echo "Pushing binary bundle artifact"
-          echo "  artifact_ref: ${artifact_ref}"
-          echo "  registry_url: ${{ needs.metadata.outputs.gitea_base_url }}/v2/"
-          echo "  manifest_url: ${{ needs.metadata.outputs.gitea_base_url }}/v2/${{ needs.metadata.outputs.namespace }}/${ARTIFACT_REPOSITORY}-${{ matrix.arch }}/manifests/rust-binaries-${{ needs.metadata.outputs.image_tag }}"
+          echo "Publishing binary bundle generic package"
+          echo "  package_name: ${package_name}"
+          echo "  package_version: ${package_version}"
+          echo "  package_url: ${package_url}"
           echo "  artifact_file: ${artifact_file}"
 
-          oras push \
-            "${push_args[@]}" \
-            "${artifact_ref}" \
-            --artifact-type application/vnd.attune.rust-binaries.v1 \
-            "${artifact_file}:application/vnd.attune.rust-binaries.layer.v1.tar+gzip"
+          # Generic packages reject overwriting the same file name. Delete it first on reruns.
+          delete_status="$(curl -sS -o /tmp/rust-binaries-delete-response.txt -w '%{http_code}' \
+            -u "${registry_username}:${registry_password}" \
+            -X DELETE \
+            "${package_url}")"
+
+          case "${delete_status}" in
+            204|404)
+              ;;
+            *)
+              echo "Failed to prepare binary bundle upload target"
+              cat /tmp/rust-binaries-delete-response.txt
+              exit 1
+              ;;
+          esac
+
+          upload_status="$(curl -sS -o /tmp/rust-binaries-upload-response.txt -w '%{http_code}' \
+            -u "${registry_username}:${registry_password}" \
+            --upload-file "${artifact_file}" \
+            -X PUT \
+            "${package_url}")"
+
+          case "${upload_status}" in
+            201)
+              ;;
+            *)
+              echo "Failed to publish binary bundle generic package"
+              cat /tmp/rust-binaries-upload-response.txt
+              exit 1
+              ;;
+          esac
 
   publish-docker-dist:
     name: Publish Docker Dist Bundle
@@ -792,13 +793,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup ORAS
-        uses: oras-project/setup-oras@v1
-        with:
-          # Keep pull behavior aligned with the push job and avoid ORAS 1.3.x
-          # wildcard token-scope requests against Gitea/Forgejo registries.
-          version: 1.2.3
-
       - name: Setup Docker Buildx
         if: needs.metadata.outputs.registry_plain_http != 'true'
         uses: docker/setup-buildx-action@v3
@@ -841,42 +835,40 @@ jobs:
           }
           EOF
 
-          oras_login_args=()
-          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
-            oras_login_args+=(--plain-http)
-          fi
-
-          oras login "${{ needs.metadata.outputs.registry }}" \
-            "${oras_login_args[@]}" \
-            --username "$registry_username" \
-            --password "$registry_password"
-
       - name: Pull binary bundle
         shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          pull_args=()
-          artifact_ref="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/${ARTIFACT_REPOSITORY}-${{ matrix.arch }}:rust-binaries-${{ needs.metadata.outputs.image_tag }}"
+          registry_username="${REGISTRY_USERNAME:-${{ github.actor }}}"
+          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
+          artifact_file="attune-binaries-${{ matrix.arch }}.tar.gz"
+          package_name="${ARTIFACT_REPOSITORY}-${{ matrix.arch }}"
+          package_version="rust-binaries-${{ needs.metadata.outputs.image_tag }}"
+          package_url="${{ needs.metadata.outputs.gitea_base_url }}/api/packages/${{ needs.metadata.outputs.namespace }}/generic/${package_name}/${package_version}/${artifact_file}"
 
-          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
-            pull_args+=(--plain-http)
+          if [ -z "$registry_password" ]; then
+            echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
+            exit 1
           fi
 
-          echo "Pulling binary bundle artifact"
-          echo "  ref: ${artifact_ref}"
-          echo "  registry_url: ${{ needs.metadata.outputs.gitea_base_url }}/v2/"
-          echo "  manifest_url: ${{ needs.metadata.outputs.gitea_base_url }}/v2/${{ needs.metadata.outputs.namespace }}/${ARTIFACT_REPOSITORY}-${{ matrix.arch }}/manifests/rust-binaries-${{ needs.metadata.outputs.image_tag }}"
+          echo "Downloading binary bundle generic package"
+          echo "  package_name: ${package_name}"
+          echo "  package_version: ${package_version}"
+          echo "  package_url: ${package_url}"
           echo "  arch: ${{ matrix.arch }}"
-          echo "  plain_http: ${{ needs.metadata.outputs.registry_plain_http }}"
 
           mkdir -p dist/artifact
           cd dist/artifact
 
-          oras pull \
-            "${pull_args[@]}" \
-            "${artifact_ref}"
+          curl -fL -u "${registry_username}:${registry_password}" \
+            -o "${artifact_file}" \
+            "${package_url}"
 
-          tar -xzf "attune-binaries-${{ matrix.arch }}.tar.gz"
+          tar -xzf "${artifact_file}"
 
       - name: Prepare packaging context
         shell: bash
