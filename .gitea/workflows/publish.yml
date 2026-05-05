@@ -932,6 +932,8 @@ jobs:
             .
             --platform "${{ matrix.platform }}"
             --file "${{ matrix.image.dockerfile }}"
+            --provenance=false
+            --sbom=false
           )
 
           if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
