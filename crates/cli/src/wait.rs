@@ -1677,7 +1677,7 @@ fn resolve_ws_url(opts: &WaitOptions<'_>) -> Option<String> {
 ///
 /// - `http://localhost:8080`  → `ws://localhost:8081`
 /// - `https://api.example.com` → `wss://api.example.com:8081`
-/// - `http://api.example.com:9000` → `ws://api.example.com:8081`
+/// - `http://api.example.com:9000` → `ws://api.example.com:8081` // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket -- Explicit http API URLs intentionally derive ws notifier URLs for local/plain-HTTP deployments.
 fn derive_notifier_url(api_url: &str) -> Option<String> {
     // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket -- The function upgrades https->wss and only returns ws for explicit http base URLs or test examples.
     let url = url::Url::parse(api_url).ok()?;
@@ -2183,11 +2183,11 @@ mod tests {
         );
         assert_eq!(
             derive_notifier_url("http://api.example.com:9000"),
-            Some("ws://api.example.com:8081".to_string())
+            Some("ws://api.example.com:8081".to_string()) // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket -- Unit test for explicit plain-HTTP API URL handling.
         );
         assert_eq!(
             derive_notifier_url("http://10.0.0.5:8080"),
-            Some("ws://10.0.0.5:8081".to_string())
+            Some("ws://10.0.0.5:8081".to_string()) // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket -- Unit test for explicit plain-HTTP private-network API URL handling.
         );
     }
 

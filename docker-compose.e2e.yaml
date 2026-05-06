@@ -39,7 +39,7 @@ services:
     container_name: attune-e2e-tests
     environment:
       ATTUNE_API_URL: http://api:8080
-      ATTUNE_WS_URL: ws://notifier:8081
+      ATTUNE_WS_URL: ws://notifier:8081  # nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket -- E2E-only internal Docker network uses plain HTTP/WS.
       DATABASE_URL: postgresql://attune:attune@postgres:5432/attune
       TEST_TIMEOUT: "60"
       TEST_USER_LOGIN: test@attune.local

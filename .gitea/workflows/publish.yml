@@ -62,6 +62,12 @@ jobs:
       - name: Resolve tags and registry paths
         id: meta
         shell: bash
+        env:
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          COMMIT_SHA: ${{ github.sha }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
 
@@ -77,7 +83,7 @@ jobs:
           fi
 
           if [ -z "$namespace" ]; then
-            namespace="${{ github.repository_owner }}"
+            namespace="${REPOSITORY_OWNER}"
           fi
 
           if printf '%s' "$registry_host_only" | grep -Eq '(^|[.])svc[.]cluster[.]local$'; then
@@ -107,9 +113,9 @@ jobs:
             gitea_base_url="https://${registry}"
           fi
 
-          short_sha="$(printf '%s' "${{ github.sha }}" | cut -c1-12)"
-          ref_type="${{ github.ref_type }}"
-          ref_name="${{ github.ref_name }}"
+          short_sha="$(printf '%s' "${COMMIT_SHA}" | cut -c1-12)"
+          ref_type="${REF_TYPE}"
+          ref_name="${REF_NAME}"
 
           if [ "$ref_type" = "tag" ] && printf '%s' "$ref_name" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.].*)?$'; then
             version="${ref_name#v}"
@@ -118,7 +124,7 @@ jobs:
           else
             version="sha-${short_sha}"
             image_tags="edge,sha-${short_sha}"
-            chart_version="0.0.0-edge.${{ github.run_number }}"
+            chart_version="0.0.0-edge.${RUN_NUMBER}"
           fi
 
           artifact_ref_base="${registry}/${namespace}/${ARTIFACT_REPOSITORY}"
@@ -151,6 +157,11 @@ jobs:
       - name: Detect changes
         id: filter
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TARGET_IMAGE: ${{ inputs.target_image }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           rust="false"
@@ -158,8 +169,8 @@ jobs:
           web="false"
           docker_dist="false"
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            target="${{ inputs.target_image }}"
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            target="${TARGET_IMAGE}"
             case "$target" in
               all)
                 rust="true"; helm="true"; web="true"; docker_dist="true" ;;
@@ -173,8 +184,8 @@ jobs:
                 docker_dist="true" ;;
             esac
           else
-            before="${{ github.event.before }}"
-            after="${{ github.sha }}"
+            before="${BEFORE_SHA}"
+            after="${AFTER_SHA}"
 
             if [ "$before" = "0000000000000000000000000000000000000000" ]; then
               rust="true"; helm="true"; web="true"; docker_dist="true"
@@ -354,31 +365,38 @@ jobs:
 
       - name: Assemble binary bundle
         shell: bash
+        env:
+          BUNDLE_ARCH: ${{ matrix.arch }}
+          SERVICE_RUST_TARGET: ${{ matrix.service_rust_target }}
+          MUSL_TARGET: ${{ matrix.musl_target }}
+          COMMIT_SHA: ${{ github.sha }}
+          GIT_REF: ${{ github.ref }}
+          IMAGE_TAG: ${{ needs.metadata.outputs.image_tag }}
         run: |
           set -euo pipefail
 
-          bundle_root="dist/bundle/${{ matrix.arch }}"
-          service_output_dir="target/${{ matrix.service_rust_target }}/release"
+          bundle_root="dist/bundle/${BUNDLE_ARCH}"
+          service_output_dir="target/${SERVICE_RUST_TARGET}/release"
           mkdir -p "$bundle_root/bin" "$bundle_root/agent"
 
           cp "${service_output_dir}/attune-api" "$bundle_root/bin/"
           cp "${service_output_dir}/attune-executor" "$bundle_root/bin/"
           cp "${service_output_dir}/attune-notifier" "$bundle_root/bin/"
-          cp target/${{ matrix.musl_target }}/release/attune-agent "$bundle_root/agent/"
-          cp target/${{ matrix.musl_target }}/release/attune-sensor-agent "$bundle_root/agent/"
-          cp target/${{ matrix.musl_target }}/release/attune-mcp "$bundle_root/agent/"
-          cp target/${{ matrix.musl_target }}/release/attune "$bundle_root/agent/"
+          cp "target/${MUSL_TARGET}/release/attune-agent" "$bundle_root/agent/"
+          cp "target/${MUSL_TARGET}/release/attune-sensor-agent" "$bundle_root/agent/"
+          cp "target/${MUSL_TARGET}/release/attune-mcp" "$bundle_root/agent/"
+          cp "target/${MUSL_TARGET}/release/attune" "$bundle_root/agent/"
 
           cat > "$bundle_root/metadata.json" <<EOF
           {
-            "git_sha": "${{ github.sha }}",
-            "ref": "${{ github.ref }}",
-            "arch": "${{ matrix.arch }}",
-            "image_tag": "${{ needs.metadata.outputs.image_tag }}"
+            "git_sha": "${COMMIT_SHA}",
+            "ref": "${GIT_REF}",
+            "arch": "${BUNDLE_ARCH}",
+            "image_tag": "${IMAGE_TAG}"
           }
           EOF
 
-          tar -C dist/bundle/${{ matrix.arch }} -czf "dist/attune-binaries-${{ matrix.arch }}.tar.gz" .
+          tar -C "dist/bundle/${BUNDLE_ARCH}" -czf "dist/attune-binaries-${BUNDLE_ARCH}.tar.gz" .
 
       - name: Publish binary bundle generic package
         shell: bash
@@ -386,14 +404,19 @@ jobs:
           REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
           GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR_NAME: ${{ github.actor }}
+          BUNDLE_ARCH: ${{ matrix.arch }}
+          IMAGE_TAG: ${{ needs.metadata.outputs.image_tag }}
+          GITEA_BASE_URL: ${{ needs.metadata.outputs.gitea_base_url }}
+          PACKAGE_NAMESPACE: ${{ needs.metadata.outputs.namespace }}
         run: |
           set -euo pipefail
-          registry_username="${REGISTRY_USERNAME:-${{ github.actor }}}"
+          registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
           registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
-          artifact_file="attune-binaries-${{ matrix.arch }}.tar.gz"
-          package_name="$(basename "${ARTIFACT_REPOSITORY}")-${{ matrix.arch }}"
-          package_version="rust-binaries-${{ needs.metadata.outputs.image_tag }}"
-          package_url="${{ needs.metadata.outputs.gitea_base_url }}/api/packages/${{ needs.metadata.outputs.namespace }}/generic/${package_name}/${package_version}/${artifact_file}"
+          artifact_file="attune-binaries-${BUNDLE_ARCH}.tar.gz"
+          package_name="$(basename "${ARTIFACT_REPOSITORY}")-${BUNDLE_ARCH}"
+          package_version="rust-binaries-${IMAGE_TAG}"
+          package_url="${GITEA_BASE_URL}/api/packages/${PACKAGE_NAMESPACE}/generic/${package_name}/${package_version}/${artifact_file}"
 
           if [ -z "$registry_password" ]; then
             echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
@@ -462,6 +485,9 @@ jobs:
         env:
           REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          GITEA_BASE_URL: ${{ needs.metadata.outputs.gitea_base_url }}
+          OWNER_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
@@ -523,9 +549,9 @@ jobs:
             exit 1
           fi
 
-          api_base="${{ needs.metadata.outputs.gitea_base_url }}/api/v1"
-          owner_repo="${{ github.repository }}"
-          tag_name="${{ github.ref_name }}"
+          api_base="${GITEA_BASE_URL}/api/v1"
+          owner_repo="${OWNER_REPO}"
+          tag_name="${TAG_NAME}"
           archive_path="artifacts/attune-docker-dist.tar.gz"
           asset_name="attune-docker-dist-${tag_name}.tar.gz"
 
@@ -864,9 +890,10 @@ jobs:
           REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
           GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR_NAME: ${{ github.actor }}
         run: |
           set -euo pipefail
-          registry_username="${REGISTRY_USERNAME:-${{ github.actor }}}"
+          registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
           registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
 
           if [ -z "$registry_password" ]; then
@@ -893,9 +920,10 @@ jobs:
           REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
           GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR_NAME: ${{ github.actor }}
         run: |
           set -euo pipefail
-          registry_username="${REGISTRY_USERNAME:-${{ github.actor }}}"
+          registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
           registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
           artifact_file="attune-binaries-${{ matrix.arch }}.tar.gz"
           package_name="$(basename "${ARTIFACT_REPOSITORY}")-${{ matrix.arch }}"
@@ -1052,9 +1080,10 @@ jobs:
           REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
           GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR_NAME: ${{ github.actor }}
         run: |
           set -euo pipefail
-          username="${REGISTRY_USERNAME:-${{ github.actor }}}"
+          username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
           password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
 
           if [ -z "$password" ]; then
@@ -1179,9 +1208,10 @@ jobs:
           REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
           GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR_NAME: ${{ github.actor }}
         run: |
           set -euo pipefail
-          username="${REGISTRY_USERNAME:-${{ github.actor }}}"
+          username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
           password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
 
           if [ -z "$password" ]; then
