@@ -33,6 +33,11 @@ use attune_common::{
         Create, FindById, FindByRef, Update,
     },
     runtime_detection::{normalize_runtime_name, runtime_aliases_contain},
+    scheduling::{
+        parse_worker_affinity, parse_worker_selector, parse_worker_tolerations,
+        preferred_affinity_score, worker_labels_from_capabilities, worker_matches_placement,
+        worker_taints_from_capabilities, WorkerAffinity, WorkerToleration,
+    },
     version_matching::matches_constraint,
     workflow::WorkflowDefinition,
 };
@@ -40,7 +45,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sqlx::{PgConnection, PgPool};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -50,6 +55,13 @@ use crate::policy_enforcer::{PolicyEnforcer, SchedulingPolicyOutcome};
 use crate::workflow::context::{TaskOutcome, WorkflowContext};
 use crate::workflow::graph::{BackoffStrategy, TaskGraph};
 use crate::workflow::log::WorkflowLogger;
+
+#[derive(Debug, Clone)]
+struct EffectiveWorkerPlacement {
+    selector: BTreeMap<String, String>,
+    tolerations: Vec<WorkerToleration>,
+    affinity: WorkerAffinity,
+}
 
 /// Extract workflow parameters from an execution's `config` field.
 ///
@@ -626,7 +638,14 @@ impl ExecutionScheduler {
         // Regular action: select appropriate worker only after policy
         // readiness is confirmed, so queued executions don't reserve stale
         // workers while they wait.
-        let worker = match Self::select_worker(pool, &action, round_robin_counter).await {
+        let worker = match Self::select_worker_for_action_execution(
+            pool,
+            &action,
+            Some(&execution),
+            round_robin_counter,
+        )
+        .await
+        {
             Ok(worker) => worker,
             Err(err) if Self::is_unschedulable_error(&err) => {
                 Self::release_acquired_policy_slot(policy_enforcer, pool, publisher, execution_id)
@@ -1162,6 +1181,68 @@ impl ExecutionScheduler {
             .collect())
     }
 
+    fn workflow_task_placement_overrides(
+        task_node: &crate::workflow::graph::TaskNode,
+        wf_ctx: &WorkflowContext,
+    ) -> Result<(Option<JsonValue>, Option<JsonValue>, Option<JsonValue>)> {
+        let worker_selector = Self::render_workflow_placement_field(
+            task_node,
+            wf_ctx,
+            "worker_selector",
+            task_node.worker_selector.as_ref(),
+            parse_worker_selector,
+        )?;
+        let worker_tolerations = Self::render_workflow_placement_field(
+            task_node,
+            wf_ctx,
+            "worker_tolerations",
+            task_node.worker_tolerations.as_ref(),
+            parse_worker_tolerations,
+        )?;
+        let worker_affinity = Self::render_workflow_placement_field(
+            task_node,
+            wf_ctx,
+            "worker_affinity",
+            task_node.worker_affinity.as_ref(),
+            parse_worker_affinity,
+        )?;
+
+        Ok((worker_selector, worker_tolerations, worker_affinity))
+    }
+
+    fn render_workflow_placement_field<T, E>(
+        task_node: &crate::workflow::graph::TaskNode,
+        wf_ctx: &WorkflowContext,
+        field_name: &str,
+        template: Option<&JsonValue>,
+        validate: impl FnOnce(&JsonValue) -> std::result::Result<T, E>,
+    ) -> Result<Option<JsonValue>>
+    where
+        E: std::fmt::Display,
+    {
+        let Some(template) = template else {
+            return Ok(None);
+        };
+
+        let rendered = wf_ctx.render_json(template).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to render {} for workflow task '{}': {}",
+                field_name,
+                task_node.name,
+                e
+            )
+        })?;
+        validate(&rendered).map_err(|e| {
+            anyhow::anyhow!(
+                "Invalid {} for workflow task '{}': {}",
+                field_name,
+                task_node.name,
+                e
+            )
+        })?;
+        Ok(Some(rendered))
+    }
+
     /// Create a child execution for a single workflow task and dispatch it to
     /// a worker. The child execution references the parent workflow execution
     /// via `workflow_task` metadata.
@@ -1261,6 +1342,8 @@ impl ExecutionScheduler {
 
         let permission_set_refs =
             Self::workflow_task_permission_set_refs(task_node, &task_action, wf_ctx)?;
+        let (worker_selector, worker_tolerations, worker_affinity) =
+            Self::workflow_task_placement_overrides(task_node, wf_ctx)?;
 
         // Build workflow task metadata
         let workflow_task = WorkflowTaskMetadata {
@@ -1296,6 +1379,9 @@ impl ExecutionScheduler {
                 enforcement: parent_execution.enforcement,
                 executor: parent_execution.executor,
                 permission_set_refs,
+                worker_selector,
+                worker_tolerations,
+                worker_affinity,
                 worker: None,
                 status: ExecutionStatus::Requested,
                 result: None,
@@ -1448,6 +1534,9 @@ impl ExecutionScheduler {
                 enforcement: execution.enforcement,
                 executor: execution.executor,
                 permission_set_refs: execution.permission_set_refs.clone(),
+                worker_selector: execution.worker_selector.clone(),
+                worker_tolerations: execution.worker_tolerations.clone(),
+                worker_affinity: execution.worker_affinity.clone(),
                 worker: None,
                 status: ExecutionStatus::Requested,
                 result: None,
@@ -1630,6 +1719,8 @@ impl ExecutionScheduler {
 
         let permission_set_refs =
             Self::workflow_task_permission_set_refs(task_node, &task_action, wf_ctx)?;
+        let (worker_selector, worker_tolerations, worker_affinity) =
+            Self::workflow_task_placement_overrides(task_node, wf_ctx)?;
 
         let workflow_task = WorkflowTaskMetadata {
             workflow_execution: *workflow_execution_id,
@@ -1662,6 +1753,9 @@ impl ExecutionScheduler {
                 enforcement: parent_execution.enforcement,
                 executor: parent_execution.executor,
                 permission_set_refs,
+                worker_selector,
+                worker_tolerations,
+                worker_affinity,
                 worker: None,
                 status: ExecutionStatus::Requested,
                 result: None,
@@ -1829,6 +1923,8 @@ impl ExecutionScheduler {
 
             let permission_set_refs =
                 Self::workflow_task_permission_set_refs(task_node, task_action, &item_ctx)?;
+            let (worker_selector, worker_tolerations, worker_affinity) =
+                Self::workflow_task_placement_overrides(task_node, &item_ctx)?;
 
             let workflow_task = WorkflowTaskMetadata {
                 workflow_execution: *workflow_execution_id,
@@ -1861,6 +1957,9 @@ impl ExecutionScheduler {
                     enforcement: parent_execution.enforcement,
                     executor: parent_execution.executor,
                     permission_set_refs,
+                    worker_selector,
+                    worker_tolerations,
+                    worker_affinity,
                     worker: None,
                     status: ExecutionStatus::Requested,
                     result: None,
@@ -2023,6 +2122,8 @@ impl ExecutionScheduler {
 
             let permission_set_refs =
                 Self::workflow_task_permission_set_refs(task_node, task_action, &item_ctx)?;
+            let (worker_selector, worker_tolerations, worker_affinity) =
+                Self::workflow_task_placement_overrides(task_node, &item_ctx)?;
 
             let workflow_task = WorkflowTaskMetadata {
                 workflow_execution: *workflow_execution_id,
@@ -2056,6 +2157,9 @@ impl ExecutionScheduler {
                         enforcement: parent_execution.enforcement,
                         executor: parent_execution.executor,
                         permission_set_refs,
+                        worker_selector,
+                        worker_tolerations,
+                        worker_affinity,
                         worker: None,
                         status: ExecutionStatus::Requested,
                         result: None,
@@ -3365,11 +3469,22 @@ impl ExecutionScheduler {
     ///
     /// Uses round-robin selection among compatible, active, and healthy workers
     /// to distribute load evenly across the worker pool.
-    async fn select_worker(
+    #[allow(dead_code)]
+    pub async fn select_worker(
         pool: &PgPool,
         action: &Action,
         round_robin_counter: &AtomicUsize,
     ) -> Result<attune_common::models::Worker> {
+        Self::select_worker_for_action_execution(pool, action, None, round_robin_counter).await
+    }
+
+    async fn select_worker_for_action_execution(
+        pool: &PgPool,
+        action: &Action,
+        execution: Option<&Execution>,
+        round_robin_counter: &AtomicUsize,
+    ) -> Result<attune_common::models::Worker> {
+        let placement = Self::effective_placement(action, execution)?;
         // Get runtime requirements for the action
         let runtime = if let Some(runtime_id) = action.runtime {
             RuntimeRepository::find_by_id(pool, runtime_id).await?
@@ -3385,7 +3500,7 @@ impl ExecutionScheduler {
         }
 
         // Filter workers by runtime compatibility if runtime is specified
-        let compatible_workers: Vec<_> = if let Some(ref runtime) = runtime {
+        let runtime_compatible_workers: Vec<_> = if let Some(ref runtime) = runtime {
             workers
                 .into_iter()
                 .filter(|w| Self::worker_supports_runtime(w, runtime))
@@ -3409,6 +3524,11 @@ impl ExecutionScheduler {
                 .collect()
         };
 
+        let compatible_workers: Vec<_> = runtime_compatible_workers
+            .into_iter()
+            .filter(|w| Self::worker_satisfies_placement(w, action, &placement))
+            .collect();
+
         if compatible_workers.is_empty() {
             let runtime_name = runtime.as_ref().map(|r| r.name.as_str()).unwrap_or("any");
             let version_constraint = action
@@ -3426,11 +3546,12 @@ impl ExecutionScheduler {
                     .join(", ")
             };
             return Err(anyhow::anyhow!(
-                "No compatible workers found for action: {} (requires runtime: {}, version constraint: {}, required worker runtimes: {})",
+                "No compatible workers found for action: {} (requires runtime: {}, version constraint: {}, required worker runtimes: {}, worker placement: {})",
                 action.r#ref,
                 runtime_name,
                 version_constraint,
                 required_runtimes,
+                Self::placement_description(&placement),
             ));
         }
 
@@ -3458,21 +3579,133 @@ impl ExecutionScheduler {
             ));
         }
 
-        // Round-robin selection: distribute executions evenly across workers.
-        // Each call increments the counter and picks the next worker in the list.
+        let max_preference_score = fresh_workers
+            .iter()
+            .map(|worker| Self::worker_preference_score(worker, &placement))
+            .max()
+            .unwrap_or(0);
+        let preferred_workers: Vec<_> = fresh_workers
+            .into_iter()
+            .filter(|worker| {
+                Self::worker_preference_score(worker, &placement) == max_preference_score
+            })
+            .collect();
+
+        // Round-robin selection: distribute executions evenly across the best
+        // scoring workers after hard placement constraints are enforced.
         let count = round_robin_counter.fetch_add(1, Ordering::Relaxed);
-        let index = count % fresh_workers.len();
-        let selected = fresh_workers
+        let index = count % preferred_workers.len();
+        let selected = preferred_workers
             .into_iter()
             .nth(index)
             .expect("Worker list should not be empty");
 
         info!(
-            "Selected worker {} (id={}) via round-robin (index {} of available workers)",
-            selected.name, selected.id, index
+            "Selected worker {} (id={}) via round-robin (index {} of best-scoring workers, placement score {})",
+            selected.name, selected.id, index, max_preference_score
         );
 
         Ok(selected)
+    }
+
+    /// Select an appropriate worker for a persisted execution using the same
+    /// action lookup and worker selection path as normal scheduling.
+    #[allow(dead_code)]
+    pub async fn select_worker_for_execution(
+        pool: &PgPool,
+        execution_id: i64,
+        round_robin_counter: &AtomicUsize,
+    ) -> Result<attune_common::models::Worker> {
+        let execution = ExecutionRepository::find_by_id(pool, execution_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Execution not found: {}", execution_id))?;
+        let action = Self::get_action_for_execution(pool, &execution).await?;
+        Self::select_worker_for_action_execution(
+            pool,
+            &action,
+            Some(&execution),
+            round_robin_counter,
+        )
+        .await
+    }
+
+    fn effective_placement(
+        action: &Action,
+        execution: Option<&Execution>,
+    ) -> Result<EffectiveWorkerPlacement> {
+        let selector = if let Some(selector) = execution.and_then(|e| e.worker_selector.as_ref()) {
+            parse_worker_selector(selector)?
+        } else {
+            action.worker_selector_labels()
+        };
+        let tolerations =
+            if let Some(tolerations) = execution.and_then(|e| e.worker_tolerations.as_ref()) {
+                parse_worker_tolerations(tolerations)?
+            } else {
+                action.worker_toleration_specs()
+            };
+        let affinity = if let Some(affinity) = execution.and_then(|e| e.worker_affinity.as_ref()) {
+            parse_worker_affinity(affinity)?
+        } else {
+            action.worker_affinity_spec()
+        };
+
+        Ok(EffectiveWorkerPlacement {
+            selector,
+            tolerations,
+            affinity,
+        })
+    }
+
+    fn worker_satisfies_placement(
+        worker: &attune_common::models::Worker,
+        action: &Action,
+        placement: &EffectiveWorkerPlacement,
+    ) -> bool {
+        let labels = worker_labels_from_capabilities(worker.capabilities.as_ref());
+        let taints = worker_taints_from_capabilities(worker.capabilities.as_ref());
+
+        let matches = worker_matches_placement(
+            &labels,
+            &taints,
+            &placement.selector,
+            &placement.tolerations,
+            &placement.affinity,
+        );
+        if !matches {
+            debug!(
+                "Worker {} rejected by placement constraints for action {}",
+                worker.name, action.r#ref
+            );
+        }
+        matches
+    }
+
+    fn worker_preference_score(
+        worker: &attune_common::models::Worker,
+        placement: &EffectiveWorkerPlacement,
+    ) -> i32 {
+        let labels = worker_labels_from_capabilities(worker.capabilities.as_ref());
+        preferred_affinity_score(&labels, &placement.affinity)
+    }
+
+    fn placement_description(placement: &EffectiveWorkerPlacement) -> String {
+        let selector = &placement.selector;
+        let tolerations = &placement.tolerations;
+        let affinity = &placement.affinity;
+
+        if selector.is_empty() && tolerations.is_empty() && affinity.is_empty() {
+            return "none".to_string();
+        }
+
+        format!(
+            "selector={:?}, tolerations={}, required_affinity_terms={}, preferred_affinity_terms={}, anti_affinity_terms={}",
+            selector,
+            tolerations.len(),
+            affinity.required.len(),
+            affinity.preferred.len(),
+            affinity.anti_affinity.len(),
+        )
     }
 
     /// Check if a worker supports a given runtime
@@ -4623,6 +4856,9 @@ mod tests {
             enforcement: None,
             executor: None,
             permission_set_refs: Vec::new(),
+            worker_selector: None,
+            worker_tolerations: None,
+            worker_affinity: None,
             worker: None,
             status: ExecutionStatus::Requested,
             result: None,
@@ -4670,6 +4906,9 @@ mod tests {
             enforcement: None,
             executor: None,
             permission_set_refs: Vec::new(),
+            worker_selector: None,
+            worker_tolerations: None,
+            worker_affinity: None,
             worker: None,
             status: ExecutionStatus::Requested,
             result: None,
@@ -4759,6 +4998,9 @@ mod tests {
             enforcement: None,
             executor: None,
             permission_set_refs: Vec::new(),
+            worker_selector: None,
+            worker_tolerations: None,
+            worker_affinity: None,
             worker: None,
             status: ExecutionStatus::Requested,
             result: None,

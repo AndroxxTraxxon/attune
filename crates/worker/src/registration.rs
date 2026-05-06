@@ -7,6 +7,9 @@ use attune_common::config::Config;
 use attune_common::error::{Error, Result};
 use attune_common::models::{Worker, WorkerRole, WorkerStatus, WorkerType};
 use attune_common::runtime_detection::{normalize_runtime_name, RuntimeDetector};
+use attune_common::scheduling::{
+    validate_label_map, validate_taints, WORKER_LABELS_CAPABILITY_KEY, WORKER_TAINTS_CAPABILITY_KEY,
+};
 use chrono::Utc;
 use serde_json::json;
 use sqlx::PgPool;
@@ -141,6 +144,32 @@ impl WorkerRegistration {
         );
 
         Self::inject_agent_capabilities(&mut capabilities);
+
+        if let Some(worker_config) = config.worker.as_ref() {
+            if let Err(err) = validate_label_map("worker.labels", &worker_config.labels) {
+                warn!(
+                    "Ignoring invalid worker labels for '{}': {}",
+                    worker_name, err
+                );
+            } else if !worker_config.labels.is_empty() {
+                capabilities.insert(
+                    WORKER_LABELS_CAPABILITY_KEY.to_string(),
+                    json!(worker_config.labels),
+                );
+            }
+
+            if let Err(err) = validate_taints(&worker_config.taints) {
+                warn!(
+                    "Ignoring invalid worker taints for '{}': {}",
+                    worker_name, err
+                );
+            } else if !worker_config.taints.is_empty() {
+                capabilities.insert(
+                    WORKER_TAINTS_CAPABILITY_KEY.to_string(),
+                    json!(worker_config.taints),
+                );
+            }
+        }
 
         // Placeholder for runtimes (will be detected asynchronously)
         capabilities.insert("runtimes".to_string(), json!(Vec::<String>::new()));

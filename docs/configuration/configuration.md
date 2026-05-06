@@ -197,6 +197,13 @@ message_queue:
 worker:
   name: attune-worker-1
   worker_type: local      # local, remote, container
+  labels:                 # optional placement labels for executor scheduling
+    gpu: nvidia
+    zone: us-east-1a
+  taints:                 # optional taints; actions need matching tolerations
+    - key: gpu
+      value: "true"
+      effect: no_schedule
   max_concurrent_tasks: 10
   heartbeat_interval: 30  # seconds
   task_timeout: 300       # seconds

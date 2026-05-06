@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 use utoipa::ToSchema;
 use validator::Validate;
 
+use attune_common::scheduling::{WorkerAffinity, WorkerToleration};
+
 /// Request DTO for creating a new action
 #[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
 pub struct CreateActionRequest {
@@ -52,6 +54,21 @@ pub struct CreateActionRequest {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[schema(value_type = Object, example = json!({"node": "*", "python": ">=3.12"}), default = json!({}))]
     pub required_worker_runtimes: BTreeMap<String, String>,
+
+    /// Exact worker label requirements. All labels must match the selected worker.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schema(value_type = Object, example = json!({"gpu": "nvidia", "zone": "us-east-1a"}), default = json!({}))]
+    pub worker_selector: BTreeMap<String, String>,
+
+    /// Tolerations that allow scheduling onto workers with matching taints.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(default = json!([]))]
+    pub worker_tolerations: Vec<WorkerToleration>,
+
+    /// Required/preferred worker label affinity and required anti-affinity.
+    #[serde(default)]
+    #[schema(default = json!({}))]
+    pub worker_affinity: WorkerAffinity,
 
     /// Parameter schema (StackStorm-style) defining expected inputs with inline required/secret
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,6 +124,18 @@ pub struct UpdateActionRequest {
     /// Additional worker runtime requirements keyed by runtime name/alias. Use "*" for any available version.
     #[schema(value_type = Object, example = json!({"node": "*", "python": ">=3.12"}), nullable = true)]
     pub required_worker_runtimes: Option<BTreeMap<String, String>>,
+
+    /// Exact worker label requirements. All labels must match the selected worker.
+    #[schema(value_type = Object, example = json!({"gpu": "nvidia"}), nullable = true)]
+    pub worker_selector: Option<BTreeMap<String, String>>,
+
+    /// Tolerations that allow scheduling onto workers with matching taints.
+    #[schema(nullable = true)]
+    pub worker_tolerations: Option<Vec<WorkerToleration>>,
+
+    /// Required/preferred worker label affinity and required anti-affinity.
+    #[schema(nullable = true)]
+    pub worker_affinity: Option<WorkerAffinity>,
 
     /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
@@ -184,6 +213,19 @@ pub struct ActionResponse {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[schema(value_type = Object, example = json!({"node": "*", "python": ">=3.12"}))]
     pub required_worker_runtimes: BTreeMap<String, String>,
+
+    /// Exact worker label requirements.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[schema(value_type = Object, example = json!({"gpu": "nvidia"}))]
+    pub worker_selector: BTreeMap<String, String>,
+
+    /// Tolerations for worker taints.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub worker_tolerations: Vec<WorkerToleration>,
+
+    /// Required/preferred worker label affinity and required anti-affinity.
+    #[serde(skip_serializing_if = "WorkerAffinity::is_empty")]
+    pub worker_affinity: WorkerAffinity,
 
     /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
@@ -266,6 +308,19 @@ pub struct ActionSummary {
     #[schema(value_type = Object, example = json!({"node": "*", "python": ">=3.12"}))]
     pub required_worker_runtimes: BTreeMap<String, String>,
 
+    /// Exact worker label requirements.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[schema(value_type = Object, example = json!({"gpu": "nvidia"}))]
+    pub worker_selector: BTreeMap<String, String>,
+
+    /// Tolerations for worker taints.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub worker_tolerations: Vec<WorkerToleration>,
+
+    /// Required/preferred worker label affinity and required anti-affinity.
+    #[serde(skip_serializing_if = "WorkerAffinity::is_empty")]
+    pub worker_affinity: WorkerAffinity,
+
     /// Workflow definition ID (non-null if this action is a workflow)
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(example = 42, nullable = true)]
@@ -293,6 +348,9 @@ pub struct ActionSummary {
 impl From<attune_common::models::action::Action> for ActionResponse {
     fn from(action: attune_common::models::action::Action) -> Self {
         let required_worker_runtimes = action.required_worker_runtime_constraints();
+        let worker_selector = action.worker_selector_labels();
+        let worker_tolerations = action.worker_toleration_specs();
+        let worker_affinity = action.worker_affinity_spec();
         Self {
             id: action.id,
             r#ref: action.r#ref,
@@ -305,6 +363,9 @@ impl From<attune_common::models::action::Action> for ActionResponse {
             runtime_ref: None,
             runtime_version_constraint: action.runtime_version_constraint,
             required_worker_runtimes,
+            worker_selector,
+            worker_tolerations,
+            worker_affinity,
             param_schema: action.param_schema,
             out_schema: action.out_schema,
             workflow_def: action.workflow_def,
@@ -321,6 +382,9 @@ impl From<attune_common::models::action::Action> for ActionResponse {
 impl From<attune_common::models::action::Action> for ActionSummary {
     fn from(action: attune_common::models::action::Action) -> Self {
         let required_worker_runtimes = action.required_worker_runtime_constraints();
+        let worker_selector = action.worker_selector_labels();
+        let worker_tolerations = action.worker_toleration_specs();
+        let worker_affinity = action.worker_affinity_spec();
         Self {
             id: action.id,
             r#ref: action.r#ref,
@@ -332,6 +396,9 @@ impl From<attune_common::models::action::Action> for ActionSummary {
             runtime_ref: None,
             runtime_version_constraint: action.runtime_version_constraint,
             required_worker_runtimes,
+            worker_selector,
+            worker_tolerations,
+            worker_affinity,
             workflow_def: action.workflow_def,
             accesses_mcp: action.accesses_mcp,
             default_execution_permission_set_refs: action.default_execution_permission_set_refs,
@@ -517,6 +584,9 @@ mod tests {
             runtime_ref: None,
             runtime_version_constraint: None,
             required_worker_runtimes: BTreeMap::new(),
+            worker_selector: BTreeMap::new(),
+            worker_tolerations: Vec::new(),
+            worker_affinity: WorkerAffinity::default(),
             param_schema: None,
             out_schema: None,
             accesses_mcp: None,
@@ -538,6 +608,9 @@ mod tests {
             runtime_ref: None,
             runtime_version_constraint: None,
             required_worker_runtimes: BTreeMap::new(),
+            worker_selector: BTreeMap::new(),
+            worker_tolerations: Vec::new(),
+            worker_affinity: WorkerAffinity::default(),
             param_schema: None,
             out_schema: None,
             accesses_mcp: None,
@@ -557,6 +630,9 @@ mod tests {
             runtime_ref: None,
             runtime_version_constraint: None,
             required_worker_runtimes: None,
+            worker_selector: None,
+            worker_tolerations: None,
+            worker_affinity: None,
             param_schema: None,
             out_schema: None,
             accesses_mcp: None,

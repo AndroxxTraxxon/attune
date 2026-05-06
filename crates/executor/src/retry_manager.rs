@@ -302,6 +302,9 @@ impl RetryManager {
             // context as the original.
             executor: original.executor,
             permission_set_refs: original.permission_set_refs.clone(),
+            worker_selector: original.worker_selector.clone(),
+            worker_tolerations: original.worker_tolerations.clone(),
+            worker_affinity: original.worker_affinity.clone(),
             worker: None,
             status: ExecutionStatus::Requested,
             result: None,

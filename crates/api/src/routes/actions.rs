@@ -288,6 +288,9 @@ pub async fn create_action(
         runtime,
         runtime_version_constraint: request.runtime_version_constraint,
         required_worker_runtimes: json!(request.required_worker_runtimes),
+        worker_selector: json!(request.worker_selector),
+        worker_tolerations: json!(request.worker_tolerations),
+        worker_affinity: json!(request.worker_affinity),
         param_schema: request.param_schema,
         out_schema: request.out_schema,
         is_adhoc: true, // Actions created via API are ad-hoc (not from pack installation)
@@ -383,6 +386,11 @@ pub async fn update_action(
         required_worker_runtimes: request
             .required_worker_runtimes
             .map(|runtimes| json!(runtimes)),
+        worker_selector: request.worker_selector.map(|selector| json!(selector)),
+        worker_tolerations: request
+            .worker_tolerations
+            .map(|tolerations| json!(tolerations)),
+        worker_affinity: request.worker_affinity.map(|affinity| json!(affinity)),
         param_schema: request.param_schema,
         out_schema: request.out_schema,
         parameter_delivery: None,

@@ -50,6 +50,20 @@ enabled: true
 runner_type: shell              # Runtime to use (shell, python, nodejs, etc.)
 entry_point: my_action.sh       # Script to execute
 
+# Optional worker placement constraints
+worker_selector:                # exact worker label matches
+  zone: us-east-1a
+worker_tolerations:             # tolerate matching worker taints
+  - key: gpu
+    operator: exists
+    effect: no_schedule
+worker_affinity:                # required/preferred label affinity
+  preferred:
+    - weight: 50
+      preference:
+        match_labels:
+          disk: ssd
+
 # Parameter configuration (how parameters are delivered)
 parameter_delivery: stdin       # Options: stdin (default), file
 parameter_format: json          # Options: json (default), yaml, dotenv
@@ -87,6 +101,8 @@ output_schema:
 tags:
   - utility
 ```
+
+Action-level worker placement is the default for executions of that action. Manual execution requests can override any of `worker_selector`, `worker_tolerations`, or `worker_affinity` with the same JSON shape; omitted override fields inherit the action default, while explicit `{}` (`worker_selector` / `worker_affinity`) or `[]` (`worker_tolerations`) clears that field for the execution. Workflow tasks support the same fields and render them as workflow templates before creating the child execution.
 
 ---
 

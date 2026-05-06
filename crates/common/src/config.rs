@@ -507,6 +507,14 @@ pub struct WorkerConfig {
     /// Can be overridden by ATTUNE_WORKER_RUNTIMES environment variable
     pub capabilities: Option<std::collections::HashMap<String, serde_json::Value>>,
 
+    /// Worker placement labels used by executor scheduling constraints.
+    #[serde(default)]
+    pub labels: std::collections::BTreeMap<String, String>,
+
+    /// Worker taints that require matching action tolerations.
+    #[serde(default)]
+    pub taints: Vec<crate::scheduling::WorkerTaint>,
+
     /// Maximum concurrent tasks
     #[serde(default = "default_max_concurrent_tasks")]
     pub max_concurrent_tasks: usize,

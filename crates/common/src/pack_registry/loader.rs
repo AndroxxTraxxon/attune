@@ -987,6 +987,18 @@ impl<'a> PackComponentLoader<'a> {
                 .get("required_worker_runtimes")
                 .map(|value| serde_json::to_value(value).unwrap_or_else(|_| serde_json::json!({})))
                 .unwrap_or_else(|| serde_json::json!({}));
+            let worker_selector = data
+                .get("worker_selector")
+                .map(|value| serde_json::to_value(value).unwrap_or_else(|_| serde_json::json!({})))
+                .unwrap_or_else(|| serde_json::json!({}));
+            let worker_tolerations = data
+                .get("worker_tolerations")
+                .map(|value| serde_json::to_value(value).unwrap_or_else(|_| serde_json::json!([])))
+                .unwrap_or_else(|| serde_json::json!([]));
+            let worker_affinity = data
+                .get("worker_affinity")
+                .map(|value| serde_json::to_value(value).unwrap_or_else(|_| serde_json::json!({})))
+                .unwrap_or_else(|| serde_json::json!({}));
 
             let accesses_mcp = data
                 .get("accesses_mcp")
@@ -1020,6 +1032,9 @@ impl<'a> PackComponentLoader<'a> {
                         None => Patch::Clear,
                     }),
                     required_worker_runtimes: Some(required_worker_runtimes.clone()),
+                    worker_selector: Some(worker_selector.clone()),
+                    worker_tolerations: Some(worker_tolerations.clone()),
+                    worker_affinity: Some(worker_affinity.clone()),
                     param_schema,
                     out_schema,
                     parameter_delivery: Some(parameter_delivery),
@@ -1066,10 +1081,11 @@ impl<'a> PackComponentLoader<'a> {
                 INSERT INTO action (
                     ref, pack, pack_ref, label, description, entrypoint,
                     runtime, runtime_version_constraint, required_worker_runtimes,
+                    worker_selector, worker_tolerations, worker_affinity,
                     param_schema, out_schema, is_adhoc, parameter_delivery, parameter_format,
                     output_format, accesses_mcp, default_execution_permission_set_refs
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
                 RETURNING id
                 "#,
             )
@@ -1082,6 +1098,9 @@ impl<'a> PackComponentLoader<'a> {
             .bind(runtime_id)
             .bind(&runtime_version_constraint)
             .bind(&required_worker_runtimes)
+            .bind(&worker_selector)
+            .bind(&worker_tolerations)
+            .bind(&worker_affinity)
             .bind(&param_schema)
             .bind(&out_schema)
             .bind(false) // is_adhoc

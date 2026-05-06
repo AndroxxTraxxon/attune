@@ -31,6 +31,9 @@ use attune_common::repositories::{
     workflow::{WorkflowDefinitionRepository, WorkflowExecutionRepository},
     Create, FindById, FindByRef, Update,
 };
+use attune_common::scheduling::{
+    parse_worker_affinity, parse_worker_selector, parse_worker_tolerations,
+};
 use attune_common::workflow::{CancellationPolicy, WorkflowDefinition};
 use sqlx::Row;
 
@@ -164,6 +167,19 @@ pub async fn create_execution(
         ));
     }
 
+    if let Some(worker_selector) = &request.worker_selector {
+        parse_worker_selector(worker_selector)
+            .map_err(|e| ApiError::BadRequest(format!("Invalid worker_selector: {e}")))?;
+    }
+    if let Some(worker_tolerations) = &request.worker_tolerations {
+        parse_worker_tolerations(worker_tolerations)
+            .map_err(|e| ApiError::BadRequest(format!("Invalid worker_tolerations: {e}")))?;
+    }
+    if let Some(worker_affinity) = &request.worker_affinity {
+        parse_worker_affinity(worker_affinity)
+            .map_err(|e| ApiError::BadRequest(format!("Invalid worker_affinity: {e}")))?;
+    }
+
     // Create execution input
     let execution_input = CreateExecutionInput {
         action: Some(action.id),
@@ -180,6 +196,9 @@ pub async fn create_execution(
         enforcement: None,
         executor: executor_identity,
         permission_set_refs,
+        worker_selector: request.worker_selector.clone(),
+        worker_tolerations: request.worker_tolerations.clone(),
+        worker_affinity: request.worker_affinity.clone(),
         worker: None,
         status: ExecutionStatus::Requested,
         result: None,

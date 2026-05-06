@@ -1092,6 +1092,12 @@ pub mod action {
         pub runtime_version_constraint: Option<String>,
         #[sqlx(default)]
         pub required_worker_runtimes: JsonDict,
+        #[sqlx(default)]
+        pub worker_selector: JsonDict,
+        #[sqlx(default)]
+        pub worker_tolerations: JsonDict,
+        #[sqlx(default)]
+        pub worker_affinity: JsonDict,
         pub param_schema: Option<JsonSchema>,
         pub out_schema: Option<JsonSchema>,
         pub workflow_def: Option<Id>,
@@ -1122,6 +1128,19 @@ pub mod action {
                         .map(|constraint| (runtime.clone(), constraint.to_string()))
                 })
                 .collect()
+        }
+
+        pub fn worker_selector_labels(&self) -> BTreeMap<String, String> {
+            crate::scheduling::parse_worker_selector(&self.worker_selector).unwrap_or_default()
+        }
+
+        pub fn worker_toleration_specs(&self) -> Vec<crate::scheduling::WorkerToleration> {
+            crate::scheduling::parse_worker_tolerations(&self.worker_tolerations)
+                .unwrap_or_default()
+        }
+
+        pub fn worker_affinity_spec(&self) -> crate::scheduling::WorkerAffinity {
+            crate::scheduling::parse_worker_affinity(&self.worker_affinity).unwrap_or_default()
         }
     }
 
@@ -1332,6 +1351,9 @@ pub mod execution {
         pub executor: Option<Id>,
         #[sqlx(default)]
         pub permission_set_refs: Vec<String>,
+        pub worker_selector: Option<JsonDict>,
+        pub worker_tolerations: Option<JsonDict>,
+        pub worker_affinity: Option<JsonDict>,
         pub worker: Option<Id>,
         pub status: ExecutionStatus,
         pub result: Option<JsonDict>,

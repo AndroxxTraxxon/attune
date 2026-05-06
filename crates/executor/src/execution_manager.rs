@@ -426,6 +426,9 @@ impl ExecutionManager {
                 // token has the same security context.
                 executor: parent.executor,
                 permission_set_refs: parent.permission_set_refs.clone(),
+                worker_selector: parent.worker_selector.clone(),
+                worker_tolerations: parent.worker_tolerations.clone(),
+                worker_affinity: parent.worker_affinity.clone(),
                 worker: None,
                 status: ExecutionStatus::Requested,
                 result: None,

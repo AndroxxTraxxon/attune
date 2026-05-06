@@ -58,6 +58,15 @@ pub struct TaskNode {
     /// Templatable permission set refs for the child execution token
     pub permission_set_refs: Option<JsonValue>,
 
+    /// Templatable worker selector override for the child execution
+    pub worker_selector: Option<JsonValue>,
+
+    /// Templatable worker tolerations override for the child execution
+    pub worker_tolerations: Option<JsonValue>,
+
+    /// Templatable worker affinity override for the child execution
+    pub worker_affinity: Option<JsonValue>,
+
     /// Conditional execution (task-level — controls whether the task runs at all)
     pub when: Option<String>,
 
@@ -371,6 +380,9 @@ impl GraphBuilder {
             action: task.action.clone(),
             input: serde_json::to_value(&task.input).unwrap_or(serde_json::json!({})),
             permission_set_refs: task.permission_set_refs.clone(),
+            worker_selector: task.worker_selector.clone(),
+            worker_tolerations: task.worker_tolerations.clone(),
+            worker_affinity: task.worker_affinity.clone(),
             when: task.when.clone(),
             with_items: task.with_items.clone(),
             batch_size: task.batch_size,
@@ -553,6 +565,60 @@ tasks:
         let next = graph.next_tasks("task2", true);
         assert_eq!(next.len(), 1);
         assert_eq!(next[0], "task3");
+    }
+
+    #[test]
+    fn test_task_graph_preserves_worker_placement_overrides() {
+        let yaml = r#"
+ref: test.placement
+label: Placement Workflow
+version: 1.0.0
+tasks:
+  - name: gpu_task
+    action: core.echo
+    worker_selector:
+      pool: gpu
+    worker_tolerations:
+      - key: dedicated
+        operator: equal
+        value: gpu
+        effect: no_schedule
+    worker_affinity:
+      preferred:
+        - weight: 50
+          preference:
+            match_labels:
+              zone: east
+"#;
+
+        let workflow = workflow::parse_workflow_yaml(yaml).unwrap();
+        let graph = TaskGraph::from_workflow(&workflow).unwrap();
+        let task = graph.get_task("gpu_task").unwrap();
+
+        assert_eq!(
+            task.worker_selector,
+            Some(serde_json::json!({"pool": "gpu"}))
+        );
+        assert_eq!(
+            task.worker_tolerations,
+            Some(serde_json::json!([{
+                "key": "dedicated",
+                "operator": "equal",
+                "value": "gpu",
+                "effect": "no_schedule"
+            }]))
+        );
+        assert_eq!(
+            task.worker_affinity,
+            Some(serde_json::json!({
+                "preferred": [{
+                    "weight": 50,
+                    "preference": {
+                        "match_labels": {"zone": "east"}
+                    }
+                }]
+            }))
+        );
     }
 
     #[test]

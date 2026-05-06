@@ -209,6 +209,27 @@ pub struct Task {
     #[serde(default, alias = "permission_set_ref")]
     pub permission_set_refs: Option<JsonValue>,
 
+    /// Worker selector override for this task's child execution.
+    ///
+    /// May be a literal object or a template expression resolving to an object.
+    /// If omitted, the task action's default worker selector is used.
+    #[serde(default)]
+    pub worker_selector: Option<JsonValue>,
+
+    /// Worker tolerations override for this task's child execution.
+    ///
+    /// May be a literal array or a template expression resolving to an array.
+    /// If omitted, the task action's default worker tolerations are used.
+    #[serde(default)]
+    pub worker_tolerations: Option<JsonValue>,
+
+    /// Worker affinity override for this task's child execution.
+    ///
+    /// May be a literal object or a template expression resolving to an object.
+    /// If omitted, the task action's default worker affinity is used.
+    #[serde(default)]
+    pub worker_affinity: Option<JsonValue>,
+
     /// Conditional execution (task-level — controls whether this task runs)
     pub when: Option<String>,
 

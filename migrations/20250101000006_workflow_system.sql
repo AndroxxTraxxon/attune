@@ -135,13 +135,22 @@ ALTER TABLE workflow_task_dispatch
 
 ALTER TABLE action
     ADD COLUMN workflow_def BIGINT REFERENCES workflow_definition(id) ON DELETE CASCADE,
-    ADD COLUMN required_worker_runtimes JSONB NOT NULL DEFAULT '{}'::jsonb;
+    ADD COLUMN required_worker_runtimes JSONB NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN worker_selector JSONB NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN worker_tolerations JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN worker_affinity JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE INDEX idx_action_workflow_def ON action(workflow_def);
 
 COMMENT ON COLUMN action.workflow_def IS 'Reference to workflow definition (non-null means this action is a workflow)';
 COMMENT ON COLUMN action.required_worker_runtimes IS
     'Additional worker runtime requirements keyed by runtime name/alias with semver constraints; use "*" for any available version (for example {"node": ">=20", "python": "*"}).';
+COMMENT ON COLUMN action.worker_selector IS
+    'Exact worker label requirements for scheduling; all labels must match the selected worker.';
+COMMENT ON COLUMN action.worker_tolerations IS
+    'Tolerations that allow the action to schedule onto workers with matching taints.';
+COMMENT ON COLUMN action.worker_affinity IS
+    'Required and preferred worker label affinity terms plus required anti-affinity terms for executor scheduling.';
 
 ALTER TABLE execution
     ADD CONSTRAINT execution_workflow_def_fkey

@@ -140,6 +140,12 @@ security:
 # worker:
 #   name: attune-worker-1
 #   worker_type: local
+#   labels:
+#     zone: us-east-1a
+#   taints:
+#     - key: gpu
+#       value: "true"
+#       effect: no_schedule
 #   max_concurrent_tasks: 10
 #   heartbeat_interval: 30  # seconds
 #   task_timeout: 300       # seconds

@@ -3,6 +3,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::models::{enums::ExecutionStatus, execution::*, Id, JsonDict};
+use crate::scheduling::{parse_worker_affinity, parse_worker_selector, parse_worker_tolerations};
 use crate::Result;
 use sqlx::{Executor, PgConnection, PgPool, Postgres, QueryBuilder};
 use tokio::time::{sleep, Duration};
@@ -122,6 +123,9 @@ pub struct ExecutionWithRefs {
     pub enforcement: Option<Id>,
     pub executor: Option<Id>,
     pub permission_set_refs: Vec<String>,
+    pub worker_selector: Option<JsonDict>,
+    pub worker_tolerations: Option<JsonDict>,
+    pub worker_affinity: Option<JsonDict>,
     pub worker: Option<Id>,
     pub status: ExecutionStatus,
     pub result: Option<JsonDict>,
@@ -146,7 +150,8 @@ pub struct ExecutionWithRefs {
 /// Rust struct, so `SELECT *` must never be used.
 pub const SELECT_COLUMNS: &str = "\
     id, action, action_ref, config, env_vars, parent, enforcement, \
-    executor, permission_set_refs, worker, status, result, retry_count, max_retries, retry_reason, \
+    executor, permission_set_refs, worker_selector, worker_tolerations, worker_affinity, \
+    worker, status, result, retry_count, max_retries, retry_reason, \
     original_execution, started_at, workflow_task, created, updated";
 
 pub struct ExecutionRepository;
@@ -168,10 +173,26 @@ pub struct CreateExecutionInput {
     pub enforcement: Option<Id>,
     pub executor: Option<Id>,
     pub permission_set_refs: Vec<String>,
+    pub worker_selector: Option<JsonDict>,
+    pub worker_tolerations: Option<JsonDict>,
+    pub worker_affinity: Option<JsonDict>,
     pub worker: Option<Id>,
     pub status: ExecutionStatus,
     pub result: Option<JsonDict>,
     pub workflow_task: Option<WorkflowTaskMetadata>,
+}
+
+fn validate_execution_placement(input: &CreateExecutionInput) -> Result<()> {
+    if let Some(worker_selector) = &input.worker_selector {
+        parse_worker_selector(worker_selector)?;
+    }
+    if let Some(worker_tolerations) = &input.worker_tolerations {
+        parse_worker_tolerations(worker_tolerations)?;
+    }
+    if let Some(worker_affinity) = &input.worker_affinity {
+        parse_worker_affinity(worker_affinity)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default)]
@@ -234,10 +255,12 @@ impl Create for ExecutionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
+        validate_execution_placement(&input)?;
         let sql = format!(
             "INSERT INTO execution \
-             (action, action_ref, config, env_vars, parent, enforcement, executor, permission_set_refs, worker, status, result, workflow_task) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+             (action, action_ref, config, env_vars, parent, enforcement, executor, permission_set_refs, \
+              worker_selector, worker_tolerations, worker_affinity, worker, status, result, workflow_task) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
              RETURNING {SELECT_COLUMNS}"
         );
         sqlx::query_as::<_, Execution>(&sql)
@@ -249,6 +272,9 @@ impl Create for ExecutionRepository {
             .bind(input.enforcement)
             .bind(input.executor)
             .bind(&input.permission_set_refs)
+            .bind(&input.worker_selector)
+            .bind(&input.worker_tolerations)
+            .bind(&input.worker_affinity)
             .bind(input.worker)
             .bind(input.status)
             .bind(&input.result)
@@ -295,10 +321,13 @@ impl ExecutionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
+        validate_execution_placement(&input)?;
         let sql = format!(
             "INSERT INTO execution \
-             (action, action_ref, config, env_vars, parent, enforcement, executor, permission_set_refs, worker, status, result, workflow_task, retry_count, max_retries, retry_reason, original_execution) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
+             (action, action_ref, config, env_vars, parent, enforcement, executor, permission_set_refs, \
+              worker_selector, worker_tolerations, worker_affinity, worker, status, result, workflow_task, \
+              retry_count, max_retries, retry_reason, original_execution) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) \
              RETURNING {SELECT_COLUMNS}"
         );
         sqlx::query_as::<_, Execution>(&sql)
@@ -310,6 +339,9 @@ impl ExecutionRepository {
             .bind(input.enforcement)
             .bind(input.executor)
             .bind(&input.permission_set_refs)
+            .bind(&input.worker_selector)
+            .bind(&input.worker_tolerations)
+            .bind(&input.worker_affinity)
             .bind(input.worker)
             .bind(input.status)
             .bind(&input.result)
@@ -355,10 +387,12 @@ impl ExecutionRepository {
     where
         E: Executor<'e, Database = Postgres> + Copy + 'e,
     {
+        validate_execution_placement(&input)?;
         let inserted = sqlx::query_as::<_, Execution>(&format!(
             "INSERT INTO execution \
-             (action, action_ref, config, env_vars, parent, enforcement, executor, permission_set_refs, worker, status, result, workflow_task) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+             (action, action_ref, config, env_vars, parent, enforcement, executor, permission_set_refs, \
+              worker_selector, worker_tolerations, worker_affinity, worker, status, result, workflow_task) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
              ON CONFLICT (enforcement)
              WHERE enforcement IS NOT NULL
                AND parent IS NULL
@@ -374,6 +408,9 @@ impl ExecutionRepository {
         .bind(input.enforcement)
         .bind(input.executor)
         .bind(&input.permission_set_refs)
+        .bind(&input.worker_selector)
+        .bind(&input.worker_tolerations)
+        .bind(&input.worker_affinity)
         .bind(input.worker)
         .bind(input.status)
         .bind(&input.result)

@@ -25,6 +25,9 @@ CREATE TABLE execution (
     enforcement BIGINT,
     executor BIGINT,
     permission_set_refs TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    worker_selector JSONB,
+    worker_tolerations JSONB,
+    worker_affinity JSONB,
     worker BIGINT,
     status execution_status_enum NOT NULL DEFAULT 'requested',
     result JSONB,
@@ -49,6 +52,9 @@ CREATE INDEX idx_execution_parent ON execution(parent);
 CREATE INDEX idx_execution_enforcement ON execution(enforcement);
 CREATE INDEX idx_execution_executor ON execution(executor);
 CREATE INDEX idx_execution_permission_set_refs ON execution USING GIN (permission_set_refs);
+CREATE INDEX idx_execution_worker_selector_gin ON execution USING GIN (worker_selector) WHERE worker_selector IS NOT NULL;
+CREATE INDEX idx_execution_worker_tolerations_gin ON execution USING GIN (worker_tolerations) WHERE worker_tolerations IS NOT NULL;
+CREATE INDEX idx_execution_worker_affinity_gin ON execution USING GIN (worker_affinity) WHERE worker_affinity IS NOT NULL;
 CREATE INDEX idx_execution_worker ON execution(worker);
 CREATE INDEX idx_execution_status ON execution(status);
 CREATE INDEX idx_execution_created ON execution(created DESC);
@@ -77,6 +83,13 @@ CREATE TRIGGER update_execution_updated
     BEFORE UPDATE ON execution
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_column();
+
+COMMENT ON COLUMN execution.worker_selector IS
+    'Per-execution worker selector override. NULL inherits the action default; an empty object explicitly clears selector requirements.';
+COMMENT ON COLUMN execution.worker_tolerations IS
+    'Per-execution worker toleration override. NULL inherits the action default; an empty array explicitly clears tolerations.';
+COMMENT ON COLUMN execution.worker_affinity IS
+    'Per-execution worker affinity override. NULL inherits the action default; an empty object explicitly clears affinity requirements.';
 
 -- Comments
 COMMENT ON TABLE execution IS 'Executions represent action runs, supports nested workflows';

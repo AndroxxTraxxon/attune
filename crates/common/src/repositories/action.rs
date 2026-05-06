@@ -3,6 +3,7 @@
 //! This module provides CRUD operations and queries for Action and Policy entities.
 
 use crate::models::{action::*, enums::PolicyMethod, Id, JsonDict, JsonSchema};
+use crate::scheduling::{parse_worker_affinity, parse_worker_selector, parse_worker_tolerations};
 use crate::version_matching::parse_constraint;
 use crate::{Error, Result};
 use sqlx::{Executor, Postgres, QueryBuilder};
@@ -12,6 +13,7 @@ use super::{Create, Delete, FindById, FindByRef, List, Patch, Repository, Update
 /// Columns selected in all Action queries. Must match the `Action` model's `FromRow` fields.
 pub const ACTION_COLUMNS: &str = "id, ref, pack, pack_ref, label, description, entrypoint, \
     runtime, runtime_version_constraint, required_worker_runtimes, \
+    worker_selector, worker_tolerations, worker_affinity, \
     param_schema, out_schema, workflow_def, is_adhoc, accesses_mcp, \
     default_execution_permission_set_refs, \
     parameter_delivery, parameter_format, output_format, created, updated";
@@ -119,6 +121,9 @@ pub struct CreateActionInput {
     pub runtime: Option<Id>,
     pub runtime_version_constraint: Option<String>,
     pub required_worker_runtimes: JsonDict,
+    pub worker_selector: JsonDict,
+    pub worker_tolerations: JsonDict,
+    pub worker_affinity: JsonDict,
     pub param_schema: Option<JsonSchema>,
     pub out_schema: Option<JsonSchema>,
     pub is_adhoc: bool,
@@ -136,6 +141,9 @@ pub struct UpdateActionInput {
     pub runtime: Option<Id>,
     pub runtime_version_constraint: Option<Patch<String>>,
     pub required_worker_runtimes: Option<JsonDict>,
+    pub worker_selector: Option<JsonDict>,
+    pub worker_tolerations: Option<JsonDict>,
+    pub worker_affinity: Option<JsonDict>,
     pub param_schema: Option<JsonSchema>,
     pub out_schema: Option<JsonSchema>,
     pub parameter_delivery: Option<String>,
@@ -221,15 +229,19 @@ impl Create for ActionRepository {
             validate_version_constraint("runtime_version_constraint", runtime_version_constraint)?;
         }
         validate_required_worker_runtimes(&input.required_worker_runtimes)?;
+        parse_worker_selector(&input.worker_selector)?;
+        parse_worker_tolerations(&input.worker_tolerations)?;
+        parse_worker_affinity(&input.worker_affinity)?;
 
         // Try to insert - database will enforce uniqueness constraint
         let action = sqlx::query_as::<_, Action>(&format!(
             r#"
             INSERT INTO action (ref, pack, pack_ref, label, description, entrypoint,
                                  runtime, runtime_version_constraint, required_worker_runtimes,
+                                 worker_selector, worker_tolerations, worker_affinity,
                                  param_schema, out_schema, is_adhoc, accesses_mcp,
                                  default_execution_permission_set_refs)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             RETURNING {}
             "#,
             ACTION_COLUMNS
@@ -243,6 +255,9 @@ impl Create for ActionRepository {
         .bind(input.runtime)
         .bind(&input.runtime_version_constraint)
         .bind(&input.required_worker_runtimes)
+        .bind(&input.worker_selector)
+        .bind(&input.worker_tolerations)
+        .bind(&input.worker_affinity)
         .bind(&input.param_schema)
         .bind(&input.out_schema)
         .bind(input.is_adhoc)
@@ -277,6 +292,15 @@ impl Update for ActionRepository {
         }
         if let Some(required_worker_runtimes) = &input.required_worker_runtimes {
             validate_required_worker_runtimes(required_worker_runtimes)?;
+        }
+        if let Some(worker_selector) = &input.worker_selector {
+            parse_worker_selector(worker_selector)?;
+        }
+        if let Some(worker_tolerations) = &input.worker_tolerations {
+            parse_worker_tolerations(worker_tolerations)?;
+        }
+        if let Some(worker_affinity) = &input.worker_affinity {
+            parse_worker_affinity(worker_affinity)?;
         }
 
         // Build dynamic UPDATE query
@@ -340,6 +364,33 @@ impl Update for ActionRepository {
             }
             query.push("required_worker_runtimes = ");
             query.push_bind(required_worker_runtimes);
+            has_updates = true;
+        }
+
+        if let Some(worker_selector) = &input.worker_selector {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("worker_selector = ");
+            query.push_bind(worker_selector);
+            has_updates = true;
+        }
+
+        if let Some(worker_tolerations) = &input.worker_tolerations {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("worker_tolerations = ");
+            query.push_bind(worker_tolerations);
+            has_updates = true;
+        }
+
+        if let Some(worker_affinity) = &input.worker_affinity {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("worker_affinity = ");
+            query.push_bind(worker_affinity);
             has_updates = true;
         }
 

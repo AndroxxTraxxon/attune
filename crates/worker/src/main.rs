@@ -56,6 +56,8 @@ async fn main() -> Result<()> {
                 host: None,
                 port: None,
                 capabilities: None,
+                labels: Default::default(),
+                taints: Vec::new(),
                 max_concurrent_tasks: 10,
                 heartbeat_interval: 30,
                 task_timeout: 300,

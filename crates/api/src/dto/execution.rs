@@ -29,6 +29,24 @@ pub struct CreateExecutionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = json!(["core.agent_reader"]), nullable = true)]
     pub permission_set_refs: Option<Vec<String>>,
+
+    /// Worker label selector override. Omit to inherit the action default;
+    /// provide `{}` to explicitly clear selector requirements.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>, example = json!({"pool": "gpu"}), nullable = true)]
+    pub worker_selector: Option<JsonValue>,
+
+    /// Worker taint tolerations override. Omit to inherit the action default;
+    /// provide `[]` to explicitly clear tolerations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Vec<Object>>, example = json!([{"key": "dedicated", "operator": "equal", "value": "gpu", "effect": "no_schedule"}]), nullable = true)]
+    pub worker_tolerations: Option<JsonValue>,
+
+    /// Worker affinity override. Omit to inherit the action default; provide
+    /// `{}` to explicitly clear affinity requirements/preferences.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>, nullable = true)]
+    pub worker_affinity: Option<JsonValue>,
 }
 
 /// Response DTO for execution information
@@ -66,6 +84,21 @@ pub struct ExecutionResponse {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[schema(example = json!(["core.agent_reader"]))]
     pub permission_set_refs: Vec<String>,
+
+    /// Worker selector override stored on the execution, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>, nullable = true)]
+    pub worker_selector: Option<JsonValue>,
+
+    /// Worker tolerations override stored on the execution, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Vec<Object>>, nullable = true)]
+    pub worker_tolerations: Option<JsonValue>,
+
+    /// Worker affinity override stored on the execution, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>, nullable = true)]
+    pub worker_affinity: Option<JsonValue>,
 
     /// Worker ID currently assigned to this execution
     #[schema(example = 1)]
@@ -251,6 +284,9 @@ impl From<attune_common::models::execution::Execution> for ExecutionResponse {
             enforcement: execution.enforcement,
             executor: execution.executor,
             permission_set_refs: execution.permission_set_refs,
+            worker_selector: execution.worker_selector,
+            worker_tolerations: execution.worker_tolerations,
+            worker_affinity: execution.worker_affinity,
             worker: execution.worker,
             status: execution.status,
             result: execution

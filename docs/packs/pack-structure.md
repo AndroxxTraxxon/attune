@@ -148,6 +148,20 @@ enabled: true
 runner_type: shell
 entry_point: echo.sh
 
+# Optional worker placement constraints
+worker_selector:
+  zone: us-east-1a
+worker_tolerations:
+  - key: gpu
+    operator: exists
+    effect: no_schedule
+worker_affinity:
+  preferred:
+    - weight: 50
+      preference:
+        match_labels:
+          disk: ssd
+
 # Parameter delivery (optional, defaults to stdin/json)
 parameter_delivery: stdin
 parameter_format: json
@@ -178,6 +192,8 @@ tags:
   - utility
   - testing
 ```
+
+Worker placement in action YAML is the default for executions of that action. Manual executions and workflow tasks can override `worker_selector`, `worker_tolerations`, or `worker_affinity`; omitted override fields inherit the action default, while explicit empty objects/arrays clear that field for the execution.
 
 ---
 

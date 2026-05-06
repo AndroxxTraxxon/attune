@@ -22,6 +22,7 @@ pub mod queue_definition;
 pub mod rbac;
 pub mod repositories;
 pub mod runtime_detection;
+pub mod scheduling;
 pub mod schema;
 pub mod template_resolver;
 pub mod test_executor;
