@@ -800,17 +800,17 @@ function PermissionSetRefChips({ refs }: { refs: string[] }) {
 }
 
 function DefaultExecutionPermissionsCard({ action }: { action: ActionResponse }) {
+  const resetKey = `${action.ref}:${formatPermissionSetRefs(action.default_execution_permission_set_refs)}`;
+  return <DefaultExecutionPermissionsEditor key={resetKey} action={action} />;
+}
+
+function DefaultExecutionPermissionsEditor({ action }: { action: ActionResponse }) {
   const currentRefs = action.default_execution_permission_set_refs ?? [];
   const updateAction = useUpdateAction();
   const { data: permissionSets, isLoading: permissionSetsLoading } =
     usePermissionSets();
   const [draftRefs, setDraftRefs] = useState(formatPermissionSetRefs(currentRefs));
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    setDraftRefs(formatPermissionSetRefs(action.default_execution_permission_set_refs));
-    setErrorMessage(null);
-  }, [action.ref, action.default_execution_permission_set_refs]);
 
   const normalizedDraftRefs = useMemo(
     () => normalizePermissionSetRefs(draftRefs),

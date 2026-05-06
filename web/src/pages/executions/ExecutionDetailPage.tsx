@@ -27,11 +27,13 @@ import type {
 import { useState, useMemo } from "react";
 import { ChevronDown, RotateCcw, Loader2, XCircle } from "lucide-react";
 import {
-  hasSchemaFields,
-  isJsonObject,
   JsonValueDisplay,
   SchemaValueRows,
 } from "@/components/common/CuratedDataPanel";
+import {
+  hasSchemaFields,
+  isJsonObject,
+} from "@/components/common/curatedDataUtils";
 import ExecuteActionModal from "@/components/common/ExecuteActionModal";
 import EntityHistoryPanel from "@/components/common/EntityHistoryPanel";
 import ExecutionArtifactsPanel from "@/components/executions/ExecutionArtifactsPanel";

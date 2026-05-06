@@ -77,7 +77,7 @@ fn response_snippet(body: &str) -> String {
     const MAX_CHARS: usize = 1200;
     let mut snippet: String = body.chars().take(MAX_CHARS).collect();
     if body.chars().count() > MAX_CHARS {
-        snippet.push_str("…");
+        snippet.push('…');
     }
     snippet
 }

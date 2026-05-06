@@ -1,13 +1,10 @@
 import {
-  extractProperties,
   type ParamSchemaProperty,
 } from "@/components/common/ParamSchemaForm";
-
-type JsonObject = Record<string, unknown>;
-
-export function isJsonObject(value: unknown): value is JsonObject {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
+import {
+  isJsonObject,
+  sortedSchemaEntries,
+} from "@/components/common/curatedDataUtils";
 
 function stringifyValue(value: unknown): string {
   if (value === null) return "null";
@@ -24,20 +21,6 @@ function displayType(schema?: ParamSchemaProperty, value?: unknown): string {
   if (Array.isArray(value)) return "array";
   if (value === null) return "null";
   return typeof value === "undefined" ? "unknown" : typeof value;
-}
-
-function sortedSchemaEntries(schema: unknown) {
-  return Object.entries(
-    extractProperties(isJsonObject(schema) ? schema : null),
-  ).sort(([aKey, a], [bKey, b]) => {
-    const aPos = a.position ?? Number.MAX_SAFE_INTEGER;
-    const bPos = b.position ?? Number.MAX_SAFE_INTEGER;
-    return aPos === bPos ? aKey.localeCompare(bKey) : aPos - bPos;
-  });
-}
-
-export function hasSchemaFields(schema: unknown): boolean {
-  return sortedSchemaEntries(schema).length > 0;
 }
 
 export function JsonValueDisplay({ value }: { value: unknown }) {
