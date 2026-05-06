@@ -352,6 +352,7 @@ async fn test_action_foreign_key_constraint() {
         out_schema: None,
         is_adhoc: false,
         accesses_mcp: false,
+        default_execution_permission_set_refs: Vec::new(),
     };
 
     let result = ActionRepository::create(&pool, input).await;

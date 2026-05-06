@@ -59,6 +59,29 @@ fn build_http_client() -> HttpClient {
     }
 }
 
+fn parse_json_response<T: DeserializeOwned>(body: &str, description: &str) -> Result<T> {
+    let mut deserializer = serde_json::Deserializer::from_str(body);
+    serde_path_to_error::deserialize(&mut deserializer).map_err(|err| {
+        let snippet = response_snippet(body);
+        anyhow::anyhow!(
+            "{} at JSON path '{}': {}. Response body starts with: {}",
+            description,
+            err.path(),
+            err.inner(),
+            snippet
+        )
+    })
+}
+
+fn response_snippet(body: &str) -> String {
+    const MAX_CHARS: usize = 1200;
+    let mut snippet: String = body.chars().take(MAX_CHARS).collect();
+    if body.chars().count() > MAX_CHARS {
+        snippet.push_str("…");
+    }
+    snippet
+}
+
 impl ApiClient {
     /// Create a new API client from configuration
     pub fn from_config(config: &CliConfig, api_url_override: &Option<String>) -> Self {
@@ -267,10 +290,12 @@ impl ApiClient {
         let status = response.status();
 
         if status.is_success() {
-            let api_response: ApiResponse<T> = response
-                .json()
+            let body = response
+                .text()
                 .await
-                .context("Failed to parse API response")?;
+                .context("Failed to read API response body")?;
+            let api_response: ApiResponse<T> =
+                parse_json_response(&body, "Failed to parse API response")?;
             Ok(api_response.data)
         } else {
             let error_text = response
@@ -292,10 +317,12 @@ impl ApiClient {
     ) -> Result<Vec<T>> {
         let status = response.status();
         if status.is_success() {
-            let paginated: PaginatedResponse<T> = response
-                .json()
+            let body = response
+                .text()
                 .await
-                .context("Failed to parse paginated API response")?;
+                .context("Failed to read paginated API response body")?;
+            let paginated: PaginatedResponse<T> =
+                parse_json_response(&body, "Failed to parse paginated API response")?;
             Ok(paginated.items)
         } else {
             let error_text = response

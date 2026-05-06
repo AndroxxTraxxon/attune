@@ -19,6 +19,7 @@ export class ActionsService {
     public static listActions({
         page,
         pageSize,
+        executableWithCurrentAccess,
     }: {
         /**
          * Page number (1-based)
@@ -28,6 +29,11 @@ export class ActionsService {
          * Number of items per page
          */
         pageSize?: number,
+        /**
+         * When true, only return actions the current token can execute and whose
+         * default execution permission sets can be delegated by the current token.
+         */
+        executableWithCurrentAccess?: boolean,
     }): CancelablePromise<PaginatedResponse_ActionSummary> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -35,6 +41,7 @@ export class ActionsService {
             query: {
                 'page': page,
                 'page_size': pageSize,
+                'executable_with_current_access': executableWithCurrentAccess,
             },
         });
     }

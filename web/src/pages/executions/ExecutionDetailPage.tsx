@@ -14,17 +14,30 @@ function formatDuration(ms: number): string {
 }
 import { useExecution, useCancelExecution } from "@/hooks/useExecutions";
 import { useAction } from "@/hooks/useActions";
+import { usePermissionSets } from "@/hooks/usePermissions";
 import { useExecutionStream } from "@/hooks/useExecutionStream";
 import { useExecutionHistory } from "@/hooks/useHistory";
 import { formatDistanceToNow } from "date-fns";
 import { ExecutionStatus } from "@/api";
+import type {
+  ActionResponse,
+  ExecutionResponse,
+  PermissionSetSummary,
+} from "@/api";
 import { useState, useMemo } from "react";
-import { RotateCcw, Loader2, XCircle } from "lucide-react";
+import { ChevronDown, RotateCcw, Loader2, XCircle } from "lucide-react";
+import {
+  hasSchemaFields,
+  isJsonObject,
+  JsonValueDisplay,
+  SchemaValueRows,
+} from "@/components/common/CuratedDataPanel";
 import ExecuteActionModal from "@/components/common/ExecuteActionModal";
 import EntityHistoryPanel from "@/components/common/EntityHistoryPanel";
 import ExecutionArtifactsPanel from "@/components/executions/ExecutionArtifactsPanel";
 import ExecutionProgressBar from "@/components/executions/ExecutionProgressBar";
 import WorkflowDetailsPanel from "@/components/executions/WorkflowDetailsPanel";
+import { STANDARD_EXECUTION_ACCESS_REF } from "@/lib/permissions";
 
 const getStatusColor = (status: string) => {
   switch (status) {
@@ -114,7 +127,7 @@ interface TimelineEntry {
 export default function ExecutionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { data: executionData, isLoading, error } = useExecution(Number(id));
-  const execution = executionData?.data;
+  const execution = executionData?.data as ExecutionResponse | undefined;
 
   // Fetch the action so we can get param_schema for the re-run modal
   const { data: actionData } = useAction(execution?.action_ref || "");
@@ -338,6 +351,7 @@ export default function ExecutionDetailPage() {
           action={actionData.data}
           onClose={() => setShowRerunModal(false)}
           initialParameters={execution.config}
+          initialPermissionSetRefs={execution.permission_set_refs}
         />
       )}
 
@@ -434,25 +448,23 @@ export default function ExecutionDetailPage() {
             )}
           </div>
 
-          {/* Config/Parameters */}
-          {execution.config && Object.keys(execution.config).length > 0 && (
-            <div className="bg-white shadow rounded-lg p-6">
-              <h2 className="text-xl font-semibold mb-4">Configuration</h2>
-              <pre className="bg-gray-50 p-4 rounded text-sm overflow-x-auto">
-                {JSON.stringify(execution.config, null, 2)}
-              </pre>
-            </div>
-          )}
+          {execution.permission_set_refs &&
+            execution.permission_set_refs.length > 0 && (
+              <ExecutionTokenAccessCard
+                permissionSetRefs={execution.permission_set_refs}
+              />
+            )}
 
-          {/* Result */}
-          {execution.result && Object.keys(execution.result).length > 0 && (
-            <div className="bg-white shadow rounded-lg p-6">
-              <h2 className="text-xl font-semibold mb-4">Result</h2>
-              <pre className="bg-gray-50 p-4 rounded text-sm overflow-x-auto">
-                {JSON.stringify(execution.result, null, 2)}
-              </pre>
-            </div>
-          )}
+          <ExecutionConfigurationCard
+            config={execution.config}
+            action={actionData?.data as ActionResponse | undefined}
+          />
+
+          <ExecutionResultCard
+            result={execution.result}
+            action={actionData?.data as ActionResponse | undefined}
+            isWorkflow={isWorkflow}
+          />
 
           {/* Timeline */}
           <div className="bg-white shadow rounded-lg p-6">
@@ -620,6 +632,366 @@ export default function ExecutionDetailPage() {
           entityId={execution.id}
           title="Execution History"
         />
+      </div>
+    </div>
+  );
+}
+
+function ExecutionConfigurationCard({
+  config,
+  action,
+}: {
+  config: unknown;
+  action?: ActionResponse;
+}) {
+  if (!isJsonObject(config) || Object.keys(config).length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="bg-white shadow rounded-lg p-6">
+      <h2 className="text-xl font-semibold mb-2">Configuration</h2>
+      <p className="text-sm text-gray-600 mb-4">
+        Parameters used for this execution, annotated with the action parameter
+        schema when available.
+      </p>
+      <SchemaValueRows
+        schema={action?.param_schema}
+        values={config}
+        emptyMessage="No configuration parameters were captured for this execution."
+        maskSecrets
+      />
+    </div>
+  );
+}
+
+function ExecutionResultCard({
+  result,
+  action,
+  isWorkflow,
+}: {
+  result: unknown;
+  action?: ActionResponse;
+  isWorkflow: boolean;
+}) {
+  if (!isJsonObject(result) || Object.keys(result).length === 0) {
+    return null;
+  }
+
+  const exitCode =
+    typeof result.exit_code === "number" ? result.exit_code : undefined;
+  const succeeded =
+    typeof result.succeeded === "boolean"
+      ? result.succeeded
+      : exitCode !== undefined
+        ? exitCode === 0
+        : undefined;
+  const durationMs =
+    typeof result.duration_ms === "number" ? result.duration_ms : undefined;
+  const hasProcessEnvelope =
+    !isWorkflow &&
+    ("succeeded" in result ||
+      "exit_code" in result ||
+      "stdout" in result ||
+      "stderr_log" in result ||
+      "duration_ms" in result);
+  const data = "data" in result ? result.data : undefined;
+  const remainingEntries = Object.entries(result).filter(
+    ([key]) =>
+      ![
+        "succeeded",
+        "exit_code",
+        "duration_ms",
+        "stdout",
+        "stderr_log",
+        "error",
+        "data",
+        "stdout_truncated",
+        "stdout_bytes_truncated",
+        "stderr_truncated",
+        "stderr_bytes_truncated",
+      ].includes(key),
+  );
+
+  return (
+    <div className="bg-white shadow rounded-lg p-6">
+      <h2 className="text-xl font-semibold mb-4">Result</h2>
+
+      {hasProcessEnvelope && (
+        <div className="mb-4 rounded-lg border border-gray-200 p-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {succeeded !== undefined && (
+              <span
+                className={`rounded px-2 py-1 text-sm font-medium ${
+                  succeeded
+                    ? "bg-green-100 text-green-800"
+                    : "bg-red-100 text-red-800"
+                }`}
+              >
+                {succeeded ? "Succeeded" : "Failed"}
+                {exitCode !== undefined ? ` (exit ${exitCode})` : ""}
+              </span>
+            )}
+            {durationMs !== undefined && (
+              <span className="text-sm text-gray-600">
+                Duration: {formatDuration(durationMs)}
+              </span>
+            )}
+          </div>
+          {typeof result.error === "string" && result.error.trim() && (
+            <p className="mt-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
+              {result.error}
+            </p>
+          )}
+        </div>
+      )}
+
+      {"data" in result && (
+        <div className="mb-4">
+          <h3 className="text-sm font-semibold text-gray-700 mb-2">
+            Output Data
+          </h3>
+          {isJsonObject(data) && hasSchemaFields(action?.out_schema) ? (
+            <SchemaValueRows
+              schema={action?.out_schema}
+              values={data}
+              emptyMessage="No structured output data was returned."
+            />
+          ) : (
+            <JsonValueDisplay value={data} />
+          )}
+        </div>
+      )}
+
+      {typeof result.stdout === "string" && result.stdout.length > 0 && (
+        <div className="mb-4">
+          <div className="flex items-center gap-2 mb-2">
+            <h3 className="text-sm font-semibold text-gray-700">Stdout</h3>
+            {result.stdout_truncated === true && (
+              <span className="rounded bg-yellow-50 px-2 py-0.5 text-xs text-yellow-700">
+                truncated
+              </span>
+            )}
+          </div>
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded bg-gray-900 p-3 text-xs text-gray-100">
+            {result.stdout}
+          </pre>
+        </div>
+      )}
+
+      {typeof result.stderr_log === "string" && (
+        <div className="mb-4 rounded bg-gray-50 px-3 py-2 text-sm text-gray-700">
+          <span className="font-medium">Stderr log:</span>{" "}
+          <span className="font-mono">{result.stderr_log}</span>
+          {result.stderr_truncated === true && (
+            <span className="ml-2 rounded bg-yellow-50 px-2 py-0.5 text-xs text-yellow-700">
+              truncated
+            </span>
+          )}
+        </div>
+      )}
+
+      {remainingEntries.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold text-gray-700 mb-2">
+            Additional Result Fields
+          </h3>
+          <SchemaValueRows
+            schema={null}
+            values={Object.fromEntries(remainingEntries)}
+            emptyMessage="No additional result fields."
+          />
+        </div>
+      )}
+
+      {!hasProcessEnvelope &&
+        !("data" in result) &&
+        remainingEntries.length === 0 && <JsonValueDisplay value={result} />}
+    </div>
+  );
+}
+
+function summarizeGrant(grant: unknown): string {
+  if (!grant || typeof grant !== "object") {
+    return "Invalid grant";
+  }
+
+  const grantObject = grant as {
+    resource?: unknown;
+    actions?: unknown;
+    constraints?: unknown;
+  };
+  const resource =
+    typeof grantObject.resource === "string" ? grantObject.resource : "unknown";
+  const actions = Array.isArray(grantObject.actions)
+    ? grantObject.actions.filter((action): action is string => typeof action === "string")
+    : [];
+  const actionText = actions.length > 0 ? actions.join(", ") : "no actions";
+
+  if (
+    !grantObject.constraints ||
+    typeof grantObject.constraints !== "object" ||
+    Array.isArray(grantObject.constraints)
+  ) {
+    return `${resource}: ${actionText}`;
+  }
+
+  const constraints = grantObject.constraints as Record<string, unknown>;
+  const constraintParts: string[] = [];
+  for (const [key, value] of Object.entries(constraints)) {
+    if (key === "ids") {
+      continue;
+    }
+    if (Array.isArray(value)) {
+      constraintParts.push(`${key}=${value.join(", ")}`);
+    } else if (value !== null && value !== undefined) {
+      constraintParts.push(`${key}=${String(value)}`);
+    }
+  }
+
+  return constraintParts.length > 0
+    ? `${resource}: ${actionText} (${constraintParts.join("; ")})`
+    : `${resource}: ${actionText}`;
+}
+
+function ExecutionTokenAccessCard({
+  permissionSetRefs,
+}: {
+  permissionSetRefs: string[];
+}) {
+  const [isGrantDetailsOpen, setIsGrantDetailsOpen] = useState(false);
+  const {
+    data: permissionSets,
+    isLoading,
+    error: permissionSetsError,
+  } = usePermissionSets(null, { enabled: isGrantDetailsOpen });
+  const permissionSetsByRef = useMemo(
+    () =>
+      new Map(
+        (permissionSets ?? []).map((permissionSet: PermissionSetSummary) => [
+          permissionSet.ref,
+          permissionSet,
+        ]),
+      ),
+    [permissionSets],
+  );
+
+  return (
+    <div className="bg-white shadow rounded-lg p-6">
+      <h2 className="text-xl font-semibold mb-2">Effective Token Access</h2>
+      <p className="text-sm text-gray-600 mb-4">
+        This execution has an Attune API token scoped to the permission set refs
+        below.
+      </p>
+
+      <div className="flex flex-wrap gap-2 mb-4">
+        {permissionSetRefs.map((ref) =>
+          ref === STANDARD_EXECUTION_ACCESS_REF ? (
+            <span
+              key={ref}
+              className="font-mono text-xs font-medium text-green-700 bg-green-50 rounded px-2 py-1"
+              title="Standard action/pack-scoped keys and artifacts access"
+            >
+              {ref}
+            </span>
+          ) : (
+            <Link
+              key={ref}
+              to={`/access-control/permission-sets/${ref}`}
+              className="font-mono text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded px-2 py-1"
+            >
+              {ref}
+            </Link>
+          ),
+        )}
+      </div>
+
+      <div className="border border-gray-200 rounded-lg">
+        <button
+          type="button"
+          onClick={() => setIsGrantDetailsOpen((open) => !open)}
+          className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-gray-50"
+          aria-expanded={isGrantDetailsOpen}
+        >
+          <span className="text-sm font-medium text-gray-700">
+            Grant details
+          </span>
+          <ChevronDown
+            className={`h-4 w-4 flex-shrink-0 text-gray-400 transition-transform ${
+              isGrantDetailsOpen ? "rotate-180" : ""
+            }`}
+          />
+        </button>
+
+        {isGrantDetailsOpen && (
+          <div className="space-y-3 border-t border-gray-200 p-3">
+            {permissionSetRefs.map((ref) => {
+              if (ref === STANDARD_EXECUTION_ACCESS_REF) {
+                return (
+                  <div key={ref} className="border border-green-200 rounded-lg p-3 bg-green-50">
+                    <div className="font-mono text-sm font-medium text-green-700">
+                      {ref}
+                    </div>
+                    <p className="text-xs text-green-700 mt-1">
+                      Grants this execution access to keys and artifacts scoped
+                      to the executing action/pack, plus the workflow action/pack
+                      when this is a workflow task execution.
+                    </p>
+                  </div>
+                );
+              }
+
+              const permissionSet = permissionSetsByRef.get(ref);
+              const grants = Array.isArray(permissionSet?.grants)
+                ? permissionSet.grants
+                : [];
+
+              return (
+                <div key={ref} className="border border-gray-200 rounded-lg p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <Link
+                      to={`/access-control/permission-sets/${ref}`}
+                      className="font-mono text-sm font-medium text-blue-600 hover:text-blue-800"
+                    >
+                      {ref}
+                    </Link>
+                    {!permissionSet && !isLoading && !permissionSetsError && (
+                      <span className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">
+                        Not found
+                      </span>
+                    )}
+                  </div>
+
+                  {isLoading ? (
+                    <p className="text-xs text-gray-500 mt-2">
+                      Loading grants...
+                    </p>
+                  ) : permissionSetsError ? (
+                    <p className="text-xs text-gray-500 mt-2">
+                      Grant details are unavailable with your current
+                      permissions.
+                    </p>
+                  ) : grants.length > 0 ? (
+                    <ul className="mt-2 space-y-1">
+                      {grants.map((grant, index) => (
+                        <li
+                          key={`${ref}-${index}`}
+                          className="text-xs font-mono text-gray-700 bg-gray-50 rounded px-2 py-1"
+                        >
+                          {summarizeGrant(grant)}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-gray-500 mt-2">
+                      No grants available for this permission set ref.
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

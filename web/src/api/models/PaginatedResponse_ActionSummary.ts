@@ -20,6 +20,10 @@ export type PaginatedResponse_ActionSummary = {
          */
         created: string;
         /**
+         * Default permission set refs used when executions do not explicitly override token permissions.
+         */
+        default_execution_permission_set_refs?: Array<string>;
+        /**
          * Action description
          */
         description?: string | null;
@@ -73,4 +77,3 @@ export type PaginatedResponse_ActionSummary = {
      */
     pagination: PaginationMeta;
 };
-

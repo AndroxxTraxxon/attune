@@ -750,6 +750,10 @@ class AttuneClient:
             payload["out_schema"] = out_schema
         if runtime_ref:
             payload["runtime_ref"] = runtime_ref
+        if data is not None and "default_execution_permission_set_refs" in data:
+            payload["default_execution_permission_set_refs"] = data[
+                "default_execution_permission_set_refs"
+            ]
 
         response = self._request("POST", "/api/v1/actions", json=payload)
         if response.status_code in (200, 201):

@@ -62,7 +62,10 @@ pub async fn list_keys(
     let result = KeyRepository::search(&state.db, &filters).await?;
     let mut rows = result.rows;
 
-    if user.0.claims.token_type == TokenType::Access {
+    if matches!(
+        user.0.claims.token_type,
+        TokenType::Access | TokenType::Execution
+    ) {
         let identity_id = user
             .0
             .identity_id()
@@ -119,8 +122,10 @@ pub async fn get_key(
         .ok_or_else(|| ApiError::NotFound(format!("Key '{}' not found", key_ref)))?;
 
     // For encrypted keys, track whether this caller is permitted to see the value.
-    // Non-Access tokens (sensor, execution) always get full access.
-    let can_decrypt = if user.0.claims.token_type == TokenType::Access {
+    let can_decrypt = if matches!(
+        user.0.claims.token_type,
+        TokenType::Access | TokenType::Execution
+    ) {
         let identity_id = user
             .0
             .identity_id()
@@ -132,7 +137,7 @@ pub async fn get_key(
             return Err(ApiError::NotFound(format!("Key '{}' not found", key_ref)));
         }
 
-        // For encrypted keys, separately check Keys::Decrypt.
+        // For encrypted keys, separately check keys:decrypt.
         // Failing this is not an error — we just return the value as null.
         if key.encrypted {
             key_action_allowed(&grants, Action::Decrypt, identity_id, &key)
@@ -221,7 +226,10 @@ pub async fn create_key(
     // Validate request
     request.validate()?;
 
-    if user.0.claims.token_type == TokenType::Access {
+    if matches!(
+        user.0.claims.token_type,
+        TokenType::Access | TokenType::Execution
+    ) {
         let identity_id = user
             .0
             .identity_id()
@@ -434,7 +442,10 @@ pub async fn update_key(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Key '{}' not found", key_ref)))?;
 
-    if user.0.claims.token_type == TokenType::Access {
+    if matches!(
+        user.0.claims.token_type,
+        TokenType::Access | TokenType::Execution
+    ) {
         let identity_id = user
             .0
             .identity_id()
@@ -561,7 +572,10 @@ pub async fn delete_key(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Key '{}' not found", key_ref)))?;
 
-    if user.0.claims.token_type == TokenType::Access {
+    if matches!(
+        user.0.claims.token_type,
+        TokenType::Access | TokenType::Execution
+    ) {
         let identity_id = user
             .0
             .identity_id()

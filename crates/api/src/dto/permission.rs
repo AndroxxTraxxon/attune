@@ -52,6 +52,16 @@ pub struct PermissionSetSummary {
     pub roles: Vec<PermissionSetRoleAssignmentResponse>,
 }
 
+#[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
+pub struct UpdatePermissionSetRequest {
+    #[serde(default)]
+    #[validate(length(max = 255))]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub grants: JsonValue,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PermissionAssignmentResponse {
     pub id: i64,

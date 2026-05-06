@@ -507,6 +507,7 @@ pub async fn create_test_action(pool: &PgPool, pack_id: i64, ref_name: &str) -> 
         out_schema: None,
         is_adhoc: false,
         accesses_mcp: false,
+        default_execution_permission_set_refs: Vec::new(),
     };
 
     Ok(ActionRepository::create(pool, input).await?)

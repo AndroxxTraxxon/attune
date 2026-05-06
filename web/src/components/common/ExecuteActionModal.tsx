@@ -2,7 +2,11 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { OpenAPI } from "@/api";
 import type { ActionResponse } from "@/api";
-import { Play, X } from "lucide-react";
+import MultiSelect from "@/components/common/MultiSelect";
+import { useAuth } from "@/contexts/AuthContext";
+import { usePermissionSets } from "@/hooks/usePermissions";
+import { STANDARD_EXECUTION_ACCESS_REF } from "@/lib/permissions";
+import { ChevronDown, Play, X } from "lucide-react";
 import ParamSchemaForm, {
   validateParamSchema,
   extractProperties,
@@ -16,7 +20,10 @@ interface ExecuteActionModalProps {
   action: ActionResponse;
   onClose: () => void;
   initialParameters?: Record<string, JsonValue>;
+  initialPermissionSetRefs?: string[];
 }
+
+type PermissionOverrideMode = "default" | "none" | "custom";
 
 /**
  * Shared modal for executing an action with a dynamic parameter form.
@@ -29,8 +36,10 @@ export default function ExecuteActionModal({
   action,
   onClose,
   initialParameters,
+  initialPermissionSetRefs,
 }: ExecuteActionModalProps) {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
 
   const paramSchema: ParamSchema = (action.param_schema as ParamSchema) || {};
   const paramProperties = extractProperties(paramSchema);
@@ -61,11 +70,71 @@ export default function ExecuteActionModal({
   const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>(
     [{ key: "", value: "" }],
   );
+  const assignedPermissionSetRefs = user?.assigned_permission_set_refs ?? [];
+  const isCoreAdmin = assignedPermissionSetRefs.includes("core.admin");
+  const defaultPermissionSetRefs =
+    action.default_execution_permission_set_refs ?? [];
+  const hasDefaultPermissionSets = defaultPermissionSetRefs.length > 0;
+  const canUseDefaultPermissionSets =
+    hasDefaultPermissionSets &&
+    (isCoreAdmin ||
+      defaultPermissionSetRefs.every((ref) =>
+        ref === STANDARD_EXECUTION_ACCESS_REF ||
+        assignedPermissionSetRefs.includes(ref),
+      ));
+  const initialPermissionMode: PermissionOverrideMode =
+    initialPermissionSetRefs === undefined
+      ? canUseDefaultPermissionSets
+        ? "default"
+        : "none"
+      : initialPermissionSetRefs.length > 0
+        ? "custom"
+        : "none";
+  const [permissionMode, setPermissionMode] =
+    useState<PermissionOverrideMode>(initialPermissionMode);
+  const [selectedPermissionSetRefs, setSelectedPermissionSetRefs] = useState<
+    string[]
+  >(initialPermissionSetRefs ?? []);
+  const [isTokenAccessOpen, setIsTokenAccessOpen] = useState(false);
+
+  const permissionSets = usePermissionSets(null, { enabled: isCoreAdmin });
+  const allPermissionSetRefs =
+    permissionSets.data?.map((permissionSet) => permissionSet.ref) ?? [];
+  const selectablePermissionSetRefs = Array.from(
+    new Set(
+      isCoreAdmin
+        ? [
+            STANDARD_EXECUTION_ACCESS_REF,
+            ...allPermissionSetRefs,
+            ...selectedPermissionSetRefs,
+          ]
+        : [
+            STANDARD_EXECUTION_ACCESS_REF,
+            ...assignedPermissionSetRefs,
+            ...selectedPermissionSetRefs.filter(
+              (ref) => ref === STANDARD_EXECUTION_ACCESS_REF,
+            ),
+          ],
+    ),
+  ).sort((a, b) => a.localeCompare(b));
+  const selectablePermissionSetOptions = selectablePermissionSetRefs.map(
+    (ref) => ({
+      value: ref,
+      label:
+        ref === STANDARD_EXECUTION_ACCESS_REF
+          ? "standard (action/pack-scoped keys and artifacts)"
+          : ref,
+    }),
+  );
+  const allowedSelectedPermissionSetRefs = selectedPermissionSetRefs.filter(
+    (ref) => selectablePermissionSetRefs.includes(ref),
+  );
 
   const executeAction = useMutation({
     mutationFn: async (params: {
       parameters: Record<string, JsonValue>;
       envVars: Array<{ key: string; value: string }>;
+      permissionSetRefs?: string[];
     }) => {
       const token =
         typeof OpenAPI.TOKEN === "function"
@@ -92,6 +161,9 @@ export default function ExecuteActionModal({
                 },
                 {} as Record<string, string>,
               ),
+            ...(params.permissionSetRefs === undefined
+              ? {}
+              : { permission_set_refs: params.permissionSetRefs }),
           }),
         },
       );
@@ -124,7 +196,20 @@ export default function ExecuteActionModal({
     }
 
     try {
-      await executeAction.mutateAsync({ parameters, envVars });
+      const permissionSetRefs =
+        permissionMode === "default"
+          ? undefined
+          : permissionMode === "none"
+            ? []
+            : selectedPermissionSetRefs.filter((ref) =>
+                selectablePermissionSetRefs.includes(ref),
+              );
+
+      await executeAction.mutateAsync({
+        parameters,
+        envVars,
+        permissionSetRefs,
+      });
     } catch (err) {
       console.error("Failed to execute action:", err);
     }
@@ -149,6 +234,22 @@ export default function ExecuteActionModal({
     updated[index][field] = value;
     setEnvVars(updated);
   };
+
+  const permissionSummary = (() => {
+    if (permissionMode === "default") {
+      return `Action default: ${defaultPermissionSetRefs.join(", ")}`;
+    }
+
+    if (permissionMode === "none") {
+      return "No execution API token";
+    }
+
+    if (allowedSelectedPermissionSetRefs.length === 0) {
+      return "Custom: no permission sets selected";
+    }
+
+    return `Custom: ${allowedSelectedPermissionSetRefs.join(", ")}`;
+  })();
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -243,6 +344,124 @@ export default function ExecuteActionModal({
           >
             + Add Environment Variable
           </button>
+        </div>
+
+        <div className="mb-6 rounded-lg border border-gray-200">
+          <button
+            type="button"
+            onClick={() => setIsTokenAccessOpen((open) => !open)}
+            className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-gray-50"
+            aria-expanded={isTokenAccessOpen}
+          >
+            <span>
+              <span className="block text-sm font-semibold text-gray-700">
+                Execution Token Access
+              </span>
+              <span className="mt-1 block truncate text-xs text-gray-500">
+                {permissionSummary}
+              </span>
+            </span>
+            <ChevronDown
+              className={`h-4 w-4 flex-shrink-0 text-gray-400 transition-transform ${
+                isTokenAccessOpen ? "rotate-180" : ""
+              }`}
+            />
+          </button>
+          {isTokenAccessOpen && (
+            <div className="space-y-3 border-t border-gray-200 p-3">
+              <p className="text-xs text-gray-500">
+                Controls which Attune API permissions are granted to this
+                execution. Without permission sets, no execution API token is
+                issued.
+              </p>
+              {hasDefaultPermissionSets && (
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="permission-mode"
+                    checked={permissionMode === "default"}
+                    onChange={() => setPermissionMode("default")}
+                    disabled={!canUseDefaultPermissionSets}
+                    className="mt-1"
+                  />
+                  <span>
+                    <span className="font-medium text-gray-900">
+                      Use action default
+                    </span>
+                    <span className="block text-xs text-gray-500">
+                      {canUseDefaultPermissionSets
+                        ? defaultPermissionSetRefs.join(", ")
+                        : `${defaultPermissionSetRefs.join(", ")} (not assignable by your account)`}
+                    </span>
+                  </span>
+                </label>
+              )}
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="permission-mode"
+                  checked={permissionMode === "none"}
+                  onChange={() => setPermissionMode("none")}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="font-medium text-gray-900">
+                    No execution API token
+                  </span>
+                  <span className="block text-xs text-gray-500">
+                    {hasDefaultPermissionSets
+                      ? "The worker will omit ATTUNE_API_TOKEN for this execution."
+                      : "This action has no default token access, so the worker will omit ATTUNE_API_TOKEN."}
+                  </span>
+                </span>
+              </label>
+              <div>
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="permission-mode"
+                    checked={permissionMode === "custom"}
+                    onChange={() => setPermissionMode("custom")}
+                    className="mt-1"
+                  />
+                  <span>
+                    <span className="font-medium text-gray-900">
+                      Specify permission sets
+                    </span>
+                    <span className="block text-xs text-gray-500">
+                      {isCoreAdmin
+                        ? "core.admin can assign any permission set."
+                        : "You can assign standard access and permission sets assigned to you."}
+                    </span>
+                  </span>
+                </label>
+                {permissionMode === "custom" && (
+                  <div className="mt-3 pl-6">
+                    {isCoreAdmin && permissionSets.isLoading ? (
+                      <p className="text-xs text-gray-500">
+                        Loading permission sets...
+                      </p>
+                    ) : selectablePermissionSetRefs.length > 0 ? (
+                      <MultiSelect
+                        options={selectablePermissionSetOptions}
+                        value={allowedSelectedPermissionSetRefs}
+                        onChange={(refs) =>
+                          setSelectedPermissionSetRefs(
+                            refs.sort((a, b) => a.localeCompare(b)),
+                          )
+                        }
+                        placeholder="Search and select permission sets..."
+                      />
+                    ) : (
+                      <p className="text-xs text-gray-500">
+                        No assignable permission sets are available.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex justify-end gap-3">

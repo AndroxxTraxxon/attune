@@ -1,6 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
-use attune_common::models::WorkerStatus;
+use attune_common::{
+    models::WorkerStatus,
+    rbac::{Action, AuthorizationContext, Resource},
+};
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -15,6 +18,7 @@ use attune_common::repositories::{
 
 use crate::{
     auth::middleware::RequireAuth,
+    authz::{AuthorizationCheck, AuthorizationService},
     dto::{
         common::PaginatedResponse, worker::runtime_support_from_capabilities, WorkerLoadSnapshot,
         WorkerQueryParams, WorkerSummary,
@@ -35,9 +39,23 @@ use crate::{
 )]
 pub async fn list_workers(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Query(query): Query<WorkerQueryParams>,
 ) -> ApiResult<impl IntoResponse> {
+    let identity_id = user.identity_id().map_err(|_| {
+        crate::middleware::ApiError::Unauthorized("Invalid user identity".to_string())
+    })?;
+    AuthorizationService::new(state.db.clone())
+        .authorize(
+            &user,
+            AuthorizationCheck {
+                resource: Resource::Workers,
+                action: Action::Read,
+                context: AuthorizationContext::new(identity_id),
+            },
+        )
+        .await?;
+
     fn capability_u64(capabilities: Option<&serde_json::Value>, key: &str) -> Option<u64> {
         capabilities
             .and_then(|capabilities| capabilities.get(key))

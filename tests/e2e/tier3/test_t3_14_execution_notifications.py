@@ -21,9 +21,17 @@ from helpers.polling import (
 )
 
 
-def _notifier_ws_url(client: AttuneClient) -> str:
+def _notifier_ws_url() -> str:
     base_url = os.getenv("ATTUNE_WS_URL", "ws://localhost:8081").rstrip("/")
-    return f"{base_url}/ws?token={client.access_token}"
+    return f"{base_url}/ws"
+
+
+def _connect_notifier_ws(client: AttuneClient):
+    return websockets.connect(
+        _notifier_ws_url(),
+        additional_headers={"Authorization": f"Bearer {client.access_token}"},
+        subprotocols=["attune.v1"],
+    )
 
 
 async def _wait_for_execution_notification(
@@ -34,7 +42,7 @@ async def _wait_for_execution_notification(
     timeout: float = 10.0,
 ) -> dict:
     deadline = asyncio.get_running_loop().time() + timeout
-    async with websockets.connect(_notifier_ws_url(client)) as websocket:
+    async with _connect_notifier_ws(client) as websocket:
         welcome = json.loads(await asyncio.wait_for(websocket.recv(), timeout=3))
         assert welcome["type"] == "welcome"
 
@@ -331,7 +339,7 @@ def test_websocket_notification_delivery(client: AttuneClient, test_pack):
     )
 
     async def run_test() -> tuple[dict, dict]:
-        async with websockets.connect(_notifier_ws_url(client)) as websocket:
+        async with _connect_notifier_ws(client) as websocket:
             welcome = json.loads(await asyncio.wait_for(websocket.recv(), timeout=3))
             assert welcome["type"] == "welcome"
             await websocket.send(

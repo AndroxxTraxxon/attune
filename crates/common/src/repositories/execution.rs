@@ -121,6 +121,7 @@ pub struct ExecutionWithRefs {
     pub parent: Option<Id>,
     pub enforcement: Option<Id>,
     pub executor: Option<Id>,
+    pub permission_set_refs: Vec<String>,
     pub worker: Option<Id>,
     pub status: ExecutionStatus,
     pub result: Option<JsonDict>,
@@ -145,7 +146,7 @@ pub struct ExecutionWithRefs {
 /// Rust struct, so `SELECT *` must never be used.
 pub const SELECT_COLUMNS: &str = "\
     id, action, action_ref, config, env_vars, parent, enforcement, \
-    executor, worker, status, result, retry_count, max_retries, retry_reason, \
+    executor, permission_set_refs, worker, status, result, retry_count, max_retries, retry_reason, \
     original_execution, started_at, workflow_task, created, updated";
 
 pub struct ExecutionRepository;
@@ -166,6 +167,7 @@ pub struct CreateExecutionInput {
     pub parent: Option<Id>,
     pub enforcement: Option<Id>,
     pub executor: Option<Id>,
+    pub permission_set_refs: Vec<String>,
     pub worker: Option<Id>,
     pub status: ExecutionStatus,
     pub result: Option<JsonDict>,
@@ -234,8 +236,8 @@ impl Create for ExecutionRepository {
     {
         let sql = format!(
             "INSERT INTO execution \
-             (action, action_ref, config, env_vars, parent, enforcement, executor, worker, status, result, workflow_task) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             (action, action_ref, config, env_vars, parent, enforcement, executor, permission_set_refs, worker, status, result, workflow_task) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
              RETURNING {SELECT_COLUMNS}"
         );
         sqlx::query_as::<_, Execution>(&sql)
@@ -246,6 +248,7 @@ impl Create for ExecutionRepository {
             .bind(input.parent)
             .bind(input.enforcement)
             .bind(input.executor)
+            .bind(&input.permission_set_refs)
             .bind(input.worker)
             .bind(input.status)
             .bind(&input.result)
@@ -294,8 +297,8 @@ impl ExecutionRepository {
     {
         let sql = format!(
             "INSERT INTO execution \
-             (action, action_ref, config, env_vars, parent, enforcement, executor, worker, status, result, workflow_task, retry_count, max_retries, retry_reason, original_execution) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+             (action, action_ref, config, env_vars, parent, enforcement, executor, permission_set_refs, worker, status, result, workflow_task, retry_count, max_retries, retry_reason, original_execution) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
              RETURNING {SELECT_COLUMNS}"
         );
         sqlx::query_as::<_, Execution>(&sql)
@@ -306,6 +309,7 @@ impl ExecutionRepository {
             .bind(input.parent)
             .bind(input.enforcement)
             .bind(input.executor)
+            .bind(&input.permission_set_refs)
             .bind(input.worker)
             .bind(input.status)
             .bind(&input.result)
@@ -353,8 +357,8 @@ impl ExecutionRepository {
     {
         let inserted = sqlx::query_as::<_, Execution>(&format!(
             "INSERT INTO execution \
-             (action, action_ref, config, env_vars, parent, enforcement, executor, worker, status, result, workflow_task) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             (action, action_ref, config, env_vars, parent, enforcement, executor, permission_set_refs, worker, status, result, workflow_task) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
              ON CONFLICT (enforcement)
              WHERE enforcement IS NOT NULL
                AND parent IS NULL
@@ -369,6 +373,7 @@ impl ExecutionRepository {
         .bind(input.parent)
         .bind(input.enforcement)
         .bind(input.executor)
+        .bind(&input.permission_set_refs)
         .bind(input.worker)
         .bind(input.status)
         .bind(&input.result)

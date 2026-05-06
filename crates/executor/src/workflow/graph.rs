@@ -55,6 +55,9 @@ pub struct TaskNode {
     /// Input template
     pub input: serde_json::Value,
 
+    /// Templatable permission set refs for the child execution token
+    pub permission_set_refs: Option<JsonValue>,
+
     /// Conditional execution (task-level — controls whether the task runs at all)
     pub when: Option<String>,
 
@@ -367,6 +370,7 @@ impl GraphBuilder {
             task_type: task.r#type.clone(),
             action: task.action.clone(),
             input: serde_json::to_value(&task.input).unwrap_or(serde_json::json!({})),
+            permission_set_refs: task.permission_set_refs.clone(),
             when: task.when.clone(),
             with_items: task.with_items.clone(),
             batch_size: task.batch_size,

@@ -1,5 +1,7 @@
 import { useParams, Link } from "react-router-dom";
 import { useEvent } from "@/hooks/useEvents";
+import { useTrigger } from "@/hooks/useTriggers";
+import { CuratedDataCard } from "@/components/common/CuratedDataPanel";
 
 export default function EventDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -7,6 +9,7 @@ export default function EventDetailPage() {
 
   const { data: eventData, isLoading, error } = useEvent(eventId);
   const event = eventData?.data;
+  const { data: triggerData } = useTrigger(event?.trigger_ref || "");
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString();
@@ -123,23 +126,13 @@ export default function EventDetailPage() {
             </div>
           </div>
 
-          {/* Payload Card */}
-          <div className="bg-white rounded-lg shadow">
-            <div className="px-6 py-4 border-b border-gray-200">
-              <h2 className="text-lg font-semibold text-gray-900">
-                Event Payload
-              </h2>
-            </div>
-            <div className="px-6 py-4">
-              {event.payload && Object.keys(event.payload).length > 0 ? (
-                <pre className="text-sm bg-gray-50 rounded-lg p-4 overflow-x-auto">
-                  {JSON.stringify(event.payload, null, 2)}
-                </pre>
-              ) : (
-                <p className="text-sm text-gray-500">No payload data</p>
-              )}
-            </div>
-          </div>
+          <CuratedDataCard
+            title="Event Payload"
+            description="Payload fields emitted by the trigger, annotated with the trigger output schema when available."
+            schema={triggerData?.data?.out_schema}
+            values={event.payload}
+            emptyMessage="No payload data"
+          />
         </div>
 
         {/* Right Column - Quick Links and Info */}

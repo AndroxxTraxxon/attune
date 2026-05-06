@@ -13,7 +13,9 @@
 //! so the `ProcessRuntime` uses version-specific interpreter binaries,
 //! environment commands, etc.
 
-use attune_common::auth::jwt::{generate_execution_token, JwtConfig};
+use attune_common::auth::jwt::{
+    generate_execution_token_with_permission_sets_and_standard_access, JwtConfig,
+};
 use attune_common::error::{Error, Result};
 use attune_common::models::runtime::RuntimeExecutionConfig;
 use attune_common::models::{
@@ -38,7 +40,11 @@ use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use std::collections::HashMap;
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tokio::sync::Mutex as AsyncMutex;
+use tokio::task::JoinHandle;
+use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
 
 use crate::artifacts::ArtifactManager;
@@ -114,7 +120,12 @@ impl ExecutionLogArtifactStream {
 
 struct ExecutionLogArtifacts {
     stdout_full_path: PathBuf,
-    stderr_full_path: PathBuf,
+    stderr_pending_full_path: PathBuf,
+}
+
+struct StderrLogPromotion {
+    handle: JoinHandle<Result<Option<PathBuf>>>,
+    lock: Arc<AsyncMutex<()>>,
 }
 
 impl ActionExecutor {
@@ -199,6 +210,11 @@ impl ActionExecutor {
         // Attach the cancellation token so the process executor can monitor it
         context.cancel_token = Some(cancel_token.clone());
 
+        let stderr_pending_path = context.stderr_log_path.clone();
+        let stderr_promotion = stderr_pending_path
+            .as_ref()
+            .map(|stderr_path| self.spawn_stderr_log_promotion(&execution, stderr_path));
+
         // Execute the action
         // Note: execute_action should rarely return Err - most failures should be
         // captured in ExecutionResult with non-zero exit codes
@@ -206,6 +222,18 @@ impl ActionExecutor {
             Ok(result) => result,
             Err(e) => {
                 error!("Action execution failed catastrophically: {}", e);
+                if let (Some(stderr_path), Some(promotion)) =
+                    (stderr_pending_path.as_deref(), stderr_promotion)
+                {
+                    self.finish_stderr_log_promotion(&execution, stderr_path, promotion)
+                        .await;
+                }
+                if let Err(finalize_err) = self.finalize_file_artifacts(execution_id).await {
+                    warn!(
+                        "Failed to finalize file-backed artifacts for execution {} after catastrophic failure: {}",
+                        execution_id, finalize_err
+                    );
+                }
                 // This should only happen for unrecoverable errors like runtime not found
                 self.handle_execution_failure(
                     execution_id,
@@ -221,6 +249,13 @@ impl ActionExecutor {
         if let Err(e) = self.store_execution_artifacts(execution_id, &result).await {
             warn!("Failed to store artifacts: {}", e);
             // Don't fail the execution just because artifact storage failed
+        }
+
+        if let (Some(stderr_path), Some(promotion)) =
+            (stderr_pending_path.as_deref(), stderr_promotion)
+        {
+            self.finish_stderr_log_promotion(&execution, stderr_path, promotion)
+                .await;
         }
 
         // Finalize file-backed artifacts (stat files on disk and update size_bytes)
@@ -413,27 +448,36 @@ impl ActionExecutor {
         // workflow children). If `executor` is unset, that indicates a bug in
         // one of those paths; we fall back to the system identity (1) and log
         // a warning so the regression is visible.
-        let identity_id = resolve_execution_identity(execution.executor, execution.id);
-        // Add a 60s grace period beyond the process timeout for cleanup and
-        // callback reporting.
-        let token_ttl = Some((execution_timeout.unwrap_or(300) + 60) as i64);
-        match generate_execution_token(
-            identity_id,
-            execution.id,
-            &execution.action_ref,
-            &self.jwt_config,
-            token_ttl,
-        ) {
-            Ok(token) => {
-                env.insert("ATTUNE_API_TOKEN".to_string(), token);
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to generate execution token for execution {}: {}. \
-                     Actions that call back to the API will not authenticate.",
-                    execution.id, e
-                );
-                env.insert("ATTUNE_API_TOKEN".to_string(), String::new());
+        if execution.permission_set_refs.is_empty() {
+            debug!(
+                "Execution {} has no permission sets; omitting ATTUNE_API_TOKEN",
+                execution.id
+            );
+        } else {
+            let identity_id = resolve_execution_identity(execution.executor, execution.id);
+            // Add a 60s grace period beyond the process timeout for cleanup and
+            // callback reporting.
+            let token_ttl = Some((execution_timeout.unwrap_or(300) + 60) as i64);
+            let standard_access_action_refs = self.standard_access_action_refs(execution).await;
+            match generate_execution_token_with_permission_sets_and_standard_access(
+                identity_id,
+                execution.id,
+                &execution.action_ref,
+                &self.jwt_config,
+                token_ttl,
+                &execution.permission_set_refs,
+                &standard_access_action_refs,
+            ) {
+                Ok(token) => {
+                    env.insert("ATTUNE_API_TOKEN".to_string(), token);
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to generate execution token for execution {}: {}. \
+                         Actions that call back to the API will not authenticate.",
+                        execution.id, e
+                    );
+                }
             }
         }
 
@@ -631,7 +675,7 @@ impl ActionExecutor {
             max_stdout_bytes: self.max_stdout_bytes,
             max_stderr_bytes: self.max_stderr_bytes,
             stdout_log_path: Some(log_artifacts.stdout_full_path),
-            stderr_log_path: Some(log_artifacts.stderr_full_path),
+            stderr_log_path: Some(log_artifacts.stderr_pending_full_path),
             parameter_delivery: action.parameter_delivery,
             parameter_format: action.parameter_format,
             output_format: action.output_format,
@@ -639,6 +683,30 @@ impl ActionExecutor {
         };
 
         Ok(context)
+    }
+
+    async fn standard_access_action_refs(&self, execution: &Execution) -> Vec<String> {
+        let mut refs = vec![execution.action_ref.clone()];
+
+        if execution.workflow_task.is_some() {
+            if let Some(parent_id) = execution.parent {
+                match ExecutionRepository::find_by_id(&self.pool, parent_id).await {
+                    Ok(Some(parent)) => refs.push(parent.action_ref),
+                    Ok(None) => warn!(
+                        "Execution {} references missing workflow parent {}; standard token access will not include workflow action scope",
+                        execution.id, parent_id
+                    ),
+                    Err(e) => warn!(
+                        "Failed to load workflow parent {} for execution {}; standard token access will not include workflow action scope: {}",
+                        parent_id, execution.id, e
+                    ),
+                }
+            }
+        }
+
+        refs.sort();
+        refs.dedup();
+        refs
     }
 
     /// Resolve the best runtime version for an action, if applicable.
@@ -914,14 +982,95 @@ impl ActionExecutor {
         let stdout_full_path = self
             .allocate_execution_log_artifact(execution, ExecutionLogArtifactStream::Stdout)
             .await?;
-        let stderr_full_path = self
-            .allocate_execution_log_artifact(execution, ExecutionLogArtifactStream::Stderr)
-            .await?;
+        let stderr_pending_full_path = self
+            .pending_execution_log_artifact_path(execution.id, ExecutionLogArtifactStream::Stderr);
 
         Ok(ExecutionLogArtifacts {
             stdout_full_path,
-            stderr_full_path,
+            stderr_pending_full_path,
         })
+    }
+
+    fn pending_execution_log_artifact_path(
+        &self,
+        execution_id: i64,
+        stream: ExecutionLogArtifactStream,
+    ) -> PathBuf {
+        self.artifacts_dir
+            .join("_pending")
+            .join("executions")
+            .join(execution_id.to_string())
+            .join(format!("{}.log", stream.as_str()))
+    }
+
+    fn spawn_stderr_log_promotion(
+        &self,
+        execution: &Execution,
+        pending_path: &Path,
+    ) -> StderrLogPromotion {
+        let pool = self.pool.clone();
+        let artifacts_dir = self.artifacts_dir.clone();
+        let execution = execution.clone();
+        let pending_path = pending_path.to_path_buf();
+        let lock = Arc::new(AsyncMutex::new(()));
+        let task_lock = Arc::clone(&lock);
+
+        let handle = tokio::spawn(async move {
+            loop {
+                sleep(Duration::from_millis(100)).await;
+                let _guard = task_lock.lock().await;
+                if let Some(final_path) = Self::persist_pending_stderr_log_artifact_if_written(
+                    &pool,
+                    &artifacts_dir,
+                    &execution,
+                    &pending_path,
+                )
+                .await?
+                {
+                    return Ok(Some(final_path));
+                }
+            }
+        });
+
+        StderrLogPromotion { handle, lock }
+    }
+
+    async fn finish_stderr_log_promotion(
+        &self,
+        execution: &Execution,
+        pending_path: &Path,
+        promotion: StderrLogPromotion,
+    ) {
+        {
+            let _guard = promotion.lock.lock().await;
+            if let Err(e) = Self::persist_pending_stderr_log_artifact_if_written(
+                &self.pool,
+                &self.artifacts_dir,
+                execution,
+                pending_path,
+            )
+            .await
+            {
+                warn!(
+                    "Failed to persist stderr artifact for execution {}: {}",
+                    execution.id, e
+                );
+            }
+        }
+
+        promotion.handle.abort();
+        match promotion.handle.await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => warn!(
+                "Failed to persist live stderr artifact for execution {}: {}",
+                execution.id, e
+            ),
+            Err(e) if e.is_cancelled() => {}
+            Err(e) => warn!(
+                "Live stderr artifact promotion task failed for execution {}: {}",
+                execution.id, e
+            ),
+        }
     }
 
     async fn allocate_execution_log_artifact(
@@ -929,14 +1078,29 @@ impl ActionExecutor {
         execution: &Execution,
         stream: ExecutionLogArtifactStream,
     ) -> Result<PathBuf> {
+        Self::allocate_execution_log_artifact_with(
+            &self.pool,
+            &self.artifacts_dir,
+            execution,
+            stream,
+        )
+        .await
+    }
+
+    async fn allocate_execution_log_artifact_with(
+        pool: &PgPool,
+        artifacts_dir: &Path,
+        execution: &Execution,
+        stream: ExecutionLogArtifactStream,
+    ) -> Result<PathBuf> {
         let artifact_ref = Self::execution_log_artifact_ref(&execution.action_ref, stream);
         let content_type = default_content_type_for_artifact(ArtifactType::FileText);
 
-        let artifact = match ArtifactRepository::find_by_ref(&self.pool, &artifact_ref).await? {
+        let artifact = match ArtifactRepository::find_by_ref(pool, &artifact_ref).await? {
             Some(existing) => existing,
             None => {
                 ArtifactRepository::create(
-                    &self.pool,
+                    pool,
                     CreateArtifactInput {
                         r#ref: artifact_ref.clone(),
                         scope: OwnerType::Action,
@@ -960,7 +1124,7 @@ impl ActionExecutor {
         };
 
         let version = ArtifactVersionRepository::create_file_backed(
-            &self.pool,
+            pool,
             artifact.id,
             &artifact.r#ref,
             content_type,
@@ -979,7 +1143,7 @@ impl ActionExecutor {
                 version.id
             ))
         })?;
-        let full_path = self.artifacts_dir.join(&file_path);
+        let full_path = artifacts_dir.join(&file_path);
         if let Some(parent) = full_path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
                 Error::Internal(format!(
@@ -991,6 +1155,70 @@ impl ActionExecutor {
         }
 
         Ok(full_path)
+    }
+
+    async fn persist_pending_stderr_log_artifact_if_written(
+        pool: &PgPool,
+        artifacts_dir: &Path,
+        execution: &Execution,
+        pending_path: &Path,
+    ) -> Result<Option<PathBuf>> {
+        let metadata = match tokio::fs::metadata(pending_path).await {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(e) => {
+                return Err(Error::Internal(format!(
+                    "Failed to stat pending stderr log '{}': {}",
+                    pending_path.display(),
+                    e
+                )));
+            }
+        };
+
+        if metadata.len() == 0 {
+            let _ = tokio::fs::remove_file(pending_path).await;
+            Self::remove_empty_pending_parent_dirs(pending_path).await;
+            return Ok(None);
+        }
+
+        let final_path = Self::allocate_execution_log_artifact_with(
+            pool,
+            artifacts_dir,
+            execution,
+            ExecutionLogArtifactStream::Stderr,
+        )
+        .await?;
+
+        tokio::fs::rename(pending_path, &final_path)
+            .await
+            .map_err(|e| {
+                Error::Internal(format!(
+                    "Failed to move pending stderr log '{}' to artifact file '{}': {}",
+                    pending_path.display(),
+                    final_path.display(),
+                    e
+                ))
+            })?;
+        Self::remove_empty_pending_parent_dirs(pending_path).await;
+
+        Ok(Some(final_path))
+    }
+
+    async fn remove_empty_pending_parent_dirs(path: &Path) {
+        let Some(execution_dir) = path.parent() else {
+            return;
+        };
+        let _ = tokio::fs::remove_dir(execution_dir).await;
+
+        let Some(executions_dir) = execution_dir.parent() else {
+            return;
+        };
+        let _ = tokio::fs::remove_dir(executions_dir).await;
+
+        let Some(pending_dir) = executions_dir.parent() else {
+            return;
+        };
+        let _ = tokio::fs::remove_dir(pending_dir).await;
     }
 
     async fn latest_execution_log_path(

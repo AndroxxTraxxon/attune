@@ -270,7 +270,7 @@ async fn handle_list(
         "/actions".to_string()
     };
 
-    let mut actions: Vec<Action> = client.get(&path).await?;
+    let mut actions: Vec<Action> = client.get_paginated(&path).await?;
 
     // Filter by name if specified (client-side filtering)
     if let Some(action_name) = name {

@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use std::sync::Arc;
@@ -18,6 +18,7 @@ use attune_common::{
             CreatePermissionAssignmentInput, CreatePermissionSetRoleAssignmentInput,
             IdentityRepository, IdentityRoleAssignmentRepository, PermissionAssignmentRepository,
             PermissionSetRepository, PermissionSetRoleAssignmentRepository, UpdateIdentityInput,
+            UpdatePermissionSetInput,
         },
         Create, Delete, FindById, FindByRef, List, Update,
     },
@@ -34,7 +35,7 @@ use crate::{
         IdentityResponse, IdentityRoleAssignmentResponse, IdentitySummary,
         PermissionAssignmentResponse, PermissionSetQueryParams,
         PermissionSetRoleAssignmentResponse, PermissionSetSummary, SuccessResponse,
-        UpdateIdentityRequest,
+        UpdateIdentityRequest, UpdatePermissionSetRequest,
     },
     middleware::{ApiError, ApiResult},
     state::AppState,
@@ -374,6 +375,88 @@ pub async fn list_permission_sets(
     }
 
     Ok((StatusCode::OK, Json(response)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/permissions/sets/{id}",
+    tag = "permissions",
+    params(
+        ("id" = i64, Path, description = "Permission set ID")
+    ),
+    request_body = UpdatePermissionSetRequest,
+    responses(
+        (status = 200, description = "Permission set updated", body = inline(ApiResponse<PermissionSetSummary>)),
+        (status = 400, description = "Validation error"),
+        (status = 404, description = "Permission set not found")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn update_permission_set(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(permission_set_id): Path<i64>,
+    Json(request): Json<UpdatePermissionSetRequest>,
+) -> ApiResult<impl IntoResponse> {
+    authorize_permissions(&state, &user, Resource::Permissions, Action::Manage).await?;
+    request.validate()?;
+    validate_permission_grants(&request.grants)?;
+
+    let existing = PermissionSetRepository::find_by_id(&state.db, permission_set_id)
+        .await?
+        .ok_or_else(|| {
+            ApiError::NotFound(format!("Permission set '{}' not found", permission_set_id))
+        })?;
+
+    let updated = PermissionSetRepository::update(
+        &state.db,
+        existing.id,
+        UpdatePermissionSetInput {
+            label: request.label,
+            description: request.description,
+            grants: Some(request.grants),
+        },
+    )
+    .await?;
+    let roles =
+        PermissionSetRoleAssignmentRepository::find_by_permission_set(&state.db, updated.id)
+            .await?;
+
+    emit_admin_audit(
+        &state,
+        &user,
+        event_type::admin::PERMISSION_SET_CHANGED,
+        "permission_set",
+        Some(updated.id),
+        Some(updated.r#ref.as_str()),
+        serde_json::json!({
+            "operation": "updated",
+            "permission_set_ref": updated.r#ref.as_str(),
+            "updated_fields": ["label", "description", "grants"],
+        }),
+    );
+
+    Ok((
+        StatusCode::OK,
+        Json(ApiResponse::new(PermissionSetSummary {
+            id: updated.id,
+            r#ref: updated.r#ref.clone(),
+            pack_ref: updated.pack_ref,
+            label: updated.label,
+            description: updated.description,
+            grants: updated.grants,
+            roles: roles
+                .into_iter()
+                .map(|assignment| PermissionSetRoleAssignmentResponse {
+                    id: assignment.id,
+                    permission_set_id: assignment.permset,
+                    permission_set_ref: Some(updated.r#ref.clone()),
+                    role: assignment.role,
+                    created: assignment.created,
+                })
+                .collect(),
+        })),
+    ))
 }
 
 #[utoipa::path(
@@ -861,6 +944,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             delete(delete_identity_role_assignment),
         )
         .route("/permissions/sets", get(list_permission_sets))
+        .route("/permissions/sets/{id}", put(update_permission_set))
         .route(
             "/permissions/sets/{id}/roles",
             post(create_permission_set_role_assignment),
@@ -899,6 +983,179 @@ async fn authorize_permissions(
             },
         )
         .await
+}
+
+fn validate_permission_grants(grants: &serde_json::Value) -> ApiResult<()> {
+    if !grants.is_array() {
+        return Err(ApiError::BadRequest(
+            "Permission set grants must be an array".to_string(),
+        ));
+    }
+
+    let parsed = serde_json::from_value::<Vec<attune_common::rbac::Grant>>(grants.clone())
+        .map_err(|e| ApiError::BadRequest(format!("Invalid permission grant schema: {}", e)))?;
+
+    for grant in parsed {
+        validate_grant_actions(&grant)?;
+        if let Some(constraints) = &grant.constraints {
+            if constraints.ids.is_some() {
+                return Err(ApiError::BadRequest(
+                    "Permission set grants cannot be scoped by database IDs; use metadata refs instead"
+                        .to_string(),
+                ));
+            }
+            if constraints.owner_refs.is_some() {
+                return Err(ApiError::BadRequest(
+                    "Permission set grants cannot use owner_refs; use a pack scope, component ref scope, or owner type/self constraints".to_string(),
+                ));
+            }
+            if constraints.pack_refs.is_some() && constraints.refs.is_some() {
+                return Err(ApiError::BadRequest(
+                    "Permission set grants can be pack scoped or component scoped, not both"
+                        .to_string(),
+                ));
+            }
+            validate_grant_constraints(&grant.resource, constraints)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_grant_actions(grant: &attune_common::rbac::Grant) -> ApiResult<()> {
+    let allowed = match grant.resource {
+        Resource::Packs => &[
+            Action::Read,
+            Action::Create,
+            Action::Install,
+            Action::Configure,
+            Action::Delete,
+        ][..],
+        Resource::Actions => &[
+            Action::Read,
+            Action::Create,
+            Action::Update,
+            Action::Delete,
+            Action::Execute,
+        ][..],
+        Resource::Queues => &[Action::Read, Action::Create, Action::Update, Action::Delete][..],
+        Resource::Rules => &[Action::Read, Action::Create, Action::Update, Action::Delete][..],
+        Resource::Triggers => &[Action::Read, Action::Create, Action::Update, Action::Delete][..],
+        Resource::Executions => &[Action::Read, Action::Update, Action::Cancel][..],
+        Resource::Events => &[Action::Read][..],
+        Resource::Enforcements => &[Action::Read][..],
+        Resource::Inquiries => &[
+            Action::Read,
+            Action::Create,
+            Action::Update,
+            Action::Delete,
+            Action::Respond,
+        ][..],
+        Resource::Keys => &[
+            Action::Read,
+            Action::Create,
+            Action::Update,
+            Action::Delete,
+            Action::Decrypt,
+        ][..],
+        Resource::Artifacts => &[Action::Read, Action::Create, Action::Update, Action::Delete][..],
+        Resource::Runtimes => &[Action::Read, Action::Create, Action::Update, Action::Delete][..],
+        Resource::Workers => &[Action::Read][..],
+        Resource::Identities => &[Action::Read, Action::Create, Action::Update, Action::Delete][..],
+        Resource::Permissions => &[Action::Read, Action::Manage][..],
+        Resource::AuditLog => &[Action::Read][..],
+    };
+
+    if grant.actions.is_empty() || grant.actions.iter().any(|action| !allowed.contains(action)) {
+        return Err(ApiError::BadRequest(format!(
+            "Permission grant for {:?} includes unsupported actions",
+            grant.resource
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_grant_constraints(
+    resource: &Resource,
+    constraints: &attune_common::rbac::GrantConstraints,
+) -> ApiResult<()> {
+    if constraints.pack_refs.is_some()
+        && !matches!(
+            resource,
+            Resource::Packs
+                | Resource::Actions
+                | Resource::Queues
+                | Resource::Rules
+                | Resource::Triggers
+                | Resource::Artifacts
+        )
+    {
+        return Err(ApiError::BadRequest(format!(
+            "{:?} grants do not support pack scope constraints",
+            resource
+        )));
+    }
+
+    if constraints.refs.is_some()
+        && !matches!(
+            resource,
+            Resource::Packs
+                | Resource::Actions
+                | Resource::Queues
+                | Resource::Rules
+                | Resource::Triggers
+                | Resource::Executions
+                | Resource::Keys
+                | Resource::Artifacts
+        )
+    {
+        return Err(ApiError::BadRequest(format!(
+            "{:?} grants do not support component ref constraints",
+            resource
+        )));
+    }
+
+    if constraints.owner.is_some()
+        && !matches!(
+            resource,
+            Resource::Packs | Resource::Keys | Resource::Artifacts
+        )
+    {
+        return Err(ApiError::BadRequest(format!(
+            "{:?} grants do not support owner constraints",
+            resource
+        )));
+    }
+
+    if constraints.owner_types.is_some()
+        && !matches!(resource, Resource::Keys | Resource::Artifacts)
+    {
+        return Err(ApiError::BadRequest(format!(
+            "{:?} grants do not support owner type constraints",
+            resource
+        )));
+    }
+
+    if constraints.visibility.is_some() && !matches!(resource, Resource::Artifacts) {
+        return Err(ApiError::BadRequest(
+            "Visibility constraints only apply to artifacts grants".to_string(),
+        ));
+    }
+
+    if constraints.execution_scope.is_some() && !matches!(resource, Resource::Executions) {
+        return Err(ApiError::BadRequest(
+            "Execution scope constraints only apply to executions grants".to_string(),
+        ));
+    }
+
+    if constraints.encrypted.is_some() && !matches!(resource, Resource::Keys) {
+        return Err(ApiError::BadRequest(
+            "Encryption constraints only apply to keys grants".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 async fn resolve_identity(

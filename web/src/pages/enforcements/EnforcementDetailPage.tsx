@@ -1,6 +1,10 @@
 import { useParams, Link } from "react-router-dom";
 import { useEnforcement } from "@/hooks/useEvents";
+import { useTrigger } from "@/hooks/useTriggers";
+import { useRule } from "@/hooks/useRules";
+import { useAction } from "@/hooks/useActions";
 import { EnforcementStatus, EnforcementCondition } from "@/api";
+import { CuratedDataCard } from "@/components/common/CuratedDataPanel";
 
 export default function EnforcementDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -12,6 +16,9 @@ export default function EnforcementDetailPage() {
     error,
   } = useEnforcement(enforcementId);
   const enforcement = enforcementData?.data;
+  const { data: triggerData } = useTrigger(enforcement?.trigger_ref || "");
+  const { data: ruleData } = useRule(enforcement?.rule_ref || "");
+  const { data: actionData } = useAction(ruleData?.data?.action_ref || "");
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString();
@@ -207,54 +214,36 @@ export default function EnforcementDetailPage() {
           {/* Conditions Card */}
           {enforcement.conditions &&
             Object.keys(enforcement.conditions).length > 0 && (
-              <div className="bg-white rounded-lg shadow">
-                <div className="px-6 py-4 border-b border-gray-200">
-                  <h2 className="text-lg font-semibold text-gray-900">
-                    Rule Conditions
-                  </h2>
-                  <p className="text-sm text-gray-600 mt-1">
-                    Evaluation criteria that must be met for this enforcement
-                  </p>
-                </div>
-                <div className="px-6 py-4">
-                  <pre className="text-sm bg-gray-50 rounded-lg p-4 overflow-x-auto">
-                    {JSON.stringify(enforcement.conditions, null, 2)}
-                  </pre>
-                </div>
-              </div>
+              <CuratedDataCard
+                title="Rule Conditions"
+                description="Condition values evaluated for this enforcement."
+                values={enforcement.conditions}
+                emptyMessage="No condition details were captured."
+              />
             )}
 
           {/* Configuration Card */}
           {enforcement.config && Object.keys(enforcement.config).length > 0 && (
-            <div className="bg-white rounded-lg shadow">
-              <div className="px-6 py-4 border-b border-gray-200">
-                <h2 className="text-lg font-semibold text-gray-900">
-                  Enforcement Configuration
-                </h2>
-              </div>
-              <div className="px-6 py-4">
-                <pre className="text-sm bg-gray-50 rounded-lg p-4 overflow-x-auto">
-                  {JSON.stringify(enforcement.config, null, 2)}
-                </pre>
-              </div>
-            </div>
+            <CuratedDataCard
+              title="Enforcement Configuration"
+              description="Action parameters resolved for this enforcement, annotated with the action parameter schema when available."
+              schema={actionData?.data?.param_schema}
+              values={enforcement.config}
+              emptyMessage="No enforcement configuration was captured."
+              maskSecrets
+            />
           )}
 
           {/* Payload Card */}
           {enforcement.payload &&
             Object.keys(enforcement.payload).length > 0 && (
-              <div className="bg-white rounded-lg shadow">
-                <div className="px-6 py-4 border-b border-gray-200">
-                  <h2 className="text-lg font-semibold text-gray-900">
-                    Payload
-                  </h2>
-                </div>
-                <div className="px-6 py-4">
-                  <pre className="text-sm bg-gray-50 rounded-lg p-4 overflow-x-auto">
-                    {JSON.stringify(enforcement.payload, null, 2)}
-                  </pre>
-                </div>
-              </div>
+              <CuratedDataCard
+                title="Payload"
+                description="Trigger payload that activated the rule, annotated with the trigger output schema when available."
+                schema={triggerData?.data?.out_schema}
+                values={enforcement.payload}
+                emptyMessage="No payload data was captured."
+              />
             )}
         </div>
 

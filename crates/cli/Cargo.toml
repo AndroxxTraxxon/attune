@@ -34,6 +34,7 @@ webpki-root-certs = "1.0"
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_path_to_error = "0.1"
 serde_yaml_ng = { workspace = true }
 
 # Error handling

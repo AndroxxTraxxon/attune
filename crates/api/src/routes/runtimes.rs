@@ -10,6 +10,7 @@ use axum::{
 use std::sync::Arc;
 use validator::Validate;
 
+use attune_common::rbac::{Action, AuthorizationContext, Resource};
 use attune_common::repositories::{
     pack::PackRepository,
     runtime::{CreateRuntimeInput, RuntimeRepository, UpdateRuntimeInput},
@@ -18,6 +19,7 @@ use attune_common::repositories::{
 
 use crate::{
     auth::middleware::RequireAuth,
+    authz::{AuthorizationCheck, AuthorizationService},
     dto::{
         common::{PaginatedResponse, PaginationParams},
         runtime::{
@@ -29,6 +31,26 @@ use crate::{
     middleware::{ApiError, ApiResult},
     state::AppState,
 };
+
+async fn authorize_runtime(
+    state: &Arc<AppState>,
+    user: &crate::auth::middleware::AuthenticatedUser,
+    action: Action,
+) -> ApiResult<()> {
+    let identity_id = user
+        .identity_id()
+        .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+    AuthorizationService::new(state.db.clone())
+        .authorize(
+            user,
+            AuthorizationCheck {
+                resource: Resource::Runtimes,
+                action,
+                context: AuthorizationContext::new(identity_id),
+            },
+        )
+        .await
+}
 
 #[utoipa::path(
     get,
@@ -42,9 +64,11 @@ use crate::{
 )]
 pub async fn list_runtimes(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Query(pagination): Query<PaginationParams>,
 ) -> ApiResult<impl IntoResponse> {
+    authorize_runtime(&state, &user, Action::Read).await?;
+
     let all_runtimes = RuntimeRepository::list(&state.db).await?;
     let total = all_runtimes.len() as u64;
     let rows: Vec<_> = all_runtimes
@@ -78,10 +102,12 @@ pub async fn list_runtimes(
 )]
 pub async fn list_runtimes_by_pack(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Path(pack_ref): Path<String>,
     Query(pagination): Query<PaginationParams>,
 ) -> ApiResult<impl IntoResponse> {
+    authorize_runtime(&state, &user, Action::Read).await?;
+
     let pack = PackRepository::find_by_ref(&state.db, &pack_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Pack '{}' not found", pack_ref)))?;
@@ -116,9 +142,11 @@ pub async fn list_runtimes_by_pack(
 )]
 pub async fn get_runtime(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Path(runtime_ref): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
+    authorize_runtime(&state, &user, Action::Read).await?;
+
     let runtime = RuntimeRepository::find_by_ref(&state.db, &runtime_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Runtime '{}' not found", runtime_ref)))?;
@@ -144,9 +172,11 @@ pub async fn get_runtime(
 )]
 pub async fn create_runtime(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Json(request): Json<CreateRuntimeRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    authorize_runtime(&state, &user, Action::Create).await?;
+
     request.validate()?;
 
     if RuntimeRepository::find_by_ref(&state.db, &request.r#ref)
@@ -210,10 +240,12 @@ pub async fn create_runtime(
 )]
 pub async fn update_runtime(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Path(runtime_ref): Path<String>,
     Json(request): Json<UpdateRuntimeRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    authorize_runtime(&state, &user, Action::Update).await?;
+
     request.validate()?;
 
     let existing_runtime = RuntimeRepository::find_by_ref(&state.db, &runtime_ref)
@@ -262,9 +294,11 @@ pub async fn update_runtime(
 )]
 pub async fn delete_runtime(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Path(runtime_ref): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
+    authorize_runtime(&state, &user, Action::Delete).await?;
+
     let runtime = RuntimeRepository::find_by_ref(&state.db, &runtime_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Runtime '{}' not found", runtime_ref)))?;

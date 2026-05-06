@@ -12,6 +12,11 @@ export type CreateActionRequest = {
      */
     accesses_mcp?: boolean | null;
     /**
+     * Default permission set refs for execution-scoped API tokens.
+     * Empty or omitted means executions of this action receive no API token by default.
+     */
+    default_execution_permission_set_refs?: Array<string>;
+    /**
      * Action description
      */
     description?: string | null;
@@ -52,4 +57,3 @@ export type CreateActionRequest = {
      */
     runtime_version_constraint?: string | null;
 };
-

@@ -5,19 +5,20 @@ import {
   type UpdateRuntimeRequest,
 } from "@/api";
 
-export function useRuntimes() {
+export function useRuntimes(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["runtimes"],
     queryFn: async () => RuntimesService.listRuntimes({ page: 1, pageSize: 100 }),
+    enabled: options?.enabled ?? true,
     staleTime: 30000,
   });
 }
 
-export function useRuntime(ref: string) {
+export function useRuntime(ref: string, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["runtimes", ref],
     queryFn: async () => RuntimesService.getRuntime({ ref }),
-    enabled: !!ref && ref !== "new",
+    enabled: (options?.enabled ?? true) && !!ref && ref !== "new",
     staleTime: 30000,
   });
 }

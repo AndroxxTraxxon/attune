@@ -280,6 +280,7 @@ impl WorkflowRegistrar {
             out_schema: workflow.output.clone(),
             is_adhoc: false,
             accesses_mcp: false,
+            default_execution_permission_set_refs: Vec::new(),
         };
 
         let action = ActionRepository::create(&self.pool, action_input).await?;
@@ -334,6 +335,7 @@ impl WorkflowRegistrar {
                 parameter_format: None,
                 output_format: None,
                 accesses_mcp: None,
+                default_execution_permission_set_refs: None,
             };
 
             ActionRepository::update(&self.pool, action.id, update_input).await?;

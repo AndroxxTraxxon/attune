@@ -68,6 +68,12 @@ pub struct CreateActionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = false, default = false, nullable = true)]
     pub accesses_mcp: Option<bool>,
+
+    /// Default permission set refs for execution-scoped API tokens.
+    /// Empty or omitted means executions of this action receive no API token by default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(example = json!(["core.agent_reader"]), default = json!([]))]
+    pub default_execution_permission_set_refs: Vec<String>,
 }
 
 /// Request DTO for updating an action
@@ -114,6 +120,11 @@ pub struct UpdateActionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = false, nullable = true)]
     pub accesses_mcp: Option<bool>,
+
+    /// Default permission set refs for execution-scoped API tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = json!(["core.agent_reader"]), nullable = true)]
+    pub default_execution_permission_set_refs: Option<Vec<String>>,
 }
 
 /// Explicit patch operation for a nullable runtime version constraint.
@@ -195,6 +206,11 @@ pub struct ActionResponse {
     #[schema(example = false, default = false)]
     pub accesses_mcp: bool,
 
+    /// Default permission set refs used when executions do not explicitly override token permissions.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schema(example = json!(["core.agent_reader"]))]
+    pub default_execution_permission_set_refs: Vec<String>,
+
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
@@ -259,6 +275,11 @@ pub struct ActionSummary {
     #[schema(example = false, default = false)]
     pub accesses_mcp: bool,
 
+    /// Default permission set refs used when executions do not explicitly override token permissions.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schema(example = json!(["core.agent_reader"]))]
+    pub default_execution_permission_set_refs: Vec<String>,
+
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
@@ -289,6 +310,7 @@ impl From<attune_common::models::action::Action> for ActionResponse {
             workflow_def: action.workflow_def,
             is_adhoc: action.is_adhoc,
             accesses_mcp: action.accesses_mcp,
+            default_execution_permission_set_refs: action.default_execution_permission_set_refs,
             created: action.created,
             updated: action.updated,
         }
@@ -312,6 +334,7 @@ impl From<attune_common::models::action::Action> for ActionSummary {
             required_worker_runtimes,
             workflow_def: action.workflow_def,
             accesses_mcp: action.accesses_mcp,
+            default_execution_permission_set_refs: action.default_execution_permission_set_refs,
             created: action.created,
             updated: action.updated,
         }
@@ -381,6 +404,44 @@ pub struct ActionSearchParams {
     /// or repeated query params (e.g., `?packs=core&packs=slack`).
     #[param(example = "core,slack")]
     pub packs: Option<String>,
+}
+
+/// Query parameters for `GET /api/v1/actions`.
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+pub struct ActionListParams {
+    /// Page number (1-based)
+    #[serde(default = "default_page")]
+    #[param(example = 1, minimum = 1)]
+    pub page: u32,
+
+    /// Number of items per page
+    #[serde(default = "default_page_size")]
+    #[param(example = 50, minimum = 1, maximum = 100)]
+    pub page_size: u32,
+
+    /// When true, only return actions the current token can execute and whose
+    /// default execution permission sets can be delegated by the current token.
+    #[serde(default)]
+    #[param(example = true)]
+    pub executable_with_current_access: bool,
+}
+
+fn default_page() -> u32 {
+    1
+}
+
+fn default_page_size() -> u32 {
+    50
+}
+
+impl ActionListParams {
+    pub fn offset(&self) -> u32 {
+        (self.page.saturating_sub(1)) * self.page_size
+    }
+
+    pub fn limit(&self) -> u32 {
+        self.page_size.min(100)
+    }
 }
 
 /// Response DTO for queue statistics
@@ -459,6 +520,7 @@ mod tests {
             param_schema: None,
             out_schema: None,
             accesses_mcp: None,
+            default_execution_permission_set_refs: Vec::new(),
         };
 
         assert!(req.validate().is_err());
@@ -479,6 +541,7 @@ mod tests {
             param_schema: None,
             out_schema: None,
             accesses_mcp: None,
+            default_execution_permission_set_refs: Vec::new(),
         };
 
         assert!(req.validate().is_ok());
@@ -497,6 +560,7 @@ mod tests {
             param_schema: None,
             out_schema: None,
             accesses_mcp: None,
+            default_execution_permission_set_refs: None,
         };
 
         // Should be valid even with all None values

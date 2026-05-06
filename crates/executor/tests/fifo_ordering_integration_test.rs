@@ -109,6 +109,7 @@ async fn create_test_action(pool: &PgPool, pack_id: i64, pack_ref: &str, suffix:
         out_schema: None,
         is_adhoc: false,
         accesses_mcp: false,
+        default_execution_permission_set_refs: Vec::new(),
     };
 
     ActionRepository::create(pool, action_input)
@@ -132,6 +133,7 @@ async fn create_test_execution(
         parent: None,
         enforcement: None,
         executor: None,
+        permission_set_refs: Vec::new(),
         worker: None,
         status,
         result: None,

@@ -11,8 +11,9 @@ use crate::dto::{
         UpdateActionRequest,
     },
     auth::{
-        AuthSettingsResponse, ChangePasswordRequest, CurrentUserResponse, LoginRequest,
-        RefreshTokenRequest, RegisterRequest, TokenResponse,
+        AuthSettingsResponse, ChangePasswordRequest, CurrentUserResponse,
+        EffectivePermissionResponse, LoginRequest, ProviderProfileResponse, RefreshTokenRequest,
+        RegisterRequest, TokenResponse, UpdateCurrentUserRequest,
     },
     common::{ApiResponse, PaginatedResponse, PaginationMeta, SuccessResponse},
     event::{EnforcementResponse, EnforcementSummary, EventResponse, EventSummary},
@@ -32,7 +33,7 @@ use crate::dto::{
         CreatePermissionAssignmentRequest, CreatePermissionSetRoleAssignmentRequest,
         IdentityResponse, IdentityRoleAssignmentResponse, IdentitySummary,
         PermissionAssignmentResponse, PermissionSetRoleAssignmentResponse, PermissionSetSummary,
-        UpdateIdentityRequest,
+        UpdateIdentityRequest, UpdatePermissionSetRequest,
     },
     rule::{CreateRuleRequest, RuleResponse, RuleSummary, UpdateRuleRequest},
     runtime::{CreateRuntimeRequest, RuntimeResponse, RuntimeSummary, UpdateRuntimeRequest},
@@ -86,6 +87,7 @@ use attune_common::audit::{AuditCategory, AuditOutcome};
         crate::routes::auth::register,
         crate::routes::auth::refresh_token,
         crate::routes::auth::get_current_user,
+        crate::routes::auth::update_current_user,
         crate::routes::auth::change_password,
 
         // Packs
@@ -208,6 +210,7 @@ use attune_common::audit::{AuditCategory, AuditOutcome};
         crate::routes::permissions::update_identity,
         crate::routes::permissions::delete_identity,
         crate::routes::permissions::list_permission_sets,
+        crate::routes::permissions::update_permission_set,
         crate::routes::permissions::list_identity_permissions,
         crate::routes::permissions::create_permission_assignment,
         crate::routes::permissions::delete_permission_assignment,
@@ -290,8 +293,11 @@ use attune_common::audit::{AuditCategory, AuditOutcome};
             RegisterRequest,
             RefreshTokenRequest,
             ChangePasswordRequest,
+            UpdateCurrentUserRequest,
             TokenResponse,
             CurrentUserResponse,
+            ProviderProfileResponse,
+            EffectivePermissionResponse,
 
             // Pack DTOs
             CreatePackRequest,
@@ -317,6 +323,7 @@ use attune_common::audit::{AuditCategory, AuditOutcome};
             UpdateIdentityRequest,
             IdentityResponse,
             PermissionSetSummary,
+            UpdatePermissionSetRequest,
             PermissionAssignmentResponse,
             CreatePermissionAssignmentRequest,
             CreateIdentityRoleAssignmentRequest,

@@ -3,7 +3,7 @@ label: Editor
 description: Create and update operational resources without full administrative control.
 grants:
   - resource: packs
-    actions: [read, create, update]
+    actions: [read, create, install, configure]
   - resource: actions
     actions: [read, create, update, execute]
   - resource: queues
@@ -17,4 +17,8 @@ grants:
   - resource: keys
     actions: [read, update, decrypt]
   - resource: artifacts
+    actions: [read]
+  - resource: runtimes
+    actions: [read, create, update]
+  - resource: workers
     actions: [read]

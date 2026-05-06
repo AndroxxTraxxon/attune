@@ -13,6 +13,7 @@ use super::{Create, Delete, FindById, FindByRef, List, Patch, Repository, Update
 pub const ACTION_COLUMNS: &str = "id, ref, pack, pack_ref, label, description, entrypoint, \
     runtime, runtime_version_constraint, required_worker_runtimes, \
     param_schema, out_schema, workflow_def, is_adhoc, accesses_mcp, \
+    default_execution_permission_set_refs, \
     parameter_delivery, parameter_format, output_format, created, updated";
 
 /// Filters for [`ActionRepository::list_search`].
@@ -123,6 +124,7 @@ pub struct CreateActionInput {
     pub is_adhoc: bool,
     #[doc = "Hint that this action may invoke the MCP server and spawn child executions."]
     pub accesses_mcp: bool,
+    pub default_execution_permission_set_refs: Vec<String>,
 }
 
 /// Input for updating an action
@@ -140,6 +142,7 @@ pub struct UpdateActionInput {
     pub parameter_format: Option<String>,
     pub output_format: Option<String>,
     pub accesses_mcp: Option<bool>,
+    pub default_execution_permission_set_refs: Option<Vec<String>>,
 }
 
 #[async_trait::async_trait]
@@ -223,9 +226,10 @@ impl Create for ActionRepository {
         let action = sqlx::query_as::<_, Action>(&format!(
             r#"
             INSERT INTO action (ref, pack, pack_ref, label, description, entrypoint,
-                                runtime, runtime_version_constraint, required_worker_runtimes,
-                                param_schema, out_schema, is_adhoc, accesses_mcp)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                                 runtime, runtime_version_constraint, required_worker_runtimes,
+                                 param_schema, out_schema, is_adhoc, accesses_mcp,
+                                 default_execution_permission_set_refs)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             RETURNING {}
             "#,
             ACTION_COLUMNS
@@ -243,6 +247,7 @@ impl Create for ActionRepository {
         .bind(&input.out_schema)
         .bind(input.is_adhoc)
         .bind(input.accesses_mcp)
+        .bind(&input.default_execution_permission_set_refs)
         .fetch_one(executor)
         .await
         .map_err(|e| {
@@ -389,6 +394,15 @@ impl Update for ActionRepository {
             }
             query.push("accesses_mcp = ");
             query.push_bind(accesses_mcp);
+            has_updates = true;
+        }
+
+        if let Some(permission_set_refs) = &input.default_execution_permission_set_refs {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("default_execution_permission_set_refs = ");
+            query.push_bind(permission_set_refs);
             has_updates = true;
         }
 

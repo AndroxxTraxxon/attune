@@ -11,9 +11,17 @@ from helpers import AttuneClient
 from helpers.fixtures import create_echo_action, unique_ref
 
 
-def _notifier_ws_url(client: AttuneClient) -> str:
+def _notifier_ws_url() -> str:
     base_url = os.getenv("ATTUNE_WS_URL", "ws://localhost:8081").rstrip("/")
-    return f"{base_url}/ws?token={client.access_token}"
+    return f"{base_url}/ws"
+
+
+def _connect_notifier_ws(client: AttuneClient):
+    return websockets.connect(
+        _notifier_ws_url(),
+        additional_headers={"Authorization": f"Bearer {client.access_token}"},
+        subprotocols=["attune.v1"],
+    )
 
 
 def _create_execution_for_inquiry(client: AttuneClient, pack_ref: str) -> dict:
@@ -113,7 +121,7 @@ def test_inquiry_timeout_notification(client: AttuneClient, test_pack):
     pack_ref = test_pack["ref"]
 
     async def run_test() -> tuple[dict, dict, dict]:
-        async with websockets.connect(_notifier_ws_url(client)) as websocket:
+        async with _connect_notifier_ws(client) as websocket:
             welcome = json.loads(await asyncio.wait_for(websocket.recv(), timeout=3))
             assert welcome["type"] == "welcome"
             await websocket.send(
@@ -159,7 +167,7 @@ def test_websocket_inquiry_notification_delivery(client: AttuneClient, test_pack
     pack_ref = test_pack["ref"]
 
     async def run_test() -> tuple[dict, dict, dict]:
-        async with websockets.connect(_notifier_ws_url(client)) as websocket:
+        async with _connect_notifier_ws(client) as websocket:
             welcome = json.loads(await asyncio.wait_for(websocket.recv(), timeout=3))
             assert welcome["type"] == "welcome"
             await websocket.send(

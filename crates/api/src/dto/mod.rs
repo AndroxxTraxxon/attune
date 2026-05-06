@@ -33,8 +33,9 @@ pub use artifact::{
     CreateVersionJsonRequest, SetDataRequest, UpdateArtifactRequest,
 };
 pub use auth::{
-    AuthSettingsResponse, ChangePasswordRequest, CurrentUserResponse, LoginRequest,
-    RefreshTokenRequest, RegisterRequest, TokenResponse,
+    AuthSettingsResponse, ChangePasswordRequest, CurrentUserResponse, EffectivePermissionResponse,
+    LoginRequest, ProviderProfileResponse, RefreshTokenRequest, RegisterRequest, TokenResponse,
+    UpdateCurrentUserRequest,
 };
 pub use common::{
     ApiResponse, PaginatedResponse, PaginationMeta, PaginationParams, SuccessResponse,
@@ -58,6 +59,7 @@ pub use permission::{
     CreatePermissionSetRoleAssignmentRequest, IdentityResponse, IdentityRoleAssignmentResponse,
     IdentitySummary, PermissionAssignmentResponse, PermissionSetQueryParams,
     PermissionSetRoleAssignmentResponse, PermissionSetSummary, UpdateIdentityRequest,
+    UpdatePermissionSetRequest,
 };
 pub use rule::{CreateRuleRequest, RuleResponse, RuleSummary, UpdateRuleRequest};
 pub use runtime::{CreateRuntimeRequest, RuntimeResponse, RuntimeSummary, UpdateRuntimeRequest};

@@ -11,6 +11,7 @@ import type { PaginatedResponse_IdentitySummary } from '../models/PaginatedRespo
 import type { PermissionAssignmentResponse } from '../models/PermissionAssignmentResponse';
 import type { PermissionSetSummary } from '../models/PermissionSetSummary';
 import type { UpdateIdentityRequest } from '../models/UpdateIdentityRequest';
+import type { UpdatePermissionSetRequest } from '../models/UpdatePermissionSetRequest';
 import type { Value } from '../models/Value';
 import type { CancelablePromise } from '../core/CancelablePromise';
 import { OpenAPI } from '../core/OpenAPI';
@@ -468,6 +469,40 @@ export class PermissionsService {
             url: '/api/v1/permissions/sets',
             query: {
                 'pack_ref': packRef,
+            },
+        });
+    }
+    /**
+     * @returns any Permission set updated
+     * @throws ApiError
+     */
+    public static updatePermissionSet({
+        id,
+        requestBody,
+    }: {
+        /**
+         * Permission set ID
+         */
+        id: number,
+        requestBody: UpdatePermissionSetRequest,
+    }): CancelablePromise<{
+        data: PermissionSetSummary;
+        /**
+         * Optional message
+         */
+        message?: string | null;
+    }> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/api/v1/permissions/sets/{id}',
+            path: {
+                'id': id,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                400: `Validation error`,
+                404: `Permission set not found`,
             },
         });
     }

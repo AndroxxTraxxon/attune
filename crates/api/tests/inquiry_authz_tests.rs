@@ -92,6 +92,7 @@ async fn setup_pack_action(pool: &PgPool, suffix: &str) -> TResult<(Pack, Action
             out_schema: None,
             is_adhoc: false,
             accesses_mcp: false,
+            default_execution_permission_set_refs: Vec::new(),
         },
     )
     .await?;
@@ -110,6 +111,7 @@ async fn create_execution(pool: &PgPool, action: &Action) -> TResult<Execution> 
             parent: None,
             enforcement: None,
             executor: None,
+            permission_set_refs: Vec::new(),
             worker: None,
             status: ExecutionStatus::Running,
             result: None,
@@ -134,6 +136,7 @@ async fn create_child_execution(
             parent: Some(parent_id),
             enforcement: None,
             executor: None,
+            permission_set_refs: Vec::new(),
             worker: None,
             status: ExecutionStatus::Running,
             result: None,

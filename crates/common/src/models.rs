@@ -1099,6 +1099,8 @@ pub mod action {
         #[sqlx(default)]
         pub accesses_mcp: bool,
         #[sqlx(default)]
+        pub default_execution_permission_set_refs: Vec<String>,
+        #[sqlx(default)]
         pub parameter_delivery: ParameterDelivery,
         #[sqlx(default)]
         pub parameter_format: ParameterFormat,
@@ -1328,6 +1330,8 @@ pub mod execution {
 
         pub enforcement: Option<Id>,
         pub executor: Option<Id>,
+        #[sqlx(default)]
+        pub permission_set_refs: Vec<String>,
         pub worker: Option<Id>,
         pub status: ExecutionStatus,
         pub result: Option<JsonDict>,

@@ -424,7 +424,7 @@ async fn test_action_list_by_pack() {
     Mock::given(method("GET"))
         .and(path("/api/v1/packs/core/actions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": [
+            "items": [
                 {
                     "id": 1,
                     "ref": "core.echo",
@@ -437,11 +437,13 @@ async fn test_action_list_by_pack() {
                     "updated": "2024-01-01T00:00:00Z"
                 }
             ],
-            "meta": {
+            "pagination": {
                 "page": 1,
-                "limit": 50,
-                "total": 1,
-                "total_pages": 1
+                "page_size": 50,
+                "total_items": 1,
+                "total_pages": 1,
+                "has_previous": false,
+                "has_next": false
             }
         })))
         .mount(&fixture.mock_server)
@@ -492,7 +494,15 @@ async fn test_action_list_empty_result() {
     Mock::given(method("GET"))
         .and(path("/api/v1/actions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": []
+            "items": [],
+            "pagination": {
+                "page": 1,
+                "page_size": 50,
+                "total_items": 0,
+                "total_pages": 0,
+                "has_previous": false,
+                "has_next": false
+            }
         })))
         .mount(&fixture.mock_server)
         .await;

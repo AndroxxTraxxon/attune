@@ -65,6 +65,43 @@ const TRANSITION_DOT_COLORS: Record<string, string> = {
   custom: "bg-violet-500",
 };
 
+function permissionSetRefsToInput(value: WorkflowTask["permission_set_refs"]): string {
+  if (Array.isArray(value)) {
+    return value.join(", ");
+  }
+  return value ?? "";
+}
+
+function inputToPermissionSetRefs(value: string): WorkflowTask["permission_set_refs"] {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (trimmed.startsWith("{{") && trimmed.endsWith("}}")) {
+    return trimmed;
+  }
+
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (
+        Array.isArray(parsed) &&
+        parsed.every((item) => typeof item === "string")
+      ) {
+        return parsed.map((item) => item.trim()).filter(Boolean);
+      }
+    } catch {
+      // Fall through to comma/newline parsing for partially typed values.
+    }
+  }
+
+  return trimmed
+    .split(/[,\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 export default function TaskInspector({
   task,
   allTaskNames,
@@ -400,6 +437,28 @@ export default function TaskInspector({
                 This action has no declared parameters.
               </p>
             )}
+
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">
+                Execution Permission Set Refs
+              </label>
+              <textarea
+                value={permissionSetRefsToInput(task.permission_set_refs)}
+                onChange={(e) =>
+                  update({
+                    permission_set_refs: inputToPermissionSetRefs(e.target.value),
+                  })
+                }
+                className="w-full px-2.5 py-1.5 border border-gray-300 rounded text-xs font-mono focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                placeholder="core.executor_mcp, my_pack.agent_scope or {{ workflow.permission_sets }}"
+                rows={2}
+              />
+              <p className="text-[10px] text-gray-400 mt-0.5">
+                Optional. Use comma/newline-separated refs, a JSON string array,
+                or a template resolving to a ref or ref array. When omitted, the
+                action&apos;s default execution permission sets are used.
+              </p>
+            </div>
           </div>
         </CollapsibleSection>
 

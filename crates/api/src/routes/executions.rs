@@ -81,7 +81,10 @@ pub async fn create_execution(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Action '{}' not found", request.action_ref)))?;
 
-    if user.claims.token_type == crate::auth::jwt::TokenType::Access {
+    if matches!(
+        user.claims.token_type,
+        TokenType::Access | TokenType::Execution
+    ) {
         let identity_id = user
             .identity_id()
             .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
@@ -147,6 +150,20 @@ pub async fn create_execution(
         _ => user.identity_id().ok(),
     };
 
+    let permission_set_refs = request
+        .permission_set_refs
+        .clone()
+        .unwrap_or_else(|| action.default_execution_permission_set_refs.clone());
+    if !permission_set_refs.is_empty()
+        && !AuthorizationService::new(state.db.clone())
+            .can_delegate_permission_sets(&user, &permission_set_refs)
+            .await?
+    {
+        return Err(ApiError::Forbidden(
+            "Cannot execute action with permission sets beyond current access".to_string(),
+        ));
+    }
+
     // Create execution input
     let execution_input = CreateExecutionInput {
         action: Some(action.id),
@@ -162,6 +179,7 @@ pub async fn create_execution(
         parent: parent_from_token,
         enforcement: None,
         executor: executor_identity,
+        permission_set_refs,
         worker: None,
         status: ExecutionStatus::Requested,
         result: None,

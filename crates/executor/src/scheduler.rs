@@ -1100,6 +1100,68 @@ impl ExecutionScheduler {
         Ok(())
     }
 
+    fn workflow_task_permission_set_refs(
+        task_node: &crate::workflow::graph::TaskNode,
+        task_action: &Action,
+        wf_ctx: &WorkflowContext,
+    ) -> Result<Vec<String>> {
+        let Some(template) = &task_node.permission_set_refs else {
+            return Ok(task_action.default_execution_permission_set_refs.clone());
+        };
+
+        let rendered = wf_ctx.render_json(template).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to render permission_set_refs for workflow task '{}': {}",
+                task_node.name,
+                e
+            )
+        })?;
+
+        Self::normalize_workflow_permission_set_refs(&task_node.name, rendered)
+    }
+
+    fn normalize_workflow_permission_set_refs(
+        task_name: &str,
+        value: JsonValue,
+    ) -> Result<Vec<String>> {
+        let raw_refs: Vec<String> = match value {
+            JsonValue::Null => Vec::new(),
+            JsonValue::String(value) => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![trimmed.to_string()]
+                }
+            }
+            JsonValue::Array(values) => values
+                .into_iter()
+                .map(|value| match value {
+                    JsonValue::String(value) => Ok(value.trim().to_string()),
+                    other => Err(anyhow::anyhow!(
+                        "permission_set_refs for workflow task '{}' must render to a string or array of strings; found array item {}",
+                        task_name,
+                        other
+                    )),
+                })
+                .collect::<Result<Vec<_>>>()?,
+            other => {
+                return Err(anyhow::anyhow!(
+                    "permission_set_refs for workflow task '{}' must render to a string or array of strings; found {}",
+                    task_name,
+                    other
+                ));
+            }
+        };
+
+        let mut seen = HashSet::new();
+        Ok(raw_refs
+            .into_iter()
+            .filter(|value| !value.is_empty())
+            .filter(|value| seen.insert(value.clone()))
+            .collect())
+    }
+
     /// Create a child execution for a single workflow task and dispatch it to
     /// a worker. The child execution references the parent workflow execution
     /// via `workflow_task` metadata.
@@ -1197,6 +1259,9 @@ impl ExecutionScheduler {
                 parent_execution.config.clone()
             };
 
+        let permission_set_refs =
+            Self::workflow_task_permission_set_refs(task_node, &task_action, wf_ctx)?;
+
         // Build workflow task metadata
         let workflow_task = WorkflowTaskMetadata {
             workflow_execution: *workflow_execution_id,
@@ -1230,6 +1295,7 @@ impl ExecutionScheduler {
                 parent: Some(parent_execution.id),
                 enforcement: parent_execution.enforcement,
                 executor: parent_execution.executor,
+                permission_set_refs,
                 worker: None,
                 status: ExecutionStatus::Requested,
                 result: None,
@@ -1381,6 +1447,7 @@ impl ExecutionScheduler {
                 parent: execution.parent,
                 enforcement: execution.enforcement,
                 executor: execution.executor,
+                permission_set_refs: execution.permission_set_refs.clone(),
                 worker: None,
                 status: ExecutionStatus::Requested,
                 result: None,
@@ -1561,6 +1628,9 @@ impl ExecutionScheduler {
                 parent_execution.config.clone()
             };
 
+        let permission_set_refs =
+            Self::workflow_task_permission_set_refs(task_node, &task_action, wf_ctx)?;
+
         let workflow_task = WorkflowTaskMetadata {
             workflow_execution: *workflow_execution_id,
             task_name: task_node.name.clone(),
@@ -1591,6 +1661,7 @@ impl ExecutionScheduler {
                 parent: Some(parent_execution.id),
                 enforcement: parent_execution.enforcement,
                 executor: parent_execution.executor,
+                permission_set_refs,
                 worker: None,
                 status: ExecutionStatus::Requested,
                 result: None,
@@ -1756,6 +1827,9 @@ impl ExecutionScheduler {
                     parent_execution.config.clone()
                 };
 
+            let permission_set_refs =
+                Self::workflow_task_permission_set_refs(task_node, task_action, &item_ctx)?;
+
             let workflow_task = WorkflowTaskMetadata {
                 workflow_execution: *workflow_execution_id,
                 task_name: task_node.name.clone(),
@@ -1786,6 +1860,7 @@ impl ExecutionScheduler {
                     parent: Some(parent_execution.id),
                     enforcement: parent_execution.enforcement,
                     executor: parent_execution.executor,
+                    permission_set_refs,
                     worker: None,
                     status: ExecutionStatus::Requested,
                     result: None,
@@ -1946,6 +2021,9 @@ impl ExecutionScheduler {
                     parent_execution.config.clone()
                 };
 
+            let permission_set_refs =
+                Self::workflow_task_permission_set_refs(task_node, task_action, &item_ctx)?;
+
             let workflow_task = WorkflowTaskMetadata {
                 workflow_execution: *workflow_execution_id,
                 task_name: task_node.name.clone(),
@@ -1977,6 +2055,7 @@ impl ExecutionScheduler {
                         parent: Some(parent_execution.id),
                         enforcement: parent_execution.enforcement,
                         executor: parent_execution.executor,
+                        permission_set_refs,
                         worker: None,
                         status: ExecutionStatus::Requested,
                         result: None,
@@ -4488,6 +4567,36 @@ mod tests {
     }
 
     #[test]
+    fn test_normalize_workflow_permission_set_refs_accepts_string() {
+        let refs = ExecutionScheduler::normalize_workflow_permission_set_refs(
+            "agent",
+            serde_json::json!(" core.agent "),
+        )
+        .unwrap();
+        assert_eq!(refs, vec!["core.agent"]);
+    }
+
+    #[test]
+    fn test_normalize_workflow_permission_set_refs_accepts_array_and_dedupes() {
+        let refs = ExecutionScheduler::normalize_workflow_permission_set_refs(
+            "agent",
+            serde_json::json!(["core.agent", "core.agent", "core.reader", ""]),
+        )
+        .unwrap();
+        assert_eq!(refs, vec!["core.agent", "core.reader"]);
+    }
+
+    #[test]
+    fn test_normalize_workflow_permission_set_refs_rejects_non_string_items() {
+        let err = ExecutionScheduler::normalize_workflow_permission_set_refs(
+            "agent",
+            serde_json::json!(["core.agent", 5]),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("array of strings"));
+    }
+
+    #[test]
     fn test_extract_workflow_params_with_parameters_key() {
         // A "parameters" key is just a regular parameter — not unwrapped
         let config = Some(serde_json::json!({
@@ -4513,6 +4622,7 @@ mod tests {
             parent: Some(5),
             enforcement: None,
             executor: None,
+            permission_set_refs: Vec::new(),
             worker: None,
             status: ExecutionStatus::Requested,
             result: None,
@@ -4559,6 +4669,7 @@ mod tests {
             parent: None,
             enforcement: None,
             executor: None,
+            permission_set_refs: Vec::new(),
             worker: None,
             status: ExecutionStatus::Requested,
             result: None,
@@ -4647,6 +4758,7 @@ mod tests {
             parent: None,
             enforcement: None,
             executor: None,
+            permission_set_refs: Vec::new(),
             worker: None,
             status: ExecutionStatus::Requested,
             result: None,

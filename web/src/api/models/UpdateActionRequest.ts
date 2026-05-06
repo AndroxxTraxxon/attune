@@ -12,6 +12,10 @@ export type UpdateActionRequest = {
      */
     accesses_mcp?: boolean | null;
     /**
+     * Default permission set refs for execution-scoped API tokens.
+     */
+    default_execution_permission_set_refs?: Array<string> | null;
+    /**
      * Action description
      */
     description?: string | null;
@@ -41,4 +45,3 @@ export type UpdateActionRequest = {
     runtime?: number | null;
     runtime_version_constraint?: (null | RuntimeVersionConstraintPatch);
 };
-

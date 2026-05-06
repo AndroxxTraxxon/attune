@@ -55,6 +55,8 @@ export interface WorkflowTask {
   action: string;
   /** Input parameters (template strings or values) */
   input: Record<string, unknown>;
+  /** Permission set refs for this task's execution token; may be a template */
+  permission_set_refs?: string | string[];
   /** Task transitions — evaluated in order after task completes */
   next?: TaskTransition[];
   /** Delay in seconds before executing this task */
@@ -329,6 +331,7 @@ export interface WorkflowYamlTask {
   name: string;
   action?: string;
   input?: Record<string, unknown>;
+  permission_set_refs?: string | string[];
   delay?: number;
   with_items?: string;
   batch_size?: number;
@@ -506,6 +509,10 @@ export function builderStateToGraph(
       : task.input;
     if (Object.keys(effectiveInput).length > 0) {
       yamlTask.input = effectiveInput;
+    }
+
+    if (task.permission_set_refs !== undefined) {
+      yamlTask.permission_set_refs = task.permission_set_refs;
     }
 
     if (task.delay) yamlTask.delay = task.delay;
@@ -879,6 +886,7 @@ export function definitionToBuilderState(
       name: task.name,
       action: task.action || "",
       input: task.input || {},
+      permission_set_refs: task.permission_set_refs,
       next,
       delay: task.delay,
       retry: task.retry,

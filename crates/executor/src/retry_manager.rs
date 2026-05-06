@@ -301,6 +301,7 @@ impl RetryManager {
             // execution is minted a callback token with the same security
             // context as the original.
             executor: original.executor,
+            permission_set_refs: original.permission_set_refs.clone(),
             worker: None,
             status: ExecutionStatus::Requested,
             result: None,

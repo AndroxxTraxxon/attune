@@ -12,7 +12,9 @@ use attune_common::{
         event_type, AuditCategory, AuditEventBuilder, AuditOutcome, AuditRepository,
         PendingAuditEvent,
     },
-    rbac::{Action, AuthorizationContext, Grant, Resource},
+    auth::jwt::STANDARD_EXECUTION_ACCESS_REF,
+    models::OwnerType,
+    rbac::{Action, AuthorizationContext, Grant, GrantConstraints, Resource},
     repositories::{
         identity::{IdentityRepository, IdentityRoleAssignmentRepository, PermissionSetRepository},
         FindById,
@@ -45,14 +47,9 @@ impl AuthorizationService {
         // Sensor and Refresh tokens have dedicated scope checks elsewhere and
         // are not subject to identity-based RBAC.
         //
-        // Access and Execution tokens both carry an identity in `sub` and are
-        // evaluated through identity RBAC: Access = "user logged in via the
-        // UI/CLI"; Execution = "callback from a running action, scoped to the
-        // identity that triggered it". Execution-scoped tokens are additionally
-        // restricted by the execution scope itself (e.g., the worker's writes
-        // to `/api/v1/executions/{id}/...` validate the token's execution_id
-        // matches the path), but at the resource/action level they get the
-        // permissions of the triggering identity — never more.
+        // Access tokens use identity/role assignments. Execution tokens are
+        // constrained to permission set refs embedded by the worker at token
+        // mint time; they never inherit the triggering identity's full RBAC.
         match user.claims.token_type {
             TokenType::Access | TokenType::Execution => {}
             _ => return Ok(()),
@@ -73,7 +70,7 @@ impl AuthorizationService {
             _ => Default::default(),
         };
 
-        let grants = self.load_effective_grants(identity_id).await?;
+        let grants = self.load_grants_for_token(user, identity_id).await?;
 
         let allowed = Self::is_allowed(&grants, check.resource, check.action, &check.context);
 
@@ -109,7 +106,48 @@ impl AuthorizationService {
         let identity_id = user.identity_id().map_err(|_| {
             ApiError::Unauthorized("Invalid authentication subject in token".to_string())
         })?;
-        self.load_effective_grants(identity_id).await
+        self.load_grants_for_token(user, identity_id).await
+    }
+
+    /// Returns true when the current token's effective grants are at least
+    /// sufficient to grant every resource/action pair in the named permission
+    /// sets to a child execution token.
+    pub async fn can_delegate_permission_sets(
+        &self,
+        user: &AuthenticatedUser,
+        permission_set_refs: &[String],
+    ) -> Result<bool, ApiError> {
+        let permission_set_refs = named_execution_permission_set_refs(permission_set_refs);
+        if permission_set_refs.is_empty() {
+            return Ok(true);
+        }
+
+        let identity_id = user.identity_id().map_err(|_| {
+            ApiError::Unauthorized("Invalid authentication subject in token".to_string())
+        })?;
+        let identity = IdentityRepository::find_by_id(&self.db, identity_id)
+            .await?
+            .ok_or_else(|| ApiError::Unauthorized("Identity not found".to_string()))?;
+        let mut ctx = AuthorizationContext::new(identity_id);
+        ctx.identity_attributes = match identity.attributes {
+            serde_json::Value::Object(map) => map.into_iter().collect(),
+            _ => Default::default(),
+        };
+
+        let current_grants = self.load_grants_for_token(user, identity_id).await?;
+        let requested_sets =
+            PermissionSetRepository::find_by_refs(&self.db, &permission_set_refs).await?;
+        if requested_sets.len() != permission_set_refs.len() {
+            return Ok(false);
+        }
+        let requested_grants = Self::grants_from_permission_sets(requested_sets)?;
+
+        Ok(requested_grants.iter().all(|grant| {
+            grant
+                .actions
+                .iter()
+                .all(|action| Self::is_allowed(&current_grants, grant.resource, *action, &ctx))
+        }))
     }
 
     pub fn is_allowed(
@@ -147,6 +185,154 @@ impl AuthorizationService {
 
         Ok(grants)
     }
+
+    async fn load_grants_for_token(
+        &self,
+        user: &AuthenticatedUser,
+        identity_id: i64,
+    ) -> Result<Vec<Grant>, ApiError> {
+        match user.claims.token_type {
+            TokenType::Access => self.load_effective_grants(identity_id).await,
+            TokenType::Execution => {
+                let refs = execution_permission_set_refs(user);
+                let permission_sets =
+                    PermissionSetRepository::find_by_refs(&self.db, &refs).await?;
+                if permission_sets.len() != refs.len() {
+                    let found: std::collections::HashSet<_> = permission_sets
+                        .iter()
+                        .map(|set| set.r#ref.as_str())
+                        .collect();
+                    let missing: Vec<_> = refs
+                        .iter()
+                        .filter(|r| !found.contains(r.as_str()))
+                        .cloned()
+                        .collect();
+                    return Err(ApiError::Forbidden(format!(
+                        "Execution token references unavailable permission sets: {}",
+                        missing.join(", ")
+                    )));
+                }
+                let mut grants = Self::grants_from_permission_sets(permission_sets)?;
+                grants.extend(execution_standard_access_grants(user));
+                Ok(grants)
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    fn grants_from_permission_sets(
+        permission_sets: Vec<attune_common::models::PermissionSet>,
+    ) -> Result<Vec<Grant>, ApiError> {
+        let mut grants = Vec::new();
+        for permission_set in permission_sets {
+            let set_grants: Vec<Grant> =
+                serde_json::from_value(permission_set.grants).map_err(|e| {
+                    ApiError::InternalServerError(format!(
+                        "Invalid grant schema in permission set '{}': {}",
+                        permission_set.r#ref, e
+                    ))
+                })?;
+            grants.extend(set_grants);
+        }
+        Ok(grants)
+    }
+}
+
+pub fn execution_permission_set_refs(user: &AuthenticatedUser) -> Vec<String> {
+    named_execution_permission_set_refs(&execution_access_refs(user))
+}
+
+pub fn execution_has_standard_access(user: &AuthenticatedUser) -> bool {
+    user.claims.token_type == TokenType::Execution
+        && execution_access_refs(user)
+            .iter()
+            .any(|value| value == STANDARD_EXECUTION_ACCESS_REF)
+}
+
+pub fn execution_standard_pack_refs(user: &AuthenticatedUser) -> Vec<String> {
+    metadata_string_array(user, "standard_access_pack_refs")
+}
+
+pub fn execution_standard_owner_refs(user: &AuthenticatedUser) -> Vec<String> {
+    let mut refs = execution_standard_pack_refs(user);
+    refs.extend(metadata_string_array(user, "standard_access_action_refs"));
+    refs.sort();
+    refs.dedup();
+    refs
+}
+
+fn execution_access_refs(user: &AuthenticatedUser) -> Vec<String> {
+    user.claims
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("permission_set_refs"))
+        .and_then(|value| value.as_array())
+        .map(|refs| {
+            refs.iter()
+                .filter_map(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn named_execution_permission_set_refs(refs: &[String]) -> Vec<String> {
+    refs.iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty() && *value != STANDARD_EXECUTION_ACCESS_REF)
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn metadata_string_array(user: &AuthenticatedUser, key: &str) -> Vec<String> {
+    user.claims
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(key))
+        .and_then(|value| value.as_array())
+        .map(|refs| {
+            refs.iter()
+                .filter_map(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn execution_standard_access_grants(user: &AuthenticatedUser) -> Vec<Grant> {
+    if !execution_has_standard_access(user) {
+        return Vec::new();
+    }
+
+    let owner_refs = execution_standard_owner_refs(user);
+    if owner_refs.is_empty() {
+        return Vec::new();
+    }
+
+    vec![
+        Grant {
+            resource: Resource::Keys,
+            actions: vec![Action::Read, Action::Decrypt],
+            constraints: Some(GrantConstraints {
+                owner_types: Some(vec![OwnerType::Pack, OwnerType::Action]),
+                owner_refs: Some(owner_refs.clone()),
+                ..Default::default()
+            }),
+        },
+        Grant {
+            resource: Resource::Artifacts,
+            actions: vec![Action::Read, Action::Create, Action::Update, Action::Delete],
+            constraints: Some(GrantConstraints {
+                owner_types: Some(vec![OwnerType::Pack, OwnerType::Action]),
+                owner_refs: Some(owner_refs),
+                ..Default::default()
+            }),
+        },
+    ]
 }
 
 fn build_rbac_denied_event(
@@ -201,6 +387,8 @@ fn resource_name(resource: Resource) -> &'static str {
         Resource::Inquiries => "inquiries",
         Resource::Keys => "keys",
         Resource::Artifacts => "artifacts",
+        Resource::Runtimes => "runtimes",
+        Resource::Workers => "workers",
         Resource::Identities => "identities",
         Resource::Permissions => "permissions",
         Resource::AuditLog => "audit_log",
@@ -211,6 +399,8 @@ fn action_name(action: Action) -> &'static str {
     match action {
         Action::Read => "read",
         Action::Create => "create",
+        Action::Install => "install",
+        Action::Configure => "configure",
         Action::Update => "update",
         Action::Delete => "delete",
         Action::Execute => "execute",
@@ -238,6 +428,84 @@ mod tests {
                 metadata: None,
             },
         }
+    }
+
+    #[test]
+    fn execution_permission_set_refs_read_from_token_metadata() {
+        let user = AuthenticatedUser {
+            claims: Claims {
+                sub: "42".to_string(),
+                login: "execution:123".to_string(),
+                iat: 1,
+                exp: 999_999,
+                token_type: TokenType::Execution,
+                scope: Some("execution".to_string()),
+                metadata: Some(serde_json::json!({
+                    "execution_id": 123,
+                    "permission_set_refs": ["standard", "core.agent_reader", "", " core.agent_writer "],
+                })),
+            },
+        };
+
+        assert_eq!(
+            execution_permission_set_refs(&user),
+            vec![
+                "core.agent_reader".to_string(),
+                "core.agent_writer".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn execution_standard_access_grants_cover_action_and_pack_resources() {
+        let user = AuthenticatedUser {
+            claims: Claims {
+                sub: "42".to_string(),
+                login: "execution:123".to_string(),
+                iat: 1,
+                exp: 999_999,
+                token_type: TokenType::Execution,
+                scope: Some("execution".to_string()),
+                metadata: Some(serde_json::json!({
+                    "execution_id": 123,
+                    "permission_set_refs": ["standard"],
+                    "standard_access_pack_refs": ["salesforce", "workflow_pack"],
+                    "standard_access_action_refs": ["salesforce.read_sobject", "workflow_pack.sync"],
+                })),
+            },
+        };
+
+        let grants = execution_standard_access_grants(&user);
+        let mut pack_key_ctx = AuthorizationContext::new(42);
+        pack_key_ctx.owner_type = Some(OwnerType::Pack);
+        pack_key_ctx.owner_ref = Some("workflow_pack".to_string());
+        pack_key_ctx.encrypted = Some(true);
+        assert!(AuthorizationService::is_allowed(
+            &grants,
+            Resource::Keys,
+            Action::Decrypt,
+            &pack_key_ctx
+        ));
+
+        let mut action_artifact_ctx = AuthorizationContext::new(42);
+        action_artifact_ctx.owner_type = Some(OwnerType::Action);
+        action_artifact_ctx.owner_ref = Some("salesforce.read_sobject".to_string());
+        assert!(AuthorizationService::is_allowed(
+            &grants,
+            Resource::Artifacts,
+            Action::Create,
+            &action_artifact_ctx
+        ));
+
+        let mut unrelated_ctx = AuthorizationContext::new(42);
+        unrelated_ctx.owner_type = Some(OwnerType::Pack);
+        unrelated_ctx.owner_ref = Some("unrelated".to_string());
+        assert!(!AuthorizationService::is_allowed(
+            &grants,
+            Resource::Keys,
+            Action::Read,
+            &unrelated_ctx
+        ));
     }
 
     #[test]

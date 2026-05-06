@@ -9,8 +9,8 @@ import type { WorkQueueSummary } from "@/api/queues";
 import { useAuth } from "@/contexts/AuthContext";
 import { useActions } from "@/hooks/useActions";
 import { useQueueStream } from "@/hooks/useQueueStream";
-import { useIdentity, usePermissionSets } from "@/hooks/usePermissions";
 import { useQueue, useQueues, useUpdateQueue } from "@/hooks/useQueues";
+import { hasPermission } from "@/lib/permissions";
 
 function getMutationErrorMessage(error: unknown): string {
   const maybeApiError = error as { body?: { message?: string } };
@@ -18,23 +18,6 @@ function getMutationErrorMessage(error: unknown): string {
   return maybeApiError.body?.message ||
     maybeAxios.response?.data?.message ||
     (error instanceof Error ? error.message : "Failed to update queue");
-}
-
-function grantIncludesQueueUpdate(grants: unknown): boolean {
-  if (!Array.isArray(grants)) {
-    return false;
-  }
-
-  return grants.some((grant) => {
-    if (!grant || typeof grant !== "object") {
-      return false;
-    }
-
-    const candidate = grant as { resource?: unknown; actions?: unknown };
-    return candidate.resource === "queues" &&
-      Array.isArray(candidate.actions) &&
-      candidate.actions.includes("update");
-  });
 }
 
 interface QueueFlagToggleProps {
@@ -97,8 +80,6 @@ export default function QueuesPage() {
   const { data: actionsData } = useActions({ pageSize: 1000 });
   const updateQueue = useUpdateQueue();
   useQueueStream();
-  const { data: identityData, isLoading: isIdentityLoading } = useIdentity(user?.id ?? 0);
-  const { data: permissionSetsData, isLoading: isPermissionSetsLoading } = usePermissionSets();
 
   const queues = data?.items ?? [];
   const actionDescriptionsByRef = useMemo(
@@ -123,31 +104,8 @@ export default function QueuesPage() {
     search.trim().length > 0 || enabledFilter !== "all" || managementFilter !== "all";
 
   const selectedQueue = selectedQueueData?.data;
-  const canUpdateQueues = useMemo(() => {
-    if (!user) {
-      return false;
-    }
-
-    const identity = identityData?.data;
-    if (!identity || !permissionSetsData) {
-      return false;
-    }
-
-    const directlyAssignedRefs = new Set(
-      identity.direct_permissions.map((assignment) => assignment.permission_set_ref),
-    );
-    const assignedRoles = new Set(identity.roles.map((role) => role.role));
-
-    return permissionSetsData.some((permissionSet) => {
-      const matchesIdentity =
-        directlyAssignedRefs.has(permissionSet.ref) ||
-        permissionSet.roles.some((role) => assignedRoles.has(role.role));
-
-      return matchesIdentity && grantIncludesQueueUpdate(permissionSet.grants);
-    });
-  }, [identityData, permissionSetsData, user]);
-  const canUpdateQueuesResolved =
-    !user || (!isIdentityLoading && !isPermissionSetsLoading);
+  const canUpdateQueues = hasPermission(user, "queues", "update");
+  const canUpdateQueuesResolved = true;
 
   const clearFilters = () => {
     setSearch("");

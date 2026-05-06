@@ -121,6 +121,15 @@ pub struct ChangePasswordRequest {
     pub new_password: String,
 }
 
+/// Update current user profile request
+#[derive(Debug, Clone, Serialize, Deserialize, Validate, ToSchema)]
+pub struct UpdateCurrentUserRequest {
+    /// Display name. Empty or whitespace-only values clear the display name.
+    #[validate(length(max = 255))]
+    #[schema(example = "Jane Operator")]
+    pub display_name: Option<String>,
+}
+
 /// Current user response
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CurrentUserResponse {
@@ -135,6 +144,79 @@ pub struct CurrentUserResponse {
     /// Display name
     #[schema(example = "Administrator")]
     pub display_name: Option<String>,
+
+    /// Authentication provider backing this identity.
+    #[schema(example = "local")]
+    pub auth_provider: String,
+
+    /// Whether this identity is managed locally by Attune.
+    #[schema(example = true)]
+    pub is_local: bool,
+
+    /// Whether this identity can change its password through Attune.
+    #[schema(example = true)]
+    pub can_change_password: bool,
+
+    /// Sanitized user information supplied by the external identity provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_profile: Option<ProviderProfileResponse>,
+
+    /// Effective resource-level permissions assigned to this identity.
+    pub effective_permissions: Vec<EffectivePermissionResponse>,
+
+    /// Permission set refs assigned to this identity, including role-derived assignments.
+    pub assigned_permission_set_refs: Vec<String>,
+}
+
+/// Effective resource-level permissions assigned to an identity.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EffectivePermissionResponse {
+    /// RBAC resource name.
+    #[schema(example = "queues")]
+    pub resource: String,
+
+    /// Actions allowed for the resource.
+    #[schema(example = json!(["read", "update"]))]
+    pub actions: Vec<String>,
+}
+
+/// Sanitized user information supplied by an external identity provider.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ProviderProfileResponse {
+    /// Provider backing this identity.
+    #[schema(example = "oidc")]
+    pub provider: String,
+
+    /// Provider-issued display name.
+    #[schema(example = "Jane Operator")]
+    pub display_name: Option<String>,
+
+    /// Provider-issued login or preferred username.
+    #[schema(example = "jane.operator")]
+    pub login: Option<String>,
+
+    /// Provider-issued email address.
+    #[schema(example = "jane.operator@example.com")]
+    pub email: Option<String>,
+
+    /// Whether the provider reported the email address as verified.
+    #[schema(example = true)]
+    pub email_verified: Option<bool>,
+
+    /// OIDC subject identifier, when available.
+    #[schema(example = "00u123456789")]
+    pub subject: Option<String>,
+
+    /// OIDC issuer URL, when available.
+    #[schema(example = "https://idp.example.com")]
+    pub issuer: Option<String>,
+
+    /// LDAP distinguished name, when available.
+    #[schema(example = "uid=jane,ou=people,dc=example,dc=com")]
+    pub distinguished_name: Option<String>,
+
+    /// Provider groups associated with this identity.
+    pub groups: Vec<String>,
 }
 
 /// Public authentication settings for the login page.

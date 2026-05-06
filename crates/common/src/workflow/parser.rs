@@ -201,6 +201,14 @@ pub struct Task {
     #[serde(default)]
     pub input: HashMap<String, JsonValue>,
 
+    /// Permission set refs to snapshot onto this task's execution token.
+    ///
+    /// May be a string, array of strings, or template expression resolving to
+    /// either shape. If omitted, the task action's default execution permission
+    /// set refs are used.
+    #[serde(default, alias = "permission_set_ref")]
+    pub permission_set_refs: Option<JsonValue>,
+
     /// Conditional execution (task-level — controls whether this task runs)
     pub when: Option<String>,
 
@@ -1612,6 +1620,34 @@ tasks:
         assert_eq!(
             restored.cancellation_policy,
             CancellationPolicy::CancelRunning
+        );
+    }
+
+    #[test]
+    fn test_task_permission_set_refs_parse_array_and_alias() {
+        let yaml = r#"
+            version: "1.0.0"
+            tasks:
+              - name: literal_refs
+                action: core.echo
+                permission_set_refs:
+                  - core.reader
+                  - "{{ workflow.dynamic_ref }}"
+              - name: singular_ref
+                action: core.echo
+                permission_set_ref: "{{ parameters.permission_set }}"
+        "#;
+        let workflow = parse_workflow_yaml(yaml).unwrap();
+        assert_eq!(
+            workflow.tasks[0].permission_set_refs,
+            Some(serde_json::json!([
+                "core.reader",
+                "{{ workflow.dynamic_ref }}"
+            ]))
+        );
+        assert_eq!(
+            workflow.tasks[1].permission_set_refs,
+            Some(serde_json::json!("{{ parameters.permission_set }}"))
         );
     }
 

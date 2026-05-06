@@ -10,8 +10,13 @@ use axum::{
 
 use validator::Validate;
 
+use attune_common::models::Identity;
+use attune_common::rbac::{Action, Grant, Resource};
 use attune_common::repositories::{
-    identity::{CreateIdentityInput, IdentityRepository},
+    identity::{
+        CreateIdentityInput, IdentityRepository, IdentityRoleAssignmentRepository,
+        PermissionSetRepository,
+    },
     Create, FindById,
 };
 
@@ -30,15 +35,18 @@ use crate::{
         },
         verify_password,
     },
+    authz::AuthorizationService,
     dto::{
         ApiResponse, AuthSettingsResponse, ChangePasswordRequest, CurrentUserResponse,
-        LoginRequest, RefreshTokenRequest, RegisterRequest, SuccessResponse, TokenResponse,
+        EffectivePermissionResponse, LoginRequest, ProviderProfileResponse, RefreshTokenRequest,
+        RegisterRequest, SuccessResponse, TokenResponse, UpdateCurrentUserRequest,
     },
     middleware::error::ApiError,
     state::SharedState,
 };
 
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use utoipa::ToSchema;
 
 /// Request body for creating sensor tokens
@@ -78,10 +86,188 @@ pub fn routes() -> Router<SharedState> {
         .route("/logout", get(logout))
         .route("/register", post(register))
         .route("/refresh", post(refresh_token))
-        .route("/me", get(get_current_user))
+        .route("/me", get(get_current_user).put(update_current_user))
         .route("/change-password", post(change_password))
         .route("/sensor-token", post(create_sensor_token))
         .route("/internal/sensor-token", post(create_sensor_token_internal))
+}
+
+fn identity_auth_provider(identity: &Identity) -> &'static str {
+    if identity.attributes.get("oidc").is_some() {
+        "oidc"
+    } else if identity.attributes.get("ldap").is_some() {
+        "ldap"
+    } else {
+        "local"
+    }
+}
+
+fn current_user_response(
+    identity: Identity,
+    effective_permissions: Vec<EffectivePermissionResponse>,
+    assigned_permission_set_refs: Vec<String>,
+) -> CurrentUserResponse {
+    let auth_provider = identity_auth_provider(&identity).to_string();
+    let is_local = auth_provider == "local";
+    let can_change_password = is_local && identity.password_hash.is_some();
+    let provider_profile = provider_profile_response(&identity);
+
+    CurrentUserResponse {
+        id: identity.id,
+        login: identity.login,
+        display_name: identity.display_name,
+        auth_provider,
+        is_local,
+        can_change_password,
+        provider_profile,
+        effective_permissions,
+        assigned_permission_set_refs,
+    }
+}
+
+async fn assigned_permission_set_refs(
+    state: &SharedState,
+    identity_id: i64,
+) -> Result<Vec<String>, ApiError> {
+    let mut permission_sets =
+        PermissionSetRepository::find_by_identity(&state.db, identity_id).await?;
+    let roles =
+        IdentityRoleAssignmentRepository::find_role_names_by_identity(&state.db, identity_id)
+            .await?;
+    permission_sets.extend(PermissionSetRepository::find_by_roles(&state.db, &roles).await?);
+
+    let mut refs = BTreeSet::new();
+    for permission_set in permission_sets {
+        refs.insert(permission_set.r#ref);
+    }
+
+    Ok(refs.into_iter().collect())
+}
+
+fn effective_permissions_response(grants: Vec<Grant>) -> Vec<EffectivePermissionResponse> {
+    let mut by_resource: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+    for grant in grants {
+        let resource = resource_name(grant.resource).to_string();
+        let actions = by_resource.entry(resource).or_default();
+        actions.extend(
+            grant
+                .actions
+                .into_iter()
+                .map(action_name)
+                .map(str::to_string),
+        );
+    }
+
+    by_resource
+        .into_iter()
+        .map(|(resource, actions)| EffectivePermissionResponse {
+            resource,
+            actions: actions.into_iter().collect(),
+        })
+        .collect()
+}
+
+fn resource_name(resource: Resource) -> &'static str {
+    match resource {
+        Resource::Packs => "packs",
+        Resource::Actions => "actions",
+        Resource::Queues => "queues",
+        Resource::Rules => "rules",
+        Resource::Triggers => "triggers",
+        Resource::Executions => "executions",
+        Resource::Events => "events",
+        Resource::Enforcements => "enforcements",
+        Resource::Inquiries => "inquiries",
+        Resource::Keys => "keys",
+        Resource::Artifacts => "artifacts",
+        Resource::Runtimes => "runtimes",
+        Resource::Workers => "workers",
+        Resource::Identities => "identities",
+        Resource::Permissions => "permissions",
+        Resource::AuditLog => "audit_log",
+    }
+}
+
+fn action_name(action: Action) -> &'static str {
+    match action {
+        Action::Read => "read",
+        Action::Create => "create",
+        Action::Install => "install",
+        Action::Configure => "configure",
+        Action::Update => "update",
+        Action::Delete => "delete",
+        Action::Execute => "execute",
+        Action::Cancel => "cancel",
+        Action::Respond => "respond",
+        Action::Manage => "manage",
+        Action::Decrypt => "decrypt",
+    }
+}
+
+fn string_attr(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned)
+}
+
+fn bool_attr(value: &serde_json::Value, key: &str) -> Option<bool> {
+    value.get(key).and_then(|value| value.as_bool())
+}
+
+fn groups_attr(value: &serde_json::Value) -> Vec<String> {
+    value
+        .get("groups")
+        .and_then(|value| value.as_array())
+        .map(|groups| {
+            groups
+                .iter()
+                .filter_map(|group| group.as_str().map(ToOwned::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn provider_profile_response(identity: &Identity) -> Option<ProviderProfileResponse> {
+    if let Some(oidc) = identity.attributes.get("oidc") {
+        return Some(ProviderProfileResponse {
+            provider: "oidc".to_string(),
+            display_name: string_attr(oidc, "name").or_else(|| identity.display_name.clone()),
+            login: string_attr(oidc, "preferred_username"),
+            email: string_attr(oidc, "email"),
+            email_verified: bool_attr(oidc, "email_verified"),
+            subject: string_attr(oidc, "sub"),
+            issuer: string_attr(oidc, "issuer"),
+            distinguished_name: None,
+            groups: groups_attr(oidc),
+        });
+    }
+
+    identity
+        .attributes
+        .get("ldap")
+        .map(|ldap| ProviderProfileResponse {
+            provider: "ldap".to_string(),
+            display_name: string_attr(ldap, "display_name")
+                .or_else(|| identity.display_name.clone()),
+            login: string_attr(ldap, "login"),
+            email: string_attr(ldap, "email"),
+            email_verified: None,
+            subject: None,
+            issuer: None,
+            distinguished_name: string_attr(ldap, "dn"),
+            groups: groups_attr(ldap),
+        })
+}
+
+fn require_access_token(user: &crate::auth::middleware::AuthenticatedUser) -> Result<(), ApiError> {
+    if user.claims.token_type != TokenType::Access {
+        return Err(ApiError::Forbidden(
+            "User profile changes require a user access token".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Authentication settings endpoint
@@ -443,13 +629,84 @@ pub async fn get_current_user(
         ));
     }
 
-    let response = CurrentUserResponse {
-        id: identity.id,
-        login: identity.login,
-        display_name: identity.display_name,
-    };
+    let grants = AuthorizationService::new(state.db.clone())
+        .effective_grants(&authenticated_user)
+        .await?;
+    let assigned_permission_set_refs = assigned_permission_set_refs(&state, identity_id).await?;
+    let response = current_user_response(
+        identity,
+        effective_permissions_response(grants),
+        assigned_permission_set_refs,
+    );
 
     Ok(Json(ApiResponse::new(response)))
+}
+
+/// Update current user profile endpoint
+///
+/// PUT /auth/me
+#[utoipa::path(
+    put,
+    path = "/auth/me",
+    tag = "auth",
+    request_body = UpdateCurrentUserRequest,
+    responses(
+        (status = 200, description = "Current user profile updated", body = inline(ApiResponse<CurrentUserResponse>)),
+        (status = 400, description = "Validation error"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Profile is managed by an external provider"),
+        (status = 404, description = "Identity not found")
+    ),
+    security(
+        ("bearer_auth" = [])
+    )
+)]
+pub async fn update_current_user(
+    State(state): State<SharedState>,
+    RequireAuth(user): RequireAuth,
+    Json(payload): Json<UpdateCurrentUserRequest>,
+) -> Result<Json<ApiResponse<CurrentUserResponse>>, ApiError> {
+    require_access_token(&user)?;
+    payload
+        .validate()
+        .map_err(|e| ApiError::ValidationError(format!("Invalid profile update request: {}", e)))?;
+
+    let identity_id = user.identity_id()?;
+    let identity = IdentityRepository::find_by_id(&state.db, identity_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("Identity not found".to_string()))?;
+
+    if identity.frozen {
+        return Err(ApiError::Forbidden(
+            "Identity is frozen and cannot update its profile".to_string(),
+        ));
+    }
+
+    if identity_auth_provider(&identity) != "local" {
+        return Err(ApiError::Forbidden(
+            "Profile details are managed by the configured identity provider".to_string(),
+        ));
+    }
+
+    let normalized_display_name = payload
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let identity =
+        IdentityRepository::update_display_name(&state.db, identity_id, normalized_display_name)
+            .await?;
+    let grants = AuthorizationService::new(state.db.clone())
+        .effective_grants(&user)
+        .await?;
+    let assigned_permission_set_refs = assigned_permission_set_refs(&state, identity_id).await?;
+
+    Ok(Json(ApiResponse::new(current_user_response(
+        identity,
+        effective_permissions_response(grants),
+        assigned_permission_set_refs,
+    ))))
 }
 
 /// Request body for LDAP login.
@@ -575,6 +832,8 @@ pub async fn change_password(
     RequireAuth(user): RequireAuth,
     Json(payload): Json<ChangePasswordRequest>,
 ) -> Result<Json<ApiResponse<SuccessResponse>>, ApiError> {
+    require_access_token(&user)?;
+
     // Validate request
     payload.validate().map_err(|e| {
         ApiError::ValidationError(format!("Invalid change password request: {}", e))
@@ -586,6 +845,19 @@ pub async fn change_password(
     let identity = IdentityRepository::find_by_id(&state.db, identity_id)
         .await?
         .ok_or_else(|| ApiError::NotFound("Identity not found".to_string()))?;
+
+    if identity.frozen {
+        return Err(ApiError::Forbidden(
+            "Identity is frozen and cannot change its password".to_string(),
+        ));
+    }
+
+    if identity_auth_provider(&identity) != "local" {
+        return Err(ApiError::Forbidden(
+            "Passwords for this identity are managed by the configured identity provider"
+                .to_string(),
+        ));
+    }
 
     // Get current password hash
     let current_password_hash = identity

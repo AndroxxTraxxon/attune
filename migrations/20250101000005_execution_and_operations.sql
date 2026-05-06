@@ -24,6 +24,7 @@ CREATE TABLE execution (
     parent BIGINT,
     enforcement BIGINT,
     executor BIGINT,
+    permission_set_refs TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     worker BIGINT,
     status execution_status_enum NOT NULL DEFAULT 'requested',
     result JSONB,
@@ -47,6 +48,7 @@ CREATE INDEX idx_execution_action_ref ON execution(action_ref);
 CREATE INDEX idx_execution_parent ON execution(parent);
 CREATE INDEX idx_execution_enforcement ON execution(enforcement);
 CREATE INDEX idx_execution_executor ON execution(executor);
+CREATE INDEX idx_execution_permission_set_refs ON execution USING GIN (permission_set_refs);
 CREATE INDEX idx_execution_worker ON execution(worker);
 CREATE INDEX idx_execution_status ON execution(status);
 CREATE INDEX idx_execution_created ON execution(created DESC);
@@ -85,6 +87,7 @@ COMMENT ON COLUMN execution.env_vars IS 'Environment variables for this executio
 COMMENT ON COLUMN execution.parent IS 'Parent execution ID for workflow hierarchies';
 COMMENT ON COLUMN execution.enforcement IS 'Enforcement that triggered this execution';
 COMMENT ON COLUMN execution.executor IS 'Identity that initiated the execution';
+COMMENT ON COLUMN execution.permission_set_refs IS 'Permission set refs embedded in the execution-scoped API token. Empty means the worker omits ATTUNE_API_TOKEN.';
 COMMENT ON COLUMN execution.worker IS 'Assigned worker handling this execution';
 COMMENT ON COLUMN execution.status IS 'Current execution lifecycle status';
 COMMENT ON COLUMN execution.result IS 'Execution output/results';

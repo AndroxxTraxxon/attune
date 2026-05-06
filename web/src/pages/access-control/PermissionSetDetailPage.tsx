@@ -3,22 +3,29 @@ import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
   BarChart3,
+  Bot,
+  Edit3,
   Globe,
   History,
   Key,
   MessageSquare,
   Package,
   Plus,
+  Save,
   Shield,
   Tag,
   Trash2,
   Users,
+  X,
 } from "lucide-react";
 import {
   usePermissionSets,
   useCreatePermissionSetRoleAssignment,
   useDeletePermissionSetRoleAssignment,
+  useUpdatePermissionSet,
 } from "@/hooks/usePermissions";
+import { useAuth } from "@/contexts/AuthContext";
+import { hasPermission } from "@/lib/permissions";
 import { navIcons } from "@/components/layout/navIcons";
 
 // ── Domain interfaces ──────────────────────────────────────────────────────────
@@ -47,11 +54,9 @@ interface GrantConstraints {
   pack_refs?: string[];
   owner?: string; // "self" | "any" | "none"
   owner_types?: string[];
-  owner_refs?: string[];
   visibility?: string[];
   execution_scope?: string; // "self" | "descendants" | "any"
   refs?: string[];
-  ids?: number[];
   encrypted?: boolean;
   attributes?: Record<string, unknown>;
 }
@@ -130,6 +135,11 @@ const RESOURCE_META: Record<string, ResourceMeta> = {
     color: "text-blue-600",
     label: "Runtimes",
   },
+  workers: {
+    icon: Bot,
+    color: "text-blue-700",
+    label: "Workers",
+  },
   sensors: {
     icon: navIcons.sensors,
     color: "text-purple-600",
@@ -150,13 +160,243 @@ const RESOURCE_META: Record<string, ResourceMeta> = {
 const ACTION_STYLE: Record<string, string> = {
   read: "bg-slate-100 text-slate-700",
   create: "bg-emerald-100 text-emerald-800",
+  install: "bg-blue-100 text-blue-800",
+  configure: "bg-amber-100 text-amber-800",
   update: "bg-amber-100 text-amber-800",
   delete: "bg-red-100 text-red-800",
   execute: "bg-violet-100 text-violet-800",
   cancel: "bg-orange-100 text-orange-800",
   respond: "bg-cyan-100 text-cyan-800",
   manage: "bg-indigo-100 text-indigo-800",
+  decrypt: "bg-pink-100 text-pink-800",
 };
+
+const ALL_ACTIONS = [
+  "read",
+  "create",
+  "install",
+  "configure",
+  "update",
+  "delete",
+  "execute",
+  "cancel",
+  "respond",
+  "manage",
+  "decrypt",
+];
+
+const RESOURCE_ACTIONS: Record<string, string[]> = {
+  packs: ["read", "create", "install", "configure", "delete"],
+  actions: ["read", "create", "update", "delete", "execute"],
+  queues: ["read", "create", "update", "delete"],
+  rules: ["read", "create", "update", "delete"],
+  triggers: ["read", "create", "update", "delete"],
+  executions: ["read", "update", "cancel"],
+  events: ["read"],
+  enforcements: ["read"],
+  inquiries: ["read", "create", "update", "delete", "respond"],
+  keys: ["read", "create", "update", "delete", "decrypt"],
+  artifacts: ["read", "create", "update", "delete"],
+  runtimes: ["read", "create", "update", "delete"],
+  workers: ["read"],
+  identities: ["read", "create", "update", "delete"],
+  permissions: ["read", "manage"],
+  audit_log: ["read"],
+};
+
+const RESOURCE_OPTIONS = Object.keys(RESOURCE_ACTIONS).map((value) => ({
+  value,
+  label: RESOURCE_META[value]?.label ?? value,
+}));
+
+const PACK_SCOPED_RESOURCES = new Set([
+  "packs",
+  "actions",
+  "queues",
+  "rules",
+  "triggers",
+  "artifacts",
+]);
+const COMPONENT_SCOPED_RESOURCES = new Set([
+  "packs",
+  "actions",
+  "queues",
+  "rules",
+  "triggers",
+  "executions",
+  "keys",
+  "artifacts",
+]);
+const OWNER_SCOPED_RESOURCES = new Set(["packs", "keys", "artifacts"]);
+const OWNER_TYPE_RESOURCES = new Set(["keys", "artifacts"]);
+
+type ScopeType = "unconstrained" | "pack" | "component";
+
+type GrantDraft = {
+  id: string;
+  resource: string;
+  actions: string[];
+  scopeType: ScopeType;
+  scopeRefs: string;
+  owner: string;
+  ownerTypes: string;
+  visibility: string[];
+  executionScope: string;
+  encrypted: string;
+  attributes: string;
+};
+
+function csv(values: string[] | undefined): string {
+  return values?.join(", ") ?? "";
+}
+
+function splitCsv(value: string): string[] | undefined {
+  const values = value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return values.length > 0 ? values : undefined;
+}
+
+function grantToDraft(grant: ParsedGrant, index: number): GrantDraft {
+  const constraints = grant.constraints ?? {};
+  const scopeType: ScopeType = constraints.pack_refs?.length
+    ? "pack"
+    : constraints.refs?.length
+      ? "component"
+      : "unconstrained";
+  return {
+    id: `${index}-${grant.resource}`,
+    resource: grant.resource,
+    actions: grant.actions.filter((action) =>
+      (RESOURCE_ACTIONS[grant.resource] ?? ALL_ACTIONS).includes(action),
+    ),
+    scopeType,
+    scopeRefs:
+      scopeType === "pack"
+        ? csv(constraints.pack_refs)
+        : scopeType === "component"
+          ? csv(constraints.refs)
+          : "",
+    owner: constraints.owner ?? "",
+    ownerTypes: csv(constraints.owner_types),
+    visibility: constraints.visibility ?? [],
+    executionScope: constraints.execution_scope ?? "",
+    encrypted:
+      constraints.encrypted === undefined
+        ? ""
+        : constraints.encrypted
+          ? "true"
+          : "false",
+    attributes: constraints.attributes
+      ? JSON.stringify(constraints.attributes, null, 2)
+      : "",
+  };
+}
+
+function draftToGrant(draft: GrantDraft): ParsedGrant {
+  const validActions = RESOURCE_ACTIONS[draft.resource] ?? [];
+  const actions = draft.actions.filter((action) => validActions.includes(action));
+  if (draft.actions.length === 0) {
+    throw new Error("Each grant must include at least one permission spec.");
+  }
+  if (actions.length === 0) {
+    throw new Error(`No selected permission specs apply to ${draft.resource}.`);
+  }
+
+  const constraints: GrantConstraints = {};
+  const ownerTypes = splitCsv(draft.ownerTypes);
+  const scopeRefs = splitCsv(draft.scopeRefs);
+
+  if (draft.scopeType === "pack") {
+    if (!PACK_SCOPED_RESOURCES.has(draft.resource)) {
+      throw new Error(`${draft.resource} grants cannot be pack scoped.`);
+    }
+    if (!scopeRefs) {
+      throw new Error("Pack-scoped grants require at least one pack ref.");
+    }
+    constraints.pack_refs = scopeRefs;
+  } else if (draft.scopeType === "component") {
+    if (!COMPONENT_SCOPED_RESOURCES.has(draft.resource)) {
+      throw new Error(`${draft.resource} grants cannot be component scoped.`);
+    }
+    if (!scopeRefs) {
+      throw new Error("Component-scoped grants require at least one component ref.");
+    }
+    constraints.refs = scopeRefs;
+  }
+
+  if (draft.owner && OWNER_SCOPED_RESOURCES.has(draft.resource)) {
+    constraints.owner = draft.owner;
+  }
+  if (ownerTypes && OWNER_TYPE_RESOURCES.has(draft.resource)) {
+    constraints.owner_types = ownerTypes;
+  }
+  if (draft.visibility.length > 0 && draft.resource === "artifacts") {
+    constraints.visibility = draft.visibility;
+  }
+  if (draft.executionScope && draft.resource === "executions") {
+    constraints.execution_scope = draft.executionScope;
+  }
+  if (draft.encrypted && draft.resource === "keys") {
+    constraints.encrypted = draft.encrypted === "true";
+  }
+  if (draft.attributes.trim()) {
+    const parsed = JSON.parse(draft.attributes);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Attribute constraints must be a JSON object.");
+    }
+    constraints.attributes = parsed as Record<string, unknown>;
+  }
+
+  return {
+    resource: draft.resource,
+    actions: [...actions].sort(),
+    ...(Object.keys(constraints).length > 0 ? { constraints } : {}),
+  };
+}
+
+function newGrantDraft(): GrantDraft {
+  return {
+    id: crypto.randomUUID(),
+    resource: "actions",
+    actions: ["read"],
+    scopeType: "unconstrained",
+    scopeRefs: "",
+    owner: "",
+    ownerTypes: "",
+    visibility: [],
+    executionScope: "",
+    encrypted: "",
+    attributes: "",
+  };
+}
+
+function normalizeDraft(draft: GrantDraft): GrantDraft {
+  const validActions = RESOURCE_ACTIONS[draft.resource] ?? [];
+  const actions = draft.actions.filter((action) => validActions.includes(action));
+  const scopeType =
+    draft.scopeType === "pack" && !PACK_SCOPED_RESOURCES.has(draft.resource)
+      ? "unconstrained"
+      : draft.scopeType === "component" &&
+          !COMPONENT_SCOPED_RESOURCES.has(draft.resource)
+        ? "unconstrained"
+        : draft.scopeType;
+
+  return {
+    ...draft,
+    actions: actions.length > 0 ? actions : validActions.slice(0, 1),
+    scopeType,
+    scopeRefs: scopeType === "unconstrained" ? "" : draft.scopeRefs,
+    owner: OWNER_SCOPED_RESOURCES.has(draft.resource) ? draft.owner : "",
+    ownerTypes: OWNER_TYPE_RESOURCES.has(draft.resource)
+      ? draft.ownerTypes
+      : "",
+    visibility: draft.resource === "artifacts" ? draft.visibility : [],
+    executionScope: draft.resource === "executions" ? draft.executionScope : "",
+    encrypted: draft.resource === "keys" ? draft.encrypted : "",
+  };
+}
 
 // ── Constraint chips ───────────────────────────────────────────────────────────
 
@@ -202,17 +442,6 @@ function ConstraintChips({ c }: { c: GrantConstraints }) {
     );
   }
 
-  if (c.owner_refs?.length) {
-    chips.push(
-      <span
-        key="owner_refs"
-        className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-slate-100 text-slate-600 border border-slate-200 font-mono"
-      >
-        Owner: {c.owner_refs.join(", ")}
-      </span>,
-    );
-  }
-
   if (c.visibility?.length) {
     chips.push(
       <span
@@ -247,17 +476,6 @@ function ConstraintChips({ c }: { c: GrantConstraints }) {
         className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-slate-100 text-slate-600 border border-slate-200 font-mono"
       >
         {c.refs.join(", ")}
-      </span>,
-    );
-  }
-
-  if (c.ids?.length) {
-    chips.push(
-      <span
-        key="ids"
-        className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-slate-100 text-slate-600 border border-slate-200"
-      >
-        IDs: {c.ids.join(", ")}
       </span>,
     );
   }
@@ -383,22 +601,421 @@ function GrantsView({ grants }: { grants: ParsedGrant[] }) {
   );
 }
 
+function GrantsEditor({
+  drafts,
+  onChange,
+}: {
+  drafts: GrantDraft[];
+  onChange: (drafts: GrantDraft[]) => void;
+}) {
+  const updateDraft = (id: string, patch: Partial<GrantDraft>) => {
+    onChange(
+      drafts.map((draft) =>
+        draft.id === id ? normalizeDraft({ ...draft, ...patch }) : draft,
+      ),
+    );
+  };
+
+  const toggleAction = (draft: GrantDraft, action: string) => {
+    const nextActions = draft.actions.includes(action)
+      ? draft.actions.filter((entry) => entry !== action)
+      : [...draft.actions, action];
+    updateDraft(draft.id, { actions: nextActions });
+  };
+
+  const toggleVisibility = (draft: GrantDraft, visibility: string) => {
+    const nextVisibility = draft.visibility.includes(visibility)
+      ? draft.visibility.filter((entry) => entry !== visibility)
+      : [...draft.visibility, visibility];
+    updateDraft(draft.id, { visibility: nextVisibility });
+  };
+
+  return (
+    <div className="space-y-4 p-4">
+      {drafts.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">
+          No grants configured. Add a grant to begin.
+        </div>
+      ) : (
+        drafts.map((draft, index) => {
+          const meta = RESOURCE_META[draft.resource];
+          const Icon = meta?.icon ?? Shield;
+          const validActions = RESOURCE_ACTIONS[draft.resource] ?? [];
+          const canPackScope = PACK_SCOPED_RESOURCES.has(draft.resource);
+          const canComponentScope = COMPONENT_SCOPED_RESOURCES.has(draft.resource);
+          const canScope = canPackScope || canComponentScope;
+          const showOwner = OWNER_SCOPED_RESOURCES.has(draft.resource);
+          const showOwnerType = OWNER_TYPE_RESOURCES.has(draft.resource);
+          const showVisibility = draft.resource === "artifacts";
+          const showExecutionScope = draft.resource === "executions";
+          const showEncrypted = draft.resource === "keys";
+          return (
+            <div
+              key={draft.id}
+              className="rounded-lg border border-gray-200 bg-gray-50 p-4"
+            >
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div className="flex items-center gap-2">
+                  <Icon
+                    className={`h-5 w-5 ${meta?.color ?? "text-gray-500"}`}
+                  />
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">
+                      Grant {index + 1}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Select a resource, permission specs, and optional scope.
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChange(drafts.filter((entry) => entry.id !== draft.id))
+                  }
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Remove
+                </button>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-[14rem,1fr]">
+                <div>
+                  <label className="block text-xs font-medium uppercase tracking-wide text-gray-500">
+                    Resource
+                  </label>
+                  <select
+                    value={draft.resource}
+                    onChange={(event) => {
+                      updateDraft(draft.id, {
+                        resource: event.target.value,
+                        actions: RESOURCE_ACTIONS[event.target.value]?.includes("read")
+                          ? ["read"]
+                          : [RESOURCE_ACTIONS[event.target.value]?.[0]].filter(Boolean),
+                        scopeType: "unconstrained",
+                        scopeRefs: "",
+                      });
+                    }}
+                    className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  >
+                    {RESOURCE_OPTIONS.map((resource) => (
+                      <option key={resource.value} value={resource.value}>
+                        {resource.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium uppercase tracking-wide text-gray-500">
+                    Permission specs
+                  </label>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {validActions.map((action) => (
+                      <label
+                        key={action}
+                        className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
+                          draft.actions.includes(action)
+                            ? ACTION_STYLE[action] ?? "bg-gray-100 text-gray-700"
+                            : "bg-white text-gray-500 ring-1 ring-gray-200"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={draft.actions.includes(action)}
+                          onChange={() => toggleAction(draft, action)}
+                          className="h-3 w-3"
+                        />
+                        {action}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-md border border-gray-200 bg-white p-4">
+                <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  Resource scope
+                </div>
+                {canScope ? (
+                  <div className="grid gap-4 md:grid-cols-[14rem,1fr]">
+                    <div>
+                      <label className="block text-xs font-medium uppercase tracking-wide text-gray-500">
+                        Scope type
+                      </label>
+                      <select
+                        value={draft.scopeType}
+                        onChange={(event) =>
+                          updateDraft(draft.id, {
+                            scopeType: event.target.value as ScopeType,
+                            scopeRefs: "",
+                          })
+                        }
+                        className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      >
+                        <option value="unconstrained">Unconstrained</option>
+                        {canPackScope && <option value="pack">Pack scoped</option>}
+                        {canComponentScope && (
+                          <option value="component">Component scoped</option>
+                        )}
+                      </select>
+                    </div>
+                    <ScopeInput
+                      label={
+                        draft.scopeType === "pack"
+                          ? "Pack refs"
+                          : "Component refs"
+                      }
+                      value={
+                        draft.scopeType === "unconstrained"
+                          ? ""
+                          : draft.scopeRefs
+                      }
+                      placeholder={
+                        draft.scopeType === "pack"
+                          ? "core, slack"
+                          : "core.echo, slack.post_message"
+                      }
+                      disabled={draft.scopeType === "unconstrained"}
+                      onChange={(value) =>
+                        updateDraft(draft.id, { scopeRefs: value })
+                      }
+                    />
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500">
+                    This resource currently supports only unconstrained grants.
+                  </p>
+                )}
+
+                {(showOwner ||
+                  showOwnerType ||
+                  showVisibility ||
+                  showExecutionScope ||
+                  showEncrypted) && (
+                  <div className="mt-5 grid gap-4 md:grid-cols-2">
+                    {showOwner && (
+                  <div>
+                    <label className="block text-xs font-medium uppercase tracking-wide text-gray-500">
+                      Owner
+                    </label>
+                    <select
+                      value={draft.owner}
+                      onChange={(event) =>
+                        updateDraft(draft.id, { owner: event.target.value })
+                      }
+                      className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                    >
+                      <option value="">Any / not constrained</option>
+                      <option value="self">Own resources</option>
+                      <option value="any">Any owner</option>
+                      <option value="none">No owner</option>
+                    </select>
+                  </div>
+                    )}
+
+                    {showOwnerType && (
+                  <ScopeInput
+                    label="Owner types"
+                    value={draft.ownerTypes}
+                    placeholder="identity, pack, action, sensor"
+                    onChange={(value) => updateDraft(draft.id, { ownerTypes: value })}
+                  />
+                    )}
+
+                    {showExecutionScope && (
+                  <div>
+                    <label className="block text-xs font-medium uppercase tracking-wide text-gray-500">
+                      Execution scope
+                    </label>
+                    <select
+                      value={draft.executionScope}
+                      onChange={(event) =>
+                        updateDraft(draft.id, {
+                          executionScope: event.target.value,
+                        })
+                      }
+                      className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                    >
+                      <option value="">Any / not constrained</option>
+                      <option value="self">Own executions</option>
+                      <option value="descendants">Own + descendants</option>
+                      <option value="any">All executions</option>
+                    </select>
+                  </div>
+                    )}
+
+                    {showEncrypted && (
+                  <div>
+                    <label className="block text-xs font-medium uppercase tracking-wide text-gray-500">
+                      Key encryption scope
+                    </label>
+                    <select
+                      value={draft.encrypted}
+                      onChange={(event) =>
+                        updateDraft(draft.id, { encrypted: event.target.value })
+                      }
+                      className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                    >
+                      <option value="">Any / not constrained</option>
+                      <option value="true">Encrypted only</option>
+                      <option value="false">Unencrypted only</option>
+                    </select>
+                  </div>
+                    )}
+                </div>
+                )}
+
+                {showVisibility && (
+                <div className="mt-4">
+                  <label className="block text-xs font-medium uppercase tracking-wide text-gray-500">
+                    Artifact visibility
+                  </label>
+                  <div className="mt-2 flex gap-2">
+                    {["public", "private"].map((visibility) => (
+                      <label
+                        key={visibility}
+                        className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={draft.visibility.includes(visibility)}
+                          onChange={() => toggleVisibility(draft, visibility)}
+                        />
+                        {visibility}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                )}
+
+                <div className="mt-4">
+                  <label className="block text-xs font-medium uppercase tracking-wide text-gray-500">
+                    Identity attribute constraints JSON
+                  </label>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Optional ABAC filter. Every key/value here must exactly match
+                    the requesting identity's stored attributes for the grant to
+                    apply.
+                  </p>
+                  <textarea
+                    value={draft.attributes}
+                    onChange={(event) =>
+                      updateDraft(draft.id, { attributes: event.target.value })
+                    }
+                    placeholder='{"environment": "prod"}'
+                    rows={3}
+                    className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-xs"
+                  />
+                </div>
+              </div>
+            </div>
+          );
+        })
+      )}
+
+      <button
+        type="button"
+        onClick={() => onChange([...drafts, newGrantDraft()])}
+        className="inline-flex items-center gap-2 rounded-md border border-dashed border-blue-300 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50"
+      >
+        <Plus className="h-4 w-4" />
+        Add grant
+      </button>
+    </div>
+  );
+}
+
+function ScopeInput({
+  label,
+  value,
+  placeholder,
+  disabled = false,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div>
+      <label className="block text-xs font-medium uppercase tracking-wide text-gray-500">
+        {label}
+      </label>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        disabled={disabled}
+        className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+      />
+      <p className="mt-1 text-xs text-gray-400">Comma-separated</p>
+    </div>
+  );
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function PermissionSetDetailPage() {
   const { ref } = useParams<{ ref: string }>();
+  const { user } = useAuth();
 
   const { data: permissionSetsRaw, isLoading, error } = usePermissionSets();
+  const updatePermissionSet = useUpdatePermissionSet();
   const createRoleAssignment = useCreatePermissionSetRoleAssignment();
   const deleteRoleAssignment = useDeletePermissionSetRoleAssignment();
 
   const [newRole, setNewRole] = useState("");
   const [showAddRole, setShowAddRole] = useState(false);
+  const [isEditingGrants, setIsEditingGrants] = useState(false);
+  const [draftGrants, setDraftGrants] = useState<GrantDraft[]>([]);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const permissionSets = permissionSetsRaw as
     | PermissionSetWithRoles[]
     | undefined;
   const permissionSet = permissionSets?.find((ps) => ps.ref === ref);
+  const canManagePermissions = hasPermission(user, "permissions", "manage");
+
+  const startEditingGrants = () => {
+    setDraftGrants(parseGrants(permissionSet?.grants).map(grantToDraft));
+    setEditError(null);
+    setIsEditingGrants(true);
+  };
+
+  const cancelEditingGrants = () => {
+    setDraftGrants([]);
+    setEditError(null);
+    setIsEditingGrants(false);
+  };
+
+  const handleSaveGrants = async () => {
+    if (!permissionSet) {
+      return;
+    }
+
+    setEditError(null);
+    try {
+      const grants = draftGrants.map(draftToGrant);
+      await updatePermissionSet.mutateAsync({
+        id: permissionSet.id,
+        data: {
+          label: permissionSet.label ?? null,
+          description: permissionSet.description ?? null,
+          grants,
+        },
+      });
+      setIsEditingGrants(false);
+      setDraftGrants([]);
+    } catch (err) {
+      setEditError(
+        err instanceof Error ? err.message : "Failed to update permission set.",
+      );
+    }
+  };
 
   const handleAddRole = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -614,14 +1231,56 @@ export default function PermissionSetDetailPage() {
 
         {/* Grants Section */}
         <div className="bg-white rounded-lg shadow">
-          <div className="px-6 py-4 border-b border-gray-200 flex items-center gap-2">
-            <Shield className="w-5 h-5 text-gray-500" />
-            <h2 className="text-lg font-semibold text-gray-900">Grants</h2>
-            <span className="text-sm text-gray-500">
-              ({parsedGrants.length})
-            </span>
+          <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Shield className="w-5 h-5 text-gray-500" />
+              <h2 className="text-lg font-semibold text-gray-900">Grants</h2>
+              <span className="text-sm text-gray-500">
+                ({parsedGrants.length})
+              </span>
+            </div>
+            {canManagePermissions && !isEditingGrants && (
+              <button
+                type="button"
+                onClick={startEditingGrants}
+                className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-800"
+              >
+                <Edit3 className="h-4 w-4" />
+                Edit grants
+              </button>
+            )}
+            {isEditingGrants && (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={cancelEditingGrants}
+                  className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100"
+                >
+                  <X className="h-4 w-4" />
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveGrants}
+                  disabled={updatePermissionSet.isPending}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Save className="h-4 w-4" />
+                  {updatePermissionSet.isPending ? "Saving..." : "Save"}
+                </button>
+              </div>
+            )}
           </div>
-          <GrantsView grants={parsedGrants} />
+          {editError && (
+            <div className="border-b border-red-100 bg-red-50 px-6 py-3 text-sm text-red-700">
+              {editError}
+            </div>
+          )}
+          {isEditingGrants ? (
+            <GrantsEditor drafts={draftGrants} onChange={setDraftGrants} />
+          ) : (
+            <GrantsView grants={parsedGrants} />
+          )}
         </div>
       </div>
     </div>

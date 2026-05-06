@@ -1,8 +1,19 @@
 import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { useActions, useAction, useDeleteAction } from "@/hooks/useActions";
+import {
+  useActions,
+  useAction,
+  useDeleteAction,
+  useUpdateAction,
+} from "@/hooks/useActions";
 import { useExecutions } from "@/hooks/useExecutions";
+import { usePermissionSets } from "@/hooks/usePermissions";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ActionSummary, ExecutionSummary } from "@/api";
+import type {
+  ActionResponse,
+  ActionSummary,
+  ExecutionSummary,
+  PermissionSetSummary,
+} from "@/api";
 import type { ParamSchemaProperty } from "@/components/common/ParamSchemaForm";
 import {
   ChevronDown,
@@ -17,6 +28,7 @@ import {
 import ExecuteActionModal from "@/components/common/ExecuteActionModal";
 import ErrorDisplay from "@/components/common/ErrorDisplay";
 import { extractProperties } from "@/components/common/ParamSchemaForm";
+import { STANDARD_EXECUTION_ACCESS_REF } from "@/lib/permissions";
 
 export default function ActionsPage() {
   const { ref } = useParams<{ ref?: string }>();
@@ -349,6 +361,7 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
   }
 
   const executions = executionsData?.items || [];
+  const actionDetails = action.data as ActionResponse;
   const paramSchema = action.data?.param_schema || {};
   const properties = extractProperties(paramSchema);
   const paramEntries = Object.entries(properties);
@@ -630,6 +643,8 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
             )}
           </div>
 
+          <DefaultExecutionPermissionsCard action={actionDetails} />
+
           {/* Recent Executions */}
           <div className="bg-white shadow rounded-lg p-6">
             <div className="flex justify-between items-center mb-4">
@@ -725,6 +740,189 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function normalizePermissionSetRefs(input: string): string[] {
+  const seen = new Set<string>();
+  return input
+    .split(/[\s,]+/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .filter((value) => {
+      if (seen.has(value)) {
+        return false;
+      }
+      seen.add(value);
+      return true;
+    });
+}
+
+function formatPermissionSetRefs(refs: string[] | undefined): string {
+  return refs?.join("\n") ?? "";
+}
+
+function PermissionSetRefChips({ refs }: { refs: string[] }) {
+  if (refs.length === 0) {
+    return (
+      <p className="text-sm text-gray-500">
+        No permission set refs configured.
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {refs.map((ref) => (
+        ref === STANDARD_EXECUTION_ACCESS_REF ? (
+          <span
+            key={ref}
+            className="font-mono text-xs px-2 py-1 rounded bg-green-50 text-green-700"
+            title="Standard action/pack-scoped keys and artifacts access"
+          >
+            {ref}
+          </span>
+        ) : (
+          <Link
+            key={ref}
+            to={`/access-control/permission-sets/${ref}`}
+            className="font-mono text-xs px-2 py-1 rounded bg-blue-50 text-blue-700 hover:bg-blue-100"
+            title={`View permission set ${ref}`}
+          >
+            {ref}
+          </Link>
+        )
+      ))}
+    </div>
+  );
+}
+
+function DefaultExecutionPermissionsCard({ action }: { action: ActionResponse }) {
+  const currentRefs = action.default_execution_permission_set_refs ?? [];
+  const updateAction = useUpdateAction();
+  const { data: permissionSets, isLoading: permissionSetsLoading } =
+    usePermissionSets();
+  const [draftRefs, setDraftRefs] = useState(formatPermissionSetRefs(currentRefs));
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraftRefs(formatPermissionSetRefs(action.default_execution_permission_set_refs));
+    setErrorMessage(null);
+  }, [action.ref, action.default_execution_permission_set_refs]);
+
+  const normalizedDraftRefs = useMemo(
+    () => normalizePermissionSetRefs(draftRefs),
+    [draftRefs],
+  );
+  const knownPermissionSetRefs = useMemo(
+    () => new Set((permissionSets ?? []).map((set: PermissionSetSummary) => set.ref)),
+    [permissionSets],
+  );
+  const unknownRefs =
+    permissionSets && !permissionSetsLoading
+      ? normalizedDraftRefs.filter(
+          (ref) =>
+            ref !== STANDARD_EXECUTION_ACCESS_REF &&
+            !knownPermissionSetRefs.has(ref),
+        )
+      : [];
+  const hasChanges =
+    normalizedDraftRefs.join("\n") !== formatPermissionSetRefs(currentRefs);
+
+  const save = async () => {
+    setErrorMessage(null);
+    try {
+      await updateAction.mutateAsync({
+        ref: action.ref,
+        data: {
+          label: action.label,
+          description: action.description ?? null,
+          entrypoint: action.entrypoint,
+          runtime: action.runtime ?? null,
+          required_worker_runtimes: action.required_worker_runtimes ?? {},
+          param_schema: action.param_schema ?? null,
+          out_schema: action.out_schema ?? null,
+          accesses_mcp: action.accesses_mcp,
+          default_execution_permission_set_refs: normalizedDraftRefs,
+        },
+      });
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Failed to save permission refs");
+    }
+  };
+
+  return (
+    <div className="bg-white shadow rounded-lg p-6">
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <div>
+          <h2 className="text-xl font-semibold">Default Execution Token Access</h2>
+          <p className="text-sm text-gray-600 mt-1">
+            These permission set refs are applied to executions when the caller
+            does not explicitly override token access. Leave empty for no
+            execution-scoped API token by default.
+          </p>
+        </div>
+      </div>
+
+      <div className="mb-4">
+        <dt className="text-sm font-medium text-gray-500 mb-2">
+          Current permission set refs
+        </dt>
+        <dd>
+          <PermissionSetRefChips refs={currentRefs} />
+        </dd>
+      </div>
+
+      <label className="block text-sm font-medium text-gray-700 mb-2">
+        Configure refs
+      </label>
+      <textarea
+        value={draftRefs}
+        onChange={(event) => setDraftRefs(event.target.value)}
+        rows={Math.max(3, Math.min(8, normalizedDraftRefs.length + 1))}
+        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+        placeholder="standard&#10;core.agent_reader&#10;my_pack.agent_scope"
+      />
+      <p className="text-xs text-gray-500 mt-2">
+        Enter permission set refs separated by commas, spaces, or new lines.
+        Use <span className="font-mono">standard</span> for the action/pack-scoped keys
+        and artifacts access built into execution tokens. Refs are stored as
+        metadata refs, not database IDs.
+      </p>
+
+      {unknownRefs.length > 0 && (
+        <div className="mt-3 rounded-md border border-yellow-200 bg-yellow-50 px-3 py-2 text-sm text-yellow-800">
+          Unknown permission set refs:{" "}
+          <span className="font-mono">{unknownRefs.join(", ")}</span>. Saving
+          will let the API validate whether they can be delegated.
+        </div>
+      )}
+
+      {errorMessage && (
+        <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {errorMessage}
+        </div>
+      )}
+
+      <div className="mt-4 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={save}
+          disabled={!hasChanges || updateAction.isPending}
+          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+        >
+          {updateAction.isPending ? "Saving..." : "Save token access"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setDraftRefs("")}
+          disabled={updateAction.isPending || normalizedDraftRefs.length === 0}
+          className="px-4 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+        >
+          Clear
+        </button>
       </div>
     </div>
   );

@@ -4,6 +4,8 @@ import type {
   CreateIdentityRequest,
   UpdateIdentityRequest,
   CreatePermissionAssignmentRequest,
+  PermissionSetSummary,
+  UpdatePermissionSetRequest,
 } from "@/api";
 
 // Fetch all identities with pagination
@@ -84,13 +86,45 @@ export function useDeleteIdentity() {
 }
 
 // Fetch permission sets
-export function usePermissionSets(packRef?: string | null) {
+export function usePermissionSets(
+  packRef?: string | null,
+  options: { enabled?: boolean } = {},
+) {
   return useQuery({
     queryKey: ["permission-sets", packRef],
     queryFn: async () => {
       return await PermissionsService.listPermissionSets({ packRef });
     },
+    enabled: options.enabled ?? true,
     staleTime: 30000,
+  });
+}
+
+export function useUpdatePermissionSet() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      id,
+      data,
+    }: {
+      id: number;
+      data: UpdatePermissionSetRequest;
+    }) => {
+      return await PermissionsService.updatePermissionSet({
+        id,
+        requestBody: data,
+      });
+    },
+    onSuccess: (response) => {
+      const updated = response.data as PermissionSetSummary;
+      queryClient.invalidateQueries({ queryKey: ["permission-sets"] });
+      if (updated?.pack_ref) {
+        queryClient.invalidateQueries({
+          queryKey: ["permission-sets", updated.pack_ref],
+        });
+      }
+    },
   });
 }
 

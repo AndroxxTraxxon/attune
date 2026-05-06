@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
@@ -16,8 +16,10 @@ import {
 import type { RuntimeSummary } from "@/api";
 import type { WorkerRuntimeSupport, WorkerSummary } from "@/api/workers";
 import RuntimeForm from "@/components/forms/RuntimeForm";
+import { useAuth } from "@/contexts/AuthContext";
 import { useRuntimes, useRuntime, useDeleteRuntime } from "@/hooks/useRuntimes";
 import { useWorkers } from "@/hooks/useWorkers";
+import { hasPermission } from "@/lib/permissions";
 
 function formatJson(value: unknown): string {
   return JSON.stringify(value ?? null, null, 2);
@@ -140,9 +142,12 @@ function getUtilizationBarClasses(percent?: number | null): string {
 type TabId = "workers" | "runtimes";
 
 export default function RuntimesPage() {
+  const { user } = useAuth();
   const { ref } = useParams<{ ref?: string }>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const canReadWorkers = hasPermission(user, "workers");
+  const canReadRuntimes = hasPermission(user, "runtimes");
 
   const tabParam = searchParams.get("tab");
   const activeTab: TabId =
@@ -151,6 +156,22 @@ export default function RuntimesPage() {
       : ref
         ? "runtimes"
         : "workers";
+  const visibleTab: TabId =
+    activeTab === "workers" && canReadWorkers
+      ? "workers"
+      : activeTab === "runtimes" && canReadRuntimes
+        ? "runtimes"
+        : canReadWorkers
+          ? "workers"
+          : "runtimes";
+
+  useEffect(() => {
+    if (activeTab === "workers" && !canReadWorkers) {
+      navigate(canReadRuntimes ? "/runtimes?tab=runtimes" : "/", { replace: true });
+    } else if (activeTab === "runtimes" && !canReadRuntimes) {
+      navigate(canReadWorkers ? "/runtimes?tab=workers" : "/", { replace: true });
+    }
+  }, [activeTab, canReadRuntimes, canReadWorkers, navigate]);
 
   const setTab = (tab: TabId) => {
     if (tab === "workers") {
@@ -180,45 +201,66 @@ export default function RuntimesPage() {
 
       <div className="mb-6 shrink-0 border-b border-gray-200">
         <nav className="-mb-px flex space-x-8">
-          <button
-            onClick={() => setTab("workers")}
-            className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
-              activeTab === "workers"
-                ? "border-blue-500 text-blue-600"
-                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <Bot className="w-4 h-4" />
-              Workers
-            </div>
-          </button>
-          <button
-            onClick={() => setTab("runtimes")}
-            className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
-              activeTab === "runtimes"
-                ? "border-indigo-500 text-indigo-600"
-                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <Code2 className="w-4 h-4" />
-              Runtimes
-            </div>
-          </button>
+          {canReadWorkers && (
+            <button
+              onClick={() => setTab("workers")}
+              className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
+                visibleTab === "workers"
+                  ? "border-blue-500 text-blue-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <Bot className="w-4 h-4" />
+                Workers
+              </div>
+            </button>
+          )}
+          {canReadRuntimes && (
+            <button
+              onClick={() => setTab("runtimes")}
+              className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
+                visibleTab === "runtimes"
+                  ? "border-indigo-500 text-indigo-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <Code2 className="w-4 h-4" />
+                Runtimes
+              </div>
+            </button>
+          )}
         </nav>
       </div>
 
       <div className="min-h-0 flex-1">
-        {activeTab === "workers" ? <WorkersTab /> : <RuntimesTab runtimeRef={ref} />}
+        {canReadWorkers || canReadRuntimes ? (
+          visibleTab === "workers" ? (
+          <WorkersTab canReadRuntimes={canReadRuntimes} />
+          ) : (
+          <RuntimesTab
+            runtimeRef={ref}
+            canCreateRuntime={hasPermission(user, "runtimes", "create")}
+            canUpdateRuntime={hasPermission(user, "runtimes", "update")}
+            canDeleteRuntime={hasPermission(user, "runtimes", "delete")}
+          />
+          )
+        ) : (
+          <PermissionNotice message="You do not have permission to view workers or runtimes." />
+        )}
       </div>
     </div>
   );
 }
 
-function WorkersTab() {
-  const { data, isLoading, error } = useWorkers({ page: 1, pageSize: 100 });
-  const { data: runtimeData } = useRuntimes();
+function WorkersTab({ canReadRuntimes }: { canReadRuntimes: boolean }) {
+  const { data, isLoading, error } = useWorkers({
+    page: 1,
+    pageSize: 100,
+    enabled: true,
+  });
+  const { data: runtimeData } = useRuntimes({ enabled: canReadRuntimes });
   const [searchQuery, setSearchQuery] = useState("");
   const [runtimeFilter, setRuntimeFilter] = useState("all");
   const [roleFilter, setRoleFilter] = useState("all");
@@ -607,7 +649,17 @@ function SummaryCard({
   );
 }
 
-function RuntimesTab({ runtimeRef }: { runtimeRef?: string }) {
+function RuntimesTab({
+  runtimeRef,
+  canCreateRuntime,
+  canUpdateRuntime,
+  canDeleteRuntime,
+}: {
+  runtimeRef?: string;
+  canCreateRuntime: boolean;
+  canUpdateRuntime: boolean;
+  canDeleteRuntime: boolean;
+}) {
   const navigate = useNavigate();
   const { data, isLoading, error } = useRuntimes();
   const [searchQuery, setSearchQuery] = useState("");
@@ -656,13 +708,15 @@ function RuntimesTab({ runtimeRef }: { runtimeRef?: string }) {
                 {filteredRuntimes.length} of {runtimes.length} runtimes
               </p>
             </div>
-            <button
-              onClick={() => navigate("/runtimes/new?tab=runtimes")}
-              className="inline-flex items-center px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
-            >
-              <Plus className="h-4 w-4 mr-1" />
-              New Runtime
-            </button>
+            {canCreateRuntime && (
+              <button
+                onClick={() => navigate("/runtimes/new?tab=runtimes")}
+                className="inline-flex items-center px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
+              >
+                <Plus className="h-4 w-4 mr-1" />
+                New Runtime
+              </button>
+            )}
           </div>
 
           <div className="mt-3 relative">
@@ -731,9 +785,18 @@ function RuntimesTab({ runtimeRef }: { runtimeRef?: string }) {
 
       <div className="flex-1 overflow-y-auto">
         {runtimeRef === "new" ? (
-          <RuntimeForm />
+          canCreateRuntime ? (
+            <RuntimeForm />
+          ) : (
+            <PermissionNotice message="You do not have permission to create runtimes." />
+          )
         ) : runtimeRef ? (
-          <RuntimeDetail key={runtimeRef} runtimeRef={runtimeRef} />
+          <RuntimeDetail
+            key={runtimeRef}
+            runtimeRef={runtimeRef}
+            canUpdateRuntime={canUpdateRuntime}
+            canDeleteRuntime={canDeleteRuntime}
+          />
         ) : (
           <div className="flex items-center justify-center h-full">
             <div className="text-center text-gray-500">
@@ -752,7 +815,15 @@ function RuntimesTab({ runtimeRef }: { runtimeRef?: string }) {
   );
 }
 
-function RuntimeDetail({ runtimeRef }: { runtimeRef: string }) {
+function RuntimeDetail({
+  runtimeRef,
+  canUpdateRuntime,
+  canDeleteRuntime,
+}: {
+  runtimeRef: string;
+  canUpdateRuntime: boolean;
+  canDeleteRuntime: boolean;
+}) {
   const navigate = useNavigate();
   const { data, isLoading, error } = useRuntime(runtimeRef);
   const deleteRuntime = useDeleteRuntime();
@@ -814,22 +885,28 @@ function RuntimeDetail({ runtimeRef }: { runtimeRef: string }) {
             <p className="mt-3 text-sm text-gray-700">{runtime.description}</p>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setIsEditing(true)}
-            className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
-          >
-            <Pencil className="h-4 w-4 mr-2" />
-            Edit
-          </button>
-          <button
-            onClick={handleDelete}
-            className="inline-flex items-center px-3 py-2 border border-red-300 text-red-700 rounded-lg text-sm hover:bg-red-50"
-          >
-            <Trash2 className="h-4 w-4 mr-2" />
-            Delete
-          </button>
-        </div>
+        {(canUpdateRuntime || canDeleteRuntime) && (
+          <div className="flex items-center gap-2">
+            {canUpdateRuntime && (
+              <button
+                onClick={() => setIsEditing(true)}
+                className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
+              >
+                <Pencil className="h-4 w-4 mr-2" />
+                Edit
+              </button>
+            )}
+            {canDeleteRuntime && (
+              <button
+                onClick={handleDelete}
+                className="inline-flex items-center px-3 py-2 border border-red-300 text-red-700 rounded-lg text-sm hover:bg-red-50"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -841,6 +918,16 @@ function RuntimeDetail({ runtimeRef }: { runtimeRef: string }) {
       <JsonCard title="Distributions" value={runtime.distributions} />
       <JsonCard title="Installation" value={runtime.installation} />
       <JsonCard title="Execution Config" value={runtime.execution_config} />
+    </div>
+  );
+}
+
+function PermissionNotice({ message }: { message: string }) {
+  return (
+    <div className="flex items-center justify-center h-full">
+      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        {message}
+      </div>
     </div>
   );
 }

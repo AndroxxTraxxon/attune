@@ -3,7 +3,7 @@ label: Admin
 description: Full administrative access across Attune resources.
 grants:
   - resource: packs
-    actions: [read, create, update, delete]
+    actions: [read, create, install, configure, delete]
   - resource: actions
     actions: [read, create, update, delete, execute]
   - resource: queues
@@ -24,6 +24,10 @@ grants:
     actions: [read, create, update, delete, decrypt]
   - resource: artifacts
     actions: [read, create, update, delete]
+  - resource: runtimes
+    actions: [read, create, update, delete]
+  - resource: workers
+    actions: [read]
   - resource: identities
     actions: [read, create, update, delete]
   - resource: permissions

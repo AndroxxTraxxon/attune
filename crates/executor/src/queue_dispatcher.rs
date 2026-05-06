@@ -581,6 +581,7 @@ impl WorkQueueDispatcher {
                 parent: None,
                 enforcement: None,
                 executor: executor_identity,
+                permission_set_refs: context.action.default_execution_permission_set_refs.clone(),
                 worker: None,
                 status: ExecutionStatus::Requested,
                 result: None,

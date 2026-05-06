@@ -16,6 +16,7 @@ use attune_common::{
         Consumer, EnforcementCreatedPayload, ExecutionRequestedPayload, MessageEnvelope, Publisher,
     },
     repositories::{
+        action::ActionRepository,
         event::{EnforcementRepository, EventRepository, UpdateEnforcementInput},
         execution::{CreateExecutionInput, ExecutionRepository},
         rule::RuleRepository,
@@ -278,6 +279,11 @@ impl EnforcementProcessor {
         );
 
         let action_ref = &rule.action_ref;
+        let action = ActionRepository::find_by_id(pool, action_id).await?;
+        let permission_set_refs = action
+            .as_ref()
+            .map(|action| action.default_execution_permission_set_refs.clone())
+            .unwrap_or_default();
 
         // Create the execution row first; scheduler-side policy enforcement
         // now handles both rule-triggered and manual executions uniformly.
@@ -299,6 +305,7 @@ impl EnforcementProcessor {
             parent: None,   // TODO: Handle workflow parent-child relationships
             enforcement: Some(enforcement.id),
             executor: Some(executor_identity),
+            permission_set_refs,
             worker: None,
             status: attune_common::models::enums::ExecutionStatus::Requested,
             result: None,

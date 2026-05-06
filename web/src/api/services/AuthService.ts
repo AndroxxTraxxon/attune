@@ -7,6 +7,7 @@ import type { LdapLoginRequest } from '../models/LdapLoginRequest';
 import type { LoginRequest } from '../models/LoginRequest';
 import type { RefreshTokenRequest } from '../models/RefreshTokenRequest';
 import type { RegisterRequest } from '../models/RegisterRequest';
+import type { UpdateCurrentUserRequest } from '../models/UpdateCurrentUserRequest';
 import type { UserInfo } from '../models/UserInfo';
 import type { CancelablePromise } from '../core/CancelablePromise';
 import { OpenAPI } from '../core/OpenAPI';
@@ -163,9 +164,28 @@ export class AuthService {
          */
         data: {
             /**
+             * Permission set refs assigned to this identity, including role-derived assignments.
+             */
+            assigned_permission_set_refs: Array<string>;
+            /**
+             * Authentication provider backing this identity.
+             */
+            auth_provider: string;
+            /**
+             * Whether this identity can change its password through Attune.
+             */
+            can_change_password: boolean;
+            /**
              * Display name
              */
             display_name?: string | null;
+            /**
+             * Effective resource-level permissions assigned to this identity.
+             */
+            effective_permissions: Array<{
+                actions: Array<string>;
+                resource: string;
+            }>;
             /**
              * Identity ID
              */
@@ -174,6 +194,24 @@ export class AuthService {
              * Identity login
              */
             login: string;
+            /**
+             * Sanitized user information supplied by the external identity provider.
+             */
+            provider_profile?: ({
+                distinguished_name?: string | null;
+                display_name?: string | null;
+                email?: string | null;
+                email_verified?: boolean | null;
+                groups: Array<string>;
+                issuer?: string | null;
+                login?: string | null;
+                provider: string;
+                subject?: string | null;
+            }) | null;
+            /**
+             * Whether this identity is managed locally by Attune.
+             */
+            is_local: boolean;
         };
         /**
          * Optional message
@@ -185,6 +223,89 @@ export class AuthService {
             url: '/auth/me',
             errors: {
                 401: `Unauthorized`,
+                404: `Identity not found`,
+            },
+        });
+    }
+    /**
+     * Update current user profile endpoint
+     * PUT /auth/me
+     * @returns any Current user profile updated
+     * @throws ApiError
+     */
+    public static updateCurrentUser({
+        requestBody,
+    }: {
+        requestBody: UpdateCurrentUserRequest,
+    }): CancelablePromise<{
+        /**
+         * Current user response
+         */
+        data: {
+            /**
+             * Permission set refs assigned to this identity, including role-derived assignments.
+             */
+            assigned_permission_set_refs: Array<string>;
+            /**
+             * Authentication provider backing this identity.
+             */
+            auth_provider: string;
+            /**
+             * Whether this identity can change its password through Attune.
+             */
+            can_change_password: boolean;
+            /**
+             * Display name
+             */
+            display_name?: string | null;
+            /**
+             * Effective resource-level permissions assigned to this identity.
+             */
+            effective_permissions: Array<{
+                actions: Array<string>;
+                resource: string;
+            }>;
+            /**
+             * Identity ID
+             */
+            id: number;
+            /**
+             * Identity login
+             */
+            login: string;
+            /**
+             * Sanitized user information supplied by the external identity provider.
+             */
+            provider_profile?: ({
+                distinguished_name?: string | null;
+                display_name?: string | null;
+                email?: string | null;
+                email_verified?: boolean | null;
+                groups: Array<string>;
+                issuer?: string | null;
+                login?: string | null;
+                provider: string;
+                subject?: string | null;
+            }) | null;
+            /**
+             * Whether this identity is managed locally by Attune.
+             */
+            is_local: boolean;
+        };
+        /**
+         * Optional message
+         */
+        message?: string | null;
+    }> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/auth/me',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                400: `Validation error`,
+                401: `Unauthorized`,
+                403: `Profile is managed by an external provider`,
                 404: `Identity not found`,
             },
         });

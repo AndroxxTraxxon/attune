@@ -1,0 +1,175 @@
+import {
+  extractProperties,
+  type ParamSchemaProperty,
+} from "@/components/common/ParamSchemaForm";
+
+type JsonObject = Record<string, unknown>;
+
+export function isJsonObject(value: unknown): value is JsonObject {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringifyValue(value: unknown): string {
+  if (value === null) return "null";
+  if (value === undefined) return "Not provided";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value, null, 2);
+}
+
+function displayType(schema?: ParamSchemaProperty, value?: unknown): string {
+  if (schema?.type) return schema.type;
+  if (Array.isArray(value)) return "array";
+  if (value === null) return "null";
+  return typeof value === "undefined" ? "unknown" : typeof value;
+}
+
+function sortedSchemaEntries(schema: unknown) {
+  return Object.entries(
+    extractProperties(isJsonObject(schema) ? schema : null),
+  ).sort(([aKey, a], [bKey, b]) => {
+    const aPos = a.position ?? Number.MAX_SAFE_INTEGER;
+    const bPos = b.position ?? Number.MAX_SAFE_INTEGER;
+    return aPos === bPos ? aKey.localeCompare(bKey) : aPos - bPos;
+  });
+}
+
+export function hasSchemaFields(schema: unknown): boolean {
+  return sortedSchemaEntries(schema).length > 0;
+}
+
+export function JsonValueDisplay({ value }: { value: unknown }) {
+  if (isJsonObject(value) || Array.isArray(value)) {
+    return (
+      <pre className="mt-1 bg-gray-50 border border-gray-200 rounded p-2 text-xs overflow-x-auto whitespace-pre-wrap">
+        {JSON.stringify(value, null, 2)}
+      </pre>
+    );
+  }
+
+  return (
+    <span className="text-sm text-gray-900 break-words">
+      {stringifyValue(value)}
+    </span>
+  );
+}
+
+export function SchemaValueRows({
+  schema,
+  values,
+  emptyMessage,
+  maskSecrets = false,
+}: {
+  schema: unknown;
+  values: unknown;
+  emptyMessage: string;
+  maskSecrets?: boolean;
+}) {
+  const schemaEntries = sortedSchemaEntries(schema);
+  const valueObject = isJsonObject(values) ? values : {};
+  const renderedKeys = new Set(schemaEntries.map(([key]) => key));
+  const extraEntries = Object.entries(valueObject).filter(
+    ([key]) => !renderedKeys.has(key),
+  );
+
+  if (schemaEntries.length === 0 && extraEntries.length === 0) {
+    return <p className="text-sm text-gray-500">{emptyMessage}</p>;
+  }
+
+  return (
+    <div className="divide-y divide-gray-100 rounded-lg border border-gray-200">
+      {schemaEntries.map(([key, field]) => {
+        const hasValue = Object.prototype.hasOwnProperty.call(valueObject, key);
+        const value = hasValue ? valueObject[key] : undefined;
+        return (
+          <div key={key} className="p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-mono text-sm font-medium text-gray-900">
+                {key}
+              </span>
+              <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
+                {displayType(field, value)}
+              </span>
+              {field.required && (
+                <span className="rounded bg-blue-50 px-2 py-0.5 text-xs text-blue-700">
+                  required
+                </span>
+              )}
+              {field.secret && (
+                <span className="rounded bg-purple-50 px-2 py-0.5 text-xs text-purple-700">
+                  secret
+                </span>
+              )}
+            </div>
+            {field.description && (
+              <p className="mt-1 text-sm text-gray-500">{field.description}</p>
+            )}
+            <div className="mt-2">
+              {maskSecrets && field.secret && hasValue ? (
+                <span className="text-sm text-gray-500">••••••••</span>
+              ) : (
+                <JsonValueDisplay value={value} />
+              )}
+            </div>
+          </div>
+        );
+      })}
+
+      {extraEntries.map(([key, value]) => (
+        <div key={key} className="p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-sm font-medium text-gray-900">
+              {key}
+            </span>
+            <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
+              {displayType(undefined, value)}
+            </span>
+            <span className="rounded bg-yellow-50 px-2 py-0.5 text-xs text-yellow-700">
+              not in schema
+            </span>
+          </div>
+          <div className="mt-2">
+            <JsonValueDisplay value={value} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function CuratedDataCard({
+  title,
+  description,
+  schema,
+  values,
+  emptyMessage,
+  maskSecrets = false,
+}: {
+  title: string;
+  description?: string;
+  schema?: unknown;
+  values: unknown;
+  emptyMessage: string;
+  maskSecrets?: boolean;
+}) {
+  return (
+    <div className="bg-white rounded-lg shadow">
+      <div className="px-6 py-4 border-b border-gray-200">
+        <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+        {description && (
+          <p className="text-sm text-gray-600 mt-1">{description}</p>
+        )}
+      </div>
+      <div className="px-6 py-4">
+        <SchemaValueRows
+          schema={schema}
+          values={values}
+          emptyMessage={emptyMessage}
+          maskSecrets={maskSecrets}
+        />
+      </div>
+    </div>
+  );
+}

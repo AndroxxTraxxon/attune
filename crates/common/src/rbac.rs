@@ -22,6 +22,8 @@ pub enum Resource {
     Inquiries,
     Keys,
     Artifacts,
+    Runtimes,
+    Workers,
     Identities,
     Permissions,
     AuditLog,
@@ -32,6 +34,8 @@ pub enum Resource {
 pub enum Action {
     Read,
     Create,
+    Install,
+    Configure,
     Update,
     Delete,
     Execute,

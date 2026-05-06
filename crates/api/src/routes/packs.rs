@@ -282,9 +282,9 @@ pub async fn update_pack(
             .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
         let authz = AuthorizationService::new(state.db.clone());
         let grants = authz.effective_grants(&user).await?;
-        if !pack_action_allowed(&grants, Action::Update, identity_id, &existing_pack) {
+        if !pack_action_allowed(&grants, Action::Configure, identity_id, &existing_pack) {
             return Err(ApiError::Forbidden(
-                "Not authorized to update pack".to_string(),
+                "Not authorized to configure pack".to_string(),
             ));
         }
         if existing_pack.installed_by == Some(identity_id) || existing_pack.installed_by.is_none() {
@@ -293,7 +293,7 @@ pub async fn update_pack(
                     &user,
                     AuthorizationCheck {
                         resource: Resource::Packs,
-                        action: Action::Update,
+                        action: Action::Configure,
                         context: pack_authorization_context(identity_id, &existing_pack),
                     },
                 )
@@ -630,7 +630,7 @@ pub async fn upload_pack(
                 &user,
                 AuthorizationCheck {
                     resource: Resource::Packs,
-                    action: Action::Create,
+                    action: Action::Install,
                     context: AuthorizationContext::new(identity_id),
                 },
             )
@@ -1043,7 +1043,7 @@ pub async fn register_pack(
                 &user,
                 AuthorizationCheck {
                     resource: Resource::Packs,
-                    action: Action::Create,
+                    action: Action::Install,
                     context: AuthorizationContext::new(identity_id),
                 },
             )
@@ -1724,7 +1724,7 @@ pub async fn create_pack_index(
     Json(request): Json<CreatePackRegistryIndexRequest>,
 ) -> ApiResult<impl IntoResponse> {
     request.validate()?;
-    authorize_pack_registry_action(&state, &user, Action::Update).await?;
+    authorize_pack_registry_action(&state, &user, Action::Configure).await?;
     let index = PackRegistryIndexRepository::create(
         &state.db,
         CreatePackRegistryIndexInput {
@@ -1749,7 +1749,7 @@ pub async fn update_pack_index(
     Json(request): Json<UpdatePackRegistryIndexRequest>,
 ) -> ApiResult<impl IntoResponse> {
     request.validate()?;
-    authorize_pack_registry_action(&state, &user, Action::Update).await?;
+    authorize_pack_registry_action(&state, &user, Action::Configure).await?;
     let index = PackRegistryIndexRepository::update(
         &state.db,
         id,
@@ -1773,7 +1773,7 @@ pub async fn delete_pack_index(
     RequireAuth(user): RequireAuth,
     Path(id): Path<i64>,
 ) -> ApiResult<impl IntoResponse> {
-    authorize_pack_registry_action(&state, &user, Action::Update).await?;
+    authorize_pack_registry_action(&state, &user, Action::Configure).await?;
     let deleted = PackRegistryIndexRepository::delete(&state.db, id).await?;
     if !deleted {
         return Err(ApiError::NotFound(format!("Pack index {} not found", id)));
@@ -1935,7 +1935,7 @@ pub async fn install_pack(
                 &user,
                 AuthorizationCheck {
                     resource: Resource::Packs,
-                    action: Action::Create,
+                    action: Action::Install,
                     context: AuthorizationContext::new(identity_id),
                 },
             )
@@ -2998,7 +2998,7 @@ pub async fn register_packs_batch(
                 &user,
                 AuthorizationCheck {
                     resource: Resource::Packs,
-                    action: Action::Create,
+                    action: Action::Install,
                     context: AuthorizationContext::new(identity_id),
                 },
             )

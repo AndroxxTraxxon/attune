@@ -1,4 +1,3 @@
-import { useAuth } from "@/contexts/AuthContext";
 import { usePacks } from "@/hooks/usePacks";
 import { useActions } from "@/hooks/useActions";
 import { useRules } from "@/hooks/useRules";
@@ -12,8 +11,6 @@ import AnalyticsDashboard from "@/components/common/AnalyticsWidgets";
 import type { TimeRangeHours } from "@/components/common/AnalyticsWidgets";
 
 export default function DashboardPage() {
-  const { user } = useAuth();
-
   // Fetch metrics data
   const { data: packsData, isLoading: packsLoading } = usePacks({
     page: 1,
@@ -148,9 +145,8 @@ export default function DashboardPage() {
     <div className="p-6">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
-        <div className="flex items-center gap-2 mt-2">
-          <p className="text-gray-600">Welcome back, {user?.login || "User"}</p>
+        <div className="flex items-center gap-3">
+          <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
           {isConnected && (
             <span className="inline-flex items-center gap-1 text-xs text-green-600">
               <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>

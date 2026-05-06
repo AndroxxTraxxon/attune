@@ -23,6 +23,12 @@ pub struct CreateExecutionRequest {
     /// Environment variables for this execution
     #[schema(value_type = Object, example = json!({"DEBUG": "true", "LOG_LEVEL": "info"}))]
     pub env_vars: Option<JsonValue>,
+
+    /// Permission set refs to apply to this execution's API token. Omit to use
+    /// the action default. Provide an empty array to force no API token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = json!(["core.agent_reader"]), nullable = true)]
+    pub permission_set_refs: Option<Vec<String>>,
 }
 
 /// Response DTO for execution information
@@ -55,6 +61,11 @@ pub struct ExecutionResponse {
     /// Identity ID that initiated this execution
     #[schema(example = 1)]
     pub executor: Option<i64>,
+
+    /// Permission set refs embedded in the execution-scoped API token.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schema(example = json!(["core.agent_reader"]))]
+    pub permission_set_refs: Vec<String>,
 
     /// Worker ID currently assigned to this execution
     #[schema(example = 1)]
@@ -239,6 +250,7 @@ impl From<attune_common::models::execution::Execution> for ExecutionResponse {
             parent: execution.parent,
             enforcement: execution.enforcement,
             executor: execution.executor,
+            permission_set_refs: execution.permission_set_refs,
             worker: execution.worker,
             status: execution.status,
             result: execution

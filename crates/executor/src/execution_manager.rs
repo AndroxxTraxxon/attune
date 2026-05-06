@@ -425,6 +425,7 @@ impl ExecutionManager {
                 // Inherit triggering identity from parent so the callback
                 // token has the same security context.
                 executor: parent.executor,
+                permission_set_refs: parent.permission_set_refs.clone(),
                 worker: None,
                 status: ExecutionStatus::Requested,
                 result: None,

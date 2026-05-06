@@ -34,7 +34,7 @@ import {
 } from "@/hooks/useQueues";
 import { useQueueStream } from "@/hooks/useQueueStream";
 import { useAction } from "@/hooks/useActions";
-import { useIdentity, usePermissionSets } from "@/hooks/usePermissions";
+import { hasPermission } from "@/lib/permissions";
 
 const STATUS_FILTERS: Array<{
   value: string;
@@ -72,23 +72,6 @@ function getErrorMessage(error: unknown, fallback: string): string {
   const maybeAxios = error as { response?: { data?: { message?: string } } };
   return maybeAxios.response?.data?.message ||
     (error instanceof Error ? error.message : fallback);
-}
-
-function grantIncludesQueueUpdate(grants: unknown): boolean {
-  if (!Array.isArray(grants)) {
-    return false;
-  }
-
-  return grants.some((grant) => {
-    if (!grant || typeof grant !== "object") {
-      return false;
-    }
-
-    const candidate = grant as { resource?: unknown; actions?: unknown };
-    return candidate.resource === "queues" &&
-      Array.isArray(candidate.actions) &&
-      candidate.actions.includes("update");
-  });
 }
 
 interface QueueFlagToggleProps {
@@ -154,8 +137,6 @@ export function QueueDetailPage() {
   const { data, isLoading, error } = useQueue(queueRef);
   const updateQueue = useUpdateQueue();
   useQueueStream({ queueRef });
-  const { data: identityData, isLoading: isIdentityLoading } = useIdentity(user?.id ?? 0);
-  const { data: permissionSetsData, isLoading: isPermissionSetsLoading } = usePermissionSets();
   const queue = data?.data;
   const { data: actionData } = useAction(queue?.dispatch_action_ref || "");
   const statuses = useMemo(
@@ -183,31 +164,8 @@ export function QueueDetailPage() {
   const itemPagination = itemsData?.pagination;
   const itemTotal = itemPagination?.total_items ?? 0;
   const sourceBadge = queue ? getQueueSourceBadge(queue.is_adhoc) : null;
-  const canUpdateQueues = useMemo(() => {
-    if (!user) {
-      return false;
-    }
-
-    const identity = identityData?.data;
-    if (!identity || !permissionSetsData) {
-      return false;
-    }
-
-    const directlyAssignedRefs = new Set(
-      identity.direct_permissions.map((assignment) => assignment.permission_set_ref),
-    );
-    const assignedRoles = new Set(identity.roles.map((role) => role.role));
-
-    return permissionSetsData.some((permissionSet) => {
-      const matchesIdentity =
-        directlyAssignedRefs.has(permissionSet.ref) ||
-        permissionSet.roles.some((role) => assignedRoles.has(role.role));
-
-      return matchesIdentity && grantIncludesQueueUpdate(permissionSet.grants);
-    });
-  }, [identityData, permissionSetsData, user]);
-  const canUpdateQueuesResolved =
-    !user || (!isIdentityLoading && !isPermissionSetsLoading);
+  const canUpdateQueues = hasPermission(user, "queues", "update");
+  const canUpdateQueuesResolved = true;
   const queueFlagControlsDisabled =
     !queue || updateQueue.isPending || (canUpdateQueuesResolved && !canUpdateQueues);
 

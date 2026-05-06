@@ -18,3 +18,7 @@ grants:
     actions: [read]
   - resource: artifacts
     actions: [read]
+  - resource: runtimes
+    actions: [read]
+  - resource: workers
+    actions: [read]

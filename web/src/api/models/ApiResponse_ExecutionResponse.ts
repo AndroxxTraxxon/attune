@@ -36,6 +36,10 @@ export type ApiResponse_ExecutionResponse = {
          */
         executor?: number | null;
         /**
+         * Permission set refs embedded in the execution-scoped API token.
+         */
+        permission_set_refs?: Array<string>;
+        /**
          * Execution ID
          */
         id: number;
@@ -74,4 +78,3 @@ export type ApiResponse_ExecutionResponse = {
      */
     message?: string | null;
 };
-

@@ -159,6 +159,33 @@ impl Delete for IdentityRepository {
 }
 
 impl IdentityRepository {
+    pub async fn update_display_name<'e, E>(
+        executor: E,
+        id: Id,
+        display_name: Option<&str>,
+    ) -> Result<Identity>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        sqlx::query_as::<_, Identity>(
+            "UPDATE identity
+                SET display_name = $2,
+                    updated = NOW()
+              WHERE id = $1
+              RETURNING id, login, display_name, password_hash, attributes, frozen, created, updated",
+        )
+        .bind(id)
+        .bind(display_name)
+        .fetch_one(executor)
+        .await
+        .map_err(|e| {
+            if matches!(e, sqlx::Error::RowNotFound) {
+                return crate::Error::not_found("identity", "id", id.to_string());
+            }
+            e.into()
+        })
+    }
+
     pub async fn find_by_login<'e, E>(executor: E, login: &str) -> Result<Option<Identity>>
     where
         E: Executor<'e, Database = Postgres> + 'e,
@@ -614,6 +641,26 @@ impl Delete for PermissionSetRepository {
 }
 
 impl PermissionSetRepository {
+    pub async fn find_by_refs<'e, E>(executor: E, refs: &[String]) -> Result<Vec<PermissionSet>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        if refs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        sqlx::query_as::<_, PermissionSet>(
+            "SELECT id, ref, pack, pack_ref, label, description, grants, created, updated
+             FROM permission_set
+             WHERE ref = ANY($1)
+             ORDER BY ref ASC",
+        )
+        .bind(refs)
+        .fetch_all(executor)
+        .await
+        .map_err(Into::into)
+    }
+
     pub async fn find_by_identity<'e, E>(executor: E, identity_id: Id) -> Result<Vec<PermissionSet>>
     where
         E: Executor<'e, Database = Postgres> + 'e,

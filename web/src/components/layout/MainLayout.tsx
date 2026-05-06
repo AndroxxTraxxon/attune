@@ -1,8 +1,13 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Link, Outlet, useLocation } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { ChevronLeft, ChevronRight, User, LogOut } from "lucide-react";
+import {
+  hasAnyPermission,
+  requirementsForPath,
+  type PermissionRequirement,
+} from "@/lib/permissions";
 import { navIcons } from "./navIcons";
 
 type UserMenuPosition = {
@@ -61,7 +66,19 @@ const colorClasses = {
 };
 
 // Navigation sections with dividers and colors
-const navSections = [
+type NavItem = {
+  to: string;
+  label: string;
+  icon: React.ElementType;
+  color: string;
+  permissions?: PermissionRequirement[];
+};
+
+type NavSection = {
+  items: NavItem[];
+};
+
+const navSections: NavSection[] = [
   {
     items: [
       { to: "/", label: "Dashboard", icon: navIcons.dashboard, color: "gray" },
@@ -75,25 +92,35 @@ const navSections = [
         label: "Actions",
         icon: navIcons.actions,
         color: "cyan",
+        permissions: [{ resource: "actions" }],
       },
-      { to: "/rules", label: "Rules", icon: navIcons.rules, color: "blue" },
+      {
+        to: "/rules",
+        label: "Rules",
+        icon: navIcons.rules,
+        color: "blue",
+        permissions: [{ resource: "rules" }],
+      },
       {
         to: "/queues",
         label: "Queues",
         icon: navIcons.queues,
         color: "blue",
+        permissions: [{ resource: "queues" }],
       },
       {
         to: "/triggers",
         label: "Triggers",
         icon: navIcons.triggers,
         color: "violet",
+        permissions: [{ resource: "triggers" }],
       },
       {
         to: "/sensors",
         label: "Sensors",
         icon: navIcons.sensors,
         color: "purple",
+        permissions: [{ resource: "triggers" }],
       },
     ],
   },
@@ -105,24 +132,28 @@ const navSections = [
         label: "Execution History",
         icon: navIcons.executions,
         color: "fuchsia",
+        permissions: [{ resource: "executions" }],
       },
       {
         to: "/enforcements",
         label: "Enforcement History",
         icon: navIcons.enforcements,
         color: "rose",
+        permissions: [{ resource: "enforcements" }],
       },
       {
         to: "/events",
         label: "Event History",
         icon: navIcons.events,
         color: "orange",
+        permissions: [{ resource: "events" }],
       },
       {
         to: "/artifacts",
         label: "Artifacts",
         icon: navIcons.artifacts,
         color: "yellow",
+        permissions: [{ resource: "artifacts" }],
       },
     ],
   },
@@ -133,30 +164,35 @@ const navSections = [
         label: "Keys & Secrets",
         icon: navIcons.keys,
         color: "gray",
+        permissions: [{ resource: "keys" }],
       },
       {
         to: "/access-control",
         label: "Access Control",
         icon: navIcons.accessControl,
         color: "gray",
+        permissions: [{ resource: "identities" }, { resource: "permissions" }],
       },
       {
         to: "/audit-log",
         label: "Audit Log",
         icon: navIcons.auditLog,
         color: "gray",
+        permissions: [{ resource: "audit_log" }],
       },
       {
         to: "/packs",
         label: "Pack Management",
         icon: navIcons.packs,
         color: "gray",
+        permissions: [{ resource: "packs" }],
       },
       {
         to: "/runtimes",
         label: "Runtimes & Workers",
         icon: navIcons.runtimes,
         color: "gray",
+        permissions: [{ resource: "runtimes" }, { resource: "workers" }],
       },
     ],
   },
@@ -206,6 +242,7 @@ function NavLink({
 export default function MainLayout() {
   const { user, logout } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const userMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(() => {
     // Initialize from localStorage
@@ -222,6 +259,17 @@ export default function MainLayout() {
   useEffect(() => {
     localStorage.setItem("sidebar-collapsed", isCollapsed.toString());
   }, [isCollapsed]);
+
+  useEffect(() => {
+    const requiredPermissions = requirementsForPath(location.pathname);
+    if (
+      requiredPermissions &&
+      !hasAnyPermission(user, requiredPermissions) &&
+      location.pathname !== "/"
+    ) {
+      navigate("/", { replace: true });
+    }
+  }, [location.pathname, navigate, user]);
 
   useEffect(() => {
     if (!showUserMenu || !isCollapsed) {
@@ -292,31 +340,40 @@ export default function MainLayout() {
 
         {/* Navigation */}
         <nav className="flex-1 px-4 py-6 overflow-y-auto overflow-x-hidden">
-          {navSections.map((section, sectionIndex) => (
-            <div key={sectionIndex}>
-              <div className="space-y-1 mb-3">
-                {section.items.map((item) => {
-                  const isActive =
-                    location.pathname === item.to ||
-                    (item.to !== "/" && location.pathname.startsWith(item.to));
-                  return (
-                    <NavLink
-                      key={item.to}
-                      to={item.to}
-                      label={item.label}
-                      icon={item.icon}
-                      color={item.color}
-                      isCollapsed={isCollapsed}
-                      isActive={isActive}
-                    />
-                  );
-                })}
+          {navSections
+            .map((section) => ({
+              ...section,
+              items: section.items.filter((item) =>
+                hasAnyPermission(user, item.permissions),
+              ),
+            }))
+            .filter((section) => section.items.length > 0)
+            .map((section, sectionIndex, visibleSections) => (
+              <div key={sectionIndex}>
+                <div className="space-y-1 mb-3">
+                  {section.items.map((item) => {
+                    const isActive =
+                      location.pathname === item.to ||
+                      (item.to !== "/" &&
+                        location.pathname.startsWith(item.to));
+                    return (
+                      <NavLink
+                        key={item.to}
+                        to={item.to}
+                        label={item.label}
+                        icon={item.icon}
+                        color={item.color}
+                        isCollapsed={isCollapsed}
+                        isActive={isActive}
+                      />
+                    );
+                  })}
+                </div>
+                {sectionIndex < visibleSections.length - 1 && (
+                  <div className="my-3 mx-2 border-t border-gray-700" />
+                )}
               </div>
-              {sectionIndex < navSections.length - 1 && (
-                <div className="my-3 mx-2 border-t border-gray-700" />
-              )}
-            </div>
-          ))}
+            ))}
         </nav>
 
         {/* Toggle Button */}
@@ -360,12 +417,16 @@ export default function MainLayout() {
                 >
                   <User className="w-5 h-5 text-gray-400" />
                 </button>
-                <span
-                  className="ml-2 inline-block overflow-hidden transition-all duration-300 min-w-0"
+                <Link
+                  to="/profile"
+                  className="ml-2 inline-block overflow-hidden transition-all duration-300 min-w-0 rounded-sm font-medium text-sm text-white hover:text-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-400"
                   style={{ maxWidth: isCollapsed ? 0 : "8rem" }}
+                  title="User Profile"
                 >
-                  <p className="font-medium text-sm truncate">{user?.login}</p>
-                </span>
+                  <span className="block truncate">
+                    {user?.display_name || user?.login}
+                  </span>
+                </Link>
               </div>
               <span
                 className="ml-2 inline-block overflow-hidden transition-all duration-300"
@@ -400,9 +461,22 @@ export default function MainLayout() {
                   >
                     <div className="px-4 py-3 border-b border-gray-700">
                       <p className="text-sm font-medium text-white">
-                        {user?.login}
+                        {user?.display_name || user?.login}
                       </p>
+                      {user?.display_name && (
+                        <p className="mt-0.5 text-xs text-gray-400">
+                          {user?.login}
+                        </p>
+                      )}
                     </div>
+                    <Link
+                      to="/profile"
+                      onClick={() => setShowUserMenu(false)}
+                      className="flex items-center gap-2 px-4 py-2 text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                    >
+                      <User className="w-4 h-4" />
+                      <span>Profile</span>
+                    </Link>
                     <button
                       onClick={handleLogout}
                       className="w-full flex items-center gap-2 px-4 py-2 text-left text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"

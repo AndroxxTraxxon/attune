@@ -64,6 +64,7 @@ echo "Successfully wrote $key=$value"
                 "key": {"type": "string", "required": True},
                 "value": {"type": "string", "required": True},
             },
+            "default_execution_permission_set_refs": ["core.admin"],
         },
     )
     write_action_ref = write_action["ref"]
@@ -90,6 +91,7 @@ cat /tmp/attune_key_response.json
             "param_schema": {
                 "key": {"type": "string", "required": True},
             },
+            "default_execution_permission_set_refs": ["core.admin"],
         },
     )
     read_action_ref = read_action["ref"]
@@ -239,6 +241,7 @@ echo "Successfully wrote $key=$value"
                 "key": {"type": "string", "required": True},
                 "value": {"type": "string", "required": True},
             },
+            "default_execution_permission_set_refs": ["core.admin"],
         },
     )
     print(f"✓ Created write action: {write_action['ref']}")
@@ -264,6 +267,7 @@ cat /tmp/attune_key_response.json
             "param_schema": {
                 "key": {"type": "string", "required": True},
             },
+            "default_execution_permission_set_refs": ["core.admin"],
         },
     )
     print(f"✓ Created read action: {read_action['ref']}")

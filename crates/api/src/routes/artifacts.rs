@@ -43,7 +43,10 @@ use attune_common::repositories::{
 
 use crate::{
     auth::{jwt::TokenType, middleware::AuthenticatedUser, middleware::RequireAuth},
-    authz::{AuthorizationCheck, AuthorizationService},
+    authz::{
+        execution_has_standard_access, execution_standard_pack_refs, AuthorizationCheck,
+        AuthorizationService,
+    },
     dto::{
         artifact::{
             AllocateFileVersionByRefRequest, AppendProgressRequest, ArtifactJsonPatch,
@@ -1606,7 +1609,12 @@ fn execution_token_cross_pack_guard(
                 .to_string(),
         )
     })?;
-    if token_pack != artifact_pack {
+    if token_pack != artifact_pack
+        && !(execution_has_standard_access(user)
+            && execution_standard_pack_refs(user)
+                .iter()
+                .any(|pack_ref| pack_ref == artifact_pack))
+    {
         return Err(ApiError::Forbidden(format!(
             "Execution token from pack '{}' cannot mutate artifact owned by pack '{}'",
             token_pack, artifact_pack
@@ -1628,7 +1636,7 @@ fn execution_token_cross_pack_guard(
 ///   - **Unconstrained** `artifacts:<action>` grants do *not* unlock private
 ///     artifacts on their own; they only cover public artifacts.
 ///   - Identity-scoped private artifacts: only the owning identity may act.
-///   - Pack/Action/Sensor-scoped private artifacts: a `packs:<read|update>`
+///   - Pack/Action/Sensor-scoped private artifacts: a `packs:<read|configure>`
 ///     grant covering the derived pack ref also unlocks the artifact.
 ///
 /// Execution-token writes are additionally subject to the cross-pack guard:
@@ -1651,22 +1659,6 @@ async fn authorize_artifact_action(
     // Cross-pack write guard for execution tokens (writes only).
     if action != Action::Read {
         execution_token_cross_pack_guard(user, artifact)?;
-    }
-
-    // Execution tokens carry implicit authority within their executing pack:
-    // an in-flight `pack_x.deploy` action may freely read & write artifacts
-    // owned by `pack_x` regardless of the operator's grants. Cross-pack writes
-    // are already blocked by the guard above; cross-pack reads still fall
-    // through to the standard logic so public artifacts remain accessible.
-    if user.claims.token_type == TokenType::Execution {
-        if let (Some(artifact_pack), Some(token_pack)) = (
-            derive_pack_ref(artifact.scope, &artifact.owner),
-            execution_token_pack_ref(user),
-        ) {
-            if token_pack == artifact_pack {
-                return Ok(());
-            }
-        }
     }
 
     let identity_id = user
@@ -1724,11 +1716,11 @@ async fn authorize_artifact_action(
     }
 
     // (c) Pack/Action/Sensor-scoped: defer to parent-pack permissions. Reads
-    //     require `packs:read`; writes require `packs:update`.
+    //     require `packs:read`; writes require `packs:configure`.
     if let Some(pack_ref) = derive_pack_ref(artifact.scope, &artifact.owner) {
         let pack_action = match action {
             Action::Read => Action::Read,
-            _ => Action::Update,
+            _ => Action::Configure,
         };
         let mut pack_ctx = AuthorizationContext::new(identity_id);
         pack_ctx.pack_ref = Some(pack_ref.to_string());
@@ -1759,9 +1751,10 @@ async fn authorize_artifact_create(
         return Ok(());
     }
 
-    // Execution-token cross-pack guard for new artifacts. Tokens may freely
-    // create artifacts owned by their executing pack; cross-pack creation is
-    // forbidden up front.
+    // Execution-token cross-pack guard for new artifacts. Standard access can
+    // create artifacts scoped to the executing action/pack or workflow
+    // action/pack; otherwise explicit permission-set grants are required and
+    // still cannot cross the token's standard pack boundary.
     if user.claims.token_type == TokenType::Execution {
         if let Some(target_pack) = derive_pack_ref(scope, owner) {
             let token_pack = execution_token_pack_ref(user).ok_or_else(|| {
@@ -1770,14 +1763,17 @@ async fn authorize_artifact_create(
                         .to_string(),
                 )
             })?;
-            if token_pack != target_pack {
+            if token_pack != target_pack
+                && !(execution_has_standard_access(user)
+                    && execution_standard_pack_refs(user)
+                        .iter()
+                        .any(|pack_ref| pack_ref == target_pack))
+            {
                 return Err(ApiError::Forbidden(format!(
                     "Execution token from pack '{}' cannot create artifact owned by pack '{}'",
                     token_pack, target_pack
                 )));
             }
-            // Same-pack: implicit authority.
-            return Ok(());
         } else if scope_requires_pack(scope) {
             // Pack-derivable scope with malformed owner — refuse rather than
             // fall through to the standard RBAC path.
@@ -1849,14 +1845,14 @@ async fn authorize_artifact_create(
         return Err(denied());
     }
 
-    // Pack-derived fallback: `packs:update` on the parent pack.
+    // Pack-derived fallback: `packs:configure` on the parent pack.
     if let Some(pack_ref) = derive_pack_ref(scope, owner) {
         let mut pack_ctx = AuthorizationContext::new(identity_id);
         pack_ctx.pack_ref = Some(pack_ref.to_string());
         pack_ctx.target_ref = Some(pack_ref.to_string());
         if grants
             .iter()
-            .any(|g| g.allows(Resource::Packs, Action::Update, &pack_ctx))
+            .any(|g| g.allows(Resource::Packs, Action::Configure, &pack_ctx))
         {
             return Ok(());
         }
@@ -1922,6 +1918,8 @@ fn action_name_lower(action: Action) -> &'static str {
     match action {
         Action::Read => "read",
         Action::Create => "create",
+        Action::Install => "install",
+        Action::Configure => "configure",
         Action::Update => "update",
         Action::Delete => "delete",
         Action::Execute => "execute",

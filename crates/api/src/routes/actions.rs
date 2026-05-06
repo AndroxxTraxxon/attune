@@ -11,6 +11,7 @@ use serde_json::json;
 use std::sync::Arc;
 use validator::Validate;
 
+use attune_common::models::action::Action as ActionModel;
 use attune_common::rbac::{Action, AuthorizationContext, Resource};
 use attune_common::repositories::{
     action::{ActionRepository, ActionSearchFilters, CreateActionInput, UpdateActionInput},
@@ -21,11 +22,11 @@ use attune_common::repositories::{
 };
 
 use crate::{
-    auth::middleware::RequireAuth,
+    auth::middleware::{AuthenticatedUser, RequireAuth},
     authz::{AuthorizationCheck, AuthorizationService},
     dto::{
         action::{
-            ActionResponse, ActionSearchHit, ActionSearchParams, ActionSummary,
+            ActionListParams, ActionResponse, ActionSearchHit, ActionSearchParams, ActionSummary,
             CreateActionRequest, QueueStatsResponse, RuntimeVersionConstraintPatch,
             UpdateActionRequest,
         },
@@ -41,7 +42,7 @@ use crate::{
     get,
     path = "/api/v1/actions",
     tag = "actions",
-    params(PaginationParams),
+    params(ActionListParams),
     responses(
         (status = 200, description = "List of actions", body = PaginatedResponse<ActionSummary>),
     ),
@@ -49,24 +50,61 @@ use crate::{
 )]
 pub async fn list_actions(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
-    Query(pagination): Query<PaginationParams>,
+    RequireAuth(user): RequireAuth,
+    Query(query): Query<ActionListParams>,
 ) -> ApiResult<impl IntoResponse> {
+    let pagination = PaginationParams {
+        page: query.page,
+        page_size: query.page_size,
+    };
+    let fetch_limit = if query.executable_with_current_access {
+        10_000
+    } else {
+        pagination.limit()
+    };
+    let fetch_offset = if query.executable_with_current_access {
+        0
+    } else {
+        pagination.offset()
+    };
+
     // All filtering and pagination happen in a single SQL query.
     let filters = ActionSearchFilters {
         pack: None,
         packs: Vec::new(),
         query: None,
-        limit: pagination.limit(),
-        offset: pagination.offset(),
+        limit: fetch_limit,
+        offset: fetch_offset,
     };
 
     let result = ActionRepository::list_search(&state.db, &filters).await?;
+    let rows = if query.executable_with_current_access {
+        filter_executable_actions(&state, &user, result.rows).await?
+    } else {
+        result.rows
+    };
+    let total = if query.executable_with_current_access {
+        rows.len() as u64
+    } else {
+        result.total
+    };
+    let page_start = if query.executable_with_current_access {
+        pagination.offset() as usize
+    } else {
+        0
+    };
+    let page_rows: Vec<_> = if query.executable_with_current_access {
+        rows.into_iter()
+            .skip(page_start)
+            .take(pagination.limit() as usize)
+            .collect()
+    } else {
+        rows
+    };
 
     let runtime_refs =
-        fetch_runtime_refs(&state, result.rows.iter().filter_map(|a| a.runtime)).await?;
-    let paginated_actions: Vec<ActionSummary> = result
-        .rows
+        fetch_runtime_refs(&state, page_rows.iter().filter_map(|a| a.runtime)).await?;
+    let paginated_actions: Vec<ActionSummary> = page_rows
         .into_iter()
         .map(|a| {
             let mut summary = ActionSummary::from(a);
@@ -77,7 +115,7 @@ pub async fn list_actions(
         })
         .collect();
 
-    let response = PaginatedResponse::new(paginated_actions, &pagination, result.total);
+    let response = PaginatedResponse::new(paginated_actions, &pagination, total);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -228,6 +266,16 @@ pub async fn create_action(
 
     let runtime =
         resolve_runtime_id(&state, request.runtime, request.runtime_ref.as_deref()).await?;
+    if !request.default_execution_permission_set_refs.is_empty()
+        && !AuthorizationService::new(state.db.clone())
+            .can_delegate_permission_sets(&user, &request.default_execution_permission_set_refs)
+            .await?
+    {
+        return Err(ApiError::Forbidden(
+            "Cannot configure action default execution permission sets beyond current access"
+                .to_string(),
+        ));
+    }
 
     // Create action input
     let action_input = CreateActionInput {
@@ -244,6 +292,7 @@ pub async fn create_action(
         out_schema: request.out_schema,
         is_adhoc: true, // Actions created via API are ad-hoc (not from pack installation)
         accesses_mcp: request.accesses_mcp.unwrap_or(false),
+        default_execution_permission_set_refs: request.default_execution_permission_set_refs,
     };
 
     let action = ActionRepository::create(&state.db, action_input).await?;
@@ -308,6 +357,18 @@ pub async fn update_action(
 
     let runtime =
         resolve_runtime_id(&state, request.runtime, request.runtime_ref.as_deref()).await?;
+    if let Some(permission_set_refs) = &request.default_execution_permission_set_refs {
+        if !permission_set_refs.is_empty()
+            && !AuthorizationService::new(state.db.clone())
+                .can_delegate_permission_sets(&user, permission_set_refs)
+                .await?
+        {
+            return Err(ApiError::Forbidden(
+                "Cannot configure action default execution permission sets beyond current access"
+                    .to_string(),
+            ));
+        }
+    }
 
     // Create update input
     let update_input = UpdateActionInput {
@@ -328,6 +389,7 @@ pub async fn update_action(
         parameter_format: None,
         output_format: None,
         accesses_mcp: request.accesses_mcp,
+        default_execution_permission_set_refs: request.default_execution_permission_set_refs,
     };
 
     let action = ActionRepository::update(&state.db, existing_action.id, update_input).await?;
@@ -536,6 +598,54 @@ pub async fn search_actions(
     let response = PaginatedResponse::new(hits, &pagination, result.total);
 
     Ok((StatusCode::OK, Json(response)))
+}
+
+async fn filter_executable_actions(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    actions: Vec<ActionModel>,
+) -> ApiResult<Vec<ActionModel>> {
+    let authz = AuthorizationService::new(state.db.clone());
+    let mut allowed = Vec::new();
+    let identity_id = user.identity_id().ok();
+
+    for action_model in actions {
+        if matches!(
+            user.claims.token_type,
+            crate::auth::jwt::TokenType::Access | crate::auth::jwt::TokenType::Execution
+        ) {
+            let Some(identity_id) = identity_id else {
+                continue;
+            };
+            let mut ctx = AuthorizationContext::new(identity_id);
+            ctx.target_id = Some(action_model.id);
+            ctx.target_ref = Some(action_model.r#ref.clone());
+            ctx.pack_ref = Some(action_model.pack_ref.clone());
+            if authz
+                .authorize(
+                    user,
+                    AuthorizationCheck {
+                        resource: Resource::Actions,
+                        action: Action::Execute,
+                        context: ctx,
+                    },
+                )
+                .await
+                .is_err()
+            {
+                continue;
+            }
+        }
+
+        if authz
+            .can_delegate_permission_sets(user, &action_model.default_execution_permission_set_refs)
+            .await?
+        {
+            allowed.push(action_model);
+        }
+    }
+
+    Ok(allowed)
 }
 
 /// Bulk-resolve runtime IDs to refs.

@@ -11,6 +11,8 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub const STANDARD_EXECUTION_ACCESS_REF: &str = "standard";
+
 #[derive(Debug, Error)]
 pub enum JwtError {
     #[error("Failed to encode JWT: {0}")]
@@ -194,13 +196,70 @@ pub fn generate_execution_token(
     config: &JwtConfig,
     ttl_seconds: Option<i64>,
 ) -> Result<String, JwtError> {
+    generate_execution_token_with_permission_sets(
+        identity_id,
+        execution_id,
+        action_ref,
+        config,
+        ttl_seconds,
+        &[],
+    )
+}
+
+/// Generate an execution-scoped token constrained to explicit permission sets.
+///
+/// Execution tokens must not infer permissions from the triggering identity's
+/// roles. The listed permission set refs are embedded in token metadata and
+/// become the token's complete effective RBAC surface.
+pub fn generate_execution_token_with_permission_sets(
+    identity_id: i64,
+    execution_id: i64,
+    action_ref: &str,
+    config: &JwtConfig,
+    ttl_seconds: Option<i64>,
+    permission_set_refs: &[String],
+) -> Result<String, JwtError> {
+    generate_execution_token_with_permission_sets_and_standard_access(
+        identity_id,
+        execution_id,
+        action_ref,
+        config,
+        ttl_seconds,
+        permission_set_refs,
+        &[],
+    )
+}
+
+/// Generate an execution-scoped token with explicit permission sets and
+/// standard action/pack access context.
+///
+/// `standard_access_action_refs` is meaningful only when
+/// [`STANDARD_EXECUTION_ACCESS_REF`] is present in `permission_set_refs`.
+pub fn generate_execution_token_with_permission_sets_and_standard_access(
+    identity_id: i64,
+    execution_id: i64,
+    action_ref: &str,
+    config: &JwtConfig,
+    ttl_seconds: Option<i64>,
+    permission_set_refs: &[String],
+    standard_access_action_refs: &[String],
+) -> Result<String, JwtError> {
     let now = Utc::now();
     let expiration = ttl_seconds.unwrap_or(360); // Default: 6 minutes (5 min timeout + grace)
     let exp = (now + Duration::seconds(expiration)).timestamp();
 
+    let standard_access_pack_refs = standard_access_action_refs
+        .iter()
+        .filter_map(|action_ref| action_ref.split_once('.').map(|(pack_ref, _)| pack_ref))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
     let metadata = serde_json::json!({
         "execution_id": execution_id,
         "action_ref": action_ref,
+        "permission_set_refs": permission_set_refs,
+        "standard_access_action_refs": standard_access_action_refs,
+        "standard_access_pack_refs": standard_access_pack_refs,
     });
 
     let claims = Claims {
@@ -436,6 +495,62 @@ mod tests {
             diff > 590 && diff <= 600,
             "TTL should be ~600s, got {}s",
             diff
+        );
+    }
+
+    #[test]
+    fn test_generate_execution_token_with_permission_sets() {
+        let config = test_config();
+        let refs = vec![
+            "core.agent_reader".to_string(),
+            "core.agent_writer".to_string(),
+        ];
+
+        let token = generate_execution_token_with_permission_sets(
+            1,
+            100,
+            "core.agent",
+            &config,
+            Some(600),
+            &refs,
+        )
+        .expect("Failed to generate execution token");
+
+        let claims = validate_token(&token, &config).expect("Failed to validate token");
+        assert_eq!(claims.token_type, TokenType::Execution);
+        assert_eq!(
+            claims.metadata.expect("metadata")["permission_set_refs"],
+            serde_json::json!(refs)
+        );
+    }
+
+    #[test]
+    fn test_generate_execution_token_with_standard_access_context() {
+        let config = test_config();
+        let refs = vec![STANDARD_EXECUTION_ACCESS_REF.to_string()];
+        let standard_action_refs = vec!["sql.query".to_string(), "workflow_pack.sync".to_string()];
+
+        let token = generate_execution_token_with_permission_sets_and_standard_access(
+            1,
+            100,
+            "sql.query",
+            &config,
+            Some(600),
+            &refs,
+            &standard_action_refs,
+        )
+        .expect("Failed to generate execution token");
+
+        let claims = validate_token(&token, &config).expect("Failed to validate token");
+        let metadata = claims.metadata.expect("metadata");
+        assert_eq!(metadata["permission_set_refs"], serde_json::json!(refs));
+        assert_eq!(
+            metadata["standard_access_action_refs"],
+            serde_json::json!(standard_action_refs)
+        );
+        assert_eq!(
+            metadata["standard_access_pack_refs"],
+            serde_json::json!(["sql", "workflow_pack"])
         );
     }
 

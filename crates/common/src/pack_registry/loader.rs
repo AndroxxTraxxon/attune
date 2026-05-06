@@ -992,6 +992,18 @@ impl<'a> PackComponentLoader<'a> {
                 .get("accesses_mcp")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+            let default_execution_permission_set_refs: Vec<String> = data
+                .get("default_execution_permission_set_refs")
+                .and_then(|v| v.as_sequence())
+                .map(|refs| {
+                    refs.iter()
+                        .filter_map(|value| value.as_str())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
 
             // Check if action already exists — update in place if so
             if let Some(existing) = ActionRepository::find_by_ref(self.pool, &action_ref).await? {
@@ -1014,6 +1026,9 @@ impl<'a> PackComponentLoader<'a> {
                     parameter_format: Some(parameter_format),
                     output_format: Some(output_format),
                     accesses_mcp: Some(accesses_mcp),
+                    default_execution_permission_set_refs: Some(
+                        default_execution_permission_set_refs.clone(),
+                    ),
                 };
 
                 match ActionRepository::update(self.pool, existing.id, update_input).await {
@@ -1052,9 +1067,9 @@ impl<'a> PackComponentLoader<'a> {
                     ref, pack, pack_ref, label, description, entrypoint,
                     runtime, runtime_version_constraint, required_worker_runtimes,
                     param_schema, out_schema, is_adhoc, parameter_delivery, parameter_format,
-                    output_format, accesses_mcp
+                    output_format, accesses_mcp, default_execution_permission_set_refs
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
                 RETURNING id
                 "#,
             )
@@ -1074,6 +1089,7 @@ impl<'a> PackComponentLoader<'a> {
             .bind(&parameter_format)
             .bind(&output_format)
             .bind(accesses_mcp)
+            .bind(&default_execution_permission_set_refs)
             .fetch_one(self.pool)
             .await;
 
