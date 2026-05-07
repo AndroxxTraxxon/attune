@@ -9,7 +9,7 @@ Duration: ~5 seconds
 """
 
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from helpers import AttuneClient
@@ -46,7 +46,7 @@ def test_past_date_timer_immediate_execution(client: AttuneClient, test_pack):
 
     # Step 2: Create a date in the past (1 hour ago)
     print("\n[STEP 2] Creating date timer with past date...")
-    past_date = datetime.utcnow() - timedelta(hours=1)
+    past_date = datetime.now(timezone.utc) - timedelta(hours=1)
     date_str = past_date.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     trigger_ref = f"past_date_timer_{unique_ref()}"
@@ -176,7 +176,7 @@ def test_just_missed_date_timer(client: AttuneClient, test_pack):
 
     # Step 1: Create a date timer just 2 seconds in the past
     print("\n[STEP 1] Creating date timer 2 seconds in the past...")
-    past_date = datetime.utcnow() - timedelta(seconds=2)
+    past_date = datetime.now(timezone.utc) - timedelta(seconds=2)
     date_str = past_date.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     trigger_ref = f"just_missed_timer_{unique_ref()}"
@@ -248,7 +248,7 @@ def test_far_past_date_timer(client: AttuneClient, test_pack):
 
     # Step 1: Try to create a timer 1 year in the past
     print("\n[STEP 1] Creating date timer 1 year in the past...")
-    far_past_date = datetime.utcnow() - timedelta(days=365)
+    far_past_date = datetime.now(timezone.utc) - timedelta(days=365)
     date_str = far_past_date.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     trigger_ref = f"far_past_timer_{unique_ref()}"

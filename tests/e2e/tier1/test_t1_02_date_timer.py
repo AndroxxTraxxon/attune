@@ -19,7 +19,6 @@ Success Criteria:
 """
 
 import time
-from datetime import datetime
 
 import pytest
 from helpers import (
@@ -27,6 +26,7 @@ from helpers import (
     create_date_timer,
     create_echo_action,
     timestamp_future,
+    timestamp_now,
     wait_for_event_count,
     wait_for_execution_count,
     wait_for_execution_status,
@@ -58,7 +58,7 @@ class TestDateTimerAutomation:
         # Step 2: Create date timer (creates rule with trigger_params internally)
         print("\n[2/4] Creating date timer...")
         fire_at = timestamp_future(fire_in_seconds)
-        created_after = datetime.utcnow().isoformat() + "Z"
+        created_after = timestamp_now()
         timer = create_date_timer(
             client=client,
             fire_at=fire_at,

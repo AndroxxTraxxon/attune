@@ -7,7 +7,7 @@ triggers, actions, rules, etc.
 
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import shutil
 import tempfile
@@ -33,7 +33,7 @@ def unique_ref(prefix: str = "test") -> str:
 
 def timestamp_now() -> str:
     """Get current timestamp in ISO format"""
-    return datetime.utcnow().isoformat() + "Z"
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def timestamp_future(seconds: int) -> str:
@@ -46,8 +46,8 @@ def timestamp_future(seconds: int) -> str:
     Returns:
         ISO timestamp string
     """
-    future = datetime.utcnow() + timedelta(seconds=seconds)
-    return future.isoformat() + "Z"
+    future = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    return future.isoformat().replace("+00:00", "Z")
 
 
 # ============================================================================

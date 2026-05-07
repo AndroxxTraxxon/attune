@@ -2998,6 +2998,7 @@ impl ExecutionScheduler {
         // directives, collect successor tasks.
         // -----------------------------------------------------------------
         let mut tasks_to_schedule: Vec<String> = Vec::new();
+        let mut deferred_join_tasks: Vec<String> = Vec::new();
 
         if let Some(completed_task_node) = graph.get_task(task_name) {
             for transition in &completed_task_node.transitions {
@@ -3077,6 +3078,9 @@ impl ExecutionScheduler {
                                         "Task '{}' join barrier not met ({}/{} predecessors done)",
                                         next_task_name, inbound_completed, join_count
                                     );
+                                    if !deferred_join_tasks.contains(next_task_name) {
+                                        deferred_join_tasks.push(next_task_name.clone());
+                                    }
                                     continue;
                                 }
                             }
@@ -3159,7 +3163,8 @@ impl ExecutionScheduler {
 
         // Check if workflow is complete: no more tasks to schedule and no
         // children still running (excluding the ones we just scheduled).
-        let all_done = tasks_to_schedule.is_empty() && running_children == 0;
+        let all_done =
+            tasks_to_schedule.is_empty() && deferred_join_tasks.is_empty() && running_children == 0;
 
         if all_done {
             let has_failures = !failed_tasks.is_empty();

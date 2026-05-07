@@ -17,13 +17,14 @@ Success Criteria:
 """
 
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from helpers import (
     AttuneClient,
     create_cron_timer,
     create_echo_action,
+    timestamp_now,
     wait_for_event_count,
     wait_for_execution_count,
     wait_for_execution_status,
@@ -52,7 +53,7 @@ class TestCronTimerAutomation:
         action_ref = action["ref"]
 
         # Create cron timer (fixture creates rule internally)
-        created_after = datetime.utcnow().isoformat() + "Z"
+        created_after = timestamp_now()
         timer = create_cron_timer(
             client=client,
             cron_expression=cron_expression,
@@ -138,7 +139,7 @@ class TestCronTimerAutomation:
         action = create_echo_action(client=client, pack_ref=pack_ref)
         action_ref = action["ref"]
 
-        created_after = datetime.utcnow().isoformat() + "Z"
+        created_after = timestamp_now()
         timer = create_cron_timer(
             client=client,
             cron_expression=cron_expression,
@@ -204,7 +205,7 @@ class TestCronTimerAutomation:
         action = create_echo_action(client=client, pack_ref=pack_ref)
         action_ref = action["ref"]
 
-        created_after = datetime.utcnow().isoformat() + "Z"
+        created_after = timestamp_now()
         timer = create_cron_timer(
             client=client,
             cron_expression=cron_expression,
@@ -215,7 +216,7 @@ class TestCronTimerAutomation:
         assert rule is not None, "Failed to create cron timer rule"
 
         # Calculate wait time until next minute
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         current_second = now.second
         wait_until_next = 60 - current_second + 5  # +5 for sensor pickup delay
 
@@ -266,7 +267,7 @@ class TestCronTimerAutomation:
         action = create_echo_action(client=client, pack_ref=pack_ref)
         action_ref = action["ref"]
 
-        created_after = datetime.utcnow().isoformat() + "Z"
+        created_after = timestamp_now()
         timer = create_cron_timer(
             client=client,
             cron_expression=cron_expression,

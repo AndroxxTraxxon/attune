@@ -36,6 +36,11 @@ def _jwt_secret():
 
 def _make_execution_token(identity_id: int, execution_id: int, action_ref: str) -> str:
     now = int(time.time())
+    standard_pack_refs = []
+    if "." in action_ref:
+        pack_ref = action_ref.split(".", 1)[0]
+        if pack_ref:
+            standard_pack_refs.append(pack_ref)
     return jwt.encode(
         {
             "sub": str(identity_id),
@@ -45,6 +50,9 @@ def _make_execution_token(identity_id: int, execution_id: int, action_ref: str) 
             "metadata": {
                 "execution_id": execution_id,
                 "action_ref": action_ref,
+                "permission_set_refs": ["standard"],
+                "standard_access_action_refs": [action_ref] if action_ref else [],
+                "standard_access_pack_refs": standard_pack_refs,
             },
             "iat": now,
             "exp": now + 300,
