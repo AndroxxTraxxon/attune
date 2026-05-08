@@ -7,14 +7,14 @@ import {
   ReactNode,
 } from "react";
 import { AuthService, ApiError } from "@/api";
-import type { UserInfo } from "@/api";
+import type { CurrentUserResponse } from "@/api";
 import {
   startTokenRefreshMonitor,
   stopTokenRefreshMonitor,
 } from "@/lib/api-wrapper";
 
 interface AuthContextType {
-  user: UserInfo | null;
+  user: CurrentUserResponse | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (redirectTo?: string) => void;
@@ -34,7 +34,7 @@ interface AuthProviderProps {
 }
 
 export function AuthProvider({ children }: AuthProviderProps) {
-  const [user, setUser] = useState<UserInfo | null>(null);
+  const [user, setUser] = useState<CurrentUserResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {

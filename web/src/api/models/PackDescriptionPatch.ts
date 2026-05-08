@@ -11,6 +11,7 @@ export type PackDescriptionPatch = ({
 export namespace PackDescriptionPatch {
     export enum op {
         SET = 'set',
+        CLEAR = 'clear',
     }
 }
 

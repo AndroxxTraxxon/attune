@@ -11,6 +11,7 @@ export type TriggerStringPatch = ({
 export namespace TriggerStringPatch {
     export enum op {
         SET = 'set',
+        CLEAR = 'clear',
     }
 }
 

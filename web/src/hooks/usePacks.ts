@@ -1,5 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { PacksService } from "@/api";
+import { request as __request } from "@/api/core/request";
+import { OpenAPI } from "@/api/core/OpenAPI";
 import type { CreatePackRequest, UpdatePackRequest } from "@/api";
 
 interface PacksQueryParams {
@@ -92,7 +94,12 @@ export function useDeletePack() {
 export function usePackIndices() {
   return useQuery({
     queryKey: ["pack-indices"],
-    queryFn: () => PacksService.listPackIndices(),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    queryFn: (): Promise<any> =>
+      __request(OpenAPI, {
+        method: "GET",
+        url: "/api/v1/pack-indices",
+      }),
     staleTime: 30000,
   });
 }
@@ -106,7 +113,13 @@ export function useCreatePackIndex() {
       position?: number;
       enabled: boolean;
       headers: Record<string, string>;
-    }) => PacksService.createPackIndex({ requestBody: data }),
+    }) =>
+      __request(OpenAPI, {
+        method: "POST",
+        url: "/api/v1/pack-indices",
+        body: data,
+        mediaType: "application/json",
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["pack-indices"] });
       queryClient.invalidateQueries({ queryKey: ["indexed-packs"] });
@@ -128,7 +141,14 @@ export function useUpdatePackIndex() {
         position?: number;
         enabled?: boolean;
       };
-    }) => PacksService.updatePackIndex({ id, requestBody: data }),
+    }) =>
+      __request(OpenAPI, {
+        method: "PUT",
+        url: "/api/v1/pack-indices/{id}",
+        path: { id },
+        body: data,
+        mediaType: "application/json",
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["pack-indices"] });
       queryClient.invalidateQueries({ queryKey: ["indexed-packs"] });
@@ -139,7 +159,12 @@ export function useUpdatePackIndex() {
 export function useDeletePackIndex() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) => PacksService.deletePackIndex({ id }),
+    mutationFn: (id: number) =>
+      __request(OpenAPI, {
+        method: "DELETE",
+        url: "/api/v1/pack-indices/{id}",
+        path: { id },
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["pack-indices"] });
       queryClient.invalidateQueries({ queryKey: ["indexed-packs"] });
@@ -150,7 +175,13 @@ export function useDeletePackIndex() {
 export function useIndexedPacks(query?: string) {
   return useQuery({
     queryKey: ["indexed-packs", query],
-    queryFn: () => PacksService.browseIndexedPacks({ q: query || undefined }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    queryFn: (): Promise<any> =>
+      __request(OpenAPI, {
+        method: "GET",
+        url: "/api/v1/pack-indices/browse",
+        query: { q: query || undefined },
+      }),
     staleTime: 30000,
   });
 }

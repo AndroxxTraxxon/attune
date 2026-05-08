@@ -15,6 +15,7 @@ export type {
   RefreshTokenRequest,
   ChangePasswordRequest,
   UserInfo,
+  CurrentUserResponse,
 
   // Packs
   PackResponse,
@@ -148,12 +149,12 @@ export {
 // Prefer using the generated types directly.
 // ============================================================================
 
-import type { UserInfo } from "@/api";
+import type { CurrentUserResponse } from "@/api";
 
 /**
- * @deprecated Use UserInfo from '@/api' instead
+ * @deprecated Use CurrentUserResponse from '@/api' instead
  */
-export type User = UserInfo;
+export type User = CurrentUserResponse;
 
 /**
  * Common API Response wrapper (generic)

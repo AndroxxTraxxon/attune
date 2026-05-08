@@ -1,4 +1,4 @@
-import type { UserInfo } from "@/api";
+import type { CurrentUserResponse } from "@/api";
 
 export const STANDARD_EXECUTION_ACCESS_REF = "standard";
 
@@ -8,7 +8,7 @@ export type PermissionRequirement = {
 };
 
 export function hasPermission(
-  user: UserInfo | null,
+  user: CurrentUserResponse | null,
   resource: string,
   action = "read",
 ): boolean {
@@ -21,7 +21,7 @@ export function hasPermission(
 }
 
 export function hasAnyPermission(
-  user: UserInfo | null,
+  user: CurrentUserResponse | null,
   requirements: PermissionRequirement[] | undefined,
 ): boolean {
   if (!requirements || requirements.length === 0) {

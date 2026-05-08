@@ -385,15 +385,10 @@ function SensorDetail({ sensorRef }: { sensorRef: string }) {
               </div>
               <div>
                 <dt className="text-sm font-medium text-gray-500">
-                  Trigger Type
+                  Sensor Ref
                 </dt>
-                <dd className="mt-1 text-sm text-gray-900">
-                  <Link
-                    to={`/triggers/${sensor.data?.trigger_ref}`}
-                    className="text-blue-600 hover:text-blue-800"
-                  >
-                    {sensor.data?.trigger_ref}
-                  </Link>
+                <dd className="mt-1 text-sm text-gray-900 font-mono">
+                  {sensor.data?.ref}
                 </dd>
               </div>
               <div>
@@ -425,10 +420,10 @@ function SensorDetail({ sensorRef }: { sensorRef: string }) {
                 View Pack
               </Link>
               <Link
-                to={`/triggers/${sensor.data?.trigger_ref}`}
+                to={`/triggers`}
                 className="block w-full px-4 py-2 text-sm text-center bg-gray-100 hover:bg-gray-200 rounded"
               >
-                View Trigger Type
+                View Triggers
               </Link>
             </div>
           </div>

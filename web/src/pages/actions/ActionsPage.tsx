@@ -28,6 +28,7 @@ import {
   Pencil,
   Settings,
 } from "lucide-react";
+import ErrorDisplay from "@/components/common/ErrorDisplay";
 import ExecuteActionModal from "@/components/common/ExecuteActionModal";
 import MultiSelect from "@/components/common/MultiSelect";
 import {
