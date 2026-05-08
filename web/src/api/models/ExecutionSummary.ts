@@ -24,6 +24,10 @@ export type ExecutionSummary = {
      */
     id: number;
     /**
+     * ID of the original execution if this execution is a retry.
+     */
+    original_execution?: number | null;
+    /**
      * Parent execution ID
      */
     parent?: number | null;

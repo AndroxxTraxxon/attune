@@ -60,8 +60,16 @@ export function WebSocketProvider({
   maxReconnectAttempts = 10,
 }: WebSocketProviderProps) {
   // Construct WebSocket URL from base (add /ws path if not present)
-  const baseUrl =
-    providedUrl || import.meta.env.VITE_WS_URL || "ws://localhost:8081";
+  // Priority: explicit prop > env var > runtime config > derive from current origin via /ws/ proxy
+  const baseUrl = (() => {
+    if (providedUrl) return providedUrl;
+    if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL;
+    const runtimeWs = window.__ATTUNE_RUNTIME_CONFIG__?.wsUrl;
+    if (runtimeWs) return runtimeWs;
+    // Derive from current page origin — nginx proxies /ws/ to the notifier
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${window.location.host}/ws`;
+  })();
   const url = baseUrl.endsWith("/ws") ? baseUrl : `${baseUrl}/ws`;
 
   const [connected, setConnected] = useState(false);

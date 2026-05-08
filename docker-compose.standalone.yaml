@@ -47,7 +47,7 @@ services:
       - -c
       - |
         if ! command -v curl >/dev/null 2>&1; then
-          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+          DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null 2>&1
         fi
         # Create local (empty) directories for packs and artifacts.
         # The agent will detect no sentinel and use API transport.
@@ -114,7 +114,7 @@ services:
       - -c
       - |
         if ! command -v curl >/dev/null 2>&1; then
-          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+          DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null 2>&1
         fi
         mkdir -p /opt/attune/packs /opt/attune/artifacts /opt/attune/runtime_envs /opt/attune/logs
         exec /opt/attune/agent/attune-sensor-agent

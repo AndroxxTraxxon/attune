@@ -16,23 +16,17 @@ export class AgentService {
      */
     public static downloadAgentBinary({
         arch,
-        token,
     }: {
         /**
          * Target architecture (x86_64, aarch64). Defaults to x86_64.
          */
         arch?: string | null,
-        /**
-         * Optional bootstrap token for authentication
-         */
-        token?: string | null,
     }): CancelablePromise<any> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/api/v1/agent/binary',
             query: {
                 'arch': arch,
-                'token': token,
             },
             errors: {
                 400: `Invalid architecture`,

@@ -385,7 +385,7 @@ services:
       - -c
       - |
         if ! command -v curl >/dev/null 2>&1; then
-          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+          DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null 2>&1
         fi
         exec /opt/attune/agent/attune-agent
     stop_grace_period: 45s
@@ -439,7 +439,7 @@ services:
       - -c
       - |
         if ! command -v curl >/dev/null 2>&1; then
-          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+          DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null 2>&1
         fi
         exec /opt/attune/agent/attune-agent
     stop_grace_period: 45s
@@ -493,7 +493,7 @@ services:
       - -c
       - |
         if ! command -v curl >/dev/null 2>&1; then
-          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+          DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null 2>&1
         fi
         exec /opt/attune/agent/attune-agent
     stop_grace_period: 45s
@@ -547,7 +547,7 @@ services:
       - -c
       - |
         if ! command -v curl >/dev/null 2>&1; then
-          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+          DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null 2>&1
         fi
         exec /opt/attune/agent/attune-agent
     stop_grace_period: 45s
@@ -722,8 +722,6 @@ services:
       dockerfile: docker/Dockerfile.web
     container_name: attune-web
     environment:
-      API_URL: ${API_URL:-http://localhost:8080}
-      WS_URL: ${WS_URL:-ws://localhost:8081}
       ENVIRONMENT: docker
     ports:
       - "3000:80"

@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { RuntimeVersionConstraintPatch } from './RuntimeVersionConstraintPatch';
+import type { WorkerAffinity } from './WorkerAffinity';
 /**
  * Request DTO for updating an action
  */
@@ -14,7 +15,7 @@ export type UpdateActionRequest = {
     /**
      * Default permission set refs for execution-scoped API tokens.
      */
-    default_execution_permission_set_refs?: Array<string> | null;
+    default_execution_permission_set_refs?: any[] | null;
     /**
      * Action description
      */
@@ -43,5 +44,19 @@ export type UpdateActionRequest = {
      * Runtime ID
      */
     runtime?: number | null;
+    /**
+     * Runtime reference
+     */
+    runtime_ref?: string | null;
     runtime_version_constraint?: (null | RuntimeVersionConstraintPatch);
+    worker_affinity?: (null | WorkerAffinity);
+    /**
+     * Exact worker label requirements. All labels must match the selected worker.
+     */
+    worker_selector: any | null;
+    /**
+     * Tolerations that allow scheduling onto workers with matching taints.
+     */
+    worker_tolerations?: any[] | null;
 };
+

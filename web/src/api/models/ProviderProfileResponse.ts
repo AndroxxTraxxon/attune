@@ -7,13 +7,13 @@
  */
 export type ProviderProfileResponse = {
     /**
-     * LDAP distinguished name, when available.
-     */
-    distinguished_name?: string | null;
-    /**
      * Provider-issued display name.
      */
     display_name?: string | null;
+    /**
+     * LDAP distinguished name, when available.
+     */
+    distinguished_name?: string | null;
     /**
      * Provider-issued email address.
      */

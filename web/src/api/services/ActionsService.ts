@@ -7,6 +7,8 @@ import type { PaginatedResponse_ActionSearchHit } from '../models/PaginatedRespo
 import type { PaginatedResponse_ActionSummary } from '../models/PaginatedResponse_ActionSummary';
 import type { SuccessResponse } from '../models/SuccessResponse';
 import type { UpdateActionRequest } from '../models/UpdateActionRequest';
+import type { WorkerAffinity } from '../models/WorkerAffinity';
+import type { WorkerToleration } from '../models/WorkerToleration';
 import type { CancelablePromise } from '../core/CancelablePromise';
 import { OpenAPI } from '../core/OpenAPI';
 import { request as __request } from '../core/request';
@@ -68,6 +70,10 @@ export class ActionsService {
              */
             created: string;
             /**
+             * Default permission set refs used when executions do not explicitly override token permissions.
+             */
+            default_execution_permission_set_refs?: Array<string>;
+            /**
              * Action description
              */
             description?: string | null;
@@ -127,6 +133,18 @@ export class ActionsService {
              * Last update timestamp
              */
             updated: string;
+            /**
+             * Required/preferred worker label affinity and required anti-affinity.
+             */
+            worker_affinity?: WorkerAffinity;
+            /**
+             * Exact worker label requirements.
+             */
+            worker_selector?: Record<string, any>;
+            /**
+             * Tolerations for worker taints.
+             */
+            worker_tolerations?: Array<WorkerToleration>;
             /**
              * Workflow definition ID (non-null if this action is a workflow)
              */
@@ -223,6 +241,10 @@ export class ActionsService {
              */
             created: string;
             /**
+             * Default permission set refs used when executions do not explicitly override token permissions.
+             */
+            default_execution_permission_set_refs?: Array<string>;
+            /**
              * Action description
              */
             description?: string | null;
@@ -282,6 +304,18 @@ export class ActionsService {
              * Last update timestamp
              */
             updated: string;
+            /**
+             * Required/preferred worker label affinity and required anti-affinity.
+             */
+            worker_affinity?: WorkerAffinity;
+            /**
+             * Exact worker label requirements.
+             */
+            worker_selector?: Record<string, any>;
+            /**
+             * Tolerations for worker taints.
+             */
+            worker_tolerations?: Array<WorkerToleration>;
             /**
              * Workflow definition ID (non-null if this action is a workflow)
              */
@@ -331,6 +365,10 @@ export class ActionsService {
              */
             created: string;
             /**
+             * Default permission set refs used when executions do not explicitly override token permissions.
+             */
+            default_execution_permission_set_refs?: Array<string>;
+            /**
              * Action description
              */
             description?: string | null;
@@ -390,6 +428,18 @@ export class ActionsService {
              * Last update timestamp
              */
             updated: string;
+            /**
+             * Required/preferred worker label affinity and required anti-affinity.
+             */
+            worker_affinity?: WorkerAffinity;
+            /**
+             * Exact worker label requirements.
+             */
+            worker_selector?: Record<string, any>;
+            /**
+             * Tolerations for worker taints.
+             */
+            worker_tolerations?: Array<WorkerToleration>;
             /**
              * Workflow definition ID (non-null if this action is a workflow)
              */

@@ -55,6 +55,7 @@ export interface ArtifactResponse {
 export interface ArtifactVersionSummary {
   id: number;
   version: number;
+  execution: number | null;
   content_type: string | null;
   size_bytes: number | null;
   created_by: string | null;

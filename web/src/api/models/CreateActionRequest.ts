@@ -2,6 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { WorkerAffinity } from './WorkerAffinity';
+import type { WorkerToleration } from './WorkerToleration';
 /**
  * Request DTO for creating a new action
  */
@@ -53,7 +55,21 @@ export type CreateActionRequest = {
      */
     runtime?: number | null;
     /**
+     * Optional runtime reference for this action
+     */
+    runtime_ref?: string | null;
+    /**
      * Optional semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0")
      */
     runtime_version_constraint?: string | null;
+    worker_affinity?: WorkerAffinity;
+    /**
+     * Exact worker label requirements. All labels must match the selected worker.
+     */
+    worker_selector?: Record<string, any>;
+    /**
+     * Tolerations that allow scheduling onto workers with matching taints.
+     */
+    worker_tolerations?: Array<WorkerToleration>;
 };
+

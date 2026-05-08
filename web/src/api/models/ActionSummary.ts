@@ -2,6 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { WorkerAffinity } from './WorkerAffinity';
+import type { WorkerToleration } from './WorkerToleration';
 /**
  * Simplified action response (for list endpoints)
  */
@@ -63,7 +65,20 @@ export type ActionSummary = {
      */
     updated: string;
     /**
+     * Required/preferred worker label affinity and required anti-affinity.
+     */
+    worker_affinity?: WorkerAffinity;
+    /**
+     * Exact worker label requirements.
+     */
+    worker_selector?: Record<string, any>;
+    /**
+     * Tolerations for worker taints.
+     */
+    worker_tolerations?: Array<WorkerToleration>;
+    /**
      * Workflow definition ID (non-null if this action is a workflow)
      */
     workflow_def?: number | null;
 };
+

@@ -3,8 +3,10 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { ChangePasswordRequest } from '../models/ChangePasswordRequest';
+import type { EffectivePermissionResponse } from '../models/EffectivePermissionResponse';
 import type { LdapLoginRequest } from '../models/LdapLoginRequest';
 import type { LoginRequest } from '../models/LoginRequest';
+import type { ProviderProfileResponse } from '../models/ProviderProfileResponse';
 import type { RefreshTokenRequest } from '../models/RefreshTokenRequest';
 import type { RegisterRequest } from '../models/RegisterRequest';
 import type { UpdateCurrentUserRequest } from '../models/UpdateCurrentUserRequest';
@@ -182,36 +184,20 @@ export class AuthService {
             /**
              * Effective resource-level permissions assigned to this identity.
              */
-            effective_permissions: Array<{
-                actions: Array<string>;
-                resource: string;
-            }>;
+            effective_permissions: Array<EffectivePermissionResponse>;
             /**
              * Identity ID
              */
             id: number;
             /**
-             * Identity login
-             */
-            login: string;
-            /**
-             * Sanitized user information supplied by the external identity provider.
-             */
-            provider_profile?: ({
-                distinguished_name?: string | null;
-                display_name?: string | null;
-                email?: string | null;
-                email_verified?: boolean | null;
-                groups: Array<string>;
-                issuer?: string | null;
-                login?: string | null;
-                provider: string;
-                subject?: string | null;
-            }) | null;
-            /**
              * Whether this identity is managed locally by Attune.
              */
             is_local: boolean;
+            /**
+             * Identity login
+             */
+            login: string;
+            provider_profile?: (null | ProviderProfileResponse);
         };
         /**
          * Optional message
@@ -261,36 +247,20 @@ export class AuthService {
             /**
              * Effective resource-level permissions assigned to this identity.
              */
-            effective_permissions: Array<{
-                actions: Array<string>;
-                resource: string;
-            }>;
+            effective_permissions: Array<EffectivePermissionResponse>;
             /**
              * Identity ID
              */
             id: number;
             /**
-             * Identity login
-             */
-            login: string;
-            /**
-             * Sanitized user information supplied by the external identity provider.
-             */
-            provider_profile?: ({
-                distinguished_name?: string | null;
-                display_name?: string | null;
-                email?: string | null;
-                email_verified?: boolean | null;
-                groups: Array<string>;
-                issuer?: string | null;
-                login?: string | null;
-                provider: string;
-                subject?: string | null;
-            }) | null;
-            /**
              * Whether this identity is managed locally by Attune.
              */
             is_local: boolean;
+            /**
+             * Identity login
+             */
+            login: string;
+            provider_profile?: (null | ProviderProfileResponse);
         };
         /**
          * Optional message

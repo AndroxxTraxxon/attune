@@ -13,6 +13,8 @@ import type {
   ActionSummary,
   ExecutionSummary,
   PermissionSetSummary,
+  WorkerToleration,
+  WorkerAffinity,
 } from "@/api";
 import type { ParamSchemaProperty } from "@/components/common/ParamSchemaForm";
 import {
@@ -24,9 +26,15 @@ import {
   Plus,
   GitBranch,
   Pencil,
+  Settings,
 } from "lucide-react";
 import ExecuteActionModal from "@/components/common/ExecuteActionModal";
-import ErrorDisplay from "@/components/common/ErrorDisplay";
+import MultiSelect from "@/components/common/MultiSelect";
+import {
+  WorkerSelectorEditor,
+  WorkerTolerationsEditor,
+  WorkerAffinityEditor,
+} from "@/components/common/WorkerPlacementEditors";
 import { extractProperties } from "@/components/common/ParamSchemaForm";
 import { STANDARD_EXECUTION_ACCESS_REF } from "@/lib/permissions";
 
@@ -331,6 +339,7 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
   const deleteAction = useDeleteAction();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showExecuteModal, setShowExecuteModal] = useState(false);
+  const [showConfigureModal, setShowConfigureModal] = useState(false);
 
   const handleDelete = async () => {
     try {
@@ -399,6 +408,13 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
               <Play className="h-4 w-4" />
               Execute
             </button>
+            <button
+              onClick={() => setShowConfigureModal(true)}
+              className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 flex items-center gap-2"
+            >
+              <Settings className="h-4 w-4" />
+              Configure
+            </button>
             {/* Only show delete button for ad-hoc actions (not from pack installation) */}
             {action.data?.is_adhoc && (
               <button
@@ -451,6 +467,14 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
         />
       )}
 
+      {/* Configure Action Modal */}
+      {showConfigureModal && (
+        <ConfigureActionModal
+          action={action.data!}
+          onClose={() => setShowConfigureModal(false)}
+        />
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main Info Card */}
         <div className="lg:col-span-2 space-y-6">
@@ -499,8 +523,13 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
               {action.data?.runtime && (
                 <div>
                   <dt className="text-sm font-medium text-gray-500">Runtime</dt>
-                  <dd className="mt-1 text-sm text-gray-900">
-                    Runtime #{action.data.runtime}
+                  <dd className="mt-1 text-sm text-gray-900 font-mono">
+                    {action.data.runtime_ref || `#${action.data.runtime}`}
+                    {action.data.runtime_version_constraint && (
+                      <span className="ml-1 text-gray-500">
+                        {action.data.runtime_version_constraint}
+                      </span>
+                    )}
                   </dd>
                 </div>
               )}
@@ -641,9 +670,10 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
                 </div>
               </div>
             )}
-          </div>
 
-          <DefaultExecutionPermissionsCard action={actionDetails} />
+            {/* Execution Defaults */}
+            <ActionDefaultsDisplay action={actionDetails} />
+          </div>
 
           {/* Recent Executions */}
           <div className="bg-white shadow rounded-lg p-6">
@@ -745,25 +775,6 @@ function ActionDetail({ actionRef }: { actionRef: string }) {
   );
 }
 
-function normalizePermissionSetRefs(input: string): string[] {
-  const seen = new Set<string>();
-  return input
-    .split(/[\s,]+/)
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .filter((value) => {
-      if (seen.has(value)) {
-        return false;
-      }
-      seen.add(value);
-      return true;
-    });
-}
-
-function formatPermissionSetRefs(refs: string[] | undefined): string {
-  return refs?.join("\n") ?? "";
-}
-
 function PermissionSetRefChips({ refs }: { refs: string[] }) {
   if (refs.length === 0) {
     return (
@@ -799,130 +810,412 @@ function PermissionSetRefChips({ refs }: { refs: string[] }) {
   );
 }
 
-function DefaultExecutionPermissionsCard({ action }: { action: ActionResponse }) {
-  const resetKey = `${action.ref}:${formatPermissionSetRefs(action.default_execution_permission_set_refs)}`;
-  return <DefaultExecutionPermissionsEditor key={resetKey} action={action} />;
+function ActionDefaultsDisplay({ action }: { action: ActionResponse }) {
+  const currentRefs = action.default_execution_permission_set_refs ?? [];
+  const selector = action.worker_selector ?? {};
+  const tolerations = (action.worker_tolerations ?? []) as WorkerToleration[];
+  const affinity = (action.worker_affinity ?? {}) as WorkerAffinity;
+  const selectorEntries = Object.entries(selector);
+  const hasAffinity =
+    (affinity.required?.length ?? 0) > 0 ||
+    (affinity.preferred?.length ?? 0) > 0 ||
+    (affinity.anti_affinity?.length ?? 0) > 0;
+  const hasPlacement =
+    selectorEntries.length > 0 || tolerations.length > 0 || hasAffinity;
+  const hasAnything = currentRefs.length > 0 || action.accesses_mcp || hasPlacement;
+
+  if (!hasAnything) return null;
+
+  return (
+    <div className="mt-6 border-t border-gray-200 pt-6">
+      <h3 className="text-sm font-medium text-gray-900 mb-4">
+        Execution Defaults
+      </h3>
+
+      <div className="space-y-4">
+        {/* Accesses MCP */}
+        {action.accesses_mcp && (
+          <div>
+            <dt className="text-sm font-medium text-gray-500 mb-1">MCP Access</dt>
+            <dd>
+              <span className="text-xs px-2 py-1 rounded bg-purple-50 text-purple-700">
+                Accesses MCP
+              </span>
+            </dd>
+          </div>
+        )}
+
+        {/* Token Access */}
+        {currentRefs.length > 0 && (
+          <div>
+            <dt className="text-sm font-medium text-gray-500 mb-1">
+              Default Token Access
+            </dt>
+            <dd>
+              <PermissionSetRefChips refs={currentRefs} />
+            </dd>
+          </div>
+        )}
+
+        {/* Worker Selector */}
+        {selectorEntries.length > 0 && (
+          <div>
+            <dt className="text-sm font-medium text-gray-500 mb-1">
+              Worker Selector
+            </dt>
+            <dd className="flex flex-wrap gap-2">
+              {selectorEntries.map(([key, value]) => (
+                <span
+                  key={key}
+                  className="font-mono text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-700"
+                >
+                  {key}={String(value)}
+                </span>
+              ))}
+            </dd>
+          </div>
+        )}
+
+        {/* Worker Tolerations */}
+        {tolerations.length > 0 && (
+          <div>
+            <dt className="text-sm font-medium text-gray-500 mb-1">
+              Worker Tolerations
+            </dt>
+            <dd className="space-y-1">
+              {tolerations.map((t, i) => (
+                <div
+                  key={i}
+                  className="inline-block font-mono text-xs px-2 py-1 rounded bg-amber-50 text-amber-700 mr-2"
+                >
+                  {t.key}
+                  {t.operator === "exists" ? " exists" : `=${t.value ?? "*"}`}
+                  {t.effect ? ` (${t.effect})` : ""}
+                </div>
+              ))}
+            </dd>
+          </div>
+        )}
+
+        {/* Worker Affinity */}
+        {hasAffinity && (
+          <div>
+            <dt className="text-sm font-medium text-gray-500 mb-1">
+              Worker Affinity
+            </dt>
+            <dd>
+              <div className="space-y-2">
+                {(affinity.required?.length ?? 0) > 0 && (
+                  <div>
+                    <span className="text-xs font-medium text-gray-500 mr-2">Required:</span>
+                    {affinity.required!.map((term, i) => (
+                      <span key={i} className="inline-block mr-2">
+                        {Object.entries(term.match_labels ?? {}).map(([k, v]) => (
+                          <span
+                            key={k}
+                            className="font-mono text-xs px-2 py-1 rounded bg-green-50 text-green-700 mr-1"
+                          >
+                            {k}={v}
+                          </span>
+                        ))}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {(affinity.preferred?.length ?? 0) > 0 && (
+                  <div>
+                    <span className="text-xs font-medium text-gray-500 mr-2">Preferred:</span>
+                    {affinity.preferred!.map((pt, i) => (
+                      <span key={i} className="inline-block mr-2">
+                        <span className="text-xs text-gray-400 mr-1">
+                          (w:{pt.weight ?? 1})
+                        </span>
+                        {Object.entries(pt.preference?.match_labels ?? {}).map(([k, v]) => (
+                          <span
+                            key={k}
+                            className="font-mono text-xs px-2 py-1 rounded bg-blue-50 text-blue-700 mr-1"
+                          >
+                            {k}={v}
+                          </span>
+                        ))}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {(affinity.anti_affinity?.length ?? 0) > 0 && (
+                  <div>
+                    <span className="text-xs font-medium text-gray-500 mr-2">Anti-Affinity:</span>
+                    {affinity.anti_affinity!.map((term, i) => (
+                      <span key={i} className="inline-block mr-2">
+                        {Object.entries(term.match_labels ?? {}).map(([k, v]) => (
+                          <span
+                            key={k}
+                            className="font-mono text-xs px-2 py-1 rounded bg-red-50 text-red-700 mr-1"
+                          >
+                            {k}={v}
+                          </span>
+                        ))}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </dd>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
-function DefaultExecutionPermissionsEditor({ action }: { action: ActionResponse }) {
-  const currentRefs = action.default_execution_permission_set_refs ?? [];
+function ConfigureActionModal({
+  action,
+  onClose,
+}: {
+  action: ActionResponse;
+  onClose: () => void;
+}) {
   const updateAction = useUpdateAction();
   const { data: permissionSets, isLoading: permissionSetsLoading } =
     usePermissionSets();
-  const [draftRefs, setDraftRefs] = useState(formatPermissionSetRefs(currentRefs));
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const normalizedDraftRefs = useMemo(
-    () => normalizePermissionSetRefs(draftRefs),
-    [draftRefs],
+  const [label, setLabel] = useState(action.label);
+  const [description, setDescription] = useState(action.description ?? "");
+  const [entrypoint, setEntrypoint] = useState(action.entrypoint);
+  const [accessesMcp, setAccessesMcp] = useState(action.accesses_mcp ?? false);
+  const [selectedPermRefs, setSelectedPermRefs] = useState<string[]>([
+    ...(action.default_execution_permission_set_refs ?? []),
+  ]);
+  const [selector, setSelector] = useState<Record<string, string>>(
+    (action.worker_selector as Record<string, string>) ?? {},
   );
-  const knownPermissionSetRefs = useMemo(
-    () => new Set((permissionSets ?? []).map((set: PermissionSetSummary) => set.ref)),
+  const [tolerations, setTolerations] = useState<WorkerToleration[]>(
+    (action.worker_tolerations as WorkerToleration[]) ?? [],
+  );
+  const [affinity, setAffinity] = useState<WorkerAffinity>(
+    (action.worker_affinity as WorkerAffinity) ?? {},
+  );
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const allPermissionSetRefs = useMemo(
+    () => (permissionSets ?? []).map((set: PermissionSetSummary) => set.ref),
     [permissionSets],
   );
-  const unknownRefs =
-    permissionSets && !permissionSetsLoading
-      ? normalizedDraftRefs.filter(
-          (ref) =>
-            ref !== STANDARD_EXECUTION_ACCESS_REF &&
-            !knownPermissionSetRefs.has(ref),
-        )
-      : [];
-  const hasChanges =
-    normalizedDraftRefs.join("\n") !== formatPermissionSetRefs(currentRefs);
+
+  const selectablePermOptions = useMemo(() => {
+    const refSet = new Set([
+      STANDARD_EXECUTION_ACCESS_REF,
+      ...allPermissionSetRefs,
+      ...selectedPermRefs,
+    ]);
+    return Array.from(refSet)
+      .sort((a, b) => a.localeCompare(b))
+      .map((ref) => ({
+        value: ref,
+        label:
+          ref === STANDARD_EXECUTION_ACCESS_REF
+            ? "standard (action/pack-scoped keys and artifacts)"
+            : ref,
+      }));
+  }, [allPermissionSetRefs, selectedPermRefs]);
 
   const save = async () => {
     setErrorMessage(null);
+    setSuccessMessage(null);
+
+    const hasSelector = Object.keys(selector).length > 0;
+    const hasTolerations = tolerations.length > 0;
+    const hasAffinity =
+      (affinity.required?.length ?? 0) > 0 ||
+      (affinity.preferred?.length ?? 0) > 0 ||
+      (affinity.anti_affinity?.length ?? 0) > 0;
+
     try {
       await updateAction.mutateAsync({
         ref: action.ref,
         data: {
-          label: action.label,
-          description: action.description ?? null,
-          entrypoint: action.entrypoint,
+          label,
+          description: description || null,
+          entrypoint,
+          accesses_mcp: accessesMcp,
+          default_execution_permission_set_refs: selectedPermRefs,
+          worker_selector: hasSelector ? selector : null,
+          worker_tolerations: hasTolerations ? tolerations : null,
+          worker_affinity: hasAffinity ? affinity : null,
+          // Preserve fields we don't edit in this modal
           runtime: action.runtime ?? null,
           required_worker_runtimes: action.required_worker_runtimes ?? {},
           param_schema: action.param_schema ?? null,
           out_schema: action.out_schema ?? null,
-          accesses_mcp: action.accesses_mcp,
-          default_execution_permission_set_refs: normalizedDraftRefs,
         },
       });
+      setSuccessMessage("Action defaults saved.");
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Failed to save permission refs");
+      setErrorMessage(
+        err instanceof Error ? err.message : "Failed to save action defaults",
+      );
     }
   };
 
   return (
-    <div className="bg-white shadow rounded-lg p-6">
-      <div className="flex items-start justify-between gap-4 mb-4">
-        <div>
-          <h2 className="text-xl font-semibold">Default Execution Token Access</h2>
-          <p className="text-sm text-gray-600 mt-1">
-            These permission set refs are applied to executions when the caller
-            does not explicitly override token access. Leave empty for no
-            execution-scoped API token by default.
-          </p>
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b sticky top-0 bg-white z-10">
+          <h2 className="text-xl font-bold">Configure Action Defaults</h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600"
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
-      </div>
 
-      <div className="mb-4">
-        <dt className="text-sm font-medium text-gray-500 mb-2">
-          Current permission set refs
-        </dt>
-        <dd>
-          <PermissionSetRefChips refs={currentRefs} />
-        </dd>
-      </div>
+        <div className="px-6 py-4 space-y-5">
+          {/* Label */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Label
+            </label>
+            <input
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
 
-      <label className="block text-sm font-medium text-gray-700 mb-2">
-        Configure refs
-      </label>
-      <textarea
-        value={draftRefs}
-        onChange={(event) => setDraftRefs(event.target.value)}
-        rows={Math.max(3, Math.min(8, normalizedDraftRefs.length + 1))}
-        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-        placeholder="standard&#10;core.agent_reader&#10;my_pack.agent_scope"
-      />
-      <p className="text-xs text-gray-500 mt-2">
-        Enter permission set refs separated by commas, spaces, or new lines.
-        Use <span className="font-mono">standard</span> for the action/pack-scoped keys
-        and artifacts access built into execution tokens. Refs are stored as
-        metadata refs, not database IDs.
-      </p>
+          {/* Description */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Description
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={3}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
 
-      {unknownRefs.length > 0 && (
-        <div className="mt-3 rounded-md border border-yellow-200 bg-yellow-50 px-3 py-2 text-sm text-yellow-800">
-          Unknown permission set refs:{" "}
-          <span className="font-mono">{unknownRefs.join(", ")}</span>. Saving
-          will let the API validate whether they can be delegated.
+          {/* Entrypoint */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Entry Point
+            </label>
+            <input
+              type="text"
+              value={entrypoint}
+              onChange={(e) => setEntrypoint(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm font-mono focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+
+          {/* Accesses MCP */}
+          <div className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              id="accesses-mcp"
+              checked={accessesMcp}
+              onChange={(e) => setAccessesMcp(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <label
+              htmlFor="accesses-mcp"
+              className="text-sm font-medium text-gray-700"
+            >
+              Accesses MCP
+            </label>
+            <span className="text-xs text-gray-500">
+              Hint that this action may invoke the Attune MCP server
+            </span>
+          </div>
+
+          {/* Default Execution Token Access */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Default Execution Token Access
+            </label>
+            <p className="text-xs text-gray-500 mb-2">
+              Permission set refs applied to executions when not explicitly
+              overridden. Use{" "}
+              <span className="font-mono">standard</span> for
+              action/pack-scoped key and artifact access.
+            </p>
+            {permissionSetsLoading ? (
+              <p className="text-xs text-gray-500">
+                Loading permission sets...
+              </p>
+            ) : (
+              <MultiSelect
+                options={selectablePermOptions}
+                value={selectedPermRefs}
+                onChange={(refs) =>
+                  setSelectedPermRefs(
+                    refs.sort((a, b) => a.localeCompare(b)),
+                  )
+                }
+                placeholder="Search and select permission sets..."
+              />
+            )}
+          </div>
+
+          {/* Worker Placement */}
+          <div className="border-t pt-5">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">
+              Worker Placement Defaults
+            </h3>
+
+            <div className="space-y-5">
+              <WorkerSelectorEditor
+                value={selector}
+                onChange={setSelector}
+              />
+
+              <WorkerTolerationsEditor
+                value={tolerations}
+                onChange={setTolerations}
+              />
+
+              <WorkerAffinityEditor
+                value={affinity}
+                onChange={setAffinity}
+              />
+            </div>
+          </div>
+
+          {/* Feedback */}
+          {errorMessage && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {errorMessage}
+            </div>
+          )}
+          {successMessage && (
+            <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
+              {successMessage}
+            </div>
+          )}
         </div>
-      )}
 
-      {errorMessage && (
-        <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {errorMessage}
+        {/* Footer */}
+        <div className="flex justify-end gap-3 px-6 py-4 border-t sticky bottom-0 bg-white">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded hover:bg-gray-200"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={updateAction.isPending}
+            className="px-4 py-2 text-sm text-white bg-blue-600 rounded hover:bg-blue-700 disabled:opacity-50"
+          >
+            {updateAction.isPending ? "Saving..." : "Save Defaults"}
+          </button>
         </div>
-      )}
-
-      <div className="mt-4 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={save}
-          disabled={!hasChanges || updateAction.isPending}
-          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
-        >
-          {updateAction.isPending ? "Saving..." : "Save token access"}
-        </button>
-        <button
-          type="button"
-          onClick={() => setDraftRefs("")}
-          disabled={updateAction.isPending || normalizedDraftRefs.length === 0}
-          className="px-4 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-        >
-          Clear
-        </button>
       </div>
     </div>
   );

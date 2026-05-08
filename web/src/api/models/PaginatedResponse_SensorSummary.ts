@@ -40,10 +40,6 @@ export type PaginatedResponse_SensorSummary = {
          */
         ref: string;
         /**
-         * Trigger reference
-         */
-        trigger_ref: string;
-        /**
          * Last update timestamp
          */
         updated: string;

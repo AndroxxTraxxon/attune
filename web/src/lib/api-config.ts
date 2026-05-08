@@ -7,12 +7,20 @@ declare global {
       API_BASE_URL: string;
       WITH_CREDENTIALS: boolean;
     };
+    __ATTUNE_RUNTIME_CONFIG__?: {
+      apiUrl?: string;
+      wsUrl?: string;
+      environment?: string;
+    };
   }
 }
 
 // Configure the OpenAPI client
-// Use empty string to make requests relative to current origin (uses Vite proxy)
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+// Priority: env var > runtime config (injected by Docker) > empty (relative paths via nginx)
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ??
+  window.__ATTUNE_RUNTIME_CONFIG__?.apiUrl ??
+  "";
 
 // API configuration (silent - check window.__ATTUNE_CONFIG__ for debug info)
 if (import.meta.env.DEV) {

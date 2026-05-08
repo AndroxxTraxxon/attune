@@ -3,6 +3,8 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { PaginationMeta } from './PaginationMeta';
+import type { WorkerAffinity } from './WorkerAffinity';
+import type { WorkerToleration } from './WorkerToleration';
 /**
  * Paginated response wrapper
  */
@@ -68,6 +70,18 @@ export type PaginatedResponse_ActionSummary = {
          */
         updated: string;
         /**
+         * Required/preferred worker label affinity and required anti-affinity.
+         */
+        worker_affinity?: WorkerAffinity;
+        /**
+         * Exact worker label requirements.
+         */
+        worker_selector?: Record<string, any>;
+        /**
+         * Tolerations for worker taints.
+         */
+        worker_tolerations?: Array<WorkerToleration>;
+        /**
          * Workflow definition ID (non-null if this action is a workflow)
          */
         workflow_def?: number | null;
@@ -77,3 +91,4 @@ export type PaginatedResponse_ActionSummary = {
      */
     pagination: PaginationMeta;
 };
+

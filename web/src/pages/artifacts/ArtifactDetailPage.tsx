@@ -252,6 +252,18 @@ function VersionRow({
           v{version.version}
         </td>
         <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
+          {version.execution ? (
+            <Link
+              to={`/executions/${version.execution}`}
+              className="text-blue-600 hover:text-blue-800 font-mono"
+            >
+              #{version.execution}
+            </Link>
+          ) : (
+            "\u2014"
+          )}
+        </td>
+        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
           {version.content_type || "\u2014"}
         </td>
         <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
@@ -292,7 +304,7 @@ function VersionRow({
       </tr>
       {showPreview && (
         <tr>
-          <td colSpan={6} className="px-4 py-3">
+          <td colSpan={7} className="px-4 py-3">
             <TextContentViewer
               artifactId={artifactId}
               versionId={version.id}
@@ -487,6 +499,9 @@ function ArtifactVersionsList({ artifact }: { artifact: ArtifactResponse }) {
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Version
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Execution
                 </th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Content Type

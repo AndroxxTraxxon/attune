@@ -59,14 +59,6 @@ export type ApiResponse_SensorResponse = {
          */
         runtime_ref: string;
         /**
-         * Trigger ID
-         */
-        trigger: number;
-        /**
-         * Trigger reference
-         */
-        trigger_ref: string;
-        /**
          * Last update timestamp
          */
         updated: string;

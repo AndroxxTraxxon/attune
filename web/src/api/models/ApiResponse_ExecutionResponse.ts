@@ -36,17 +36,21 @@ export type ApiResponse_ExecutionResponse = {
          */
         executor?: number | null;
         /**
-         * Permission set refs embedded in the execution-scoped API token.
-         */
-        permission_set_refs?: Array<string>;
-        /**
          * Execution ID
          */
         id: number;
         /**
+         * ID of the original execution if this execution is a retry.
+         */
+        original_execution?: number | null;
+        /**
          * Parent execution ID (for nested/child executions)
          */
         parent?: number | null;
+        /**
+         * Permission set refs embedded in the execution-scoped API token.
+         */
+        permission_set_refs?: Array<string>;
         /**
          * Execution result/output
          */
@@ -69,6 +73,18 @@ export type ApiResponse_ExecutionResponse = {
          */
         worker?: number | null;
         /**
+         * Worker affinity override stored on the execution, if any.
+         */
+        worker_affinity?: any | null;
+        /**
+         * Worker selector override stored on the execution, if any.
+         */
+        worker_selector?: any | null;
+        /**
+         * Worker tolerations override stored on the execution, if any.
+         */
+        worker_tolerations?: any[] | null;
+        /**
          * Workflow task metadata (only populated for workflow task executions)
          */
         workflow_task?: any | null;
@@ -78,3 +94,4 @@ export type ApiResponse_ExecutionResponse = {
      */
     message?: string | null;
 };
+

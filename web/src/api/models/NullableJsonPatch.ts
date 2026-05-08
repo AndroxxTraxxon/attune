@@ -15,7 +15,6 @@ export type NullableJsonPatch = ({
 export namespace NullableJsonPatch {
     export enum op {
         SET = 'set',
-        CLEAR = 'clear',
     }
 }
 

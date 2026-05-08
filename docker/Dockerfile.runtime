@@ -2,6 +2,7 @@ ARG DEBIAN_VERSION=bookworm
 
 FROM debian:${DEBIAN_VERSION}-slim AS runtime
 
+ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \

@@ -42,6 +42,7 @@ ARG RUST_TARGET
 # - python3 + pip: needed to install ziglang (zig is the cross-compilation backend)
 # - pkg-config, libssl-dev: needed for native dependency detection during build
 # - file, binutils: for verifying and stripping the resulting binaries
+ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     musl-tools \
     pkg-config \

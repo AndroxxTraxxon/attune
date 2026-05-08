@@ -9,6 +9,7 @@ import type { CreatePermissionSetRoleAssignmentRequest } from '../models/CreateP
 import type { IdentityRoleAssignmentResponse } from '../models/IdentityRoleAssignmentResponse';
 import type { PaginatedResponse_IdentitySummary } from '../models/PaginatedResponse_IdentitySummary';
 import type { PermissionAssignmentResponse } from '../models/PermissionAssignmentResponse';
+import type { PermissionSetRoleAssignmentResponse } from '../models/PermissionSetRoleAssignmentResponse';
 import type { PermissionSetSummary } from '../models/PermissionSetSummary';
 import type { UpdateIdentityRequest } from '../models/UpdateIdentityRequest';
 import type { UpdatePermissionSetRequest } from '../models/UpdatePermissionSetRequest';
@@ -473,40 +474,6 @@ export class PermissionsService {
         });
     }
     /**
-     * @returns any Permission set updated
-     * @throws ApiError
-     */
-    public static updatePermissionSet({
-        id,
-        requestBody,
-    }: {
-        /**
-         * Permission set ID
-         */
-        id: number,
-        requestBody: UpdatePermissionSetRequest,
-    }): CancelablePromise<{
-        data: PermissionSetSummary;
-        /**
-         * Optional message
-         */
-        message?: string | null;
-    }> {
-        return __request(OpenAPI, {
-            method: 'PUT',
-            url: '/api/v1/permissions/sets/{id}',
-            path: {
-                'id': id,
-            },
-            body: requestBody,
-            mediaType: 'application/json',
-            errors: {
-                400: `Validation error`,
-                404: `Permission set not found`,
-            },
-        });
-    }
-    /**
      * @returns any Permission set role assignment deleted
      * @throws ApiError
      */
@@ -544,6 +511,48 @@ export class PermissionsService {
             },
             errors: {
                 404: `Permission set role assignment not found`,
+            },
+        });
+    }
+    /**
+     * @returns any Permission set updated
+     * @throws ApiError
+     */
+    public static updatePermissionSet({
+        id,
+        requestBody,
+    }: {
+        /**
+         * Permission set ID
+         */
+        id: number,
+        requestBody: UpdatePermissionSetRequest,
+    }): CancelablePromise<{
+        data: {
+            description?: string | null;
+            grants: Value;
+            id: number;
+            label?: string | null;
+            pack_ref?: string | null;
+            ref: string;
+            roles: Array<PermissionSetRoleAssignmentResponse>;
+        };
+        /**
+         * Optional message
+         */
+        message?: string | null;
+    }> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/api/v1/permissions/sets/{id}',
+            path: {
+                'id': id,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                400: `Validation error`,
+                404: `Permission set not found`,
             },
         });
     }

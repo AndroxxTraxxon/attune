@@ -51,6 +51,14 @@ export type TriggerResponse = {
      */
     ref: string;
     /**
+     * Sensor ID (optional — webhook triggers have no sensor)
+     */
+    sensor?: number | null;
+    /**
+     * Sensor reference (optional)
+     */
+    sensor_ref?: string | null;
+    /**
      * Last update timestamp
      */
     updated: string;
