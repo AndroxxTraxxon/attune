@@ -20,7 +20,8 @@ use attune_common::models::ExecutionStatus;
 use attune_common::mq::{
     config::MessageQueueConfig as MqConfig, Connection, Consumer, ConsumerConfig,
     ExecutionCancelRequestedPayload, ExecutionCompletedPayload, ExecutionStatusChangedPayload,
-    MessageEnvelope, MessageType, PackRegisteredPayload, Publisher, PublisherConfig,
+    MessageEnvelope, MessageType, MqError, PackDeletedPayload, PackRegisteredPayload, Publisher,
+    PublisherConfig,
 };
 use attune_common::repositories::{execution::ExecutionRepository, FindById};
 use attune_common::runtime_detection::runtime_aliases_match_filter;
@@ -139,6 +140,8 @@ pub struct WorkerService {
     packs_base_dir: PathBuf,
     /// Base directory for isolated runtime environments
     runtime_envs_dir: PathBuf,
+    /// Transport for distributing pack files to this worker
+    pack_transport: Arc<dyn attune_common::pack_transport::PackFileTransport>,
     /// Semaphore to limit concurrent executions
     execution_semaphore: Arc<Semaphore>,
     /// Tracks in-flight execution tasks for graceful shutdown
@@ -402,6 +405,45 @@ impl WorkerService {
             refresh_token_expiration: config.security.jwt_refresh_expiration as i64,
         };
 
+        // Generate a worker token for API-based transport (shared by artifact + pack transports)
+        let worker_token = attune_common::auth::jwt::generate_worker_token(
+            1, // system identity
+            &format!("worker-{}", uuid::Uuid::new_v4()),
+            &jwt_config,
+            None,
+        )
+        .ok();
+
+        // Initialize artifact file transport
+        let transport: Arc<dyn attune_common::artifact_transport::ArtifactFileTransport> = {
+            let transport_mode = &config.artifacts.transport;
+            let transport = attune_common::artifact_transport::build_transport(
+                &config.artifacts_dir,
+                Some(&api_url),
+                worker_token.as_deref(),
+                transport_mode,
+            );
+            info!(
+                "Artifact file transport initialized: mode={}",
+                transport.transport_mode()
+            );
+            Arc::from(transport)
+        };
+
+        // Initialize pack file transport
+        let pack_transport: Arc<dyn attune_common::pack_transport::PackFileTransport> = {
+            let transport = attune_common::pack_transport::build_pack_transport(
+                &config.packs_base_dir,
+                Some(&api_url),
+                worker_token.as_deref(),
+            );
+            info!(
+                "Pack file transport initialized: mode={}",
+                transport.transport_mode()
+            );
+            Arc::from(transport)
+        };
+
         let executor = Arc::new(ActionExecutor::new(
             pool.clone(),
             runtime_registry,
@@ -414,6 +456,7 @@ impl WorkerService {
             PathBuf::from(&config.runtime_envs_dir),
             api_url,
             jwt_config,
+            transport,
         ));
 
         // Initialize heartbeat manager
@@ -460,6 +503,7 @@ impl WorkerService {
             runtime_filter: runtime_filter_for_service,
             packs_base_dir,
             runtime_envs_dir,
+            pack_transport,
             execution_semaphore: Arc::new(Semaphore::new(max_concurrent_tasks)),
             in_flight_tasks: Arc::new(Mutex::new(JoinSet::new())),
             cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
@@ -523,6 +567,11 @@ impl WorkerService {
                 Error::Internal(format!("Failed to setup worker MQ infrastructure: {}", e))
             })?;
         info!("Worker-specific message queue infrastructure setup completed");
+
+        // Sync pack files from API if not using a shared volume.
+        // This must run before environment setup so that pack directories
+        // (and their dependency manifests) are available locally.
+        self.sync_all_packs_on_startup().await;
 
         match &self.startup_mode {
             StartupMode::Worker => {
@@ -609,6 +658,60 @@ impl WorkerService {
         .await;
     }
 
+    /// Sync all registered packs from the API if using API-based pack transport.
+    ///
+    /// On startup, ensures that all packs from the database are available
+    /// locally before runtime environment setup begins.
+    async fn sync_all_packs_on_startup(&self) {
+        if self.pack_transport.transport_mode() == "volume" {
+            debug!("Pack transport is volume-based — skipping startup sync");
+            return;
+        }
+
+        info!(
+            "Syncing all packs via {} transport...",
+            self.pack_transport.transport_mode()
+        );
+
+        let packs = match attune_common::repositories::PackRepository::list(&self.db_pool).await {
+            Ok(packs) => packs,
+            Err(e) => {
+                warn!("Failed to list packs for startup sync: {}", e);
+                return;
+            }
+        };
+
+        let mut synced = 0;
+        let mut skipped = 0;
+        let mut errors = 0;
+
+        for pack in &packs {
+            if self.pack_transport.is_pack_local(&pack.r#ref).await {
+                skipped += 1;
+                continue;
+            }
+
+            match self.pack_transport.sync_pack(&pack.r#ref).await {
+                Ok(()) => {
+                    synced += 1;
+                    debug!("Synced pack '{}'", pack.r#ref);
+                }
+                Err(e) => {
+                    errors += 1;
+                    warn!("Failed to sync pack '{}': {}", pack.r#ref, e);
+                }
+            }
+        }
+
+        info!(
+            "Pack startup sync complete: {} synced, {} already local, {} errors (of {} total)",
+            synced,
+            skipped,
+            errors,
+            packs.len()
+        );
+    }
+
     /// Scan all registered packs and create missing runtime environments.
     async fn scan_and_setup_environments(&self) {
         let Some(worker_id) = self.worker_id else {
@@ -676,6 +779,7 @@ impl WorkerService {
         let packs_base_dir = self.packs_base_dir.clone();
         let runtime_envs_dir = self.runtime_envs_dir.clone();
         let registration = self.registration.clone();
+        let pack_transport = self.pack_transport.clone();
 
         let handle = tokio::spawn(async move {
             info!(
@@ -683,73 +787,147 @@ impl WorkerService {
                 queue_name_for_log
             );
             let result = consumer_for_task
-                .consume_with_handler(move |envelope: MessageEnvelope<PackRegisteredPayload>| {
+                .consume_with_handler(move |envelope: MessageEnvelope<serde_json::Value>| {
                     let db_pool = db_pool.clone();
                     let runtime_filter = runtime_filter.clone();
                     let packs_base_dir = packs_base_dir.clone();
                     let runtime_envs_dir = runtime_envs_dir.clone();
                     let registration = registration.clone();
+                    let pack_transport = pack_transport.clone();
 
                     async move {
-                        info!(
-                            "Received pack.registered event for pack '{}' (version {})",
-                            envelope.payload.pack_ref, envelope.payload.version,
-                        );
+                        match envelope.message_type {
+                            MessageType::PackRegistered => {
+                                let payload: PackRegisteredPayload =
+                                    serde_json::from_value(envelope.payload).map_err(|e| {
+                                        MqError::Deserialization(format!(
+                                            "Failed to parse PackRegistered payload: {}",
+                                            e
+                                        ))
+                                    })?;
 
-                        let filter_slice: Option<Vec<String>> = runtime_filter;
-                        let filter_ref: Option<&[String]> = filter_slice.as_deref();
+                                info!(
+                                    "Received pack.registered event for pack '{}' (version {})",
+                                    payload.pack_ref, payload.version,
+                                );
 
-                        let filtered_runtime_names = filter_runtime_names_for_worker(
-                            &envelope.payload.runtime_names,
-                            filter_ref,
-                        );
+                                // Sync pack files from API if not on a shared volume
+                                if pack_transport.transport_mode() != "volume" {
+                                    match pack_transport.sync_pack(&payload.pack_ref).await {
+                                        Ok(()) => info!(
+                                            "Pack '{}' synced via {} transport",
+                                            payload.pack_ref,
+                                            pack_transport.transport_mode(),
+                                        ),
+                                        Err(e) => warn!(
+                                            "Failed to sync pack '{}': {}",
+                                            payload.pack_ref, e,
+                                        ),
+                                    }
+                                }
 
-                        if !filtered_runtime_names.is_empty() {
-                            let verify_result = version_verify::verify_all_runtime_versions(
-                                &db_pool,
-                                Some(filtered_runtime_names.as_slice()),
-                            )
-                            .await;
+                                let filter_slice: Option<Vec<String>> = runtime_filter;
+                                let filter_ref: Option<&[String]> = filter_slice.as_deref();
 
-                            if !verify_result.errors.is_empty() {
+                                let filtered_runtime_names = filter_runtime_names_for_worker(
+                                    &payload.runtime_names,
+                                    filter_ref,
+                                );
+
+                                if !filtered_runtime_names.is_empty() {
+                                    let verify_result =
+                                        version_verify::verify_all_runtime_versions(
+                                            &db_pool,
+                                            Some(filtered_runtime_names.as_slice()),
+                                        )
+                                        .await;
+
+                                    if !verify_result.errors.is_empty() {
+                                        warn!(
+                                            "Pack '{}' runtime verification had {} error(s): {:?}",
+                                            payload.pack_ref,
+                                            verify_result.errors.len(),
+                                            verify_result.errors,
+                                        );
+                                    }
+
+                                    refresh_runtime_version_capabilities_for_registration(
+                                        &db_pool,
+                                        filter_ref,
+                                        &registration,
+                                    )
+                                    .await;
+                                }
+
+                                let pack_result =
+                                    env_setup::setup_environments_for_registered_pack(
+                                        &db_pool,
+                                        worker_id,
+                                        &payload,
+                                        filter_ref,
+                                        &packs_base_dir,
+                                        &runtime_envs_dir,
+                                    )
+                                    .await;
+
+                                if !pack_result.errors.is_empty() {
+                                    warn!(
+                                        "Pack '{}' environment setup had {} error(s): {:?}",
+                                        pack_result.pack_ref,
+                                        pack_result.errors.len(),
+                                        pack_result.errors,
+                                    );
+                                } else if !pack_result.environments_created.is_empty() {
+                                    info!(
+                                        "Pack '{}' environments set up: {:?}",
+                                        pack_result.pack_ref, pack_result.environments_created,
+                                    );
+                                }
+                            }
+                            MessageType::PackDeleted => {
+                                let payload: PackDeletedPayload =
+                                    serde_json::from_value(envelope.payload).map_err(|e| {
+                                        MqError::Deserialization(format!(
+                                            "Failed to parse PackDeleted payload: {}",
+                                            e
+                                        ))
+                                    })?;
+
+                                info!(
+                                    "Received pack.deleted event for pack '{}'",
+                                    payload.pack_ref,
+                                );
+
+                                // Remove local pack files
+                                match pack_transport.remove_pack(&payload.pack_ref).await {
+                                    Ok(()) => info!("Pack '{}' removed locally", payload.pack_ref,),
+                                    Err(e) => warn!(
+                                        "Failed to remove pack '{}' locally: {}",
+                                        payload.pack_ref, e,
+                                    ),
+                                }
+
+                                // Clean up runtime environments for this pack
+                                let pack_env_dir = runtime_envs_dir.join(&payload.pack_ref);
+                                if pack_env_dir.exists() {
+                                    match tokio::fs::remove_dir_all(&pack_env_dir).await {
+                                        Ok(()) => info!(
+                                            "Cleaned up runtime environments for pack '{}'",
+                                            payload.pack_ref,
+                                        ),
+                                        Err(e) => warn!(
+                                            "Failed to clean up runtime envs for pack '{}': {}",
+                                            payload.pack_ref, e,
+                                        ),
+                                    }
+                                }
+                            }
+                            other => {
                                 warn!(
-                                    "Pack '{}' runtime verification had {} error(s): {:?}",
-                                    envelope.payload.pack_ref,
-                                    verify_result.errors.len(),
-                                    verify_result.errors,
+                                    "Unexpected message type {:?} on pack queue — skipping",
+                                    other,
                                 );
                             }
-
-                            refresh_runtime_version_capabilities_for_registration(
-                                &db_pool,
-                                filter_ref,
-                                &registration,
-                            )
-                            .await;
-                        }
-
-                        let pack_result = env_setup::setup_environments_for_registered_pack(
-                            &db_pool,
-                            worker_id,
-                            &envelope.payload,
-                            filter_ref,
-                            &packs_base_dir,
-                            &runtime_envs_dir,
-                        )
-                        .await;
-
-                        if !pack_result.errors.is_empty() {
-                            warn!(
-                                "Pack '{}' environment setup had {} error(s): {:?}",
-                                pack_result.pack_ref,
-                                pack_result.errors.len(),
-                                pack_result.errors,
-                            );
-                        } else if !pack_result.environments_created.is_empty() {
-                            info!(
-                                "Pack '{}' environments set up: {:?}",
-                                pack_result.pack_ref, pack_result.environments_created,
-                            );
                         }
 
                         Ok(())

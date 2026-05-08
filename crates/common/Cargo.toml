@@ -27,6 +27,10 @@ config = { workspace = true }
 # HTTP client
 reqwest = { workspace = true }
 
+# Archive (for pack transport)
+tar = { workspace = true }
+flate2 = { workspace = true }
+
 # Message Queue
 lapin = { workspace = true }
 

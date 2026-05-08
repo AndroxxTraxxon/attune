@@ -5,8 +5,8 @@
 
 use anyhow::Result;
 use attune_common::mq::{
-    Connection, Consumer, ConsumerConfig, MessageEnvelope, MessageType, RuleCreatedPayload,
-    RuleDisabledPayload, RuleEnabledPayload,
+    Connection, Consumer, ConsumerConfig, MessageEnvelope, MessageType, PackDeletedPayload,
+    PackRegisteredPayload, RuleCreatedPayload, RuleDisabledPayload, RuleEnabledPayload,
 };
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
@@ -23,17 +23,24 @@ pub struct RuleLifecycleListener {
     db: PgPool,
     connection: Connection,
     sensor_manager: Arc<SensorManager>,
+    pack_transport: Arc<dyn attune_common::pack_transport::PackFileTransport>,
     consumer: Arc<RwLock<Option<Arc<Consumer>>>>,
     task_handle: RwLock<Option<JoinHandle<()>>>,
 }
 
 impl RuleLifecycleListener {
     /// Create a new rule lifecycle listener
-    pub fn new(db: PgPool, connection: Connection, sensor_manager: Arc<SensorManager>) -> Self {
+    pub fn new(
+        db: PgPool,
+        connection: Connection,
+        sensor_manager: Arc<SensorManager>,
+        pack_transport: Arc<dyn attune_common::pack_transport::PackFileTransport>,
+    ) -> Self {
         Self {
             db,
             connection,
             sensor_manager,
+            pack_transport,
             consumer: Arc::new(RwLock::new(None)),
             task_handle: RwLock::new(None),
         }
@@ -75,7 +82,13 @@ impl RuleLifecycleListener {
             .await?;
 
         // Bind to routing keys
-        for routing_key in &["rule.created", "rule.enabled", "rule.disabled"] {
+        for routing_key in &[
+            "rule.created",
+            "rule.enabled",
+            "rule.disabled",
+            "pack.registered",
+            "pack.deleted",
+        ] {
             consumer
                 .channel()
                 .queue_bind(
@@ -98,6 +111,7 @@ impl RuleLifecycleListener {
         // Clone references for the spawned task
         let db = self.db.clone();
         let sensor_manager = self.sensor_manager.clone();
+        let pack_transport = self.pack_transport.clone();
         let consumer = consumer.clone();
 
         // Start consuming messages in a background task while retaining a shared consumer
@@ -108,9 +122,13 @@ impl RuleLifecycleListener {
                 .consume_with_handler::<JsonValue, _, _>(move |envelope| {
                     let db = db.clone();
                     let sensor_manager = sensor_manager.clone();
+                    let pack_transport = pack_transport.clone();
 
                     async move {
-                        if let Err(e) = Self::handle_message(&db, &sensor_manager, envelope).await {
+                        if let Err(e) =
+                            Self::handle_message(&db, &sensor_manager, &pack_transport, envelope)
+                                .await
+                        {
                             error!("Failed to handle rule lifecycle message: {}", e);
                             return Err(attune_common::mq::MqError::Other(format!(
                                 "Handler error: {}",
@@ -171,6 +189,7 @@ impl RuleLifecycleListener {
     async fn handle_message(
         db: &PgPool,
         sensor_manager: &Arc<SensorManager>,
+        pack_transport: &Arc<dyn attune_common::pack_transport::PackFileTransport>,
         envelope: MessageEnvelope<JsonValue>,
     ) -> Result<()> {
         match envelope.message_type {
@@ -185,6 +204,14 @@ impl RuleLifecycleListener {
             MessageType::RuleDisabled => {
                 let payload: RuleDisabledPayload = serde_json::from_value(envelope.payload)?;
                 Self::handle_rule_disabled(sensor_manager, db, payload).await?;
+            }
+            MessageType::PackRegistered => {
+                let payload: PackRegisteredPayload = serde_json::from_value(envelope.payload)?;
+                Self::handle_pack_registered(sensor_manager, pack_transport, payload).await?;
+            }
+            MessageType::PackDeleted => {
+                let payload: PackDeletedPayload = serde_json::from_value(envelope.payload)?;
+                Self::handle_pack_deleted(sensor_manager, pack_transport, payload).await?;
             }
             _ => {
                 warn!("Unexpected message type: {:?}", envelope.message_type);
@@ -312,5 +339,67 @@ impl RuleLifecycleListener {
         .await?;
 
         Ok(trigger_id)
+    }
+
+    /// Handle pack registered event — sync pack files if using API transport
+    async fn handle_pack_registered(
+        sensor_manager: &Arc<SensorManager>,
+        pack_transport: &Arc<dyn attune_common::pack_transport::PackFileTransport>,
+        payload: PackRegisteredPayload,
+    ) -> Result<()> {
+        info!(
+            "Handling PackRegistered: pack={} (version {})",
+            payload.pack_ref, payload.version,
+        );
+
+        if pack_transport.transport_mode() != "volume" {
+            match pack_transport.sync_pack(&payload.pack_ref).await {
+                Ok(()) => info!(
+                    "Pack '{}' synced via {} transport",
+                    payload.pack_ref,
+                    pack_transport.transport_mode(),
+                ),
+                Err(e) => warn!("Failed to sync pack '{}': {}", payload.pack_ref, e),
+            }
+        }
+
+        // Notify sensor manager that a pack changed — it may need to
+        // start or restart sensors associated with this pack.
+        if let Err(e) = sensor_manager.handle_pack_change(&payload.pack_ref).await {
+            warn!(
+                "Failed to handle sensor lifecycle for pack '{}': {}",
+                payload.pack_ref, e,
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Handle pack deleted event — remove local pack files and stop affected sensors
+    async fn handle_pack_deleted(
+        sensor_manager: &Arc<SensorManager>,
+        pack_transport: &Arc<dyn attune_common::pack_transport::PackFileTransport>,
+        payload: PackDeletedPayload,
+    ) -> Result<()> {
+        info!("Handling PackDeleted: pack={}", payload.pack_ref);
+
+        // Stop sensors that belong to this pack
+        if let Err(e) = sensor_manager.handle_pack_deleted(&payload.pack_ref).await {
+            warn!(
+                "Failed to stop sensors for deleted pack '{}': {}",
+                payload.pack_ref, e,
+            );
+        }
+
+        // Remove local pack files
+        match pack_transport.remove_pack(&payload.pack_ref).await {
+            Ok(()) => info!("Pack '{}' removed locally", payload.pack_ref),
+            Err(e) => warn!(
+                "Failed to remove pack '{}' locally: {}",
+                payload.pack_ref, e,
+            ),
+        }
+
+        Ok(())
     }
 }

@@ -67,6 +67,8 @@ pub enum MessageType {
     RuleDisabled,
     /// Pack registered or installed (triggers runtime environment setup in workers)
     PackRegistered,
+    /// Pack deleted (triggers pack file cleanup in workers/sensors)
+    PackDeleted,
     /// Execution cancel requested (sent to worker to gracefully stop a running execution)
     ExecutionCancelRequested,
 }
@@ -87,6 +89,7 @@ impl MessageType {
             Self::RuleEnabled => "rule.enabled".to_string(),
             Self::RuleDisabled => "rule.disabled".to_string(),
             Self::PackRegistered => "pack.registered".to_string(),
+            Self::PackDeleted => "pack.deleted".to_string(),
             Self::ExecutionCancelRequested => "execution.cancel".to_string(),
         }
     }
@@ -104,7 +107,7 @@ impl MessageType {
             Self::RuleCreated | Self::RuleEnabled | Self::RuleDisabled => {
                 "attune.events".to_string()
             }
-            Self::PackRegistered => "attune.events".to_string(),
+            Self::PackRegistered | Self::PackDeleted => "attune.events".to_string(),
             Self::ExecutionCancelRequested => "attune.executions".to_string(),
         }
     }
@@ -124,6 +127,7 @@ impl MessageType {
             Self::RuleEnabled => "RuleEnabled",
             Self::RuleDisabled => "RuleDisabled",
             Self::PackRegistered => "PackRegistered",
+            Self::PackDeleted => "PackDeleted",
             Self::ExecutionCancelRequested => "ExecutionCancelRequested",
         }
     }
@@ -477,6 +481,18 @@ pub struct PackRegisteredPayload {
     pub version: String,
     /// Runtime names that require environment setup (lowercase, e.g., ["python"])
     pub runtime_names: Vec<String>,
+}
+
+/// Payload for PackDeleted message
+///
+/// Published when a pack is deleted so that workers and sensors can
+/// remove local pack files and clean up runtime environments.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackDeletedPayload {
+    /// Pack ID that was deleted
+    pub pack_id: Id,
+    /// Pack reference (e.g., "python_example")
+    pub pack_ref: String,
 }
 
 /// Payload for ExecutionCancelRequested message

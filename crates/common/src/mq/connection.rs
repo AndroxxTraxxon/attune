@@ -551,6 +551,14 @@ impl Connection {
         )
         .await?;
 
+        // Bind to pack.deleted routing key on the same queue
+        self.bind_queue(
+            &packs_queue_name,
+            &config.rabbitmq.exchanges.events.name,
+            "pack.deleted",
+        )
+        .await?;
+
         // --- Cancel queue ---
         // Each worker gets its own queue for execution cancel requests so that
         // the API can target a specific worker to gracefully stop a running process.

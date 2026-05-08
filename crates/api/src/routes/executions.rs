@@ -1420,7 +1420,7 @@ fn validate_execution_log_stream_user(
     match claims.token_type {
         TokenType::Access => Ok(()),
         TokenType::Execution => validate_execution_token_scope(claims, execution_id),
-        TokenType::Sensor | TokenType::Refresh => Err(ApiError::Unauthorized(
+        TokenType::Sensor | TokenType::Refresh | TokenType::Worker => Err(ApiError::Unauthorized(
             "Invalid authentication token".to_string(),
         )),
     }
@@ -1467,7 +1467,7 @@ fn validate_execution_updates_stream_user(
             })?;
             validate_execution_token_scope(claims, execution_id)
         }
-        TokenType::Sensor | TokenType::Refresh => Err(ApiError::Unauthorized(
+        TokenType::Sensor | TokenType::Refresh | TokenType::Worker => Err(ApiError::Unauthorized(
             "Invalid authentication token".to_string(),
         )),
     }

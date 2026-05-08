@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -81,6 +81,18 @@ pub enum ActionCommands {
         /// Parameters as JSON string
         #[arg(long, conflicts_with = "param")]
         params_json: Option<String>,
+
+        /// Worker label selector as JSON (e.g. '{"pool":"gpu"}')
+        #[arg(long)]
+        worker_selector: Option<String>,
+
+        /// Worker tolerations as JSON array
+        #[arg(long)]
+        worker_tolerations: Option<String>,
+
+        /// Worker affinity as JSON object
+        #[arg(long)]
+        worker_affinity: Option<String>,
 
         /// Watch execution until it completes
         #[arg(short, long)]
@@ -172,6 +184,12 @@ struct UpdateActionRequest {
 struct ExecuteActionRequest {
     action_ref: String,
     parameters: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_selector: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_tolerations: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_affinity: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -233,6 +251,9 @@ pub async fn handle_action_command(
             action_ref,
             param,
             params_json,
+            worker_selector,
+            worker_tolerations,
+            worker_affinity,
             watch,
             timeout,
             notifier_url,
@@ -241,6 +262,9 @@ pub async fn handle_action_command(
                 action_ref,
                 param,
                 params_json,
+                worker_selector,
+                worker_tolerations,
+                worker_affinity,
                 profile,
                 api_url,
                 watch,
@@ -551,6 +575,9 @@ async fn handle_execute(
     action_ref: String,
     params: Vec<String>,
     params_json: Option<String>,
+    worker_selector: Option<String>,
+    worker_tolerations: Option<String>,
+    worker_affinity: Option<String>,
     profile: &Option<String>,
     api_url: &Option<String>,
     watch: bool,
@@ -581,9 +608,25 @@ async fn handle_execute(
         serde_json::json!({})
     };
 
+    let selector = worker_selector
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .context("Invalid --worker-selector JSON")?;
+    let tolerations = worker_tolerations
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .context("Invalid --worker-tolerations JSON")?;
+    let affinity = worker_affinity
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .context("Invalid --worker-affinity JSON")?;
+
     let request = ExecuteActionRequest {
         action_ref: action_ref.clone(),
         parameters,
+        worker_selector: selector,
+        worker_tolerations: tolerations,
+        worker_affinity: affinity,
     };
 
     if output_format == OutputFormat::Table {

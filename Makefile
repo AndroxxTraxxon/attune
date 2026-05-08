@@ -10,7 +10,7 @@
         docker-up-agent docker-down-agent \
         docker-build-pack-binaries docker-build-pack-binaries-arm64 docker-build-pack-binaries-all \
         docker-build-mcp docker-up-mcp docker-down-mcp \
-        e2e-test e2e-test-debug e2e-test-tier1 e2e-test-tier2 e2e-test-tier3
+        e2e-test e2e-test-debug e2e-test-tier1 e2e-test-tier2 e2e-test-tier3 e2e-test-standalone
 
 # Default target
 help:
@@ -515,3 +515,7 @@ e2e-test-tier2:
 
 e2e-test-tier3:
 	@./scripts/run-integration-tests.sh --tier 3 $(ARGS)
+
+# Run standalone transport tests (includes standalone worker/sensor services)
+e2e-test-standalone:
+	@./scripts/run-integration-tests.sh --standalone -k standalone $(ARGS)

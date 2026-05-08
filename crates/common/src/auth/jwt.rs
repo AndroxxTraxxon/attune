@@ -55,6 +55,8 @@ pub enum TokenType {
     Refresh,
     Sensor,
     Execution,
+    /// Long-lived token for internal worker/sensor → API file operations.
+    Worker,
 }
 
 /// Configuration for JWT tokens
@@ -111,6 +113,7 @@ pub fn generate_token(
         // with explicit TTLs; this fallback should not normally be reached.
         TokenType::Sensor => 86400,
         TokenType::Execution => 300,
+        TokenType::Worker => 86400, // 24h, renewed on heartbeat
     };
 
     let exp = (now + Duration::seconds(expiration)).timestamp();
@@ -163,6 +166,48 @@ pub fn generate_sensor_token(
         exp,
         token_type: TokenType::Sensor,
         scope: Some("sensor".to_string()),
+        metadata: Some(metadata),
+    };
+
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(config.secret.as_bytes()),
+    )
+    .map_err(|e| JwtError::EncodeError(e.to_string()))
+}
+
+/// Generate a worker/sensor-service token for internal file operations.
+///
+/// These long-lived tokens allow workers and sensors to upload/download
+/// artifact files via the API when they don't share a filesystem volume.
+///
+/// # Arguments
+/// * `identity_id` - The system identity ID (typically 1)
+/// * `worker_id` - A human-readable worker identifier
+/// * `config` - JWT configuration
+/// * `ttl_seconds` - Time to live in seconds (default: 24 hours)
+pub fn generate_worker_token(
+    identity_id: i64,
+    worker_id: &str,
+    config: &JwtConfig,
+    ttl_seconds: Option<i64>,
+) -> Result<String, JwtError> {
+    let now = Utc::now();
+    let expiration = ttl_seconds.unwrap_or(86400);
+    let exp = (now + Duration::seconds(expiration)).timestamp();
+
+    let metadata = serde_json::json!({
+        "worker_id": worker_id,
+    });
+
+    let claims = Claims {
+        sub: identity_id.to_string(),
+        login: format!("worker:{}", worker_id),
+        iat: now.timestamp(),
+        exp,
+        token_type: TokenType::Worker,
+        scope: Some("internal_files".to_string()),
         metadata: Some(metadata),
     };
 

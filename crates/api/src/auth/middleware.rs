@@ -102,10 +102,11 @@ impl axum::extract::FromRequestParts<crate::state::SharedState> for RequireAuth 
             extract_claims(&parts.headers, &state.jwt_config)?
         };
 
-        // Allow access, sensor, and execution-scoped tokens
+        // Allow access, sensor, execution, and worker tokens
         if claims.token_type != TokenType::Access
             && claims.token_type != TokenType::Sensor
             && claims.token_type != TokenType::Execution
+            && claims.token_type != TokenType::Worker
         {
             return Err(AuthError::InvalidToken);
         }

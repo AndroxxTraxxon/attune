@@ -89,7 +89,6 @@ pub enum RuntimeError {
 }
 
 /// Action execution context
-#[derive(Debug, Clone)]
 pub struct ExecutionContext {
     /// Execution ID
     pub execution_id: i64,
@@ -154,6 +153,11 @@ pub struct ExecutionContext {
     /// Optional live stderr log path for incremental writes during execution.
     pub stderr_log_path: Option<PathBuf>,
 
+    /// Optional pre-opened log writers backed by the artifact transport.
+    /// When set, these take priority over `stdout_log_path`/`stderr_log_path`.
+    pub stdout_log_writer: Option<BoundedLogFileWriter>,
+    pub stderr_log_writer: Option<BoundedLogFileWriter>,
+
     /// How parameters should be delivered to the action
     pub parameter_delivery: ParameterDelivery,
 
@@ -167,6 +171,27 @@ pub struct ExecutionContext {
     /// When triggered, the executor sends SIGTERM → SIGKILL
     /// with a short grace period.
     pub cancel_token: Option<CancellationToken>,
+}
+
+impl std::fmt::Debug for ExecutionContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExecutionContext")
+            .field("execution_id", &self.execution_id)
+            .field("action_ref", &self.action_ref)
+            .field("entry_point", &self.entry_point)
+            .field("runtime_name", &self.runtime_name)
+            .field("stdout_log_path", &self.stdout_log_path)
+            .field("stderr_log_path", &self.stderr_log_path)
+            .field(
+                "stdout_log_writer",
+                &self.stdout_log_writer.as_ref().map(|_| "..."),
+            )
+            .field(
+                "stderr_log_writer",
+                &self.stderr_log_writer.as_ref().map(|_| "..."),
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 impl ExecutionContext {
@@ -193,6 +218,8 @@ impl ExecutionContext {
             max_stderr_bytes: 10 * 1024 * 1024,
             stdout_log_path: None,
             stderr_log_path: None,
+            stdout_log_writer: None,
+            stderr_log_writer: None,
             parameter_delivery: ParameterDelivery::default(),
             parameter_format: ParameterFormat::default(),
             output_format: OutputFormat::default(),

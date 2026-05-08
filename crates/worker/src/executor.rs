@@ -13,6 +13,7 @@
 //! so the `ProcessRuntime` uses version-specific interpreter binaries,
 //! environment commands, etc.
 
+use attune_common::artifact_transport::ArtifactFileTransport;
 use attune_common::auth::jwt::{
     generate_execution_token_with_permission_sets_and_standard_access, JwtConfig,
 };
@@ -48,7 +49,7 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
 
 use crate::artifacts::ArtifactManager;
-use crate::runtime::{ExecutionContext, ExecutionResult, RuntimeRegistry};
+use crate::runtime::{BoundedLogFileWriter, ExecutionContext, ExecutionResult, RuntimeRegistry};
 use crate::secrets::SecretManager;
 
 /// Action executor that orchestrates execution flow
@@ -64,6 +65,8 @@ pub struct ActionExecutor {
     runtime_envs_dir: PathBuf,
     api_url: String,
     jwt_config: JwtConfig,
+    /// Transport abstraction for artifact file content.
+    transport: Arc<dyn ArtifactFileTransport>,
 }
 
 use tokio_util::sync::CancellationToken;
@@ -120,6 +123,8 @@ impl ExecutionLogArtifactStream {
 
 struct ExecutionLogArtifacts {
     stdout_full_path: PathBuf,
+    /// Relative path for stdout (used by transport API)
+    stdout_relative_path: String,
     stderr_pending_full_path: PathBuf,
 }
 
@@ -143,6 +148,7 @@ impl ActionExecutor {
         runtime_envs_dir: PathBuf,
         api_url: String,
         jwt_config: JwtConfig,
+        transport: Arc<dyn ArtifactFileTransport>,
     ) -> Self {
         let api_url = normalize_api_url(&api_url);
         Self {
@@ -157,6 +163,7 @@ impl ActionExecutor {
             runtime_envs_dir,
             api_url,
             jwt_config,
+            transport,
         }
     }
 
@@ -657,6 +664,36 @@ impl ActionExecutor {
         };
         let log_artifacts = self.allocate_execution_log_artifacts(execution).await?;
 
+        // Create transport-backed live log writers when not using volume transport.
+        // For volume transport, the path-based BoundedLogFileWriter (created by
+        // process_executor) writes directly to the shared filesystem.
+        // For API transport, we create writers that stream bytes over HTTP.
+        let (stdout_log_writer, stderr_log_writer) = if self.transport.transport_mode() != "volume"
+        {
+            let stdout_writer = BoundedLogFileWriter::from_transport(
+                self.transport.clone(),
+                log_artifacts.stdout_relative_path,
+                self.max_stdout_bytes,
+                true,
+            );
+            // Stderr pending path is local, not transport-backed — it's promoted later.
+            // But we still write through transport for the live streaming benefit.
+            let stderr_rel = log_artifacts
+                .stderr_pending_full_path
+                .strip_prefix(&self.artifacts_dir)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| format!("_pending/{}_stderr.log", execution.id));
+            let stderr_writer = BoundedLogFileWriter::from_transport(
+                self.transport.clone(),
+                stderr_rel,
+                self.max_stderr_bytes,
+                false,
+            );
+            (Some(stdout_writer), Some(stderr_writer))
+        } else {
+            (None, None)
+        };
+
         let context = ExecutionContext {
             execution_id: execution.id,
             action_ref: execution.action_ref.clone(),
@@ -676,6 +713,8 @@ impl ActionExecutor {
             max_stderr_bytes: self.max_stderr_bytes,
             stdout_log_path: Some(log_artifacts.stdout_full_path),
             stderr_log_path: Some(log_artifacts.stderr_pending_full_path),
+            stdout_log_writer,
+            stderr_log_writer,
             parameter_delivery: action.parameter_delivery,
             parameter_format: action.parameter_format,
             output_format: action.output_format,
@@ -979,7 +1018,7 @@ impl ActionExecutor {
         &self,
         execution: &Execution,
     ) -> Result<ExecutionLogArtifacts> {
-        let stdout_full_path = self
+        let (stdout_full_path, stdout_relative_path) = self
             .allocate_execution_log_artifact(execution, ExecutionLogArtifactStream::Stdout)
             .await?;
         let stderr_pending_full_path = self
@@ -987,6 +1026,7 @@ impl ActionExecutor {
 
         Ok(ExecutionLogArtifacts {
             stdout_full_path,
+            stdout_relative_path,
             stderr_pending_full_path,
         })
     }
@@ -1010,6 +1050,7 @@ impl ActionExecutor {
     ) -> StderrLogPromotion {
         let pool = self.pool.clone();
         let artifacts_dir = self.artifacts_dir.clone();
+        let transport = Arc::clone(&self.transport);
         let execution = execution.clone();
         let pending_path = pending_path.to_path_buf();
         let lock = Arc::new(AsyncMutex::new(()));
@@ -1022,6 +1063,7 @@ impl ActionExecutor {
                 if let Some(final_path) = Self::persist_pending_stderr_log_artifact_if_written(
                     &pool,
                     &artifacts_dir,
+                    transport.as_ref(),
                     &execution,
                     &pending_path,
                 )
@@ -1046,6 +1088,7 @@ impl ActionExecutor {
             if let Err(e) = Self::persist_pending_stderr_log_artifact_if_written(
                 &self.pool,
                 &self.artifacts_dir,
+                self.transport.as_ref(),
                 execution,
                 pending_path,
             )
@@ -1077,10 +1120,11 @@ impl ActionExecutor {
         &self,
         execution: &Execution,
         stream: ExecutionLogArtifactStream,
-    ) -> Result<PathBuf> {
+    ) -> Result<(PathBuf, String)> {
         Self::allocate_execution_log_artifact_with(
             &self.pool,
             &self.artifacts_dir,
+            self.transport.as_ref(),
             execution,
             stream,
         )
@@ -1090,9 +1134,10 @@ impl ActionExecutor {
     async fn allocate_execution_log_artifact_with(
         pool: &PgPool,
         artifacts_dir: &Path,
+        transport: &dyn ArtifactFileTransport,
         execution: &Execution,
         stream: ExecutionLogArtifactStream,
-    ) -> Result<PathBuf> {
+    ) -> Result<(PathBuf, String)> {
         let artifact_ref = Self::execution_log_artifact_ref(&execution.action_ref, stream);
         let content_type = default_content_type_for_artifact(ArtifactType::FileText);
 
@@ -1143,26 +1188,31 @@ impl ActionExecutor {
                 version.id
             ))
         })?;
-        let full_path = artifacts_dir.join(&file_path);
-        if let Some(parent) = full_path.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+
+        // Ensure parent directories exist via transport
+        transport
+            .ensure_parent_dirs(&file_path)
+            .await
+            .map_err(|e| {
                 Error::Internal(format!(
-                    "Failed to create log artifact directory '{}': {}",
-                    parent.display(),
-                    e
+                    "Failed to create log artifact directory for '{}': {}",
+                    file_path, e
                 ))
             })?;
-        }
 
-        Ok(full_path)
+        let full_path = artifacts_dir.join(&file_path);
+        Ok((full_path, file_path))
     }
 
     async fn persist_pending_stderr_log_artifact_if_written(
         pool: &PgPool,
         artifacts_dir: &Path,
+        transport: &dyn ArtifactFileTransport,
         execution: &Execution,
         pending_path: &Path,
     ) -> Result<Option<PathBuf>> {
+        // Pending files are always on local disk (even with API transport,
+        // they are staged locally before promotion)
         let metadata = match tokio::fs::metadata(pending_path).await {
             Ok(metadata) => metadata,
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
@@ -1181,24 +1231,33 @@ impl ActionExecutor {
             return Ok(None);
         }
 
-        let final_path = Self::allocate_execution_log_artifact_with(
+        let (final_path, relative_path) = Self::allocate_execution_log_artifact_with(
             pool,
             artifacts_dir,
+            transport,
             execution,
             ExecutionLogArtifactStream::Stderr,
         )
         .await?;
 
-        tokio::fs::rename(pending_path, &final_path)
+        // Read from local pending file, write to final location via transport
+        let content = tokio::fs::read(pending_path).await.map_err(|e| {
+            Error::Internal(format!(
+                "Failed to read pending stderr log '{}': {}",
+                pending_path.display(),
+                e
+            ))
+        })?;
+        transport
+            .write_file(&relative_path, &content, Some("text/plain"))
             .await
             .map_err(|e| {
                 Error::Internal(format!(
-                    "Failed to move pending stderr log '{}' to artifact file '{}': {}",
-                    pending_path.display(),
-                    final_path.display(),
-                    e
+                    "Failed to write stderr log to '{}': {}",
+                    relative_path, e
                 ))
             })?;
+        let _ = tokio::fs::remove_file(pending_path).await;
         Self::remove_empty_pending_parent_dirs(pending_path).await;
 
         Ok(Some(final_path))
@@ -1254,8 +1313,8 @@ impl ActionExecutor {
     /// Finalize file-backed artifacts after execution completes.
     ///
     /// Scans all artifact versions linked to this execution that have a `file_path`,
-    /// stats each file on disk, and updates `size_bytes` on both the version row
-    /// and the parent artifact row.
+    /// stats each file via the transport, and updates `size_bytes` on both the
+    /// version row and the parent artifact row.
     async fn finalize_file_artifacts(&self, execution_id: i64) -> Result<()> {
         let versions =
             ArtifactVersionRepository::find_file_versions_by_execution(&self.pool, execution_id)
@@ -1280,10 +1339,9 @@ impl ActionExecutor {
                 None => continue,
             };
 
-            let full_path = self.artifacts_dir.join(file_path);
-            let size_bytes = match tokio::fs::metadata(&full_path).await {
-                Ok(metadata) => metadata.len() as i64,
-                Err(e) if e.kind() == ErrorKind::NotFound => {
+            let size_bytes = match self.transport.file_size(file_path).await {
+                Ok(Some(size)) => size as i64,
+                Ok(None) => {
                     debug!(
                         "Removing unwritten artifact version {} (artifact {}): file='{}'",
                         ver.id, ver.artifact, file_path,
@@ -1293,7 +1351,7 @@ impl ActionExecutor {
                 Err(e) => {
                     warn!(
                         "Could not stat artifact file '{}' for version {}: {}. Setting size_bytes=0.",
-                        full_path.display(),
+                        file_path,
                         ver.id,
                         e,
                     );
@@ -1307,7 +1365,7 @@ impl ActionExecutor {
                     "Removing empty artifact version {} (artifact {}): file='{}'",
                     ver.id, ver.artifact, file_path,
                 );
-                let _ = tokio::fs::remove_file(&full_path).await;
+                let _ = self.transport.delete_file(file_path).await;
                 if let Err(e) = ArtifactVersionRepository::delete(&self.pool, ver.id).await {
                     warn!("Failed to delete empty artifact version {}: {}", ver.id, e,);
                 }

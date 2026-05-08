@@ -516,7 +516,7 @@ pub async fn update_rule(
         action_params: request.action_params,
         trigger_params: request.trigger_params,
         enabled: request.enabled,
-        owner_identity: None,
+        ..Default::default()
     };
 
     let rule = RuleRepository::update(&state.db, existing_rule.id, update_input).await?;
@@ -662,17 +662,8 @@ pub async fn enable_rule(
 
     // Update rule to enabled
     let update_input = UpdateRuleInput {
-        label: None,
-        description: None,
-        action: None,
-        action_ref: None,
-        trigger: None,
-        trigger_ref: None,
-        conditions: None,
-        action_params: None,
-        trigger_params: None,
         enabled: Some(true),
-        owner_identity: None,
+        ..Default::default()
     };
 
     let rule = RuleRepository::update(&state.db, existing_rule.id, update_input).await?;
@@ -730,17 +721,8 @@ pub async fn disable_rule(
 
     // Update rule to disabled
     let update_input = UpdateRuleInput {
-        label: None,
-        description: None,
-        action: None,
-        action_ref: None,
-        trigger: None,
-        trigger_ref: None,
-        conditions: None,
-        action_params: None,
-        trigger_params: None,
         enabled: Some(false),
-        owner_identity: None,
+        ..Default::default()
     };
 
     let rule = RuleRepository::update(&state.db, existing_rule.id, update_input).await?;

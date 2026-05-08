@@ -485,13 +485,15 @@ When a pack is loaded, Attune performs the following steps:
 
 1. **Parse Pack Manifest**: Read and validate `pack.yaml`
 2. **Register Pack**: Insert pack metadata into database
-3. **Load Actions**: Parse all `actions/*.yaml` files and register actions
-4. **Load Sensors**: Parse all `sensors/*.yaml` files and register sensors
-5. **Load Triggers**: Parse all `triggers/*.yaml` files and register triggers
-6. **Load Rules** (optional): Parse all `rules/*.yaml` files
-7. **Load Workflows** (optional): Parse all `workflows/*.yaml` files
-8. **Validate Dependencies**: Check that all dependencies are available
-9. **Apply Configuration**: Apply default configuration from pack manifest
+3. **Load Permission Sets**: Parse all `permission_sets/*.yaml` files
+4. **Load Runtimes**: Parse all `runtimes/*.yaml` files
+5. **Load Triggers**: Parse all `triggers/*.yaml` files
+6. **Load Actions and Workflow Definitions**: Parse `actions/*.yaml` files and any `workflow_file` graphs they reference
+7. **Load Work Queues**: Parse all `queues/*.yaml` files
+8. **Load Rules**: Parse all `rules/*.yaml` files after actions and triggers are available
+9. **Load Sensors**: Parse all `sensors/*.yaml` files
+10. **Validate Dependencies**: Check that all dependencies are available
+11. **Apply Configuration**: Apply default configuration from pack manifest
 
 ---
 

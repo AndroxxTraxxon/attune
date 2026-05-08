@@ -125,6 +125,18 @@ enum Commands {
         #[arg(long, conflicts_with = "param")]
         params_json: Option<String>,
 
+        /// Worker label selector as JSON (e.g. '{"pool":"gpu"}')
+        #[arg(long)]
+        worker_selector: Option<String>,
+
+        /// Worker tolerations as JSON array
+        #[arg(long)]
+        worker_tolerations: Option<String>,
+
+        /// Worker affinity as JSON object
+        #[arg(long)]
+        worker_affinity: Option<String>,
+
         /// Watch execution until it completes
         #[arg(short, long)]
         watch: bool,
@@ -253,6 +265,9 @@ async fn main() {
             action_ref,
             param,
             params_json,
+            worker_selector,
+            worker_tolerations,
+            worker_affinity,
             watch,
             timeout,
             notifier_url,
@@ -264,6 +279,9 @@ async fn main() {
                     action_ref,
                     param,
                     params_json,
+                    worker_selector,
+                    worker_tolerations,
+                    worker_affinity,
                     watch,
                     timeout,
                     notifier_url,

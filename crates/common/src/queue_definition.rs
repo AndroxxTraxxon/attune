@@ -110,12 +110,6 @@ pub fn validate_work_queue_config(config: &JsonValue) -> Result<WorkQueueConfig>
     let config: WorkQueueConfig = serde_json::from_value(config.clone())
         .map_err(|e| Error::validation(format!("Invalid work queue config structure: {}", e)))?;
 
-    if let Some(priority) = &config.priority {
-        if let Some(default) = &priority.default {
-            validate_tunable_value("config.priority.default", default)?;
-        }
-    }
-
     if let Some(dispatch) = &config.dispatch {
         if let Some(concurrency) = &dispatch.concurrency {
             validate_tunable_value("config.dispatch.concurrency", concurrency)?;
@@ -329,6 +323,21 @@ config:
         .expect_err("config should be rejected");
 
         assert!(error.to_string().contains("config.dispatch.concurrency"));
+    }
+
+    #[test]
+    fn rejects_removed_priority_config() {
+        let error = validate_work_queue_config(&json!({
+            "priority": {
+                "default": {
+                    "source": "literal",
+                    "value": 10
+                }
+            }
+        }))
+        .expect_err("removed priority config should be rejected");
+
+        assert!(error.to_string().contains("unknown field `priority`"));
     }
 
     #[test]

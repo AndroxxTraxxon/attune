@@ -708,6 +708,65 @@ pub struct AgentConfig {
     pub bootstrap_token: Option<String>,
 }
 
+/// Configuration for artifact file transport.
+///
+/// Controls how file content (not metadata) is transferred between
+/// workers/sensors and the API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactsConfig {
+    /// Transport mode: "auto" (default), "volume", or "api".
+    ///
+    /// - `auto`: detect shared volume via sentinel file, fall back to API
+    /// - `volume`: always use shared filesystem
+    /// - `api`: always use HTTP API for file transfer
+    #[serde(default)]
+    pub transport: crate::artifact_transport::TransportMode,
+
+    /// Maximum file upload size in bytes for API transport (default: 100 MB).
+    #[serde(default = "default_max_upload_size")]
+    pub max_upload_size: u64,
+
+    /// Buffer flush interval in milliseconds for streaming writes (default: 500).
+    #[serde(default = "default_flush_interval_ms")]
+    pub flush_interval_ms: u64,
+
+    /// Sensor log rotation: max bytes per log file (default: 10 MB).
+    #[serde(default = "default_sensor_log_max_bytes")]
+    pub sensor_log_max_bytes: u64,
+
+    /// Sensor log rotation: number of rotated files to keep (default: 5).
+    #[serde(default = "default_sensor_log_max_files")]
+    pub sensor_log_max_files: u32,
+}
+
+impl Default for ArtifactsConfig {
+    fn default() -> Self {
+        Self {
+            transport: crate::artifact_transport::TransportMode::Auto,
+            max_upload_size: default_max_upload_size(),
+            flush_interval_ms: default_flush_interval_ms(),
+            sensor_log_max_bytes: default_sensor_log_max_bytes(),
+            sensor_log_max_files: default_sensor_log_max_files(),
+        }
+    }
+}
+
+fn default_max_upload_size() -> u64 {
+    100 * 1024 * 1024 // 100 MB
+}
+
+fn default_flush_interval_ms() -> u64 {
+    500
+}
+
+fn default_sensor_log_max_bytes() -> u64 {
+    10 * 1024 * 1024 // 10 MB
+}
+
+fn default_sensor_log_max_files() -> u32 {
+    5
+}
+
 /// Executor service configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutorConfig {
@@ -791,6 +850,10 @@ pub struct Config {
     /// Pattern: {artifacts_dir}/{ref_slug}/v{version}.{ext}
     #[serde(default = "default_artifacts_dir")]
     pub artifacts_dir: String,
+
+    /// Artifact file transport configuration.
+    #[serde(default)]
+    pub artifacts: ArtifactsConfig,
 
     /// Notifier configuration (optional, for notifier service)
     pub notifier: Option<NotifierConfig>,
@@ -1253,6 +1316,7 @@ mod tests {
             packs_base_dir: default_packs_base_dir(),
             runtime_envs_dir: default_runtime_envs_dir(),
             artifacts_dir: default_artifacts_dir(),
+            artifacts: ArtifactsConfig::default(),
             notifier: None,
             pack_registry: PackRegistryConfig::default(),
             executor: None,
@@ -1333,6 +1397,7 @@ mod tests {
             packs_base_dir: default_packs_base_dir(),
             runtime_envs_dir: default_runtime_envs_dir(),
             artifacts_dir: default_artifacts_dir(),
+            artifacts: ArtifactsConfig::default(),
             notifier: None,
             pack_registry: PackRegistryConfig::default(),
             executor: None,

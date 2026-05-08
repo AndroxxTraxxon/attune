@@ -60,8 +60,8 @@ pub use messages::{
     EnforcementCreatedPayload, EventCreatedPayload, ExecutionCancelRequestedPayload,
     ExecutionCompletedPayload, ExecutionRequestedPayload, ExecutionStatusChangedPayload,
     InquiryCreatedPayload, InquiryRespondedPayload, Message, MessageEnvelope, MessageType,
-    NotificationCreatedPayload, PackRegisteredPayload, RuleCreatedPayload, RuleDisabledPayload,
-    RuleEnabledPayload,
+    NotificationCreatedPayload, PackDeletedPayload, PackRegisteredPayload, RuleCreatedPayload,
+    RuleDisabledPayload, RuleEnabledPayload,
 };
 pub use publisher::{Publisher, PublisherConfig};
 

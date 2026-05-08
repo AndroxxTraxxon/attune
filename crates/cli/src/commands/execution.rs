@@ -145,6 +145,18 @@ pub enum ExecutionCommands {
         #[arg(long, conflicts_with_all = ["param", "interactive"])]
         params_json: Option<String>,
 
+        /// Worker label selector as JSON (e.g. '{"pool":"gpu"}')
+        #[arg(long)]
+        worker_selector: Option<String>,
+
+        /// Worker tolerations as JSON array
+        #[arg(long)]
+        worker_tolerations: Option<String>,
+
+        /// Worker affinity as JSON object
+        #[arg(long)]
+        worker_affinity: Option<String>,
+
         /// Watch the new execution until it completes
         #[arg(short, long)]
         watch: bool,
@@ -376,6 +388,9 @@ pub async fn handle_execution_command(
             interactive,
             param,
             params_json,
+            worker_selector,
+            worker_tolerations,
+            worker_affinity,
             watch,
             timeout,
             notifier_url,
@@ -386,6 +401,9 @@ pub async fn handle_execution_command(
                 interactive,
                 param,
                 params_json,
+                worker_selector,
+                worker_tolerations,
+                worker_affinity,
                 watch,
                 timeout,
                 notifier_url,
@@ -558,6 +576,12 @@ async fn handle_watch_execution(
 struct ExecuteActionRequest {
     action_ref: String,
     parameters: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_selector: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_tolerations: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_affinity: Option<serde_json::Value>,
 }
 
 fn parse_param_overrides(params: &[String]) -> Result<Vec<(String, serde_json::Value)>> {
@@ -639,6 +663,9 @@ async fn handle_rerun(
     interactive: bool,
     params: Vec<String>,
     params_json: Option<String>,
+    worker_selector: Option<String>,
+    worker_tolerations: Option<String>,
+    worker_affinity: Option<String>,
     watch: bool,
     timeout: u64,
     notifier_url: Option<String>,
@@ -696,9 +723,25 @@ async fn handle_rerun(
         ));
     }
 
+    let selector = worker_selector
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .context("Invalid --worker-selector JSON")?;
+    let tolerations = worker_tolerations
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .context("Invalid --worker-tolerations JSON")?;
+    let affinity = worker_affinity
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .context("Invalid --worker-affinity JSON")?;
+
     let request = ExecuteActionRequest {
         action_ref: original.action_ref.clone(),
         parameters,
+        worker_selector: selector,
+        worker_tolerations: tolerations,
+        worker_affinity: affinity,
     };
 
     let new_execution: ExecutionDetail = client.post("/executions/execute", &request).await?;

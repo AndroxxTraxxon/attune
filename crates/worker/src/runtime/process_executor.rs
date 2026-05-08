@@ -61,6 +61,8 @@ pub async fn execute_streaming(
         None,
         None,
         None,
+        None,
+        None,
     )
     .await
 }
@@ -97,6 +99,8 @@ pub async fn execute_streaming_cancellable(
     cancel_token: Option<CancellationToken>,
     stdout_log_path: Option<&Path>,
     stderr_log_path: Option<&Path>,
+    stdout_log_writer: Option<BoundedLogFileWriter>,
+    stderr_log_writer: Option<BoundedLogFileWriter>,
 ) -> RuntimeResult<ExecutionResult> {
     let start = Instant::now();
 
@@ -134,8 +138,11 @@ pub async fn execute_streaming_cancellable(
     // Create bounded writers
     let mut stdout_writer = BoundedLogWriter::new_stdout(max_stdout_bytes);
     let mut stderr_writer = BoundedLogWriter::new_stderr(max_stderr_bytes);
-    let mut stdout_file = open_live_log_file(stdout_log_path, max_stdout_bytes, true);
-    let mut stderr_file = open_live_log_file(stderr_log_path, max_stderr_bytes, false);
+    // Prefer pre-opened transport writers over path-based file writers
+    let mut stdout_file =
+        stdout_log_writer.or_else(|| open_live_log_file(stdout_log_path, max_stdout_bytes, true));
+    let mut stderr_file =
+        stderr_log_writer.or_else(|| open_live_log_file(stderr_log_path, max_stderr_bytes, false));
 
     // Take stdout and stderr streams
     let stdout = child.stdout.take().expect("stdout not captured");
@@ -730,6 +737,8 @@ mod tests {
             1024 * 1024,
             OutputFormat::Text,
             Some(cancel_token),
+            None,
+            None,
             None,
             None,
         )

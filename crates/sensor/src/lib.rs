@@ -5,6 +5,7 @@
 
 pub mod api_client;
 pub mod rule_lifecycle_listener;
+pub mod sensor_log;
 pub mod sensor_manager;
 pub mod sensor_worker_registration;
 pub mod service;

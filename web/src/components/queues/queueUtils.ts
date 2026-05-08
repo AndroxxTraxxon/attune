@@ -15,10 +15,6 @@ export interface QueueTunableValue {
   fallback?: JsonValue;
 }
 
-export interface QueuePriorityConfig {
-  default?: QueueTunableValue;
-}
-
 export interface QueueDispatchConfig {
   concurrency?: QueueTunableValue;
   batch_size?: QueueTunableValue;
@@ -38,7 +34,6 @@ export interface QueueBatchCoalescingConfig {
 }
 
 export interface QueueConfig {
-  priority?: QueuePriorityConfig;
   dispatch?: QueueDispatchConfig;
   ack_contract?: QueueAckContractConfig;
 }

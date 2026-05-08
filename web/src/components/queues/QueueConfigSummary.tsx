@@ -239,10 +239,7 @@ function QueueConfigPreview({
         resolvedDispatchTuning?.batch_size,
       )
       : "Single item dispatch";
-  const priority = formatQueueTunable(
-    config.priority?.default,
-    `Queue default: ${queue.default_priority}`,
-  );
+  const priority = queue.default_priority.toString();
   const ackContract = config.ack_contract?.version
     ? `Version ${config.ack_contract.version}`
     : "Not required";

@@ -1,0 +1,159 @@
+# Docker Compose override: Standalone Worker and Sensor
+#
+# Adds worker and sensor services that do NOT share packs_data, artifacts_data,
+# or runtime_envs volumes with the rest of the cluster.  They rely entirely on
+# the API-based transport layer for pack distribution, artifact I/O, and log
+# streaming.
+#
+# Usage:
+#   # Start full stack with standalone services
+#   docker compose -f docker-compose.yaml -f docker-compose.standalone.yaml up -d
+#
+#   # Start full stack + standalone + e2e tests
+#   docker compose -f docker-compose.yaml \
+#                  -f docker-compose.standalone.yaml \
+#                  -f docker-compose.e2e.yaml \
+#                  run --rm e2e-tests -k standalone
+#
+# How it works:
+#   These services have the same DB / MQ / JWT config as normal workers but
+#   mount ONLY:
+#     - agent_bin (read-only, for the attune-agent binary itself)
+#     - config file (read-only)
+#
+#   They do NOT mount:
+#     - packs_data    → pack contents are fetched via GET /internal/packs/{ref}/archive
+#     - artifacts_data → artifact files are transferred via internal file endpoints
+#     - runtime_envs   → environments are created locally in the container
+#
+#   The API writes sentinel files (.attune-packs-sentinel, .attune-api-sentinel)
+#   into the shared volumes.  Because the standalone containers lack those
+#   volumes, no sentinel is found and the agent automatically switches to API
+#   transport.
+#
+# Labels:
+#   worker-standalone has label attune.transport=api so tests can target it
+#   via worker_selector: { "attune.transport": "api" }.
+
+services:
+  # ---------------------------------------------------------------------------
+  # Standalone Shell Worker
+  # ---------------------------------------------------------------------------
+  worker-standalone:
+    image: debian:bookworm-slim
+    container_name: attune-worker-standalone
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if ! command -v curl >/dev/null 2>&1; then
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+        fi
+        # Create local (empty) directories for packs and artifacts.
+        # The agent will detect no sentinel and use API transport.
+        mkdir -p /opt/attune/packs /opt/attune/artifacts /opt/attune/runtime_envs /opt/attune/logs
+        exec /opt/attune/agent/attune-agent
+    stop_grace_period: 45s
+    environment:
+      RUST_LOG: info,attune=debug
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
+      ATTUNE_WORKER_TYPE: container
+      ATTUNE_WORKER_NAME: worker-standalone-01
+      ATTUNE_WORKER_RUNTIMES: shell
+      ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
+      ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+      ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+      ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE_API_URL: http://attune-api:8080
+      # Override paths so they don't point at nonexistent shared volumes
+      ATTUNE__PACKS_BASE_DIR: /opt/attune/packs
+      ATTUNE__ARTIFACTS_DIR: /opt/attune/artifacts
+      ATTUNE__RUNTIME_ENVS_DIR: /opt/attune/runtime_envs
+      # Worker labels for placement targeting from tests
+      ATTUNE__WORKER__LABELS__attune_transport: api
+    volumes:
+      # ONLY the agent binary and config — no shared data volumes
+      - agent_bin:/opt/attune/agent:ro
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
+    depends_on:
+      init-agent:
+        condition: service_completed_successfully
+      init-packs:
+        condition: service_completed_successfully
+      init-user:
+        condition: service_completed_successfully
+      migrations:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /proc/1/status"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - attune-network
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Standalone Sensor
+  # ---------------------------------------------------------------------------
+  # The sensor service monitors triggers and generates events.
+  # This instance has no access to the shared packs volume —
+  # it downloads pack files via the API transport.
+  sensor-standalone:
+    image: debian:bookworm-slim
+    container_name: attune-sensor-standalone
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if ! command -v curl >/dev/null 2>&1; then
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+        fi
+        mkdir -p /opt/attune/packs /opt/attune/artifacts /opt/attune/runtime_envs /opt/attune/logs
+        exec /opt/attune/agent/attune-sensor-agent
+    stop_grace_period: 30s
+    environment:
+      RUST_LOG: info,attune=debug
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
+      ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
+      ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+      ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+      ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
+      ATTUNE_API_URL: http://attune-api:8080
+      ATTUNE__PACKS_BASE_DIR: /opt/attune/packs
+      ATTUNE__ARTIFACTS_DIR: /opt/attune/artifacts
+      ATTUNE__RUNTIME_ENVS_DIR: /opt/attune/runtime_envs
+    volumes:
+      - agent_bin:/opt/attune/agent:ro
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
+    depends_on:
+      init-agent:
+        condition: service_completed_successfully
+      init-packs:
+        condition: service_completed_successfully
+      init-user:
+        condition: service_completed_successfully
+      migrations:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /proc/1/status"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - attune-network
+    restart: unless-stopped

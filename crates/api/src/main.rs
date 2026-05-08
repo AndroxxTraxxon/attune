@@ -156,6 +156,25 @@ async fn main() -> Result<()> {
 
     info!("Configuration loaded successfully");
     info!("Environment: {}", config.environment);
+
+    // Write sentinel file for volume auto-detection by workers/sensors
+    let api_url = format!("http://{}:{}", config.server.host, config.server.port);
+    if let Err(e) = attune_common::artifact_transport::detection::write_sentinel(
+        &config.artifacts_dir,
+        &api_url,
+    ) {
+        warn!("Failed to write artifact sentinel file: {e} — remote workers will default to API transport");
+    }
+
+    // Write packs sentinel for pack volume auto-detection
+    if let Err(e) =
+        attune_common::pack_transport::write_packs_sentinel(&config.packs_base_dir, &api_url)
+    {
+        warn!(
+            "Failed to write packs sentinel file: {e} — remote workers will download packs via API"
+        );
+    }
+
     info!(
         "Server will bind to {}:{}",
         config.server.host, config.server.port

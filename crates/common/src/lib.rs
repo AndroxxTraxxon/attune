@@ -8,6 +8,7 @@
 
 pub mod agent_bootstrap;
 pub mod agent_runtime_detection;
+pub mod artifact_transport;
 pub mod audit;
 pub mod auth;
 pub mod config;
@@ -18,6 +19,7 @@ pub mod models;
 pub mod mq;
 pub mod pack_environment;
 pub mod pack_registry;
+pub mod pack_transport;
 pub mod queue_definition;
 pub mod rbac;
 pub mod repositories;

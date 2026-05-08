@@ -563,6 +563,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "config",
+ "flate2",
  "futures",
  "hmac 0.13.0",
  "jsonschema",
@@ -580,6 +581,7 @@ dependencies = [
  "sha2 0.11.0",
  "signature",
  "sqlx",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -672,6 +674,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

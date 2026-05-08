@@ -3,8 +3,8 @@
 Pack Loader for Attune
 
 This script loads a pack from the filesystem into the database.
-It reads pack.yaml, permission set definitions, action definitions, trigger
-definitions, and sensor definitions and creates all necessary database entries.
+It reads pack.yaml, permission set definitions, action definitions, trigger,
+rule, and sensor definitions and creates all necessary database entries.
 
 Usage:
     python3 scripts/load_core_pack.py [--database-url URL] [--pack-dir DIR] [--pack-name NAME]
@@ -948,6 +948,123 @@ class PackLoader:
         cursor.close()
         return sensor_ids
 
+    def upsert_rules(
+        self, trigger_ids: Dict[str, int], action_ids: Dict[str, int]
+    ) -> Dict[str, int]:
+        """Load declarative rule definitions from rules/*.yaml."""
+        print("\n→ Loading rules...")
+
+        rules_dir = self.pack_dir / "rules"
+        if not rules_dir.exists():
+            print("  No rules directory found")
+            return {}
+
+        rule_ids = {}
+        cursor = self.conn.cursor()
+
+        def qualify(ref: str) -> str:
+            return ref if "." in ref else f"{self.pack_ref}.{ref}"
+
+        def find_entity_id(table: str, ref: str) -> Optional[int]:
+            if table == "trigger":
+                cursor.execute("SELECT id FROM trigger WHERE ref = %s", (ref,))
+            elif table == "action":
+                cursor.execute("SELECT id FROM action WHERE ref = %s", (ref,))
+            else:
+                raise ValueError(f"Unsupported lookup table: {table}")
+            row = cursor.fetchone()
+            return row[0] if row else None
+
+        for yaml_file in sorted(rules_dir.glob("*.yaml")):
+            rule_data = self.load_yaml(yaml_file)
+            if not rule_data:
+                continue
+
+            ref = rule_data.get("ref")
+            if not ref:
+                print(f"  ⚠ Rule YAML {yaml_file.name} missing 'ref' field, skipping")
+                continue
+            ref = qualify(ref)
+
+            trigger_ref = rule_data.get("trigger_ref")
+            action_ref = rule_data.get("action_ref")
+            if not trigger_ref or not action_ref:
+                print(
+                    f"  ⚠ Rule '{ref}' must define both 'trigger_ref' and 'action_ref', skipping"
+                )
+                continue
+
+            trigger_ref = qualify(trigger_ref)
+            action_ref = qualify(action_ref)
+            trigger_id = trigger_ids.get(trigger_ref) or find_entity_id("trigger", trigger_ref)
+            action_id = action_ids.get(action_ref) or find_entity_id("action", action_ref)
+
+            if not trigger_id:
+                print(f"  ⚠ Rule '{ref}' references unknown trigger '{trigger_ref}', skipping")
+                continue
+            if not action_id:
+                print(f"  ⚠ Rule '{ref}' references unknown action '{action_ref}', skipping")
+                continue
+
+            name = ref.split(".")[-1] if "." in ref else ref
+            label = rule_data.get("label") or generate_label(name)
+            description = rule_data.get("description", "")
+            enabled = rule_data.get("enabled", True)
+            conditions = json.dumps(rule_data.get("conditions", {}))
+            action_params = json.dumps(rule_data.get("action_params", {}))
+            trigger_params = json.dumps(rule_data.get("trigger_params", {}))
+
+            cursor.execute(
+                """
+                INSERT INTO rule (
+                    ref, pack, pack_ref, label, description,
+                    action, action_ref, trigger, trigger_ref,
+                    conditions, action_params, trigger_params,
+                    enabled, is_adhoc, owner_identity
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, false, NULL)
+                ON CONFLICT (ref) DO UPDATE SET
+                    pack = EXCLUDED.pack,
+                    pack_ref = EXCLUDED.pack_ref,
+                    label = EXCLUDED.label,
+                    description = EXCLUDED.description,
+                    action = EXCLUDED.action,
+                    action_ref = EXCLUDED.action_ref,
+                    trigger = EXCLUDED.trigger,
+                    trigger_ref = EXCLUDED.trigger_ref,
+                    conditions = EXCLUDED.conditions,
+                    action_params = EXCLUDED.action_params,
+                    trigger_params = EXCLUDED.trigger_params,
+                    enabled = EXCLUDED.enabled,
+                    is_adhoc = false,
+                    owner_identity = NULL,
+                    updated = NOW()
+                RETURNING id
+            """,
+                (
+                    ref,
+                    self.pack_id,
+                    self.pack_ref,
+                    label,
+                    description,
+                    action_id,
+                    action_ref,
+                    trigger_id,
+                    trigger_ref,
+                    conditions,
+                    action_params,
+                    trigger_params,
+                    enabled,
+                ),
+            )
+
+            rule_id = cursor.fetchone()[0]
+            rule_ids[ref] = rule_id
+            print(f"  ✓ Rule '{ref}' (ID: {rule_id})")
+
+        cursor.close()
+        return rule_ids
+
     def load_pack(self):
         """Main loading process.
 
@@ -957,7 +1074,8 @@ class PackLoader:
         3. Triggers (no dependencies)
         4. Actions (depend on runtime; workflow actions also create
            workflow_definition records)
-        5. Sensors (depend on triggers and runtime)
+        5. Rules (depend on triggers and actions)
+        6. Sensors (depend on triggers and runtime)
         """
         print("=" * 60)
         print(f"Pack Loader - {self.pack_name}")
@@ -984,6 +1102,9 @@ class PackLoader:
             # Load actions (with runtime resolution + workflow definitions)
             action_ids = self.upsert_actions(runtime_ids)
 
+            # Load rules
+            rule_ids = self.upsert_rules(trigger_ids, action_ids)
+
             # Load sensors
             sensor_ids = self.upsert_sensors(trigger_ids, runtime_ids)
 
@@ -998,6 +1119,7 @@ class PackLoader:
             print(f"  Runtimes: {runtime_count}")
             print(f"  Triggers: {len(trigger_ids)}")
             print(f"  Actions: {len(action_ids)}")
+            print(f"  Rules: {len(rule_ids)}")
             print(f"  Sensors: {len(sensor_ids)}")
             print()
 

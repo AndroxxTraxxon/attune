@@ -844,7 +844,7 @@ async fn test_update_rule_multiple_fields() {
         action_params: None,
         trigger_params: None,
         enabled: Some(false),
-        owner_identity: None,
+        ..Default::default()
     };
 
     let updated = RuleRepository::update(&pool, created.id, update)

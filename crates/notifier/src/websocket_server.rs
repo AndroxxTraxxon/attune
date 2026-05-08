@@ -217,6 +217,7 @@ fn verify_ws_token(
         TokenType::Access | TokenType::Execution => {}
         TokenType::Refresh => return Err("refresh_tokens_not_allowed"),
         TokenType::Sensor => return Err("sensor_tokens_not_allowed"),
+        TokenType::Worker => return Err("worker_tokens_not_allowed"),
     }
 
     let identity_id: i64 = claims.sub.parse().map_err(|_| "invalid_subject_in_token")?;

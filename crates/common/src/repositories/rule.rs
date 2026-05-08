@@ -91,6 +91,8 @@ pub struct CreateRuleInput {
 /// Input for updating a rule
 #[derive(Debug, Clone, Default)]
 pub struct UpdateRuleInput {
+    pub pack: Option<Id>,
+    pub pack_ref: Option<String>,
     pub label: Option<String>,
     pub description: Option<Patch<String>>,
     pub action: Option<Id>,
@@ -101,6 +103,7 @@ pub struct UpdateRuleInput {
     pub action_params: Option<serde_json::Value>,
     pub trigger_params: Option<serde_json::Value>,
     pub enabled: Option<bool>,
+    pub is_adhoc: Option<bool>,
     pub owner_identity: Option<Patch<Id>>,
 }
 
@@ -229,7 +232,25 @@ impl Update for RuleRepository {
         let mut query = QueryBuilder::new("UPDATE rule SET ");
         let mut has_updates = false;
 
+        if let Some(pack) = input.pack {
+            query.push("pack = ");
+            query.push_bind(pack);
+            has_updates = true;
+        }
+
+        if let Some(pack_ref) = &input.pack_ref {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("pack_ref = ");
+            query.push_bind(pack_ref);
+            has_updates = true;
+        }
+
         if let Some(label) = &input.label {
+            if has_updates {
+                query.push(", ");
+            }
             query.push("label = ");
             query.push_bind(label);
             has_updates = true;
@@ -316,6 +337,15 @@ impl Update for RuleRepository {
             }
             query.push("enabled = ");
             query.push_bind(enabled);
+            has_updates = true;
+        }
+
+        if let Some(is_adhoc) = input.is_adhoc {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("is_adhoc = ");
+            query.push_bind(is_adhoc);
             has_updates = true;
         }
 
@@ -624,6 +654,34 @@ impl RuleRepository {
         .bind(trigger_ref)
         .execute(executor)
         .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Delete pack-owned (non-ad-hoc) rules for a pack, excluding the supplied refs.
+    ///
+    /// Used by pack reload to remove declarative rules that were deleted from
+    /// `rules/*.yaml` while preserving API/UI-created ad-hoc rules.
+    pub async fn delete_by_pack_excluding<'e, E>(
+        executor: E,
+        pack_id: Id,
+        refs: &[String],
+    ) -> Result<u64>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let result = if refs.is_empty() {
+            sqlx::query("DELETE FROM rule WHERE pack = $1 AND is_adhoc = false")
+                .bind(pack_id)
+                .execute(executor)
+                .await?
+        } else {
+            sqlx::query("DELETE FROM rule WHERE pack = $1 AND is_adhoc = false AND ref != ALL($2)")
+                .bind(pack_id)
+                .bind(refs)
+                .execute(executor)
+                .await?
+        };
 
         Ok(result.rows_affected())
     }

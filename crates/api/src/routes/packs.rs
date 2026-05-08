@@ -13,7 +13,7 @@ use validator::Validate;
 
 use attune_common::audit::{event_type, AuditCategory, AuditEventBuilder, AuditOutcome};
 use attune_common::models::{pack_test::PackTestResult, Pack};
-use attune_common::mq::{MessageEnvelope, MessageType, PackRegisteredPayload};
+use attune_common::mq::{MessageEnvelope, MessageType, PackDeletedPayload, PackRegisteredPayload};
 use attune_common::rbac::{Action, AuthorizationContext, Grant, Resource};
 use attune_common::repositories::{
     pack::{CreatePackInput, UpdatePackInput},
@@ -445,6 +445,28 @@ pub async fn delete_pack(
             );
         } else {
             tracing::info!("Removed pack directory: {}", pack_dir.display());
+        }
+    }
+
+    // Publish pack.deleted event so workers and sensors can clean up
+    // local pack files and runtime environments.
+    if let Some(publisher) = state.get_publisher().await {
+        let payload = PackDeletedPayload {
+            pack_id: pack.id,
+            pack_ref: pack_ref.clone(),
+        };
+        let envelope = MessageEnvelope::new(MessageType::PackDeleted, payload);
+        match publisher.publish_envelope(&envelope).await {
+            Ok(()) => {
+                tracing::info!("Published pack.deleted event for pack '{}'", pack_ref);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to publish pack.deleted event for pack '{}': {}",
+                    pack_ref,
+                    e,
+                );
+            }
         }
     }
 
@@ -1555,40 +1577,38 @@ async fn register_pack_internal(
         }
     }
 
-    // Publish pack.registered event so workers can proactively set up
-    // runtime environments (virtualenvs, node_modules, etc.).
+    // Publish pack.registered event so workers can sync pack content and
+    // proactively set up runtime environments (virtualenvs, node_modules, etc.).
     if let Some(publisher) = state.get_publisher().await {
         let runtime_names = attune_common::pack_environment::collect_runtime_names_for_pack(
             &state.db, pack.id, &pack_path,
         )
         .await;
 
-        if !runtime_names.is_empty() {
-            let payload = PackRegisteredPayload {
-                pack_id: pack.id,
-                pack_ref: pack.r#ref.clone(),
-                version: pack.version.clone(),
-                runtime_names: runtime_names.clone(),
-            };
+        let payload = PackRegisteredPayload {
+            pack_id: pack.id,
+            pack_ref: pack.r#ref.clone(),
+            version: pack.version.clone(),
+            runtime_names: runtime_names.clone(),
+        };
 
-            let envelope = MessageEnvelope::new(MessageType::PackRegistered, payload);
+        let envelope = MessageEnvelope::new(MessageType::PackRegistered, payload);
 
-            match publisher.publish_envelope(&envelope).await {
-                Ok(()) => {
-                    tracing::info!(
-                        "Published pack.registered event for pack '{}' (runtimes: {:?})",
-                        pack.r#ref,
-                        runtime_names,
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to publish pack.registered event for pack '{}': {}. \
-                         Workers will set up environments lazily on first execution.",
-                        pack.r#ref,
-                        e,
-                    );
-                }
+        match publisher.publish_envelope(&envelope).await {
+            Ok(()) => {
+                tracing::info!(
+                    "Published pack.registered event for pack '{}' (runtimes: {:?})",
+                    pack.r#ref,
+                    runtime_names,
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to publish pack.registered event for pack '{}': {}. \
+                     Workers will sync pack content lazily on first execution.",
+                    pack.r#ref,
+                    e,
+                );
             }
         }
     }

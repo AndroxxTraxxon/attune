@@ -88,6 +88,8 @@ fn make_context(action_ref: &str, entry_point: &str, runtime_name: &str) -> Exec
         max_stderr_bytes: 10 * 1024 * 1024,
         stdout_log_path: None,
         stderr_log_path: None,
+        stdout_log_writer: None,
+        stderr_log_writer: None,
         parameter_delivery: ParameterDelivery::default(),
         parameter_format: ParameterFormat::default(),
         output_format: OutputFormat::default(),

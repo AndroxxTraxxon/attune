@@ -22,10 +22,10 @@ use attune_common::version_matching::select_best_version;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use std::io;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -161,6 +161,7 @@ struct SensorManagerInner {
     running: Arc<RwLock<bool>>,
     packs_base_dir: String,
     runtime_envs_dir: String,
+    artifacts_dir: PathBuf,
     api_client: ApiClient,
     api_url: String,
     mq_url: String,
@@ -189,6 +190,9 @@ impl SensorManager {
             .or_else(|_| std::env::var("ATTUNE__RUNTIME_ENVS_DIR"))
             .unwrap_or_else(|_| "/opt/attune/runtime_envs".to_string());
 
+        let artifacts_dir = std::env::var("ATTUNE_ARTIFACTS_DIR")
+            .unwrap_or_else(|_| "/opt/attune/artifacts".to_string());
+
         // Create API client for token provisioning (no admin token - uses internal endpoint)
         let api_client = ApiClient::new(api_url.clone(), None);
 
@@ -199,6 +203,7 @@ impl SensorManager {
                 running: Arc::new(RwLock::new(false)),
                 packs_base_dir,
                 runtime_envs_dir,
+                artifacts_dir: PathBuf::from(artifacts_dir),
                 api_client,
                 api_url,
                 mq_url,
@@ -712,32 +717,42 @@ impl SensorManager {
             .take()
             .ok_or_else(|| anyhow!("Failed to capture sensor stderr"))?;
 
-        // Spawn task to log stdout
-        let sensor_ref_stdout = sensor.r#ref.clone();
-        let stdout_handle = tokio::spawn(async move {
-            let mut reader = BufReader::new(stdout).lines();
+        // Spawn tasks that write to rotating log files AND forward to tracing
+        let log_config = crate::sensor_log::SensorLogConfig::default();
+        let stdout_handle = crate::sensor_log::spawn_stdout_log_task(
+            stdout,
+            sensor.r#ref.clone(),
+            self.inner.artifacts_dir.clone(),
+            log_config.clone(),
+        );
+        let stderr_handle = crate::sensor_log::spawn_stderr_log_task(
+            stderr,
+            sensor.r#ref.clone(),
+            self.inner.artifacts_dir.clone(),
+            log_config,
+        );
 
-            while let Ok(Some(line)) = reader.next_line().await {
-                info!("Sensor {} stdout: {}", sensor_ref_stdout, line);
-            }
-
-            info!("Sensor {} stdout stream closed", sensor_ref_stdout);
-        });
-
-        // Spawn task to log stderr
-        let sensor_ref_stderr = sensor.r#ref.clone();
-        let stderr_handle = tokio::spawn(async move {
-            let mut reader = BufReader::new(stderr).lines();
-
-            while let Ok(Some(line)) = reader.next_line().await {
-                warn!("Sensor {} stderr: {}", sensor_ref_stderr, line);
-            }
-
-            info!("Sensor {} stderr stream closed", sensor_ref_stderr);
-        });
+        // Register sensor log artifacts in DB (best-effort)
+        if let Err(e) = crate::sensor_log::register_sensor_log_artifacts(
+            &self.inner.db,
+            &sensor.r#ref,
+            &attune_common::artifact_transport::VolumeTransport::new(
+                self.inner
+                    .artifacts_dir
+                    .to_str()
+                    .unwrap_or("/opt/attune/artifacts"),
+            ),
+        )
+        .await
+        {
+            warn!(
+                "Failed to register sensor log artifacts for '{}': {}",
+                sensor.r#ref, e
+            );
+        }
 
         Ok(SensorInstance::new_standalone(
-            sensor.r#ref.clone(),
+            sensor,
             child,
             stdout_handle,
             stderr_handle,
@@ -1203,6 +1218,123 @@ impl SensorManager {
         info!("Sensor manager monitoring loop stopped");
     }
 
+    /// Handle a pack change event — restart any sensors belonging to this pack.
+    ///
+    /// Called when `pack.registered` fires, indicating that pack files may have
+    /// been updated. Any running sensors for this pack are stopped and restarted
+    /// so they pick up the new files.
+    pub async fn handle_pack_change(&self, pack_ref: &str) -> Result<()> {
+        info!("Handling pack change for pack '{}'", pack_ref);
+
+        let sensors = self.inner.sensors.read().await;
+        let affected_ids: Vec<Id> = sensors
+            .iter()
+            .filter(|(_, inst)| inst.sensor.pack_ref.as_deref() == Some(pack_ref))
+            .map(|(id, _)| *id)
+            .collect();
+        drop(sensors);
+
+        if affected_ids.is_empty() {
+            info!(
+                "No running sensors for pack '{}', nothing to restart",
+                pack_ref
+            );
+            return Ok(());
+        }
+
+        info!(
+            "Restarting {} sensor(s) for updated pack '{}'",
+            affected_ids.len(),
+            pack_ref,
+        );
+
+        for sensor_id in &affected_ids {
+            if let Err(e) = self.stop_sensor(*sensor_id).await {
+                warn!(
+                    "Failed to stop sensor {} for pack restart: {}",
+                    sensor_id, e
+                );
+            }
+        }
+
+        // Re-trigger reconciliation to restart sensors from the database
+        self.reconcile_sensors().await;
+
+        Ok(())
+    }
+
+    /// Handle a pack deleted event — stop any sensors belonging to this pack.
+    pub async fn handle_pack_deleted(&self, pack_ref: &str) -> Result<()> {
+        info!("Handling pack deletion for pack '{}'", pack_ref);
+
+        let sensors = self.inner.sensors.read().await;
+        let affected_ids: Vec<Id> = sensors
+            .iter()
+            .filter(|(_, inst)| inst.sensor.pack_ref.as_deref() == Some(pack_ref))
+            .map(|(id, _)| *id)
+            .collect();
+        drop(sensors);
+
+        if affected_ids.is_empty() {
+            info!("No running sensors for deleted pack '{}'", pack_ref);
+            return Ok(());
+        }
+
+        info!(
+            "Stopping {} sensor(s) for deleted pack '{}'",
+            affected_ids.len(),
+            pack_ref,
+        );
+
+        for sensor_id in &affected_ids {
+            if let Err(e) = self.stop_sensor(*sensor_id).await {
+                warn!(
+                    "Failed to stop sensor {} for deleted pack '{}': {}",
+                    sensor_id, pack_ref, e,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Reconcile the running sensor set against the database.
+    ///
+    /// Loads all enabled sensors with active rules and starts any that
+    /// are not already running.
+    async fn reconcile_sensors(&self) {
+        let sensors = match self.load_enabled_sensors().await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("Failed to load sensors for reconciliation: {}", e);
+                return;
+            }
+        };
+
+        for sensor in sensors {
+            // Skip sensors already running
+            if self.inner.sensors.read().await.contains_key(&sensor.id) {
+                continue;
+            }
+
+            match self.sensor_has_active_rules(sensor.id).await {
+                Ok(true) => {
+                    info!("Reconcile: starting sensor {}", sensor.r#ref);
+                    if let Err(e) = self.start_sensor(sensor).await {
+                        warn!("Reconcile: failed to start sensor: {}", e);
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    warn!(
+                        "Reconcile: failed to check active rules for sensor {}: {}",
+                        sensor.r#ref, e,
+                    );
+                }
+            }
+        }
+    }
+
     /// Get count of active sensors
     pub async fn active_count(&self) -> usize {
         let sensors = self.inner.sensors.read().await;
@@ -1274,6 +1406,7 @@ impl SensorManager {
 
 /// Sensor instance managing a running sensor
 struct SensorInstance {
+    sensor: Sensor,
     sensor_ref: String,
     status: Arc<RwLock<SensorStatus>>,
     child_process: Option<Child>,
@@ -1284,12 +1417,14 @@ struct SensorInstance {
 impl SensorInstance {
     /// Create a new standalone sensor instance
     fn new_standalone(
-        sensor_ref: String,
+        sensor: Sensor,
         child_process: Child,
         stdout_handle: JoinHandle<()>,
         stderr_handle: JoinHandle<()>,
     ) -> Self {
+        let sensor_ref = sensor.r#ref.clone();
         Self {
+            sensor,
             sensor_ref,
             status: Arc::new(RwLock::new(SensorStatus {
                 running: true,
@@ -1356,6 +1491,7 @@ mod tests {
     use std::collections::HashMap;
     use tempfile::NamedTempFile;
     use tokio::fs;
+    use tokio::io::{AsyncBufReadExt, BufReader};
 
     #[test]
     fn test_sensor_status_default() {
@@ -1442,12 +1578,26 @@ mod tests {
             while let Ok(Some(_)) = reader.next_line().await {}
         });
 
-        let mut instance = SensorInstance::new_standalone(
-            "test.sensor".to_string(),
-            child,
-            stdout_handle,
-            stderr_handle,
-        );
+        let test_sensor = attune_common::models::Sensor {
+            id: 0,
+            r#ref: "test.sensor".to_string(),
+            pack: None,
+            pack_ref: None,
+            label: "Test Sensor".to_string(),
+            description: None,
+            entrypoint: "test.sh".to_string(),
+            runtime: 0,
+            runtime_ref: "core.shell".to_string(),
+            runtime_version_constraint: None,
+            enabled: true,
+            param_schema: None,
+            config: None,
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+        };
+
+        let mut instance =
+            SensorInstance::new_standalone(test_sensor, child, stdout_handle, stderr_handle);
         instance.stop().await;
 
         let status = instance.child_process.as_mut().unwrap().try_wait().unwrap();

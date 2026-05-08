@@ -48,6 +48,8 @@ impl NativeRuntime {
         max_stderr_bytes: usize,
         stdout_log_path: Option<&Path>,
         stderr_log_path: Option<&Path>,
+        stdout_log_writer: Option<BoundedLogFileWriter>,
+        stderr_log_writer: Option<BoundedLogFileWriter>,
     ) -> RuntimeResult<ExecutionResult> {
         let start = Instant::now();
 
@@ -134,8 +136,11 @@ impl NativeRuntime {
 
         let mut stdout_writer = BoundedLogWriter::new_stdout(max_stdout_bytes);
         let mut stderr_writer = BoundedLogWriter::new_stderr(max_stderr_bytes);
-        let mut stdout_file = open_live_log_file(stdout_log_path, max_stdout_bytes, true);
-        let mut stderr_file = open_live_log_file(stderr_log_path, max_stderr_bytes, false);
+        // Prefer pre-opened transport writers over path-based file writers
+        let mut stdout_file = stdout_log_writer
+            .or_else(|| open_live_log_file(stdout_log_path, max_stdout_bytes, true));
+        let mut stderr_file = stderr_log_writer
+            .or_else(|| open_live_log_file(stderr_log_path, max_stderr_bytes, false));
 
         // Create buffered readers
         let mut stdout_reader = BufReader::new(stdout_handle);
@@ -365,6 +370,8 @@ impl Runtime for NativeRuntime {
             context.max_stderr_bytes,
             context.stdout_log_path.as_deref(),
             context.stderr_log_path.as_deref(),
+            context.stdout_log_writer,
+            context.stderr_log_writer,
         )
         .await
     }

@@ -32,6 +32,7 @@ COMPOSE_FILES=("-f" "$PROJECT_ROOT/docker-compose.yaml" "-f" "$PROJECT_ROOT/dock
 DO_BUILD=true
 DO_TEARDOWN=true
 DO_STARTUP=true
+DO_STANDALONE=false
 TEST_ARGS=()
 
 # ── Parse args ────────────────────────────────────────────────────────────
@@ -43,6 +44,8 @@ while [[ $# -gt 0 ]]; do
       DO_BUILD=false; shift ;;
     --no-startup)
       DO_STARTUP=false; shift ;;
+    --standalone)
+      DO_STANDALONE=true; shift ;;
     -h|--help)
       echo "Usage: $0 [options] [-- pytest-args...]"
       echo ""
@@ -51,6 +54,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --no-teardown     Keep Docker stack running after tests"
       echo "  --no-build        Skip docker compose build step"
       echo "  --no-startup      Skip stack startup (assume it's already running)"
+      echo "  --standalone    Include standalone worker/sensor services"
       echo "  -k <EXPR>         Pytest filter expression"
       echo "  -m <MARKER>       Pytest marker filter"
       echo "  -x                Stop on first failure"
@@ -61,6 +65,7 @@ while [[ $# -gt 0 ]]; do
       echo "  $0 --tier 1                # Run tier 1 only"
       echo "  $0 --no-teardown --tier 2  # Run tier 2, keep stack"
       echo "  $0 -k 'timer' -x          # Filter + stop on first failure"
+      echo "  $0 --standalone -k standalone  # Run standalone transport tests"
       exit 0
       ;;
     *)
@@ -69,6 +74,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 cd "$PROJECT_ROOT"
+
+# Add standalone compose file if requested
+if $DO_STANDALONE; then
+  COMPOSE_FILES+=("-f" "$PROJECT_ROOT/docker-compose.standalone.yaml")
+fi
 
 log_info()    { echo -e "${BLUE}ℹ${NC}  $1"; }
 log_success() { echo -e "${GREEN}✓${NC}  $1"; }

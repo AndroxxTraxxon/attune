@@ -1691,9 +1691,8 @@ pub mod work_queue {
         "id, queue, queue_ref, execution, status, leased_item_count, created, updated";
 
     #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+    #[serde(deny_unknown_fields)]
     pub struct WorkQueueConfig {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub priority: Option<WorkQueuePriorityConfig>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub dispatch: Option<WorkQueueDispatchConfig>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1701,12 +1700,7 @@ pub mod work_queue {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-    pub struct WorkQueuePriorityConfig {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub default: Option<WorkQueueTunableValue>,
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+    #[serde(deny_unknown_fields)]
     pub struct WorkQueueDispatchConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub concurrency: Option<WorkQueueTunableValue>,
@@ -1721,6 +1715,7 @@ pub mod work_queue {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+    #[serde(deny_unknown_fields)]
     pub struct WorkQueueBatchCoalescingConfig {
         #[serde(default)]
         pub enabled: bool,
@@ -1731,6 +1726,7 @@ pub mod work_queue {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+    #[serde(deny_unknown_fields)]
     pub struct WorkQueueAckContractConfig {
         #[serde(default)]
         pub version: i32,
@@ -1756,6 +1752,7 @@ pub mod work_queue {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(deny_unknown_fields)]
     pub struct WorkQueueTunableValue {
         pub source: WorkQueueTunableSource,
         #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,6 +1,6 @@
 //! Pack Component Loader
 //!
-//! Reads permission set, runtime, action, trigger, queue, and sensor YAML definitions from a pack directory
+//! Reads permission set, runtime, action, trigger, queue, rule, and sensor YAML definitions from a pack directory
 //! and registers them in the database. This is the Rust-native equivalent of
 //! the Python `load_core_pack.py` script used during init-packs.
 //!
@@ -10,7 +10,8 @@
 //! 3. Triggers (no dependencies)
 //! 4. Actions (depend on runtime; workflow actions also create workflow_definition records)
 //! 5. Work queues (can reference actions)
-//! 6. Sensors (depend on triggers and runtime)
+//! 6. Rules (depend on triggers and actions)
+//! 7. Sensors (depend on triggers and runtime)
 //!
 //! All loaders use **upsert** semantics: if an entity with the same ref already
 //! exists it is updated in place (preserving its database ID); otherwise a new
@@ -44,6 +45,7 @@ use crate::repositories::action::{ActionRepository, UpdateActionInput};
 use crate::repositories::identity::{
     CreatePermissionSetInput, PermissionSetRepository, UpdatePermissionSetInput,
 };
+use crate::repositories::rule::{CreateRuleInput, RuleRepository, UpdateRuleInput};
 use crate::repositories::runtime_version::{
     CreateRuntimeVersionInput, RuntimeVersionRepository, UpdateRuntimeVersionInput,
 };
@@ -68,6 +70,7 @@ struct CleanupRefs<'a> {
     triggers: &'a [String],
     actions: &'a [String],
     queues: &'a [String],
+    rules: &'a [String],
     sensors: &'a [String],
 }
 
@@ -104,6 +107,12 @@ pub struct PackLoadResult {
     pub queues_updated: usize,
     /// Number of queues skipped
     pub queues_skipped: usize,
+    /// Number of rules created
+    pub rules_loaded: usize,
+    /// Number of rules updated
+    pub rules_updated: usize,
+    /// Number of rules skipped
+    pub rules_skipped: usize,
     /// Number of sensors created
     pub sensors_loaded: usize,
     /// Number of sensors updated
@@ -123,6 +132,7 @@ impl PackLoadResult {
             + self.triggers_loaded
             + self.actions_loaded
             + self.queues_loaded
+            + self.rules_loaded
             + self.sensors_loaded
     }
 
@@ -132,6 +142,7 @@ impl PackLoadResult {
             + self.triggers_skipped
             + self.actions_skipped
             + self.queues_skipped
+            + self.rules_skipped
             + self.sensors_skipped
     }
 
@@ -141,6 +152,7 @@ impl PackLoadResult {
             + self.triggers_updated
             + self.actions_updated
             + self.queues_updated
+            + self.rules_updated
             + self.sensors_updated
     }
 }
@@ -192,12 +204,15 @@ impl<'a> PackComponentLoader<'a> {
         // 5. Load work queues (can reference actions)
         let queue_refs = self.load_queues(pack_dir, &mut result).await?;
 
-        // 6. Load sensors (depend on triggers and runtime)
+        // 6. Load rules (depend on triggers and actions)
+        let rule_refs = self.load_rules(pack_dir, &trigger_ids, &mut result).await?;
+
+        // 7. Load sensors (depend on triggers and runtime)
         let sensor_refs = self
             .load_sensors(pack_dir, &trigger_ids, &mut result)
             .await?;
 
-        // 7. Clean up entities that are no longer in the pack's YAML files
+        // 8. Clean up entities that are no longer in the pack's YAML files
         self.cleanup_removed_entities(
             CleanupRefs {
                 permission_sets: &permission_set_refs,
@@ -205,6 +220,7 @@ impl<'a> PackComponentLoader<'a> {
                 triggers: &trigger_refs,
                 actions: &action_refs,
                 queues: &queue_refs,
+                rules: &rule_refs,
                 sensors: &sensor_refs,
             },
             &mut result,
@@ -1296,6 +1312,217 @@ impl<'a> PackComponentLoader<'a> {
         Ok(loaded_refs)
     }
 
+    /// Load rule definitions from `pack_dir/rules/*.yaml`.
+    ///
+    /// Pack rules are declarative metadata. They are installed as non-ad-hoc
+    /// rules owned by the pack and are cleaned up on pack reload when removed
+    /// from the `rules/` directory.
+    async fn load_rules(
+        &self,
+        pack_dir: &Path,
+        trigger_ids: &HashMap<String, Id>,
+        result: &mut PackLoadResult,
+    ) -> Result<Vec<String>> {
+        let rules_dir = pack_dir.join("rules");
+        let mut loaded_refs = Vec::new();
+
+        if !rules_dir.exists() {
+            info!("No rules directory found for pack '{}'", self.pack_ref);
+            return Ok(loaded_refs);
+        }
+
+        let yaml_files = read_yaml_files(&rules_dir)?;
+        info!(
+            "Found {} rule definition(s) for pack '{}'",
+            yaml_files.len(),
+            self.pack_ref
+        );
+
+        for (filename, content) in &yaml_files {
+            let data: serde_yaml_ng::Value = match serde_yaml_ng::from_str(content) {
+                Ok(data) => data,
+                Err(e) => {
+                    let msg = format!("Failed to parse rule YAML {}: {}", filename, e);
+                    warn!("{}", msg);
+                    result.warnings.push(msg);
+                    result.rules_skipped += 1;
+                    continue;
+                }
+            };
+
+            let rule_ref = match data.get("ref").and_then(|v| v.as_str()) {
+                Some(r) if !r.trim().is_empty() => qualify_pack_ref(&self.pack_ref, r.trim()),
+                _ => {
+                    let msg = format!("Rule YAML {} missing 'ref' field, skipping", filename);
+                    warn!("{}", msg);
+                    result.warnings.push(msg);
+                    result.rules_skipped += 1;
+                    continue;
+                }
+            };
+
+            let trigger_ref = match data.get("trigger_ref").and_then(|v| v.as_str()) {
+                Some(r) if !r.trim().is_empty() => qualify_pack_ref(&self.pack_ref, r.trim()),
+                _ => {
+                    let msg = format!(
+                        "Rule '{}' in {} missing 'trigger_ref' field, skipping",
+                        rule_ref, filename
+                    );
+                    warn!("{}", msg);
+                    result.warnings.push(msg);
+                    result.rules_skipped += 1;
+                    continue;
+                }
+            };
+
+            let action_ref = match data.get("action_ref").and_then(|v| v.as_str()) {
+                Some(r) if !r.trim().is_empty() => qualify_pack_ref(&self.pack_ref, r.trim()),
+                _ => {
+                    let msg = format!(
+                        "Rule '{}' in {} missing 'action_ref' field, skipping",
+                        rule_ref, filename
+                    );
+                    warn!("{}", msg);
+                    result.warnings.push(msg);
+                    result.rules_skipped += 1;
+                    continue;
+                }
+            };
+
+            let trigger = match trigger_ids.get(&trigger_ref).copied() {
+                Some(id) => id,
+                None => match TriggerRepository::find_by_ref(self.pool, &trigger_ref).await? {
+                    Some(trigger) => trigger.id,
+                    None => {
+                        let msg = format!(
+                            "Rule '{}' references unknown trigger '{}', skipping",
+                            rule_ref, trigger_ref
+                        );
+                        warn!("{}", msg);
+                        result.warnings.push(msg);
+                        result.rules_skipped += 1;
+                        continue;
+                    }
+                },
+            };
+
+            let action = match ActionRepository::find_by_ref(self.pool, &action_ref).await? {
+                Some(action) => action.id,
+                None => {
+                    let msg = format!(
+                        "Rule '{}' references unknown action '{}', skipping",
+                        rule_ref, action_ref
+                    );
+                    warn!("{}", msg);
+                    result.warnings.push(msg);
+                    result.rules_skipped += 1;
+                    continue;
+                }
+            };
+
+            let name = extract_name_from_ref(&rule_ref);
+            let label = data
+                .get("label")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| generate_label(&name));
+            let description = data
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let enabled = data
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let conditions = data
+                .get("conditions")
+                .and_then(|v| serde_json::to_value(v).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+            let action_params = data
+                .get("action_params")
+                .and_then(|v| serde_json::to_value(v).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+            let trigger_params = data
+                .get("trigger_params")
+                .and_then(|v| serde_json::to_value(v).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+
+            if let Some(existing) = RuleRepository::find_by_ref(self.pool, &rule_ref).await? {
+                let update_input = UpdateRuleInput {
+                    pack: Some(self.pack_id),
+                    pack_ref: Some(self.pack_ref.clone()),
+                    label: Some(label),
+                    description: Some(match description {
+                        Some(description) => Patch::Set(description),
+                        None => Patch::Clear,
+                    }),
+                    action: Some(action),
+                    action_ref: Some(action_ref),
+                    trigger: Some(trigger),
+                    trigger_ref: Some(trigger_ref),
+                    conditions: Some(conditions),
+                    action_params: Some(action_params),
+                    trigger_params: Some(trigger_params),
+                    enabled: Some(enabled),
+                    is_adhoc: Some(false),
+                    owner_identity: Some(Patch::Clear),
+                };
+
+                match RuleRepository::update(self.pool, existing.id, update_input).await {
+                    Ok(_) => {
+                        info!("Updated rule '{}' (ID: {})", rule_ref, existing.id);
+                        result.rules_updated += 1;
+                        loaded_refs.push(rule_ref);
+                    }
+                    Err(e) => {
+                        let msg = format!("Failed to update rule '{}': {}", rule_ref, e);
+                        warn!("{}", msg);
+                        result.warnings.push(msg);
+                        result.rules_skipped += 1;
+                    }
+                }
+                continue;
+            }
+
+            match RuleRepository::create(
+                self.pool,
+                CreateRuleInput {
+                    r#ref: rule_ref.clone(),
+                    pack: self.pack_id,
+                    pack_ref: self.pack_ref.clone(),
+                    label,
+                    description,
+                    action,
+                    action_ref,
+                    trigger,
+                    trigger_ref,
+                    conditions,
+                    action_params,
+                    trigger_params,
+                    enabled,
+                    is_adhoc: false,
+                    owner_identity: None,
+                },
+            )
+            .await
+            {
+                Ok(rule) => {
+                    info!("Created rule '{}' (ID: {})", rule.r#ref, rule.id);
+                    result.rules_loaded += 1;
+                    loaded_refs.push(rule.r#ref);
+                }
+                Err(e) => {
+                    let msg = format!("Failed to create rule '{}': {}", rule_ref, e);
+                    warn!("{}", msg);
+                    result.warnings.push(msg);
+                    result.rules_skipped += 1;
+                }
+            }
+        }
+
+        Ok(loaded_refs)
+    }
+
     /// Load a workflow definition file referenced by an action's `workflow_file`
     /// field and create/update the corresponding `workflow_definition` record.
     ///
@@ -1862,6 +2089,26 @@ impl<'a> PackComponentLoader<'a> {
             }
         }
 
+        // Clean up rules before actions/triggers; rule FKs use ON DELETE SET NULL,
+        // but deleting stale declarative rules first preserves clear pack semantics.
+        match RuleRepository::delete_by_pack_excluding(self.pool, self.pack_id, refs.rules).await {
+            Ok(count) => {
+                if count > 0 {
+                    info!(
+                        "Removed {} stale rule(s) from pack '{}'",
+                        count, self.pack_ref
+                    );
+                    result.removed += count as usize;
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to clean up stale rules for pack '{}': {}",
+                    self.pack_ref, e
+                );
+            }
+        }
+
         // Clean up actions (ad-hoc preserved)
         match ActionRepository::delete_non_adhoc_by_pack_excluding(
             self.pool,
@@ -2024,6 +2271,15 @@ fn read_yaml_files(dir: &Path) -> Result<Vec<(String, String)>> {
 /// Extract the short name from a dotted ref (e.g., "core.echo" -> "echo").
 fn extract_name_from_ref(r: &str) -> String {
     r.rsplit('.').next().unwrap_or(r).to_string()
+}
+
+/// Expand short refs to this pack's namespace while preserving already-qualified refs.
+fn qualify_pack_ref(pack_ref: &str, r: &str) -> String {
+    if r.contains('.') {
+        r.to_string()
+    } else {
+        format!("{pack_ref}.{r}")
+    }
 }
 
 /// Generate a human-readable label from a snake_case name.
