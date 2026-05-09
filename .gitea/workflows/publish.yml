@@ -22,6 +22,7 @@ on:
           - agent
           - docker-dist
           - helm-chart
+          - linux-packages
           - web
         default: all
   push:
@@ -148,6 +149,7 @@ jobs:
       helm: ${{ steps.filter.outputs.helm }}
       web: ${{ steps.filter.outputs.web }}
       docker_dist: ${{ steps.filter.outputs.docker_dist }}
+      linux_packages: ${{ steps.filter.outputs.linux_packages }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -168,16 +170,19 @@ jobs:
           helm="false"
           web="false"
           docker_dist="false"
+          linux_packages="false"
 
           if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
             target="${TARGET_IMAGE}"
             case "$target" in
               all)
-                rust="true"; helm="true"; web="true"; docker_dist="true" ;;
+                rust="true"; helm="true"; web="true"; docker_dist="true"; linux_packages="true" ;;
               api|executor|notifier|agent)
                 rust="true" ;;
               helm-chart)
                 helm="true" ;;
+              linux-packages)
+                linux_packages="true"; rust="true" ;;
               web)
                 web="true" ;;
               docker-dist)
@@ -188,15 +193,16 @@ jobs:
             after="${AFTER_SHA}"
 
             if [ "$before" = "0000000000000000000000000000000000000000" ]; then
-              rust="true"; helm="true"; web="true"; docker_dist="true"
+              rust="true"; helm="true"; web="true"; docker_dist="true"; linux_packages="true"
             else
               while IFS= read -r f; do
                 if [ "$f" = ".gitea/workflows/publish.yml" ]; then
-                  rust="true"; helm="true"; web="true"; docker_dist="true"
+                  rust="true"; helm="true"; web="true"; docker_dist="true"; linux_packages="true"
                   continue
                 fi
                 if printf '%s' "$f" | grep -qE '^(crates/|Cargo\.toml$|Cargo\.lock$|docker/Dockerfile\.(runtime|agent|agent-package)$)'; then
                   rust="true"
+                  linux_packages="true"
                 fi
                 if printf '%s' "$f" | grep -qE '^charts/'; then
                   helm="true"
@@ -207,6 +213,9 @@ jobs:
                 if printf '%s' "$f" | grep -qE '^docker/distributable/'; then
                   docker_dist="true"
                 fi
+                if printf '%s' "$f" | grep -qE '^packaging/'; then
+                  linux_packages="true"
+                fi
               done < <(git diff --name-only "$before" "$after")
             fi
           fi
@@ -216,9 +225,10 @@ jobs:
             echo "helm=$helm"
             echo "web=$web"
             echo "docker_dist=$docker_dist"
+            echo "linux_packages=$linux_packages"
           } >> "$GITHUB_OUTPUT"
 
-          echo "Changed path flags: rust=$rust helm=$helm web=$web docker_dist=$docker_dist"
+          echo "Changed path flags: rust=$rust helm=$helm web=$web docker_dist=$docker_dist linux_packages=$linux_packages"
 
   build-rust-bundles:
     name: Build Rust Bundles (${{ matrix.arch }})
@@ -462,6 +472,210 @@ jobs:
               exit 1
               ;;
           esac
+
+  publish-linux-packages:
+    name: Publish Linux Packages (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner_label }}
+    needs:
+      - metadata
+      - changes
+      - build-rust-bundles
+    if: |
+      needs.changes.outputs.linux_packages == 'true' &&
+      (github.event_name != 'workflow_dispatch' ||
+      inputs.target_arch == 'all' ||
+      inputs.target_arch == matrix.arch)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner_label: build-amd64
+            nfpm_arch: amd64
+          - arch: arm64
+            runner_label: build-arm64
+            nfpm_arch: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download binary bundle
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR_NAME: ${{ github.actor }}
+          IMAGE_TAG: ${{ needs.metadata.outputs.image_tag }}
+          GITEA_BASE_URL: ${{ needs.metadata.outputs.gitea_base_url }}
+          PACKAGE_NAMESPACE: ${{ needs.metadata.outputs.namespace }}
+          BUNDLE_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
+          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
+          package_name="$(basename "${ARTIFACT_REPOSITORY}")-${BUNDLE_ARCH}"
+          package_version="rust-binaries-${IMAGE_TAG}"
+          artifact_file="attune-binaries-${BUNDLE_ARCH}.tar.gz"
+          package_url="${GITEA_BASE_URL}/api/packages/${PACKAGE_NAMESPACE}/generic/${package_name}/${package_version}/${artifact_file}"
+
+          echo "Downloading binary bundle from ${package_url}"
+          curl -sS -f -u "${registry_username}:${registry_password}" \
+            -o "${artifact_file}" "${package_url}"
+
+          mkdir -p dist/bundle
+          tar -xzf "${artifact_file}" -C dist/bundle
+          echo "Bundle contents:"
+          find dist/bundle -type f | sort
+
+      - name: Install nfpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          NFPM_VERSION="2.41.1"
+          case "$(uname -m)" in
+            x86_64) NFPM_ARCH="x86_64" ;;
+            aarch64) NFPM_ARCH="arm64" ;;
+          esac
+          curl -sLo /tmp/nfpm.tar.gz \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_${NFPM_ARCH}.tar.gz"
+          tar -xzf /tmp/nfpm.tar.gz -C /tmp nfpm
+          sudo mv /tmp/nfpm /usr/local/bin/nfpm
+          rm -f /tmp/nfpm.tar.gz
+          nfpm --version
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ needs.metadata.outputs.image_tag }}
+        run: |
+          # Use image_tag for version (strips leading 'v' for semver compliance)
+          version="${IMAGE_TAG#v}"
+          # nfpm requires valid semver — replace any non-semver chars
+          version=$(echo "$version" | sed 's/[^0-9a-zA-Z.+~-]/_/g')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Package version: $version"
+
+      - name: Build packages
+        shell: bash
+        env:
+          BUNDLE_DIR: ${{ github.workspace }}/dist/bundle
+          ARCH: ${{ matrix.nfpm_arch }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/packages
+
+          for config in packaging/nfpm/*.yaml; do
+            pkg_name=$(basename "$config" .yaml)
+            echo "=== Building $pkg_name ==="
+
+            for format in deb rpm archlinux; do
+              echo "  Format: $format"
+              BUNDLE_DIR="$BUNDLE_DIR" ARCH="$ARCH" VERSION="$VERSION" \
+                nfpm package \
+                  --config "$config" \
+                  --packager "$format" \
+                  --target "dist/packages/"
+            done
+          done
+
+          echo "Built packages:"
+          ls -lh dist/packages/
+
+      - name: Publish Debian packages
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR_NAME: ${{ github.actor }}
+          GITEA_BASE_URL: ${{ needs.metadata.outputs.gitea_base_url }}
+          PACKAGE_NAMESPACE: ${{ needs.metadata.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
+          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
+
+          for deb_file in dist/packages/*.deb; do
+            [ -f "$deb_file" ] || continue
+            echo "Publishing $(basename "$deb_file") to Debian registry"
+
+            upload_url="${GITEA_BASE_URL}/api/packages/${PACKAGE_NAMESPACE}/debian/pool/stable/main/upload"
+            status=$(curl -sS -o /tmp/deb-upload-response.txt -w '%{http_code}' \
+              -u "${registry_username}:${registry_password}" \
+              --upload-file "$deb_file" \
+              "$upload_url")
+
+            case "$status" in
+              201) echo "  ✓ Published" ;;
+              409) echo "  ⚠ Already exists (skipped)" ;;
+              *) echo "  ✗ Failed (HTTP $status)"; cat /tmp/deb-upload-response.txt; exit 1 ;;
+            esac
+          done
+
+      - name: Publish RPM packages
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR_NAME: ${{ github.actor }}
+          GITEA_BASE_URL: ${{ needs.metadata.outputs.gitea_base_url }}
+          PACKAGE_NAMESPACE: ${{ needs.metadata.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
+          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
+
+          for rpm_file in dist/packages/*.rpm; do
+            [ -f "$rpm_file" ] || continue
+            echo "Publishing $(basename "$rpm_file") to RPM registry"
+
+            upload_url="${GITEA_BASE_URL}/api/packages/${PACKAGE_NAMESPACE}/rpm/el9/upload"
+            status=$(curl -sS -o /tmp/rpm-upload-response.txt -w '%{http_code}' \
+              -u "${registry_username}:${registry_password}" \
+              --upload-file "$rpm_file" \
+              "$upload_url")
+
+            case "$status" in
+              201) echo "  ✓ Published" ;;
+              409) echo "  ⚠ Already exists (skipped)" ;;
+              *) echo "  ✗ Failed (HTTP $status)"; cat /tmp/rpm-upload-response.txt; exit 1 ;;
+            esac
+          done
+
+      - name: Publish Arch packages
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR_NAME: ${{ github.actor }}
+          GITEA_BASE_URL: ${{ needs.metadata.outputs.gitea_base_url }}
+          PACKAGE_NAMESPACE: ${{ needs.metadata.outputs.namespace }}
+        run: |
+          set -euo pipefail
+          registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
+          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
+
+          for pkg_file in dist/packages/*.pkg.tar.zst; do
+            [ -f "$pkg_file" ] || continue
+            echo "Publishing $(basename "$pkg_file") to Arch registry"
+
+            upload_url="${GITEA_BASE_URL}/api/packages/${PACKAGE_NAMESPACE}/arch/core"
+            status=$(curl -sS -o /tmp/arch-upload-response.txt -w '%{http_code}' \
+              -u "${registry_username}:${registry_password}" \
+              --upload-file "$pkg_file" \
+              "$upload_url")
+
+            case "$status" in
+              201) echo "  ✓ Published" ;;
+              409) echo "  ⚠ Already exists (skipped)" ;;
+              *) echo "  ✗ Failed (HTTP $status)"; cat /tmp/arch-upload-response.txt; exit 1 ;;
+            esac
+          done
 
   publish-docker-dist:
     name: Publish Docker Dist Bundle

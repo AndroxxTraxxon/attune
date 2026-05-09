@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# package-docker-dist.sh — Assemble a self-contained Docker Compose distribution bundle.
+#
+# The template directory (docker/distributable/) contains only the three
+# distributable-specific files: docker-compose.yaml, config.docker.yaml, README.md.
+# Everything else is copied from canonical source locations so there are no
+# stale duplicates committed to the repo.
 
 set -euo pipefail
 
@@ -21,13 +27,14 @@ copy_file() {
     cp "${src}" "${dst}"
 }
 
-# Keep the distributable compose file, README, and config as the maintained templates.
+# Copy the distributable-specific templates (compose, config, README)
 if [ "${bundle_dir}" != "${template_dir}" ]; then
     copy_file "${template_dir}/docker-compose.yaml" "${bundle_dir}/docker-compose.yaml"
     copy_file "${template_dir}/README.md" "${bundle_dir}/README.md"
     copy_file "${template_dir}/config.docker.yaml" "${bundle_dir}/config.docker.yaml"
 fi
 
+# Copy helper scripts from canonical docker/ and scripts/ directories
 copy_file "${repo_root}/docker/run-migrations.sh" "${bundle_dir}/docker/run-migrations.sh"
 copy_file "${repo_root}/docker/init-user.sh" "${bundle_dir}/docker/init-user.sh"
 copy_file "${repo_root}/docker/init-packs.sh" "${bundle_dir}/docker/init-packs.sh"
@@ -36,6 +43,7 @@ copy_file "${repo_root}/docker/nginx.conf" "${bundle_dir}/docker/nginx.conf"
 copy_file "${repo_root}/docker/inject-env.sh" "${bundle_dir}/docker/inject-env.sh"
 copy_file "${repo_root}/scripts/load_core_pack.py" "${bundle_dir}/scripts/load_core_pack.py"
 
+# Copy migrations and packs from canonical source directories
 rm -rf "${bundle_dir}/migrations" "${bundle_dir}/packs/core"
 mkdir -p "${bundle_dir}/migrations" "${bundle_dir}/packs"
 cp -R "${repo_root}/migrations/." "${bundle_dir}/migrations/"
@@ -43,5 +51,5 @@ cp -R "${repo_root}/packs/core" "${bundle_dir}/packs/core"
 
 tar -C "$(dirname "${bundle_dir}")" -czf "${archive_path}" "$(basename "${bundle_dir}")"
 
-echo "Docker dist bundle refreshed at ${bundle_dir}"
+echo "Docker dist bundle assembled at ${bundle_dir}"
 echo "Docker dist archive created at ${archive_path}"

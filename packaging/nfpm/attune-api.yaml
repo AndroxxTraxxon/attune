@@ -1,0 +1,54 @@
+# nfpm configuration for attune-api
+# https://nfpm.goreleaser.com/configuration/
+name: attune-api
+arch: "${ARCH}"
+platform: linux
+version: "${VERSION}"
+section: admin
+priority: optional
+maintainer: "Attune <attune@rdrx.app>"
+description: "Attune API Gateway — REST API for the Attune automation platform"
+vendor: "Attune"
+homepage: "https://git.rdrx.app/attune/attune"
+license: "Proprietary"
+
+depends:
+  - libc6 (>= 2.28)
+
+contents:
+  - src: "${BUNDLE_DIR}/bin/attune-api"
+    dst: /usr/bin/attune-api
+    file_info:
+      mode: 0755
+
+  - src: ../systemd/attune-api.service
+    dst: /usr/lib/systemd/system/attune-api.service
+    file_info:
+      mode: 0644
+
+  - src: ../config/attune.yaml
+    dst: /etc/attune/attune.yaml
+    type: config|noreplace
+    file_info:
+      mode: 0640
+      group: attune
+
+  - src: ../config/environment
+    dst: /etc/attune/environment
+    type: config|noreplace
+    file_info:
+      mode: 0640
+      group: attune
+
+scripts:
+  postinstall: ../scripts/postinstall.sh
+  preremove: ../scripts/preremove.sh
+  postremove: ../scripts/postremove.sh
+
+overrides:
+  rpm:
+    depends:
+      - glibc >= 2.28
+  archlinux:
+    depends:
+      - glibc

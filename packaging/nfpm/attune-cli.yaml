@@ -1,0 +1,26 @@
+# nfpm configuration for attune-cli
+# Static musl binary — no runtime dependencies
+name: attune-cli
+arch: "${ARCH}"
+platform: linux
+version: "${VERSION}"
+section: admin
+priority: optional
+maintainer: "Attune <attune@rdrx.app>"
+description: "Attune CLI — Command-line interface and MCP server for the Attune platform"
+vendor: "Attune"
+homepage: "https://git.rdrx.app/attune/attune"
+license: "Proprietary"
+
+# No dependencies — statically linked
+
+contents:
+  - src: "${BUNDLE_DIR}/agent/attune"
+    dst: /usr/bin/attune
+    file_info:
+      mode: 0755
+
+  - src: "${BUNDLE_DIR}/agent/attune-mcp"
+    dst: /usr/bin/attune-mcp
+    file_info:
+      mode: 0755

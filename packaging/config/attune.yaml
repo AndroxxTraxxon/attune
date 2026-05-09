@@ -1,0 +1,50 @@
+# Attune Configuration
+# See https://git.rdrx.app/attune/attune for full documentation
+#
+# Override any setting with environment variables using the prefix ATTUNE__
+# and double underscores as separators. Example:
+#   ATTUNE__DATABASE__URL=postgresql://user:pass@host/attune
+#   ATTUNE__SERVER__PORT=8080
+
+# Database connection
+database:
+  url: "postgresql://attune:attune@localhost:5432/attune"
+  max_connections: 10
+
+# API server
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+# Notifier (WebSocket) server
+notifier:
+  host: "0.0.0.0"
+  port: 8081
+
+# RabbitMQ message queue
+rabbitmq:
+  url: "amqp://attune:attune@localhost:5672/attune"
+
+# Security settings
+security:
+  # IMPORTANT: Change these in production!
+  # jwt_secret: "change-me-in-production-use-at-least-32-characters"
+  # encryption_key: "change-me-in-production-use-at-least-32-characters"
+  password_min_length: 8
+
+# File paths (FHS-compliant defaults for package installs)
+packs_base_dir: "/var/lib/attune/packs"
+runtime_envs_dir: "/var/lib/attune/runtime_envs"
+artifacts_dir: "/var/lib/attune/artifacts"
+
+# Agent binary directory (for serving agent downloads)
+agent:
+  binary_dir: "/var/lib/attune/agent"
+
+# Redis (optional)
+# redis:
+#   url: "redis://localhost:6379"
+
+# Logging
+# Set via RUST_LOG environment variable, e.g.:
+#   RUST_LOG=info,attune_api=debug

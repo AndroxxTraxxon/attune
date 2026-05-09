@@ -1,0 +1,26 @@
+# nfpm configuration for attune-agent
+# Static musl binary — no runtime dependencies
+name: attune-agent
+arch: "${ARCH}"
+platform: linux
+version: "${VERSION}"
+section: admin
+priority: optional
+maintainer: "Attune <attune@rdrx.app>"
+description: "Attune Agent — Universal worker agent with runtime auto-detection"
+vendor: "Attune"
+homepage: "https://git.rdrx.app/attune/attune"
+license: "Proprietary"
+
+# No dependencies — statically linked
+
+contents:
+  - src: "${BUNDLE_DIR}/agent/attune-agent"
+    dst: /usr/bin/attune-agent
+    file_info:
+      mode: 0755
+
+  - src: "${BUNDLE_DIR}/agent/attune-sensor-agent"
+    dst: /usr/bin/attune-sensor-agent
+    file_info:
+      mode: 0755
