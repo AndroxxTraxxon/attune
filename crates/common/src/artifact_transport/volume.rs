@@ -128,6 +128,9 @@ impl ArtifactFileTransport for VolumeTransport {
         file.write_all(content)
             .await
             .map_err(|e| Error::Io(format!("Failed to append to {}: {e}", path.display())))?;
+        file.flush()
+            .await
+            .map_err(|e| Error::Io(format!("Failed to flush append to {}: {e}", path.display())))?;
         self.normalize_shared_file_permissions(&path).await;
         Ok(())
     }
