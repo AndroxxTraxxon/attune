@@ -2,7 +2,9 @@
 //!
 //! This module provides CRUD operations and queries for Action and Policy entities.
 
-use crate::models::{action::*, enums::PolicyMethod, Id, JsonDict, JsonSchema};
+use crate::models::{
+    action::*, enums::PolicyMethod, Id, JsonDict, JsonSchema, RetentionPolicyType,
+};
 use crate::scheduling::{parse_worker_affinity, parse_worker_selector, parse_worker_tolerations};
 use crate::version_matching::parse_constraint;
 use crate::{Error, Result};
@@ -16,6 +18,7 @@ pub const ACTION_COLUMNS: &str = "id, ref, pack, pack_ref, label, description, e
     worker_selector, worker_tolerations, worker_affinity, \
     param_schema, out_schema, workflow_def, is_adhoc, accesses_mcp, \
     default_execution_permission_set_refs, \
+    log_retention_policy, log_retention_limit, \
     parameter_delivery, parameter_format, output_format, created, updated";
 
 /// Filters for [`ActionRepository::list_search`].
@@ -101,6 +104,15 @@ fn validate_required_worker_runtimes(required_worker_runtimes: &JsonDict) -> Res
     Ok(())
 }
 
+fn validate_log_retention_limit(limit: i32) -> Result<()> {
+    if limit <= 0 {
+        return Err(Error::validation(
+            "log_retention_limit must be greater than zero",
+        ));
+    }
+    Ok(())
+}
+
 impl Repository for ActionRepository {
     type Entity = Action;
 
@@ -130,6 +142,8 @@ pub struct CreateActionInput {
     #[doc = "Hint that this action may invoke the MCP server and spawn child executions."]
     pub accesses_mcp: bool,
     pub default_execution_permission_set_refs: Vec<String>,
+    pub log_retention_policy: Option<RetentionPolicyType>,
+    pub log_retention_limit: Option<i32>,
 }
 
 /// Input for updating an action
@@ -151,6 +165,8 @@ pub struct UpdateActionInput {
     pub output_format: Option<String>,
     pub accesses_mcp: Option<bool>,
     pub default_execution_permission_set_refs: Option<Vec<String>>,
+    pub log_retention_policy: Option<Patch<RetentionPolicyType>>,
+    pub log_retention_limit: Option<Patch<i32>>,
 }
 
 #[async_trait::async_trait]
@@ -229,6 +245,9 @@ impl Create for ActionRepository {
             validate_version_constraint("runtime_version_constraint", runtime_version_constraint)?;
         }
         validate_required_worker_runtimes(&input.required_worker_runtimes)?;
+        if let Some(limit) = input.log_retention_limit {
+            validate_log_retention_limit(limit)?;
+        }
         parse_worker_selector(&input.worker_selector)?;
         parse_worker_tolerations(&input.worker_tolerations)?;
         parse_worker_affinity(&input.worker_affinity)?;
@@ -240,8 +259,9 @@ impl Create for ActionRepository {
                                  runtime, runtime_version_constraint, required_worker_runtimes,
                                  worker_selector, worker_tolerations, worker_affinity,
                                  param_schema, out_schema, is_adhoc, accesses_mcp,
-                                 default_execution_permission_set_refs)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                                 default_execution_permission_set_refs,
+                                 log_retention_policy, log_retention_limit)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
             RETURNING {}
             "#,
             ACTION_COLUMNS
@@ -263,6 +283,8 @@ impl Create for ActionRepository {
         .bind(input.is_adhoc)
         .bind(input.accesses_mcp)
         .bind(&input.default_execution_permission_set_refs)
+        .bind(input.log_retention_policy)
+        .bind(input.log_retention_limit)
         .fetch_one(executor)
         .await
         .map_err(|e| {
@@ -292,6 +314,9 @@ impl Update for ActionRepository {
         }
         if let Some(required_worker_runtimes) = &input.required_worker_runtimes {
             validate_required_worker_runtimes(required_worker_runtimes)?;
+        }
+        if let Some(Patch::Set(limit)) = &input.log_retention_limit {
+            validate_log_retention_limit(*limit)?;
         }
         if let Some(worker_selector) = &input.worker_selector {
             parse_worker_selector(worker_selector)?;
@@ -454,6 +479,30 @@ impl Update for ActionRepository {
             }
             query.push("default_execution_permission_set_refs = ");
             query.push_bind(permission_set_refs);
+            has_updates = true;
+        }
+
+        if let Some(log_retention_policy) = input.log_retention_policy {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("log_retention_policy = ");
+            match log_retention_policy {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<RetentionPolicyType>::None),
+            };
+            has_updates = true;
+        }
+
+        if let Some(log_retention_limit) = input.log_retention_limit {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("log_retention_limit = ");
+            match log_retention_limit {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<i32>::None),
+            };
             has_updates = true;
         }
 

@@ -164,11 +164,14 @@ echo "Hello, $PARAM_NAME!"
 - Execute action via runtime registry
 - Handle success and failure cases
 - Store execution artifacts
+- Copy locally staged file-backed artifacts to API transport in standalone/API-transport mode
 - Publish status change notifications
 
 **Key Implementation Details**:
 - Parameters merged: action defaults + execution overrides
 - Environment variables include execution metadata
+- `ATTUNE_ARTIFACTS_DIR` is always provided; actions that allocate file-backed artifact versions write to `$ATTUNE_ARTIFACTS_DIR/{file_path}`
+- When no shared artifact volume is detected, finalization uploads those worker-local files through the API artifact transport before updating artifact version sizes
 - Default timeout: 5 minutes (300 seconds)
 - Errors captured and stored as execution result
 
@@ -322,8 +325,8 @@ worker:
   max_concurrent_tasks: 10           # Max parallel executions
   heartbeat_interval: 30             # Seconds between heartbeats
   task_timeout: 300                  # Default task timeout (seconds)
-  execution_log_retention_policy: days  # stdout/stderr artifact retention policy: versions, days, hours, minutes
-  execution_log_retention_limit: 7      # Retention limit interpreted by the selected policy
+  execution_log_retention_policy: days      # action stdout/stderr artifact retention policy: versions, days, hours, minutes
+  execution_log_retention_limit: 7          # Retention limit interpreted by the selected policy
 
 security:
   encryption_key: "your-encryption-key"  # Required for encrypted secrets

@@ -115,6 +115,8 @@ async fn setup_executable_action(pool: &PgPool, suffix: &str) -> TResult<(Pack, 
             is_adhoc: true,
             accesses_mcp: true,
             default_execution_permission_set_refs: Vec::new(),
+            log_retention_policy: None,
+            log_retention_limit: None,
         },
     )
     .await?;
@@ -169,6 +171,8 @@ async fn create_action_with_default_access(
             is_adhoc: true,
             accesses_mcp: true,
             default_execution_permission_set_refs: default_refs,
+            log_retention_policy: None,
+            log_retention_limit: None,
         },
     )
     .await?)

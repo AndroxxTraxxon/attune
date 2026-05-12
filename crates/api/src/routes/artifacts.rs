@@ -740,13 +740,14 @@ pub async fn create_version_file(
     let content_type = request
         .content_type
         .unwrap_or_else(|| default_content_type_for_artifact(artifact.r#type));
+    let execution = request.execution.or_else(|| user.execution_id());
 
     let version = ArtifactVersionRepository::create_file_backed(
         &state.db,
         id,
         &artifact.r#ref,
         content_type.clone(),
-        request.execution,
+        execution,
         request.meta,
         request.created_by,
     )
@@ -1017,10 +1018,25 @@ pub async fn download_latest(
         .await
         .map_err(|_| ApiError::NotFound(format!("Artifact with ID {} not found", id)))?;
 
-    // First try without content (cheaper query) to check for file_path
-    let ver = ArtifactVersionRepository::find_latest(&state.db, id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("No versions found for artifact {}", id)))?;
+    // First try without content (cheaper query) to check for file_path.
+    // Sensor log artifacts may exist before a stream has emitted any bytes
+    // (especially stderr), so no-version logs are served as empty text instead
+    // of a broken download.
+    let Some(ver) = ArtifactVersionRepository::find_latest(&state.db, id).await? else {
+        if let Some((sensor_ref, stream)) = sensor_log_artifact_parts(&artifact.r#ref) {
+            return serve_sensor_log_legacy_or_empty(
+                &state.config.artifacts_dir,
+                &artifact.r#ref,
+                &sensor_ref,
+                stream,
+            )
+            .await;
+        }
+        return Err(ApiError::NotFound(format!(
+            "No versions found for artifact {}",
+            id
+        )));
+    };
 
     let version = ver.version;
 
@@ -1040,6 +1056,23 @@ pub async fn download_latest(
 
     // File-backed version: read from disk
     if let Some(ref file_path) = ver.file_path {
+        if sensor_log_artifact_parts(&artifact.r#ref).is_some() {
+            match serve_file_from_disk(
+                &state.config.artifacts_dir,
+                file_path,
+                &artifact.r#ref,
+                version,
+                ver.content_type.as_deref(),
+            )
+            .await
+            {
+                Ok(response) => return Ok(response),
+                Err(ApiError::NotFound(_)) => return serve_empty_sensor_log(&artifact.r#ref),
+                Err(ApiError::Forbidden(_)) => return serve_empty_sensor_log(&artifact.r#ref),
+                Err(err) => return Err(err),
+            }
+        }
+
         return serve_file_from_disk(
             &state.config.artifacts_dir,
             file_path,
@@ -1479,13 +1512,14 @@ pub async fn allocate_file_version_by_ref(
     let content_type = request
         .content_type
         .unwrap_or_else(|| default_content_type_for_artifact(artifact.r#type));
+    let execution = request.execution.or_else(|| user.execution_id());
 
     let version = ArtifactVersionRepository::create_file_backed(
         &state.db,
         artifact.id,
         &artifact.r#ref,
         content_type.clone(),
-        request.execution,
+        execution,
         request.meta,
         request.created_by,
     )
@@ -1938,6 +1972,66 @@ fn action_name_lower(action: Action) -> &'static str {
     }
 }
 
+fn sensor_log_artifact_parts(artifact_ref: &str) -> Option<(String, &'static str)> {
+    let rest = artifact_ref.strip_prefix("sensor.")?;
+    if let Some(sensor_ref) = rest.strip_suffix(".stdout") {
+        Some((sensor_ref.to_string(), "stdout"))
+    } else {
+        rest.strip_suffix(".stderr")
+            .map(|sensor_ref| (sensor_ref.to_string(), "stderr"))
+    }
+}
+
+async fn serve_sensor_log_legacy_or_empty(
+    artifacts_dir: &str,
+    artifact_ref: &str,
+    sensor_ref: &str,
+    stream: &str,
+) -> ApiResult<axum::response::Response> {
+    let legacy_path = std::path::Path::new(artifacts_dir)
+        .join("sensors")
+        .join(sensor_ref)
+        .join(format!("{}.log", stream));
+
+    match tokio::fs::read(&legacy_path).await {
+        Ok(bytes) => serve_sensor_log_bytes(artifact_ref, bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serve_empty_sensor_log(artifact_ref),
+        Err(e) => Err(ApiError::InternalServerError(format!(
+            "Failed to read sensor log '{}': {}",
+            legacy_path.display(),
+            e
+        ))),
+    }
+}
+
+fn serve_empty_sensor_log(artifact_ref: &str) -> ApiResult<axum::response::Response> {
+    serve_sensor_log_bytes(artifact_ref, Vec::new())
+}
+
+fn serve_sensor_log_bytes(
+    artifact_ref: &str,
+    bytes: Vec<u8>,
+) -> ApiResult<axum::response::Response> {
+    Ok((
+        StatusCode::OK,
+        [
+            (
+                header::CONTENT_TYPE,
+                "text/plain; charset=utf-8".to_string(),
+            ),
+            (
+                header::CONTENT_DISPOSITION,
+                format!(
+                    "attachment; filename=\"{}.log\"",
+                    artifact_ref.replace('.', "_")
+                ),
+            ),
+        ],
+        Body::from(bytes),
+    )
+        .into_response())
+}
+
 /// Serve a file-backed artifact version from disk.
 async fn serve_file_from_disk(
     artifacts_dir: &str,
@@ -1961,6 +2055,12 @@ async fn serve_file_from_disk(
     }
 
     let bytes = tokio::fs::read(&full_path).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            return ApiError::Forbidden(format!(
+                "Permission denied reading artifact file '{}'",
+                full_path.display()
+            ));
+        }
         ApiError::InternalServerError(format!(
             "Failed to read artifact file '{}': {}",
             full_path.display(),

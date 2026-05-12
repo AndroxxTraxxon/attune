@@ -16,7 +16,7 @@ use chrono::Utc;
 use attune_common::repositories::{
     execution::{ExecutionRepository, WorkerExecutionLoad},
     runtime::WorkerRepository,
-    List,
+    FindById, List,
 };
 
 use crate::{
@@ -287,6 +287,52 @@ pub async fn list_workers(
 }
 
 #[utoipa::path(
+    get,
+    path = "/api/v1/workers/{id}",
+    tag = "workers",
+    params(("id" = i64, Path, description = "Worker ID")),
+    responses(
+        (status = 200, description = "Worker with runtime support and current load", body = WorkerSummary),
+        (status = 404, description = "Worker not found"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn get_worker(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(worker_id): Path<i64>,
+) -> ApiResult<impl IntoResponse> {
+    let identity_id = user.identity_id().map_err(|_| {
+        crate::middleware::ApiError::Unauthorized("Invalid user identity".to_string())
+    })?;
+    AuthorizationService::new(state.db.clone())
+        .authorize(
+            &user,
+            AuthorizationCheck {
+                resource: Resource::Workers,
+                action: Action::Read,
+                context: AuthorizationContext::new(identity_id),
+            },
+        )
+        .await?;
+
+    let worker = WorkerRepository::find_by_id(&state.db, worker_id)
+        .await?
+        .ok_or_else(|| {
+            crate::middleware::ApiError::NotFound(format!("Worker with ID {} not found", worker_id))
+        })?;
+    let load = ExecutionRepository::current_load_by_worker_ids(&state.db, &[worker.id])
+        .await?
+        .into_iter()
+        .next();
+
+    Ok((
+        StatusCode::OK,
+        Json(summarize_worker(worker, load.as_ref())),
+    ))
+}
+
+#[utoipa::path(
     post,
     path = "/api/v1/workers/{id}/cordon",
     tag = "workers",
@@ -350,6 +396,7 @@ pub async fn uncordon_worker(
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/workers", get(list_workers))
+        .route("/workers/{id}", get(get_worker))
         .route("/workers/{id}/cordon", post(cordon_worker))
         .route("/workers/{id}/uncordon", post(uncordon_worker))
 }

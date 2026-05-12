@@ -136,6 +136,8 @@ Action metadata files define the parameters, output schema, and execution detail
 - `parameter_format` (string): Parameter serialization format - `dotenv` (KEY='VALUE'), `json` (JSON object), or `yaml` (YAML format). Default: `dotenv`
 - `tags` (array): Tags for categorization
 - `timeout` (integer): Default timeout in seconds
+- `log_retention_policy` (string): Optional per-action stdout/stderr artifact retention override (`versions`, `days`, `hours`, or `minutes`)
+- `log_retention_limit` (integer): Optional per-action stdout/stderr artifact retention limit override
 - `examples` (array): Usage examples
 
 **Example:**
@@ -165,6 +167,10 @@ worker_affinity:
 # Parameter delivery (optional, defaults to stdin/json)
 parameter_delivery: stdin
 parameter_format: json
+
+# Optional action log artifact retention override
+log_retention_policy: versions
+log_retention_limit: 4
 
 parameters:
   type: object
@@ -339,6 +345,8 @@ Sensor metadata files define sensors that monitor for events and fire triggers.
 - `enabled` (boolean): Whether sensor is enabled (default: true)
 - `parameters` (object): Sensor configuration parameters
 - `poll_interval` (integer): Poll interval in seconds
+- `log_retention_policy` (string): Optional per-sensor stdout/stderr log artifact retention override (`versions`, `days`, `hours`, or `minutes`)
+- `log_retention_limit` (integer): Optional per-sensor stdout/stderr log artifact retention limit override
 - `tags` (array): Tags for categorization
 - `meta` (object): Additional metadata
 
@@ -351,6 +359,10 @@ description: "Monitors time and fires interval timer triggers"
 enabled: true
 runner_type: python
 entry_point: interval_timer_sensor.py
+
+# Optional sensor log artifact retention override
+log_retention_policy: versions
+log_retention_limit: 4
 
 trigger_types:
   - core.intervaltimer

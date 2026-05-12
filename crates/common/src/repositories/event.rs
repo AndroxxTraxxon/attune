@@ -13,7 +13,7 @@ use crate::models::{
 use crate::Result;
 use sqlx::{Executor, Postgres, QueryBuilder};
 
-use super::{Create, Delete, FindById, List, Repository, Update};
+use super::{ref_filter_like_pattern, Create, Delete, FindById, List, Repository, Update};
 
 // ============================================================================
 // Event Search
@@ -297,20 +297,44 @@ impl EventRepository {
             }};
         }
 
+        macro_rules! push_like_condition {
+            ($cond_prefix:expr, $value:expr) => {{
+                if !has_where {
+                    qb.push(" WHERE ");
+                    count_qb.push(" WHERE ");
+                    has_where = true;
+                } else {
+                    qb.push(" AND ");
+                    count_qb.push(" AND ");
+                }
+                qb.push($cond_prefix);
+                qb.push_bind($value.clone());
+                qb.push(r" ESCAPE '\'");
+                count_qb.push($cond_prefix);
+                count_qb.push_bind($value);
+                count_qb.push(r" ESCAPE '\'");
+            }};
+        }
+
         if let Some(trigger_id) = filters.trigger {
             push_condition!("trigger = ", trigger_id);
         }
         if let Some(ref trigger_ref) = filters.trigger_ref {
-            push_condition!("trigger_ref = ", trigger_ref.clone());
+            if let Some(pattern) = ref_filter_like_pattern(trigger_ref) {
+                push_like_condition!("trigger_ref LIKE ", pattern);
+            } else {
+                push_condition!("trigger_ref = ", trigger_ref.clone());
+            }
         }
         if let Some(source_id) = filters.source {
             push_condition!("source = ", source_id);
         }
         if let Some(ref rule_ref) = filters.rule_ref {
-            push_condition!(
-                "LOWER(rule_ref) LIKE ",
-                format!("%{}%", rule_ref.to_lowercase())
-            );
+            if let Some(pattern) = ref_filter_like_pattern(rule_ref) {
+                push_like_condition!("rule_ref LIKE ", pattern);
+            } else {
+                push_condition!("rule_ref = ", rule_ref.clone());
+            }
         }
 
         // Suppress unused-assignment warning from the macro's last expansion.

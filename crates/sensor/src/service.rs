@@ -152,7 +152,32 @@ impl SensorService {
             Arc::from(transport)
         };
 
-        let sensor_manager = Arc::new(SensorManager::new(db.clone()));
+        let artifact_transport: Arc<dyn attune_common::artifact_transport::ArtifactFileTransport> = {
+            let transport = attune_common::artifact_transport::build_transport(
+                &config.artifacts_dir,
+                Some(&api_url),
+                worker_token.as_deref(),
+                &config.artifacts.transport,
+            );
+            info!(
+                "Artifact file transport initialized for sensor logs: mode={}",
+                transport.transport_mode()
+            );
+            Arc::from(transport)
+        };
+
+        let default_sensor_log_config = crate::sensor_log::SensorLogConfig::default();
+        let sensor_log_config = crate::sensor_log::SensorLogConfig {
+            max_bytes: config.artifacts.sensor_log_max_bytes,
+            max_files: config.artifacts.sensor_log_max_files,
+            ..default_sensor_log_config
+        };
+
+        let sensor_manager = Arc::new(SensorManager::new(
+            db.clone(),
+            artifact_transport,
+            sensor_log_config,
+        ));
 
         // Create rule lifecycle listener
         let rule_lifecycle_listener = Arc::new(RuleLifecycleListener::new(

@@ -83,6 +83,8 @@ async fn setup_test_pack_and_action(pool: &PgPool) -> Result<(Pack, Action)> {
         is_adhoc: false,
         accesses_mcp: false,
         default_execution_permission_set_refs: Vec::new(),
+        log_retention_policy: None,
+        log_retention_limit: None,
     };
     let action = ActionRepository::create(pool, action_input).await?;
 

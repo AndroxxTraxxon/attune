@@ -51,6 +51,25 @@ pub mod trigger;
 pub mod work_queue;
 pub mod workflow;
 
+pub(crate) fn ref_filter_like_pattern(filter: &str) -> Option<String> {
+    if !filter.contains('*') {
+        return None;
+    }
+
+    let mut pattern = String::with_capacity(filter.len());
+    for ch in filter.chars() {
+        match ch {
+            '*' => pattern.push('%'),
+            '\\' => pattern.push_str(r"\\"),
+            '%' => pattern.push_str(r"\%"),
+            '_' => pattern.push_str(r"\_"),
+            ch => pattern.push(ch),
+        }
+    }
+
+    Some(pattern)
+}
+
 // Re-export repository types
 pub use action::{ActionRepository, PolicyRepository};
 pub use analytics::AnalyticsRepository;
@@ -324,5 +343,26 @@ mod tests {
         let p = Pagination::default();
         assert_eq!(p.page, 0);
         assert_eq!(p.per_page, 50);
+    }
+
+    #[test]
+    fn ref_filter_like_pattern_supports_glob_wildcards() {
+        assert_eq!(
+            ref_filter_like_pattern("core.*"),
+            Some("core.%".to_string())
+        );
+        assert_eq!(
+            ref_filter_like_pattern("core.queue_*"),
+            Some(r"core.queue\_%".to_string())
+        );
+        assert_eq!(ref_filter_like_pattern("core.timer"), None);
+    }
+
+    #[test]
+    fn ref_filter_like_pattern_escapes_like_metacharacters() {
+        assert_eq!(
+            ref_filter_like_pattern("pack%_name.*"),
+            Some(r"pack\%\_name.%".to_string())
+        );
     }
 }

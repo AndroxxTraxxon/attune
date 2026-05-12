@@ -26,8 +26,9 @@ use crate::{
     dto::{
         common::{PaginatedResponse, PaginationParams},
         trigger::{
-            CreateSensorRequest, CreateTriggerRequest, SensorJsonPatch, SensorResponse,
-            SensorSummary, TriggerJsonPatch, TriggerResponse, TriggerStringPatch, TriggerSummary,
+            CreateSensorRequest, CreateTriggerRequest, LogRetentionLimitPatch,
+            LogRetentionPolicyPatch, SensorJsonPatch, SensorResponse, SensorSummary,
+            TriggerJsonPatch, TriggerResponse, TriggerStringPatch, TriggerSummary,
             UpdateSensorRequest, UpdateTriggerRequest,
         },
         ApiResponse, SuccessResponse,
@@ -683,6 +684,8 @@ pub async fn create_sensor(
             .unwrap_or_else(|_| json!([])),
         worker_affinity: serde_json::to_value(request.worker_affinity)
             .unwrap_or_else(|_| json!({})),
+        log_retention_policy: request.log_retention_policy,
+        log_retention_limit: request.log_retention_limit,
     };
 
     let sensor = SensorRepository::create(&state.db, sensor_input).await?;
@@ -746,6 +749,14 @@ pub async fn update_sensor(
         worker_affinity: request
             .worker_affinity
             .map(|value| serde_json::to_value(value).unwrap_or_else(|_| json!({}))),
+        log_retention_policy: request.log_retention_policy.map(|patch| match patch {
+            LogRetentionPolicyPatch::Set(value) => Patch::Set(value),
+            LogRetentionPolicyPatch::Clear => Patch::Clear,
+        }),
+        log_retention_limit: request.log_retention_limit.map(|patch| match patch {
+            LogRetentionLimitPatch::Set(value) => Patch::Set(value),
+            LogRetentionLimitPatch::Clear => Patch::Clear,
+        }),
     };
 
     let sensor = SensorRepository::update(&state.db, existing_sensor.id, update_input).await?;
@@ -833,6 +844,8 @@ pub async fn enable_sensor(
         worker_selector: None,
         worker_tolerations: None,
         worker_affinity: None,
+        log_retention_policy: None,
+        log_retention_limit: None,
     };
 
     let sensor = SensorRepository::update(&state.db, existing_sensor.id, update_input).await?;
@@ -881,6 +894,8 @@ pub async fn disable_sensor(
         worker_selector: None,
         worker_tolerations: None,
         worker_affinity: None,
+        log_retention_policy: None,
+        log_retention_limit: None,
     };
 
     let sensor = SensorRepository::update(&state.db, existing_sensor.id, update_input).await?;

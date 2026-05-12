@@ -96,6 +96,8 @@ async fn setup_pack_action(pool: &PgPool, suffix: &str) -> TResult<(Pack, Action
             is_adhoc: false,
             accesses_mcp: false,
             default_execution_permission_set_refs: Vec::new(),
+            log_retention_policy: None,
+            log_retention_limit: None,
         },
     )
     .await?;

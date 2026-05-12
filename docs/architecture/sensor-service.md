@@ -180,6 +180,22 @@ trigger:
 
 ## Configuration
 
+### Sensor Logs
+
+Managed sensor process stdout and stderr are captured by `RotatingLogWriter`.
+Each stream is registered as a private FileText artifact with refs
+`sensor.{sensor_ref}.stdout` and `sensor.{sensor_ref}.stderr`. Log content is
+stored in file-backed `artifact_version` rows, and size-based rotation creates a
+new artifact version for the next segment. The default retention is 4 versions,
+with optional per-sensor overrides via `sensor.log_retention_policy` and
+`sensor.log_retention_limit`.
+
+Managed sensor processes receive `ATTUNE_ARTIFACTS_DIR`. In standalone/API
+transport mode, sensor-owned file-backed artifact versions staged under that
+directory are copied to the API-accessible artifact transport when the process
+stops or exits, so API downloads and downstream tasks do not depend on the
+sensor container's local filesystem.
+
 ### Service Configuration
 
 ```yaml
@@ -365,7 +381,7 @@ impl SensorInstance {
 
 Pack sensors can declare `worker_selector`, `worker_tolerations`, and `worker_affinity`, using the same placement vocabulary as actions. Sensor workers register configured `sensor.labels` and `sensor.taints` in `worker.capabilities`; `SensorManager` evaluates those capabilities before starting or restarting a sensor process.
 
-Sensor stdout and stderr are written to rotating files under `{artifacts_dir}/sensors/{sensor_ref}/`. The API exposes stream metadata and tail reads through `GET /api/v1/sensors/{sensor_ref}/logs` and `GET /api/v1/sensors/{sensor_ref}/logs/{stream}?tail=N`, and the sensor detail page can follow stdout/stderr by polling the tail endpoint.
+Sensor stdout and stderr are written to rotating files under `{artifacts_dir}/sensors/{sensor_ref}/`. Rotation keeps 4 files by default, and the registered log artifacts default to `versions` / `4` retention unless the sensor row sets `log_retention_policy` and/or `log_retention_limit`. Action log retention is configured separately through `worker.execution_log_retention_policy` / `worker.execution_log_retention_limit` and defaults to `days` / `7`. The API exposes stream metadata and tail reads through `GET /api/v1/sensors/{sensor_ref}/logs` and `GET /api/v1/sensors/{sensor_ref}/logs/{stream}?tail=N`, and the sensor detail page can follow stdout/stderr by polling the tail endpoint.
 
 Managed sensor process live state is persisted in `sensor_process` and changes are mirrored to `sensor_process_history`. The manager records process starts/stops, detects unexpected child exits with non-blocking `try_wait`, captures stderr excerpts, marks failed processes as `backoff`, restarts them with capped exponential backoff while active rules still depend on the sensor, and emits `core.alert` after repeated failures.
 

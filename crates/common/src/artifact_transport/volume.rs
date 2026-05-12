@@ -39,9 +39,55 @@ impl VolumeTransport {
                         parent.display()
                     ))
                 })?;
+            self.normalize_shared_dir_permissions(parent).await;
         }
         Ok(())
     }
+
+    #[cfg(unix)]
+    async fn normalize_shared_dir_permissions(&self, parent: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let Ok(relative) = parent.strip_prefix(&self.base_dir) else {
+            return;
+        };
+
+        let mut current = self.base_dir.clone();
+        let dirs = std::iter::once(current.clone()).chain(relative.components().map(|component| {
+            current.push(component.as_os_str());
+            current.clone()
+        }));
+
+        for dir in dirs {
+            if let Err(e) = fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o2775)).await
+            {
+                tracing::warn!(
+                    "Failed to set shared artifact directory permissions on '{}': {}",
+                    dir.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    async fn normalize_shared_dir_permissions(&self, _parent: &Path) {}
+
+    #[cfg(unix)]
+    async fn normalize_shared_file_permissions(&self, path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        if let Err(e) = fs::set_permissions(path, std::fs::Permissions::from_mode(0o664)).await {
+            tracing::warn!(
+                "Failed to set shared artifact file permissions on '{}': {}",
+                path.display(),
+                e
+            );
+        }
+    }
+
+    #[cfg(not(unix))]
+    async fn normalize_shared_file_permissions(&self, _path: &Path) {}
 }
 
 #[async_trait]
@@ -56,7 +102,9 @@ impl ArtifactFileTransport for VolumeTransport {
         self.ensure_parent(&path).await?;
         fs::write(&path, content)
             .await
-            .map_err(|e| Error::Io(format!("Failed to write {}: {e}", path.display())))
+            .map_err(|e| Error::Io(format!("Failed to write {}: {e}", path.display())))?;
+        self.normalize_shared_file_permissions(&path).await;
+        Ok(())
     }
 
     async fn read_file(&self, file_path: &str) -> Result<Vec<u8>> {
@@ -79,7 +127,9 @@ impl ArtifactFileTransport for VolumeTransport {
             .map_err(|e| Error::Io(format!("Failed to open for append {}: {e}", path.display())))?;
         file.write_all(content)
             .await
-            .map_err(|e| Error::Io(format!("Failed to append to {}: {e}", path.display())))
+            .map_err(|e| Error::Io(format!("Failed to append to {}: {e}", path.display())))?;
+        self.normalize_shared_file_permissions(&path).await;
+        Ok(())
     }
 
     async fn file_exists(&self, file_path: &str) -> Result<bool> {
@@ -136,6 +186,7 @@ impl ArtifactFileTransport for VolumeTransport {
                     path.display()
                 ))
             })?;
+        self.normalize_shared_file_permissions(&path).await;
         Ok(Box::pin(file))
     }
 
@@ -203,6 +254,38 @@ mod tests {
         transport.append_file("log.txt", b"line2\n").await.unwrap();
         let content = transport.read_file("log.txt").await.unwrap();
         assert_eq!(content, b"line1\nline2\n");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_shared_permissions_are_api_readable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let transport = VolumeTransport::new(tmp.path().to_str().unwrap());
+
+        transport
+            .append_file("sensor/core/timer_sensor/stdout/v1.txt", b"line\n")
+            .await
+            .unwrap();
+
+        for dir in [
+            tmp.path().join("sensor"),
+            tmp.path().join("sensor/core"),
+            tmp.path().join("sensor/core/timer_sensor"),
+            tmp.path().join("sensor/core/timer_sensor/stdout"),
+        ] {
+            let mode = fs::metadata(&dir).await.unwrap().permissions().mode() & 0o7777;
+            assert_eq!(mode, 0o2775, "unexpected mode for {}", dir.display());
+        }
+
+        let file_mode = fs::metadata(tmp.path().join("sensor/core/timer_sensor/stdout/v1.txt"))
+            .await
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(file_mode, 0o664);
     }
 
     #[tokio::test]

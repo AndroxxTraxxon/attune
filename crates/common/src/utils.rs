@@ -201,12 +201,12 @@ pub fn redact_sensitive(s: &str) -> String {
     )
 }
 
-/// Creates directories recursively with group-writable permissions (`0o2770`).
+/// Creates directories recursively with shared-volume permissions (`0o2775`).
 ///
 /// In multi-container Docker environments, services may run as different UIDs
 /// (e.g., API as UID 1000, workers as root) but share volumes. This function
 /// ensures that newly created directory components are:
-/// - Group-writable (`rwxrwx---`)
+/// - Group-writable (`rwxrwxr-x`)
 /// - Setgid-flagged so child entries inherit the parent directory's group
 ///
 /// The volume root must be owned by the shared group (GID 1000 / `attune`)
@@ -234,13 +234,13 @@ pub async fn create_shared_dir_all(path: &Path) -> std::io::Result<()> {
     // Create the full tree first
     tokio::fs::create_dir_all(path).await?;
 
-    // Set setgid + rwxrwx--- on each newly created component so child
+    // Set setgid + rwxrwxr-x on each newly created component so child
     // directories inherit the parent's group automatically.
     for dir in &to_create {
-        let perms = std::fs::Permissions::from_mode(0o2770);
+        let perms = std::fs::Permissions::from_mode(0o2775);
         if let Err(e) = tokio::fs::set_permissions(dir, perms).await {
             tracing::warn!(
-                "Failed to set 0o2770 on '{}': {} (cross-service writes may fail)",
+                "Failed to set 0o2775 on '{}': {} (cross-service reads may fail)",
                 dir.display(),
                 e
             );
@@ -270,10 +270,10 @@ pub fn create_shared_dir_all_sync(path: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(path)?;
 
     for dir in &to_create {
-        let perms = std::fs::Permissions::from_mode(0o2770);
+        let perms = std::fs::Permissions::from_mode(0o2775);
         if let Err(e) = std::fs::set_permissions(dir, perms) {
             tracing::warn!(
-                "Failed to set 0o2770 on '{}': {} (cross-service writes may fail)",
+                "Failed to set 0o2775 on '{}': {} (cross-service reads may fail)",
                 dir.display(),
                 e
             );

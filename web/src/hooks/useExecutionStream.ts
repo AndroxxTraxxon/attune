@@ -5,6 +5,7 @@ import {
   type Notification,
 } from "@/contexts/WebSocketContext";
 import type { ExecutionSummary, ExecutionStatus } from "@/api";
+import { matchesRefFilter } from "@/utils/refFilters";
 
 interface UseExecutionStreamOptions {
   /**
@@ -120,21 +121,6 @@ function stripNotificationMeta(
   return cleaned;
 }
 
-function matchesRefFilter(
-  actualRef: string | null | undefined,
-  filterRef: string | undefined,
-): boolean {
-  if (!filterRef) return true;
-  if (!actualRef) return false;
-
-  if (filterRef.endsWith(".*")) {
-    const prefix = filterRef.slice(0, -2);
-    return prefix.length > 0 && actualRef.startsWith(prefix + ".");
-  }
-
-  return actualRef === filterRef;
-}
-
 /**
  * Check if an execution matches the given query parameters.
  * Only checks fields that are reliably present in WebSocket payloads.
@@ -166,7 +152,7 @@ function executionMatchesParams(
     return false;
   }
 
-  // Check action filter. Supports exact refs and `<pack>.*` wildcards.
+  // Check action filter. Supports exact refs and glob-style `*` wildcards.
   if (!matchesRefFilter(execution.action_ref, params.actionRef)) {
     return false;
   }

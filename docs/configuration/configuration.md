@@ -208,11 +208,13 @@ worker:
   heartbeat_interval: 30  # seconds
   task_timeout: 300       # seconds
 
-  # Per-execution stdout/stderr log artifact retention.
+  # Per-execution action stdout/stderr log artifact retention.
   # Policy can be: versions, days, hours, or minutes.
   execution_log_retention_policy: days
   execution_log_retention_limit: 7
 ```
+
+Pack/API-created actions and sensors can override log artifact retention per row with nullable `log_retention_policy` and `log_retention_limit` fields. Action logs default to `days` / `7`; sensor logs default to `versions` / `4` because sensor artifact versions are created only when the rotating log segment exceeds its size limit.
 
 ## Environment-Specific Configuration
 

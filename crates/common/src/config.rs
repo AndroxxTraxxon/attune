@@ -515,11 +515,11 @@ pub struct WorkerConfig {
     #[serde(default = "default_max_stderr_bytes")]
     pub max_stderr_bytes: usize,
 
-    /// Retention policy for per-execution stdout/stderr log artifacts.
+    /// Retention policy for per-execution stdout/stderr log artifacts (default: keep 7 days).
     #[serde(default = "default_execution_log_retention_policy")]
     pub execution_log_retention_policy: crate::models::enums::RetentionPolicyType,
 
-    /// Retention limit for per-execution stdout/stderr log artifacts.
+    /// Retention limit for per-execution stdout/stderr log artifacts (default: 7 days).
     /// Interpreted according to `execution_log_retention_policy`.
     #[serde(default = "default_execution_log_retention_limit")]
     pub execution_log_retention_limit: i32,
@@ -739,7 +739,7 @@ pub struct ArtifactsConfig {
     #[serde(default = "default_sensor_log_max_bytes")]
     pub sensor_log_max_bytes: u64,
 
-    /// Sensor log rotation: number of rotated files to keep (default: 5).
+    /// Sensor log rotation: number of rotated files to keep (default: 4).
     #[serde(default = "default_sensor_log_max_files")]
     pub sensor_log_max_files: u32,
 }
@@ -769,7 +769,7 @@ fn default_sensor_log_max_bytes() -> u64 {
 }
 
 fn default_sensor_log_max_files() -> u32 {
-    5
+    4
 }
 
 /// Executor service configuration
@@ -1328,6 +1328,16 @@ mod tests {
         assert_eq!(config.environment, "development");
         assert!(config.is_development());
         assert!(!config.is_production());
+    }
+
+    #[test]
+    fn worker_log_retention_defaults_to_seven_days() {
+        let worker: WorkerConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(
+            worker.execution_log_retention_policy,
+            crate::models::enums::RetentionPolicyType::Days
+        );
+        assert_eq!(worker.execution_log_retention_limit, 7);
     }
 
     #[test]

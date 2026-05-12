@@ -176,7 +176,9 @@ echo '{"stdout_ok": true, "message": "action completed with stderr"}'
 """
     )
 
-    # Action that creates an artifact file
+    # Action that allocates a file-backed artifact version, writes to the
+    # returned local path, and relies on worker finalization to copy it to API
+    # transport in standalone mode.
     (pack_dir / "actions" / "artifact_test.yaml").write_text(
         f"""\
 ref: {pack_ref}.artifact_test
@@ -194,13 +196,43 @@ default_execution_permission_set_refs:
     (pack_dir / "actions" / "artifact_test.sh").write_text(
         """\
 #!/usr/bin/env bash
-set -e
-# Write a test artifact file into the artifacts directory
+set -eu
 ARTIFACT_DIR="${ATTUNE_ARTIFACTS_DIR:-/opt/attune/artifacts}"
-SUBDIR="${ARTIFACT_DIR}/standalone_test"
-mkdir -p "$SUBDIR"
-echo "artifact-content-$(date +%s)" > "$SUBDIR/test_output.txt"
-echo '{"artifact_created": true, "path": "standalone_test/test_output.txt"}'
+API_URL="${ATTUNE_API_URL:?ATTUNE_API_URL is required}"
+API_TOKEN="${ATTUNE_API_TOKEN:?ATTUNE_API_TOKEN is required}"
+ACTION_REF="${ATTUNE_ACTION:?ATTUNE_ACTION is required}"
+EXEC_ID="${ATTUNE_EXEC_ID:?ATTUNE_EXEC_ID is required}"
+
+ARTIFACT_REF="${ACTION_REF}.standalone_copy.${EXEC_ID}"
+EXPECTED_CONTENT="standalone-artifact-copy-${EXEC_ID}"
+
+ALLOCATE_BODY=$(cat <<JSON
+{"scope":"action","owner":"${ACTION_REF}","type":"file_text","visibility":"private","retention_policy":"versions","retention_limit":4,"name":"Standalone artifact copy ${EXEC_ID}","content_type":"text/plain","created_by":"${ACTION_REF}"}
+JSON
+)
+
+ALLOCATE_RESPONSE=$(curl -fsS \
+  -X POST "${API_URL}/api/v1/artifacts/ref/${ARTIFACT_REF}/versions/file" \
+  -H "Authorization: Bearer ${API_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "${ALLOCATE_BODY}")
+
+FILE_PATH=$(printf '%s' "$ALLOCATE_RESPONSE" \
+  | grep -o '"file_path"[[:space:]]*:[[:space:]]*"[^"]*"' \
+  | head -1 \
+  | sed 's/.*"file_path"[[:space:]]*:[[:space:]]*"//;s/"$//')
+
+if [ -z "$FILE_PATH" ]; then
+  echo "Failed to parse file_path from allocation response: $ALLOCATE_RESPONSE" >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "${ARTIFACT_DIR}/${FILE_PATH}")"
+printf '%s\n' "$EXPECTED_CONTENT" > "${ARTIFACT_DIR}/${FILE_PATH}"
+
+cat <<EOF
+{"artifact_created": true, "artifact_ref": "${ARTIFACT_REF}", "file_path": "${FILE_PATH}", "expected_content": "${EXPECTED_CONTENT}"}
+EOF
 """
     )
 
@@ -449,6 +481,95 @@ class TestStandaloneWorkerTransport:
                         assert "stderr-line-1" in content, (
                             f"Expected stderr content, got: {content[:200]}"
                         )
+
+    def test_file_artifact_copied_from_standalone_worker(
+        self, client, standalone_worker_available, sa_pack, sa_pack_ref
+    ):
+        """Verify a file-backed artifact written to a standalone worker's
+        local ATTUNE_ARTIFACTS_DIR is copied to the API artifact volume during
+        execution finalization."""
+        if not standalone_worker_available:
+            pytest.skip("Standalone worker not available")
+
+        action_ref = f"{sa_pack_ref}.artifact_test"
+        execution = _create_execution_with_selector(
+            client,
+            action_ref=action_ref,
+            worker_selector={"attune_transport": "api"},
+        )
+        exec_id = execution["id"]
+
+        final = wait_for_execution_status(
+            client, exec_id, "completed", timeout=120
+        )
+        assert final["status"] == "completed"
+
+        result = final.get("result", {})
+        assert result.get("artifact_created") is True, (
+            f"Expected artifact_created=true: {result}"
+        )
+        artifact_ref = result.get("artifact_ref")
+        file_path = result.get("file_path")
+        expected_content = result.get("expected_content")
+        assert artifact_ref, f"Missing artifact_ref in result: {result}"
+        assert file_path, f"Missing file_path in result: {result}"
+        assert expected_content, f"Missing expected_content in result: {result}"
+
+        artifact = _get(client, f"/api/v1/artifacts/ref/{artifact_ref}")
+        assert artifact["ref"] == artifact_ref
+        assert artifact["scope"] == "action"
+        assert artifact["owner"] == action_ref
+
+        versions_resp = client._request(
+            "GET", f"/api/v1/artifacts/{artifact['id']}/versions"
+        )
+        assert versions_resp.status_code == 200, (
+            f"Version list failed: {versions_resp.status_code} {versions_resp.text}"
+        )
+        versions = versions_resp.json().get("data", versions_resp.json())
+        if isinstance(versions, dict) and "items" in versions:
+            versions = versions["items"]
+        matching_versions = [
+            version for version in versions
+            if version.get("execution") == exec_id
+            and version.get("file_path") == file_path
+        ]
+        assert matching_versions, (
+            f"No version linked to execution={exec_id} file_path={file_path}: "
+            f"{versions}"
+        )
+
+        expected_body = f"{expected_content}\n"
+        download_resp = None
+
+        def _artifact_downloaded() -> bool:
+            nonlocal download_resp
+            download_resp = client._request(
+                "GET", f"/api/v1/artifacts/{artifact['id']}/download"
+            )
+            return (
+                download_resp.status_code == 200
+                and download_resp.text == expected_body
+            )
+
+        wait_for_condition(
+            _artifact_downloaded,
+            timeout=30,
+            poll_interval=1.0,
+            error_message=(
+                "Standalone file-backed artifact was not copied to API "
+                "transport with expected content"
+            ),
+        )
+        assert download_resp is not None
+        assert download_resp.status_code == 200
+        assert download_resp.text == expected_body
+
+        latest_size = artifact.get("size_bytes")
+        if latest_size is not None:
+            assert latest_size == len(expected_body), (
+                f"Expected artifact size {len(expected_body)}, got {latest_size}"
+            )
 
     def test_pack_update_syncs_to_standalone_worker(
         self, client, standalone_worker_available, sa_pack, sa_pack_ref

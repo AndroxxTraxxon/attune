@@ -63,6 +63,14 @@ export interface PaginatedResponseWorkerSummary {
 }
 
 export class WorkersService {
+  public static getWorker({ id }: { id: number }): CancelablePromise<WorkerSummary> {
+    return __request(OpenAPI, {
+      method: "GET",
+      url: "/api/v1/workers/{id}",
+      path: { id },
+    });
+  }
+
   public static listWorkers({
     page,
     pageSize,

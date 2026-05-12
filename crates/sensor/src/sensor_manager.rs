@@ -11,8 +11,10 @@
 //! - Monitoring sensor health and restarting failed sensors
 
 use anyhow::{anyhow, Result};
+use attune_common::artifact_transport::{sync_local_file_to_transport, ArtifactFileTransport};
 use attune_common::models::{
-    runtime::RuntimeExecutionConfig, Id, Sensor, SensorProcess, SensorProcessStatus, Trigger,
+    enums::OwnerType, runtime::RuntimeExecutionConfig, Id, Sensor, SensorProcess,
+    SensorProcessStatus, Trigger,
 };
 use attune_common::mq::{Connection, Publisher, PublisherConfig};
 use attune_common::repositories::{
@@ -20,8 +22,9 @@ use attune_common::repositories::{
         MarkSensorProcessFailedInput, MarkSensorProcessStoppedInput,
         RecordSensorProcessAlertedInput, UpsertSensorProcessStartInput,
     },
-    FindById, List, RuntimeRepository, RuntimeVersionRepository, SensorProcessRepository,
-    SensorRepository, TriggerRepository, WorkerRepository,
+    ArtifactRepository, ArtifactVersionRepository, FindById, List, RuntimeRepository,
+    RuntimeVersionRepository, SensorProcessRepository, SensorRepository, TriggerRepository,
+    WorkerRepository,
 };
 use attune_common::runtime_detection::normalize_runtime_name;
 use attune_common::scheduling::{
@@ -34,11 +37,12 @@ use chrono::Utc;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use std::io;
+#[cfg(test)]
 use std::io::SeekFrom;
-use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+#[cfg(test)]
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::process::{Child, Command};
 use tokio::sync::RwLock;
@@ -158,8 +162,9 @@ fn duration_to_chrono(duration: Duration) -> chrono::Duration {
         .unwrap_or_else(|_| chrono::Duration::seconds(SENSOR_RESTART_MAX_DELAY.as_secs() as i64))
 }
 
+#[cfg(test)]
 async fn read_sensor_stderr_excerpt_from_artifacts_dir(
-    artifacts_dir: &Path,
+    artifacts_dir: &std::path::Path,
     sensor_ref: &str,
 ) -> Option<String> {
     let path = artifacts_dir
@@ -215,13 +220,42 @@ async fn read_sensor_stderr_excerpt_from_artifacts_dir(
         return None;
     }
 
-    let text = String::from_utf8_lossy(&bytes);
+    format_stderr_excerpt(&bytes, start > 0)
+}
+
+async fn read_sensor_stderr_excerpt_from_transport(
+    transport: &dyn ArtifactFileTransport,
+    sensor_ref: &str,
+) -> Option<String> {
+    let relative_path = format!("sensors/{}/stderr.log", sensor_ref);
+    let bytes = match transport.read_file(&relative_path).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            debug!(
+                "No stderr excerpt available for sensor {} from {} transport path {}: {}",
+                sensor_ref,
+                transport.transport_mode(),
+                relative_path,
+                e
+            );
+            return None;
+        }
+    };
+
+    let start = bytes
+        .len()
+        .saturating_sub(STDERR_EXCERPT_MAX_BYTES as usize);
+    format_stderr_excerpt(&bytes[start..], start > 0)
+}
+
+fn format_stderr_excerpt(bytes: &[u8], truncated: bool) -> Option<String> {
+    let text = String::from_utf8_lossy(bytes);
     let mut lines: Vec<&str> = text.lines().rev().take(STDERR_EXCERPT_MAX_LINES).collect();
     lines.reverse();
     let excerpt = lines.join("\n");
     if excerpt.trim().is_empty() {
         None
-    } else if start > 0 {
+    } else if truncated {
         Some(format!("…\n{}", excerpt))
     } else {
         Some(excerpt)
@@ -292,7 +326,8 @@ struct SensorManagerInner {
     running: Arc<RwLock<bool>>,
     packs_base_dir: String,
     runtime_envs_dir: String,
-    artifacts_dir: PathBuf,
+    artifact_transport: Arc<dyn ArtifactFileTransport>,
+    sensor_log_config: crate::sensor_log::SensorLogConfig,
     api_client: ApiClient,
     api_url: String,
     mq_url: String,
@@ -304,7 +339,11 @@ struct SensorManagerInner {
 
 impl SensorManager {
     /// Create a new sensor manager
-    pub fn new(db: PgPool) -> Self {
+    pub fn new(
+        db: PgPool,
+        artifact_transport: Arc<dyn ArtifactFileTransport>,
+        sensor_log_config: crate::sensor_log::SensorLogConfig,
+    ) -> Self {
         // Get packs base directory from config or default
         let packs_base_dir =
             std::env::var("ATTUNE_PACKS_BASE_DIR").unwrap_or_else(|_| "./packs".to_string());
@@ -321,9 +360,6 @@ impl SensorManager {
             .or_else(|_| std::env::var("ATTUNE__RUNTIME_ENVS_DIR"))
             .unwrap_or_else(|_| "/opt/attune/runtime_envs".to_string());
 
-        let artifacts_dir = std::env::var("ATTUNE_ARTIFACTS_DIR")
-            .unwrap_or_else(|_| "/opt/attune/artifacts".to_string());
-
         // Create API client for token provisioning (no admin token - uses internal endpoint)
         let api_client = ApiClient::new(api_url.clone(), None);
 
@@ -334,7 +370,8 @@ impl SensorManager {
                 running: Arc::new(RwLock::new(false)),
                 packs_base_dir,
                 runtime_envs_dir,
-                artifacts_dir: PathBuf::from(artifacts_dir),
+                artifact_transport,
+                sensor_log_config,
                 api_client,
                 api_url,
                 mq_url,
@@ -819,6 +856,10 @@ impl SensorManager {
             .env("ATTUNE_SENSOR_TRIGGERS", &trigger_instances_json)
             .env("ATTUNE_MQ_URL", &self.inner.mq_url)
             .env("ATTUNE_MQ_EXCHANGE", "attune.events")
+            .env(
+                "ATTUNE_ARTIFACTS_DIR",
+                self.inner.artifact_transport.base_dir(),
+            )
             .env("ATTUNE_LOG_LEVEL", "info");
 
         apply_runtime_env_vars(&mut cmd, &exec_config, &pack_dir, env_dir_opt);
@@ -857,38 +898,50 @@ impl SensorManager {
             .ok_or_else(|| anyhow!("Failed to capture sensor stderr"))?;
 
         // Spawn tasks that write to rotating log files AND forward to tracing
-        let log_config = crate::sensor_log::SensorLogConfig::default();
+        let log_config = self
+            .inner
+            .sensor_log_config
+            .with_retention_overrides(sensor.log_retention_policy, sensor.log_retention_limit);
+        // Register sensor log artifacts in DB before the log tasks start so
+        // written segments can be associated with artifact versions.
+        let log_artifacts = match crate::sensor_log::register_sensor_log_artifacts(
+            &self.inner.db,
+            &sensor.r#ref,
+            self.inner.artifact_transport.as_ref(),
+            &log_config,
+        )
+        .await
+        {
+            Ok(artifacts) => Some(artifacts),
+            Err(e) => {
+                warn!(
+                    "Failed to register sensor log artifacts for '{}': {}",
+                    sensor.r#ref, e
+                );
+                None
+            }
+        };
+
         let stdout_handle = crate::sensor_log::spawn_stdout_log_task(
             stdout,
             sensor.r#ref.clone(),
-            self.inner.artifacts_dir.clone(),
+            self.inner.artifact_transport.clone(),
             log_config.clone(),
+            log_artifacts.as_ref().map(|_| self.inner.db.clone()),
+            log_artifacts
+                .as_ref()
+                .map(|artifacts| artifacts.stdout.clone()),
         );
         let stderr_handle = crate::sensor_log::spawn_stderr_log_task(
             stderr,
             sensor.r#ref.clone(),
-            self.inner.artifacts_dir.clone(),
-            log_config,
+            self.inner.artifact_transport.clone(),
+            log_config.clone(),
+            log_artifacts.as_ref().map(|_| self.inner.db.clone()),
+            log_artifacts
+                .as_ref()
+                .map(|artifacts| artifacts.stderr.clone()),
         );
-
-        // Register sensor log artifacts in DB (best-effort)
-        if let Err(e) = crate::sensor_log::register_sensor_log_artifacts(
-            &self.inner.db,
-            &sensor.r#ref,
-            &attune_common::artifact_transport::VolumeTransport::new(
-                self.inner
-                    .artifacts_dir
-                    .to_str()
-                    .unwrap_or("/opt/attune/artifacts"),
-            ),
-        )
-        .await
-        {
-            warn!(
-                "Failed to register sensor log artifacts for '{}': {}",
-                sensor.r#ref, e
-            );
-        }
 
         self.persist_sensor_process_started(&sensor, child.id(), reset_failure_count)
             .await;
@@ -1013,7 +1066,11 @@ impl SensorManager {
     }
 
     async fn read_sensor_stderr_excerpt(&self, sensor_ref: &str) -> Option<String> {
-        read_sensor_stderr_excerpt_from_artifacts_dir(&self.inner.artifacts_dir, sensor_ref).await
+        read_sensor_stderr_excerpt_from_transport(
+            self.inner.artifact_transport.as_ref(),
+            sensor_ref,
+        )
+        .await
     }
 
     async fn sensor_instance_running(&self, sensor_id: Id) -> bool {
@@ -1030,6 +1087,91 @@ impl SensorManager {
 
         let status = status.read().await;
         has_child && status.running && !status.failed
+    }
+
+    async fn sync_sensor_file_artifacts(&self, sensor: &Sensor) {
+        if self.inner.artifact_transport.transport_mode() == "volume" {
+            return;
+        }
+
+        let versions = match ArtifactVersionRepository::find_file_versions_by_scope_and_owner(
+            &self.inner.db,
+            OwnerType::Sensor,
+            &sensor.r#ref,
+        )
+        .await
+        {
+            Ok(versions) => versions,
+            Err(e) => {
+                warn!(
+                    "Failed to list file-backed artifacts for sensor '{}': {}",
+                    sensor.r#ref, e
+                );
+                return;
+            }
+        };
+
+        if versions.is_empty() {
+            return;
+        }
+
+        let artifacts_dir = std::path::Path::new(self.inner.artifact_transport.base_dir());
+        let mut synced_count = 0usize;
+
+        for version in versions {
+            let Some(file_path) = version.file_path.as_deref() else {
+                continue;
+            };
+
+            let size = match sync_local_file_to_transport(
+                artifacts_dir,
+                self.inner.artifact_transport.as_ref(),
+                file_path,
+                version.content_type.as_deref(),
+            )
+            .await
+            {
+                Ok(Some(size)) => size as i64,
+                Ok(None) => continue,
+                Err(e) => {
+                    warn!(
+                        "Failed to copy local sensor artifact '{}' for sensor '{}' to {} transport: {}",
+                        file_path,
+                        sensor.r#ref,
+                        self.inner.artifact_transport.transport_mode(),
+                        e,
+                    );
+                    continue;
+                }
+            };
+
+            if let Err(e) =
+                ArtifactVersionRepository::update_size_bytes(&self.inner.db, version.id, size).await
+            {
+                warn!(
+                    "Failed to update size_bytes for sensor artifact version {}: {}",
+                    version.id, e
+                );
+            }
+            if let Err(e) =
+                ArtifactRepository::update_size_bytes(&self.inner.db, version.artifact, size).await
+            {
+                warn!(
+                    "Failed to update size_bytes for sensor artifact {}: {}",
+                    version.artifact, e
+                );
+            }
+            synced_count += 1;
+        }
+
+        if synced_count > 0 {
+            info!(
+                "Synced {} local file-backed artifact version(s) for sensor '{}' to {} transport",
+                synced_count,
+                sensor.r#ref,
+                self.inner.artifact_transport.transport_mode(),
+            );
+        }
     }
 
     async fn forget_sensor_instance(&self, sensor_id: Id) {
@@ -1372,6 +1514,7 @@ impl SensorManager {
         if let Some(mut instance) = instance {
             let sensor = instance.sensor.clone();
             instance.stop().await;
+            self.sync_sensor_file_artifacts(&sensor).await;
             self.persist_sensor_process_stopped(&sensor).await;
             info!("Sensor {} stopped", sensor_id);
         } else {
@@ -1396,6 +1539,7 @@ impl SensorManager {
                 "Sensor {} exited while manager is stopping; treating as intentional stop",
                 exited.sensor.r#ref
             );
+            self.sync_sensor_file_artifacts(&exited.sensor).await;
             self.persist_sensor_process_stopped(&exited.sensor).await;
             self.forget_sensor_instance(exited.sensor.id).await;
             return;
@@ -1417,6 +1561,7 @@ impl SensorManager {
                 "Sensor {} exited but has no active rules; marking stopped and not restarting",
                 exited.sensor.r#ref
             );
+            self.sync_sensor_file_artifacts(&exited.sensor).await;
             self.persist_sensor_process_stopped(&exited.sensor).await;
             self.forget_sensor_instance(exited.sensor.id).await;
             return;
@@ -1444,6 +1589,7 @@ impl SensorManager {
         .unwrap_or(1);
         let backoff_delay = sensor_restart_backoff_delay(current_failure_count);
         let next_restart_at = Utc::now() + duration_to_chrono(backoff_delay);
+        self.sync_sensor_file_artifacts(&exited.sensor).await;
         let stderr_excerpt = self.read_sensor_stderr_excerpt(&exited.sensor.r#ref).await;
 
         let process = match SensorProcessRepository::mark_failed_or_backoff(
@@ -1808,23 +1954,13 @@ impl SensorManager {
             }
         };
 
-        // Load the sensor
-        let sensors = sqlx::query_as::<_, Sensor>(
-            r#"
-            SELECT
-                id, ref, pack, pack_ref, label, description, entrypoint,
-                runtime, runtime_ref, runtime_version_constraint,
-                enabled, param_schema, config, created, updated
-            FROM sensor
-            WHERE id = $1
-              AND enabled = TRUE
-            "#,
-        )
-        .bind(sensor_id)
-        .fetch_all(&self.inner.db)
-        .await?;
+        // Load the sensor through the repository so column selection stays in
+        // sync with the Sensor model.
+        if let Some(sensor) = SensorRepository::find_by_id(&self.inner.db, sensor_id).await? {
+            if !sensor.enabled {
+                return Ok(());
+            }
 
-        for sensor in sensors {
             // Check if sensor is actively running
             let is_running = self.sensor_instance_running(sensor.id).await;
 
@@ -1838,7 +1974,7 @@ impl SensorManager {
                             "Skipping sensor {} because placement does not match this sensor worker",
                             sensor.r#ref
                         );
-                        continue;
+                        return Ok(());
                     }
                     // Start sensor
                     info!("Starting sensor {} due to rule change", sensor.r#ref);
@@ -1862,7 +1998,7 @@ impl SensorManager {
                         if let Err(e) = self.stop_sensor(sensor.id).await {
                             error!("Failed to stop sensor after placement mismatch: {}", e);
                         }
-                        continue;
+                        return Ok(());
                     }
                     // Restart sensor to pick up new trigger instances
                     info!(
@@ -2500,6 +2636,8 @@ mod tests {
             worker_selector: serde_json::json!({}),
             worker_tolerations: serde_json::json!([]),
             worker_affinity: serde_json::json!({}),
+            log_retention_policy: None,
+            log_retention_limit: None,
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
         };

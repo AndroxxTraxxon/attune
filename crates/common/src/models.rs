@@ -1089,6 +1089,8 @@ pub mod trigger {
         pub worker_tolerations: JsonDict,
         #[sqlx(default)]
         pub worker_affinity: JsonDict,
+        pub log_retention_policy: Option<RetentionPolicyType>,
+        pub log_retention_limit: Option<i32>,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
     }
@@ -1168,6 +1170,8 @@ pub mod action {
         pub accesses_mcp: bool,
         #[sqlx(default)]
         pub default_execution_permission_set_refs: Vec<String>,
+        pub log_retention_policy: Option<RetentionPolicyType>,
+        pub log_retention_limit: Option<i32>,
         #[sqlx(default)]
         pub parameter_delivery: ParameterDelivery,
         #[sqlx(default)]

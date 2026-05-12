@@ -39,7 +39,7 @@ use sqlx::PgPool;
 use tracing::{debug, info, warn};
 
 use crate::error::{Error, Result};
-use crate::models::Id;
+use crate::models::{Id, RetentionPolicyType};
 use crate::queue_definition::parse_work_queue_definition_yaml;
 use crate::repositories::action::{ActionRepository, UpdateActionInput};
 use crate::repositories::identity::{
@@ -1032,6 +1032,9 @@ impl<'a> PackComponentLoader<'a> {
                         .collect()
                 })
                 .unwrap_or_default();
+            let log_retention_policy =
+                parse_log_retention_policy(data.get("log_retention_policy"))?;
+            let log_retention_limit = parse_log_retention_limit(data.get("log_retention_limit"))?;
 
             // Check if action already exists — update in place if so
             if let Some(existing) = ActionRepository::find_by_ref(self.pool, &action_ref).await? {
@@ -1060,6 +1063,14 @@ impl<'a> PackComponentLoader<'a> {
                     default_execution_permission_set_refs: Some(
                         default_execution_permission_set_refs.clone(),
                     ),
+                    log_retention_policy: Some(match log_retention_policy {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
+                    log_retention_limit: Some(match log_retention_limit {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
                 };
 
                 match ActionRepository::update(self.pool, existing.id, update_input).await {
@@ -1099,9 +1110,10 @@ impl<'a> PackComponentLoader<'a> {
                     runtime, runtime_version_constraint, required_worker_runtimes,
                     worker_selector, worker_tolerations, worker_affinity,
                     param_schema, out_schema, is_adhoc, parameter_delivery, parameter_format,
-                    output_format, accesses_mcp, default_execution_permission_set_refs
+                    output_format, accesses_mcp, default_execution_permission_set_refs,
+                    log_retention_policy, log_retention_limit
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
                 RETURNING id
                 "#,
             )
@@ -1125,6 +1137,8 @@ impl<'a> PackComponentLoader<'a> {
             .bind(&output_format)
             .bind(accesses_mcp)
             .bind(&default_execution_permission_set_refs)
+            .bind(log_retention_policy)
+            .bind(log_retention_limit)
             .fetch_one(self.pool)
             .await;
 
@@ -1805,6 +1819,9 @@ impl<'a> PackComponentLoader<'a> {
                 .get("worker_affinity")
                 .map(|value| serde_json::to_value(value).unwrap_or_else(|_| serde_json::json!({})))
                 .unwrap_or_else(|| serde_json::json!({}));
+            let log_retention_policy =
+                parse_log_retention_policy(data.get("log_retention_policy"))?;
+            let log_retention_limit = parse_log_retention_limit(data.get("log_retention_limit"))?;
 
             // Upsert: update existing sensors so re-registration corrects
             // stale metadata (especially runtime assignments).
@@ -1831,6 +1848,14 @@ impl<'a> PackComponentLoader<'a> {
                     worker_selector: Some(worker_selector.clone()),
                     worker_tolerations: Some(worker_tolerations.clone()),
                     worker_affinity: Some(worker_affinity.clone()),
+                    log_retention_policy: Some(match log_retention_policy {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
+                    log_retention_limit: Some(match log_retention_limit {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
                 };
 
                 match SensorRepository::update(self.pool, existing.id, update_input).await {
@@ -1869,6 +1894,8 @@ impl<'a> PackComponentLoader<'a> {
                 worker_selector,
                 worker_tolerations,
                 worker_affinity,
+                log_retention_policy,
+                log_retention_limit,
             };
 
             match SensorRepository::create(self.pool, input).await {
@@ -2298,6 +2325,33 @@ fn qualify_pack_ref(pack_ref: &str, r: &str) -> String {
     } else {
         format!("{pack_ref}.{r}")
     }
+}
+
+fn parse_log_retention_policy(
+    value: Option<&serde_yaml_ng::Value>,
+) -> Result<Option<RetentionPolicyType>> {
+    value
+        .map(|value| {
+            let json = serde_json::to_value(value).map_err(|e| {
+                Error::validation(format!("Invalid log_retention_policy value: {}", e))
+            })?;
+            serde_json::from_value(json).map_err(|e| {
+                Error::validation(format!("Invalid log_retention_policy value: {}", e))
+            })
+        })
+        .transpose()
+}
+
+fn parse_log_retention_limit(value: Option<&serde_yaml_ng::Value>) -> Result<Option<i32>> {
+    value
+        .map(|value| {
+            let json = serde_json::to_value(value).map_err(|e| {
+                Error::validation(format!("Invalid log_retention_limit value: {}", e))
+            })?;
+            serde_json::from_value(json)
+                .map_err(|e| Error::validation(format!("Invalid log_retention_limit value: {}", e)))
+        })
+        .transpose()
 }
 
 /// Generate a human-readable label from a snake_case name.

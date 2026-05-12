@@ -104,7 +104,7 @@ export default function LiveStreamControl({
 
       {showRetentionHint && (
         <span className="text-xs text-gray-500">
-          Retains latest {maxItems.toLocaleString()} {itemLabel}
+          Showing latest {maxItems.toLocaleString()} {itemLabel}
         </span>
       )}
     </div>

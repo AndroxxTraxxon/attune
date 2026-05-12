@@ -10,7 +10,10 @@
 
 use std::sync::Arc;
 
-use attune_common::repositories::{artifact::ArtifactRepository, FindByRef};
+use attune_common::repositories::{
+    artifact::{ArtifactRepository, ArtifactVersionRepository},
+    FindByRef,
+};
 use axum::{
     extract::{Path, Query, State},
     response::IntoResponse,
@@ -18,7 +21,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     auth::middleware::RequireAuth,
@@ -131,21 +134,15 @@ async fn get_sensor_log(
         artifact_ref, artifact.id
     );
 
-    let log_path = std::path::Path::new(&state.config.artifacts_dir)
-        .join("sensors")
-        .join(&sensor_ref)
-        .join(format!("{}.log", stream));
-
-    let mut content = match tokio::fs::read_to_string(&log_path).await {
-        Ok(content) => content,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => {
-            return Err(ApiError::InternalServerError(format!(
-                "Failed to read sensor log: {}",
-                e
-            )));
-        }
-    };
+    let mut content = read_sensor_log_content(
+        &state.config.artifacts_dir,
+        artifact.id,
+        &sensor_ref,
+        &stream,
+        query.tail,
+        &state.db,
+    )
+    .await?;
 
     if let Some(tail) = query.tail.filter(|tail| *tail > 0) {
         let lines = content.lines().collect::<Vec<_>>();
@@ -162,4 +159,109 @@ async fn get_sensor_log(
         )],
         content,
     ))
+}
+
+async fn read_sensor_log_content(
+    artifacts_dir: &str,
+    artifact_id: i64,
+    sensor_ref: &str,
+    stream: &str,
+    tail: Option<usize>,
+    pool: &sqlx::PgPool,
+) -> ApiResult<String> {
+    let mut versions = ArtifactVersionRepository::list_by_artifact(pool, artifact_id).await?;
+    versions.retain(|version| version.file_path.is_some());
+
+    if !versions.is_empty() {
+        let mut chunks = Vec::new();
+        if tail.filter(|tail| *tail > 0).is_some() {
+            let mut line_count = 0usize;
+            for version in versions.iter() {
+                if let Some(content) =
+                    read_log_file_path(artifacts_dir, version.file_path.as_deref().unwrap()).await?
+                {
+                    line_count += content.lines().count();
+                    chunks.push(content);
+                    if line_count >= tail.unwrap_or(0) {
+                        break;
+                    }
+                }
+            }
+            chunks.reverse();
+        } else {
+            versions.reverse();
+            for version in versions {
+                if let Some(content) =
+                    read_log_file_path(artifacts_dir, version.file_path.as_deref().unwrap()).await?
+                {
+                    chunks.push(content);
+                }
+            }
+        }
+
+        if !chunks.is_empty() {
+            return Ok(join_log_chunks(chunks));
+        }
+    }
+
+    let legacy_path = std::path::Path::new(artifacts_dir)
+        .join("sensors")
+        .join(sensor_ref)
+        .join(format!("{}.log", stream));
+
+    match tokio::fs::read(&legacy_path).await {
+        Ok(content) => Ok(String::from_utf8_lossy(&content).into_owned()),
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+            ) =>
+        {
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                warn!(
+                    "Skipping unreadable legacy sensor log '{}': {}",
+                    legacy_path.display(),
+                    e
+                );
+            }
+            Ok(String::new())
+        }
+        Err(e) => Err(ApiError::InternalServerError(format!(
+            "Failed to read sensor log: {}",
+            e
+        ))),
+    }
+}
+
+async fn read_log_file_path(artifacts_dir: &str, file_path: &str) -> ApiResult<Option<String>> {
+    let path = std::path::Path::new(artifacts_dir).join(file_path);
+    match tokio::fs::read(&path).await {
+        Ok(content) => Ok(Some(String::from_utf8_lossy(&content).into_owned())),
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+            ) =>
+        {
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                warn!("Skipping unreadable sensor log '{}': {}", path.display(), e);
+            }
+            Ok(None)
+        }
+        Err(e) => Err(ApiError::InternalServerError(format!(
+            "Failed to read sensor log '{}': {}",
+            file_path, e
+        ))),
+    }
+}
+
+fn join_log_chunks(chunks: Vec<String>) -> String {
+    let mut content = String::new();
+    for chunk in chunks {
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(&chunk);
+    }
+    content
 }

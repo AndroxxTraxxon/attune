@@ -8,24 +8,7 @@ use crate::Result;
 use sqlx::{Executor, PgConnection, PgPool, Postgres, QueryBuilder};
 use tokio::time::{sleep, Duration};
 
-use super::{Create, Delete, FindById, List, Repository, Update};
-
-fn escape_like_pattern_component(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_")
-}
-
-fn wildcard_ref_filter_pattern(filter: &str) -> Option<String> {
-    filter
-        .strip_suffix(".*")
-        .filter(|prefix| !prefix.is_empty())
-        .map(|prefix| {
-            let escaped_prefix = escape_like_pattern_component(prefix);
-            format!("{escaped_prefix}.%")
-        })
-}
+use super::{ref_filter_like_pattern, Create, Delete, FindById, List, Repository, Update};
 
 fn needs_enforcement_join(filters: &ExecutionSearchFilters) -> bool {
     filters.rule_ref.is_some() || filters.trigger_ref.is_some()
@@ -1299,14 +1282,15 @@ impl ExecutionRepository {
             push_condition!("e.status = ", *status);
         }
         if let Some(action_ref) = &filters.action_ref {
-            if let Some(pattern) = wildcard_ref_filter_pattern(action_ref) {
+            if let Some(pattern) = ref_filter_like_pattern(action_ref) {
                 push_like_condition!("e.action_ref LIKE ", pattern);
             } else {
                 push_condition!("e.action_ref = ", action_ref.clone());
             }
         }
         if let Some(pack_name) = &filters.pack_name {
-            let pattern = format!("{}.%", escape_like_pattern_component(pack_name));
+            let pattern = ref_filter_like_pattern(&format!("{pack_name}.*"))
+                .expect("pack wildcard pattern contains '*'");
             push_like_condition!("e.action_ref LIKE ", pattern);
         }
         if let Some(enforcement_id) = filters.enforcement {
@@ -1322,14 +1306,14 @@ impl ExecutionRepository {
             push_condition!("e.executor = ", executor_id);
         }
         if let Some(rule_ref) = &filters.rule_ref {
-            if let Some(pattern) = wildcard_ref_filter_pattern(rule_ref) {
+            if let Some(pattern) = ref_filter_like_pattern(rule_ref) {
                 push_like_condition!("enf.rule_ref LIKE ", pattern);
             } else {
                 push_condition!("enf.rule_ref = ", rule_ref.clone());
             }
         }
         if let Some(trigger_ref) = &filters.trigger_ref {
-            if let Some(pattern) = wildcard_ref_filter_pattern(trigger_ref) {
+            if let Some(pattern) = ref_filter_like_pattern(trigger_ref) {
                 push_like_condition!("enf.trigger_ref LIKE ", pattern);
             } else {
                 push_condition!("enf.trigger_ref = ", trigger_ref.clone());

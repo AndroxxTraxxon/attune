@@ -182,6 +182,8 @@ async fn test_create_sensor_duplicate_ref_fails() {
         worker_selector: json!({}),
         worker_tolerations: json!([]),
         worker_affinity: json!({}),
+        log_retention_policy: None,
+        log_retention_limit: None,
     };
 
     SensorRepository::create(&pool, input.clone())
@@ -239,6 +241,8 @@ async fn test_create_sensor_invalid_ref_format_fails() {
             worker_selector: json!({}),
             worker_tolerations: json!([]),
             worker_affinity: json!({}),
+            log_retention_policy: None,
+            log_retention_limit: None,
         };
 
         let result = SensorRepository::create(&pool, input).await;
@@ -281,6 +285,8 @@ async fn test_create_sensor_invalid_pack_fails() {
         worker_selector: json!({}),
         worker_tolerations: json!([]),
         worker_affinity: json!({}),
+        log_retention_policy: None,
+        log_retention_limit: None,
     };
 
     let result = SensorRepository::create(&pool, input).await;
@@ -309,6 +315,8 @@ async fn test_create_sensor_invalid_runtime_fails() {
         worker_selector: json!({}),
         worker_tolerations: json!([]),
         worker_affinity: json!({}),
+        log_retention_policy: None,
+        log_retention_limit: None,
     };
 
     let result = SensorRepository::create(&pool, input).await;

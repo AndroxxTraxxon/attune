@@ -2,7 +2,7 @@
 //!
 //! This module provides CRUD operations and queries for Trigger and Sensor entities.
 
-use crate::models::{trigger::*, Id, JsonDict, JsonSchema};
+use crate::models::{trigger::*, Id, JsonDict, JsonSchema, RetentionPolicyType};
 use crate::Result;
 use serde_json::Value as JsonValue;
 use sqlx::{Executor, Postgres, QueryBuilder};
@@ -772,7 +772,17 @@ impl Repository for SensorRepository {
 
 const SENSOR_SELECT_COLUMNS: &str = "id, ref, pack, pack_ref, label, description, entrypoint, \
      runtime, runtime_ref, runtime_version_constraint, enabled, param_schema, config, \
-     worker_selector, worker_tolerations, worker_affinity, created, updated";
+     worker_selector, worker_tolerations, worker_affinity, log_retention_policy, \
+     log_retention_limit, created, updated";
+
+fn validate_log_retention_limit(limit: i32) -> Result<()> {
+    if limit <= 0 {
+        return Err(crate::Error::validation(
+            "log_retention_limit must be greater than zero",
+        ));
+    }
+    Ok(())
+}
 
 /// Input for creating a new sensor
 #[derive(Debug, Clone)]
@@ -792,6 +802,8 @@ pub struct CreateSensorInput {
     pub worker_selector: JsonDict,
     pub worker_tolerations: JsonDict,
     pub worker_affinity: JsonDict,
+    pub log_retention_policy: Option<RetentionPolicyType>,
+    pub log_retention_limit: Option<i32>,
 }
 
 /// Input for updating a sensor
@@ -809,6 +821,8 @@ pub struct UpdateSensorInput {
     pub worker_selector: Option<JsonDict>,
     pub worker_tolerations: Option<JsonDict>,
     pub worker_affinity: Option<JsonDict>,
+    pub log_retention_policy: Option<Patch<RetentionPolicyType>>,
+    pub log_retention_limit: Option<Patch<i32>>,
 }
 
 #[async_trait::async_trait]
@@ -869,11 +883,16 @@ impl Create for SensorRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
+        if let Some(limit) = input.log_retention_limit {
+            validate_log_retention_limit(limit)?;
+        }
+
         let sensor = sqlx::query_as::<_, Sensor>(&format!(
             "INSERT INTO sensor (ref, pack, pack_ref, label, description, entrypoint, \
                  runtime, runtime_ref, runtime_version_constraint, enabled, param_schema, config, \
-                 worker_selector, worker_tolerations, worker_affinity) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+                 worker_selector, worker_tolerations, worker_affinity, log_retention_policy, \
+                 log_retention_limit) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
                  RETURNING {SENSOR_SELECT_COLUMNS}"
         ))
         .bind(&input.r#ref)
@@ -891,6 +910,8 @@ impl Create for SensorRepository {
         .bind(&input.worker_selector)
         .bind(&input.worker_tolerations)
         .bind(&input.worker_affinity)
+        .bind(input.log_retention_policy)
+        .bind(input.log_retention_limit)
         .fetch_one(executor)
         .await?;
 
@@ -906,6 +927,10 @@ impl Update for SensorRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
+        if let Some(Patch::Set(limit)) = &input.log_retention_limit {
+            validate_log_retention_limit(*limit)?;
+        }
+
         // Build update query
 
         let mut query = QueryBuilder::new("UPDATE sensor SET ");
@@ -1025,6 +1050,30 @@ impl Update for SensorRepository {
             has_updates = true;
         }
 
+        if let Some(log_retention_policy) = input.log_retention_policy {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("log_retention_policy = ");
+            match log_retention_policy {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<RetentionPolicyType>::None),
+            };
+            has_updates = true;
+        }
+
+        if let Some(log_retention_limit) = input.log_retention_limit {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("log_retention_limit = ");
+            match log_retention_limit {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<i32>::None),
+            };
+            has_updates = true;
+        }
+
         if !has_updates {
             // No updates requested, fetch and return existing entity
             return Self::get_by_id(executor, id).await;
@@ -1095,7 +1144,7 @@ impl SensorRepository {
     where
         E: Executor<'e, Database = Postgres> + Copy + 'e,
     {
-        let select_cols = "id, ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_ref, runtime_version_constraint, enabled, param_schema, config, created, updated";
+        let select_cols = SENSOR_SELECT_COLUMNS;
 
         let mut qb: QueryBuilder<'_, Postgres> =
             QueryBuilder::new(format!("SELECT {select_cols} FROM sensor"));
@@ -1152,17 +1201,9 @@ impl SensorRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let sensors = sqlx::query_as::<_, Sensor>(
-            r#"
-            SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_ref, runtime_version_constraint,
-                   enabled,
-                   param_schema, config, created, updated
-            FROM sensor
-            WHERE enabled = true
-            ORDER BY ref ASC
-            "#,
-        )
+        let sensors = sqlx::query_as::<_, Sensor>(&format!(
+            "SELECT {SENSOR_SELECT_COLUMNS} FROM sensor WHERE enabled = true ORDER BY ref ASC"
+        ))
         .fetch_all(executor)
         .await?;
 
@@ -1174,17 +1215,9 @@ impl SensorRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let sensors = sqlx::query_as::<_, Sensor>(
-            r#"
-            SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_ref, runtime_version_constraint,
-                   enabled,
-                   param_schema, config, created, updated
-            FROM sensor
-            WHERE pack = $1
-            ORDER BY ref ASC
-            "#,
-        )
+        let sensors = sqlx::query_as::<_, Sensor>(&format!(
+            "SELECT {SENSOR_SELECT_COLUMNS} FROM sensor WHERE pack = $1 ORDER BY ref ASC"
+        ))
         .bind(pack_id)
         .fetch_all(executor)
         .await?;

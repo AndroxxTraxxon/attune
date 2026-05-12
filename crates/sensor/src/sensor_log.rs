@@ -4,74 +4,130 @@
 //! size-based rotation. Log output is both written to files and forwarded
 //! to tracing for centralized observability.
 //!
-//! Log file layout:
-//!   {artifacts_dir}/sensors/{sensor_ref}/stdout.log   (current)
-//!   {artifacts_dir}/sensors/{sensor_ref}/stdout.log.1 (previous)
-//!   {artifacts_dir}/sensors/{sensor_ref}/stdout.log.2 (older)
-//!   ...
-//!   {artifacts_dir}/sensors/{sensor_ref}/stderr.log
-//!   {artifacts_dir}/sensors/{sensor_ref}/stderr.log.1
-//!   ...
+//! Sensor logs normally use file-backed artifact versions, with one version per
+//! active/rotated segment. A legacy raw-file layout under
+//! `{artifacts_dir}/sensors/{sensor_ref}/` is still supported as a fallback when
+//! artifact registration is unavailable.
 
-use std::path::{Path, PathBuf};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use std::collections::HashSet;
+use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::ChildStdout;
 use tracing::{info, warn};
 
 use attune_common::artifact_transport::ArtifactFileTransport;
+use attune_common::models::enums::RetentionPolicyType;
+use attune_common::repositories::artifact::{ArtifactRepository, ArtifactVersionRepository};
 
 /// Configuration for sensor log rotation.
 #[derive(Debug, Clone)]
 pub struct SensorLogConfig {
     /// Maximum bytes per log file before rotation.
     pub max_bytes: u64,
-    /// Number of rotated files to keep (e.g., 5 → stdout.log.1 through .5).
+    /// Number of legacy raw rotated files to keep when artifact versioning is unavailable.
     pub max_files: u32,
+    /// Retention policy for registered sensor log artifact versions.
+    pub retention_policy: RetentionPolicyType,
+    /// Retention limit for registered sensor log artifact versions.
+    pub retention_limit: i32,
 }
 
 impl Default for SensorLogConfig {
     fn default() -> Self {
         Self {
             max_bytes: 10 * 1024 * 1024, // 10 MB
-            max_files: 5,
+            max_files: 4,
+            retention_policy: RetentionPolicyType::Versions,
+            retention_limit: 4,
+        }
+    }
+}
+
+impl SensorLogConfig {
+    pub fn with_retention_overrides(
+        &self,
+        retention_policy: Option<RetentionPolicyType>,
+        retention_limit: Option<i32>,
+    ) -> Self {
+        Self {
+            retention_policy: retention_policy.unwrap_or(self.retention_policy),
+            retention_limit: retention_limit.unwrap_or(self.retention_limit),
+            ..self.clone()
         }
     }
 }
 
 /// A rotating log file writer for a single sensor stream (stdout or stderr).
 ///
-/// Writes to a local file and rotates when the current file exceeds
-/// `max_bytes`. Rotation renames `log → log.1 → log.2 → ...`, deleting
-/// the oldest file when `max_files` is exceeded.
+/// Writes through the artifact file transport and rotates when the current
+/// file exceeds `max_bytes`.
 pub struct RotatingLogWriter {
     /// Relative path within artifacts_dir (e.g., `sensors/core.timer/stdout.log`).
     relative_path: String,
-    /// Absolute path for direct file I/O (volume transport) or staging.
-    abs_path: PathBuf,
-    /// Current file handle (lazy open on first write).
-    file: Option<tokio::fs::File>,
+    /// File transport used to persist log bytes.
+    transport: Arc<dyn ArtifactFileTransport>,
     /// Current file size in bytes.
     current_size: u64,
+    /// Whether `current_size` has been initialized from the transport.
+    size_initialized: bool,
     /// Rotation config.
     config: SensorLogConfig,
+    /// Optional artifact version target. When present, each rotated segment is
+    /// stored as a file-backed artifact version instead of a legacy `.N` file.
+    versioning: Option<SensorLogVersioning>,
+    active_version_id: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SensorLogArtifactTarget {
+    artifact_id: i64,
+    artifact_ref: String,
+    sensor_ref: String,
+    stream: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SensorLogArtifacts {
+    pub stdout: SensorLogArtifactTarget,
+    pub stderr: SensorLogArtifactTarget,
+}
+
+#[derive(Debug, Clone)]
+struct SensorLogVersioning {
+    pool: sqlx::PgPool,
+    target: SensorLogArtifactTarget,
 }
 
 impl RotatingLogWriter {
     pub fn new(
-        artifacts_dir: &Path,
+        transport: Arc<dyn ArtifactFileTransport>,
         sensor_ref: &str,
         stream: &str,
         config: SensorLogConfig,
     ) -> Self {
         let relative_path = format!("sensors/{}/{}.log", sensor_ref, stream);
-        let abs_path = artifacts_dir.join(&relative_path);
         Self {
             relative_path,
-            abs_path,
-            file: None,
+            transport,
             current_size: 0,
+            size_initialized: false,
             config,
+            versioning: None,
+            active_version_id: None,
         }
+    }
+
+    pub fn new_versioned(
+        transport: Arc<dyn ArtifactFileTransport>,
+        sensor_ref: &str,
+        stream: &str,
+        config: SensorLogConfig,
+        pool: sqlx::PgPool,
+        target: SensorLogArtifactTarget,
+    ) -> Self {
+        let mut writer = Self::new(transport, sensor_ref, stream, config);
+        writer.versioning = Some(SensorLogVersioning { pool, target });
+        writer
     }
 
     /// Relative path within the artifacts directory.
@@ -79,87 +135,193 @@ impl RotatingLogWriter {
         &self.relative_path
     }
 
-    async fn ensure_open(&mut self) -> std::io::Result<&mut tokio::fs::File> {
-        if self.file.is_none() {
-            if let Some(parent) = self.abs_path.parent() {
-                attune_common::utils::create_shared_dir_all(parent).await?;
+    async fn ensure_current_size(&mut self) -> anyhow::Result<()> {
+        if !self.size_initialized {
+            if self.versioning.is_some() && self.active_version_id.is_none() {
+                self.allocate_new_version_file().await?;
             }
-            // Check existing file size on re-open (sensor restart)
-            match tokio::fs::metadata(&self.abs_path).await {
-                Ok(meta) => {
-                    self.current_size = meta.len();
-                    let file = tokio::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&self.abs_path)
-                        .await?;
-                    self.file = Some(file);
-                }
-                Err(_) => {
-                    self.current_size = 0;
-                    let file = tokio::fs::OpenOptions::new()
-                        .create(true)
-                        .write(true)
-                        .truncate(true)
-                        .open(&self.abs_path)
-                        .await?;
-                    self.file = Some(file);
-                }
-            }
-        }
-        Ok(self.file.as_mut().unwrap())
-    }
-
-    /// Write a line to the log file, rotating if needed.
-    pub async fn write_line(&mut self, line: &[u8]) -> std::io::Result<()> {
-        if self.current_size + line.len() as u64 > self.config.max_bytes {
-            self.rotate().await?;
-        }
-
-        {
-            let file = self.ensure_open().await?;
-            file.write_all(line).await?;
-            if !line.ends_with(b"\n") {
-                file.write_all(b"\n").await?;
-            }
-            file.flush().await?;
-        }
-        self.current_size += line.len() as u64;
-        if !line.ends_with(b"\n") {
-            self.current_size += 1;
+            self.current_size = self
+                .transport
+                .file_size(&self.relative_path)
+                .await?
+                .unwrap_or(0);
+            self.size_initialized = true;
         }
         Ok(())
     }
 
-    async fn rotate(&mut self) -> std::io::Result<()> {
-        // Close current file
-        self.file = None;
-        self.current_size = 0;
+    /// Write a line to the log file, rotating if needed.
+    pub async fn write_line(&mut self, line: &[u8]) -> anyhow::Result<()> {
+        self.ensure_current_size().await?;
 
-        // Shift existing rotated files: .N → .N+1
-        // Delete the oldest if it exceeds max_files
-        for i in (1..self.config.max_files).rev() {
-            let from = format!("{}.{}", self.abs_path.display(), i);
-            let to = format!("{}.{}", self.abs_path.display(), i + 1);
-            let _ = tokio::fs::rename(&from, &to).await;
+        let newline_len = if line.ends_with(b"\n") { 0 } else { 1 };
+        let bytes_to_write = line.len() as u64 + newline_len;
+
+        if self.current_size > 0
+            && self.current_size + bytes_to_write > self.config.max_bytes
+            && self.config.max_files > 0
+        {
+            self.rotate().await?;
         }
 
-        // Delete the file that would exceed max_files
-        let overflow = format!("{}.{}", self.abs_path.display(), self.config.max_files + 1);
-        let _ = tokio::fs::remove_file(&overflow).await;
+        if line.ends_with(b"\n") {
+            self.transport
+                .append_file(&self.relative_path, line)
+                .await?;
+        } else {
+            let mut bytes = Vec::with_capacity(line.len() + 1);
+            bytes.extend_from_slice(line);
+            bytes.push(b'\n');
+            self.transport
+                .append_file(&self.relative_path, &bytes)
+                .await?;
+        }
 
-        // Current → .1
-        let first_rotated = format!("{}.1", self.abs_path.display());
-        let _ = tokio::fs::rename(&self.abs_path, &first_rotated).await;
+        self.current_size += bytes_to_write;
+        Ok(())
+    }
 
+    async fn rotate(&mut self) -> anyhow::Result<()> {
+        if self.versioning.is_some() {
+            self.finalize_active_version_size().await?;
+            self.allocate_new_version_file().await?;
+            return Ok(());
+        }
+
+        // Shift existing rotated files: .N -> .N+1, deleting the oldest.
+        for i in (1..=self.config.max_files).rev() {
+            let from = format!("{}.{}", self.relative_path, i);
+            if i == self.config.max_files {
+                if let Err(e) = self.transport.delete_file(&from).await {
+                    warn!("Failed to delete old sensor log '{}': {}", from, e);
+                }
+                continue;
+            }
+
+            if self.transport.file_exists(&from).await.unwrap_or(false) {
+                let to = format!("{}.{}", self.relative_path, i + 1);
+                if let Err(e) = self.transport.rename_file(&from, &to).await {
+                    warn!("Failed to rotate sensor log '{}' to '{}': {}", from, to, e);
+                }
+            }
+        }
+
+        // Current -> .1
+        if self
+            .transport
+            .file_exists(&self.relative_path)
+            .await
+            .unwrap_or(false)
+        {
+            let first_rotated = format!("{}.1", self.relative_path);
+            if let Err(e) = self
+                .transport
+                .rename_file(&self.relative_path, &first_rotated)
+                .await
+            {
+                warn!(
+                    "Failed to rotate sensor log '{}' to '{}': {}",
+                    self.relative_path, first_rotated, e
+                );
+            }
+        }
+
+        self.current_size = 0;
         Ok(())
     }
 
     /// Flush and close the underlying file.
     pub async fn close(&mut self) {
-        if let Some(mut f) = self.file.take() {
-            let _ = f.flush().await;
+        if let Err(e) = self.finalize_active_version_size().await {
+            warn!(
+                "Failed to finalize sensor log artifact version '{}': {}",
+                self.relative_path, e
+            );
         }
+    }
+
+    async fn allocate_new_version_file(&mut self) -> anyhow::Result<()> {
+        let Some(versioning) = self.versioning.as_ref() else {
+            return Ok(());
+        };
+
+        let before_versions = ArtifactVersionRepository::find_file_versions_by_artifact(
+            &versioning.pool,
+            versioning.target.artifact_id,
+        )
+        .await?;
+
+        let version = ArtifactVersionRepository::create_file_backed(
+            &versioning.pool,
+            versioning.target.artifact_id,
+            &versioning.target.artifact_ref,
+            "text/plain".to_string(),
+            None,
+            Some(serde_json::json!({
+                "sensor_ref": versioning.target.sensor_ref,
+                "stream": versioning.target.stream,
+            })),
+            Some("sensor".to_string()),
+        )
+        .await?;
+
+        let file_path = version
+            .file_path
+            .ok_or_else(|| anyhow::anyhow!("Allocated sensor log version has no file_path"))?;
+
+        self.transport.ensure_parent_dirs(&file_path).await?;
+
+        let after_versions = ArtifactVersionRepository::find_file_versions_by_artifact(
+            &versioning.pool,
+            versioning.target.artifact_id,
+        )
+        .await?;
+        let retained_paths: HashSet<String> = after_versions
+            .iter()
+            .filter_map(|version| version.file_path.clone())
+            .collect();
+
+        for stale_path in before_versions
+            .into_iter()
+            .filter_map(|version| version.file_path)
+            .filter(|path| !retained_paths.contains(path))
+        {
+            if let Err(e) = self.transport.delete_file(&stale_path).await {
+                warn!(
+                    "Failed to delete stale retained sensor log file '{}': {}",
+                    stale_path, e
+                );
+            }
+        }
+
+        self.relative_path = file_path;
+        self.active_version_id = Some(version.id);
+        self.current_size = 0;
+        self.size_initialized = true;
+        Ok(())
+    }
+
+    async fn finalize_active_version_size(&self) -> anyhow::Result<()> {
+        let (Some(versioning), Some(version_id)) =
+            (self.versioning.as_ref(), self.active_version_id)
+        else {
+            return Ok(());
+        };
+
+        let Some(size_bytes) = self.transport.file_size(&self.relative_path).await? else {
+            return Ok(());
+        };
+        let size_bytes = size_bytes as i64;
+
+        ArtifactVersionRepository::update_size_bytes(&versioning.pool, version_id, size_bytes)
+            .await?;
+        ArtifactRepository::update_size_bytes(
+            &versioning.pool,
+            versioning.target.artifact_id,
+            size_bytes,
+        )
+        .await?;
+        Ok(())
     }
 }
 
@@ -168,11 +330,23 @@ impl RotatingLogWriter {
 pub fn spawn_stdout_log_task(
     stdout: ChildStdout,
     sensor_ref: String,
-    artifacts_dir: PathBuf,
+    transport: Arc<dyn ArtifactFileTransport>,
     log_config: SensorLogConfig,
+    pool: Option<sqlx::PgPool>,
+    artifact_target: Option<SensorLogArtifactTarget>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut writer = RotatingLogWriter::new(&artifacts_dir, &sensor_ref, "stdout", log_config);
+        let mut writer = match (pool, artifact_target) {
+            (Some(pool), Some(target)) => RotatingLogWriter::new_versioned(
+                transport,
+                &sensor_ref,
+                "stdout",
+                log_config,
+                pool,
+                target,
+            ),
+            _ => RotatingLogWriter::new(transport, &sensor_ref, "stdout", log_config),
+        };
         let mut reader = BufReader::new(stdout).lines();
 
         while let Ok(Some(line)) = reader.next_line().await {
@@ -192,11 +366,23 @@ pub fn spawn_stdout_log_task(
 pub fn spawn_stderr_log_task(
     stderr: tokio::process::ChildStderr,
     sensor_ref: String,
-    artifacts_dir: PathBuf,
+    transport: Arc<dyn ArtifactFileTransport>,
     log_config: SensorLogConfig,
+    pool: Option<sqlx::PgPool>,
+    artifact_target: Option<SensorLogArtifactTarget>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut writer = RotatingLogWriter::new(&artifacts_dir, &sensor_ref, "stderr", log_config);
+        let mut writer = match (pool, artifact_target) {
+            (Some(pool), Some(target)) => RotatingLogWriter::new_versioned(
+                transport,
+                &sensor_ref,
+                "stderr",
+                log_config,
+                pool,
+                target,
+            ),
+            _ => RotatingLogWriter::new(transport, &sensor_ref, "stderr", log_config),
+        };
         let mut reader = BufReader::new(stderr).lines();
 
         while let Ok(Some(line)) = reader.next_line().await {
@@ -217,55 +403,111 @@ pub async fn register_sensor_log_artifacts(
     pool: &sqlx::PgPool,
     sensor_ref: &str,
     _transport: &dyn ArtifactFileTransport,
-) -> anyhow::Result<()> {
-    use attune_common::models::enums::{
-        ArtifactType, ArtifactVisibility, OwnerType, RetentionPolicyType,
+    log_config: &SensorLogConfig,
+) -> anyhow::Result<SensorLogArtifacts> {
+    use attune_common::models::enums::{ArtifactType, ArtifactVisibility, OwnerType};
+    use attune_common::repositories::artifact::{
+        ArtifactRepository, CreateArtifactInput, UpdateArtifactInput,
     };
-    use attune_common::repositories::artifact::{ArtifactRepository, CreateArtifactInput};
-    use attune_common::repositories::{Create, FindByRef};
+    use attune_common::repositories::{Create, FindByRef, Update};
+
+    let mut stdout = None;
+    let mut stderr = None;
 
     for stream in &["stdout", "stderr"] {
         let artifact_ref = format!("sensor.{}.{}", sensor_ref, stream);
-        // Only create if it doesn't already exist
-        if attune_common::repositories::artifact::ArtifactRepository::find_by_ref(
-            pool,
-            &artifact_ref,
-        )
-        .await?
-        .is_some()
+        let artifact = if let Some(existing) =
+            attune_common::repositories::artifact::ArtifactRepository::find_by_ref(
+                pool,
+                &artifact_ref,
+            )
+            .await?
         {
-            continue;
-        }
+            if existing.retention_policy != log_config.retention_policy
+                || existing.retention_limit != log_config.retention_limit
+            {
+                ArtifactRepository::update(
+                    pool,
+                    existing.id,
+                    UpdateArtifactInput {
+                        retention_policy: Some(log_config.retention_policy),
+                        retention_limit: Some(log_config.retention_limit),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            }
+            existing
+        } else {
+            ArtifactRepository::create(
+                pool,
+                CreateArtifactInput {
+                    r#ref: artifact_ref.clone(),
+                    scope: OwnerType::Sensor,
+                    owner: sensor_ref.to_string(),
+                    r#type: ArtifactType::FileText,
+                    visibility: ArtifactVisibility::Private,
+                    retention_policy: log_config.retention_policy,
+                    retention_limit: log_config.retention_limit,
+                    name: Some(format!("{} sensor {} log", sensor_ref, stream)),
+                    description: Some(format!(
+                        "Rotating {} log for sensor '{}'",
+                        stream, sensor_ref
+                    )),
+                    content_type: Some("text/plain".to_string()),
+                    data: None,
+                },
+            )
+            .await?
+        };
 
-        ArtifactRepository::create(
-            pool,
-            CreateArtifactInput {
-                r#ref: artifact_ref,
-                scope: OwnerType::Sensor,
-                owner: sensor_ref.to_string(),
-                r#type: ArtifactType::FileText,
-                visibility: ArtifactVisibility::Private,
-                retention_policy: RetentionPolicyType::Days,
-                retention_limit: 90, // days
-                name: Some(format!("{} sensor {} log", sensor_ref, stream)),
-                description: Some(format!(
-                    "Rotating {} log for sensor '{}'",
-                    stream, sensor_ref
-                )),
-                content_type: Some("text/plain".to_string()),
-                data: None,
-            },
-        )
-        .await?;
+        let target = SensorLogArtifactTarget {
+            artifact_id: artifact.id,
+            artifact_ref,
+            sensor_ref: sensor_ref.to_string(),
+            stream: stream.to_string(),
+        };
+        match *stream {
+            "stdout" => stdout = Some(target),
+            "stderr" => stderr = Some(target),
+            _ => {}
+        }
     }
 
-    Ok(())
+    Ok(SensorLogArtifacts {
+        stdout: stdout.ok_or_else(|| anyhow::anyhow!("stdout log artifact target missing"))?,
+        stderr: stderr.ok_or_else(|| anyhow::anyhow!("stderr log artifact target missing"))?,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use tempfile::TempDir;
+
+    #[test]
+    fn sensor_log_defaults_keep_four_versions() {
+        let config = SensorLogConfig::default();
+        assert_eq!(config.max_files, 4);
+        assert_eq!(config.retention_policy, RetentionPolicyType::Versions);
+        assert_eq!(config.retention_limit, 4);
+    }
+
+    #[test]
+    fn sensor_log_retention_overrides_are_applied_independently() {
+        let config = SensorLogConfig::default()
+            .with_retention_overrides(Some(RetentionPolicyType::Days), Some(2));
+        assert_eq!(config.max_files, 4);
+        assert_eq!(config.retention_policy, RetentionPolicyType::Days);
+        assert_eq!(config.retention_limit, 2);
+    }
+
+    fn volume_transport(tmp: &TempDir) -> Arc<dyn ArtifactFileTransport> {
+        Arc::new(attune_common::artifact_transport::VolumeTransport::new(
+            tmp.path().to_str().unwrap(),
+        ))
+    }
 
     #[tokio::test]
     async fn test_rotating_log_writer_basic_write() {
@@ -273,8 +515,10 @@ mod tests {
         let config = SensorLogConfig {
             max_bytes: 1024,
             max_files: 3,
+            ..Default::default()
         };
-        let mut writer = RotatingLogWriter::new(tmp.path(), "test.sensor", "stdout", config);
+        let mut writer =
+            RotatingLogWriter::new(volume_transport(&tmp), "test.sensor", "stdout", config);
 
         writer.write_line(b"hello world").await.unwrap();
         writer.close().await;
@@ -291,8 +535,10 @@ mod tests {
         let config = SensorLogConfig {
             max_bytes: 50, // Very small to trigger rotation
             max_files: 3,
+            ..Default::default()
         };
-        let mut writer = RotatingLogWriter::new(tmp.path(), "test.sensor", "stdout", config);
+        let mut writer =
+            RotatingLogWriter::new(volume_transport(&tmp), "test.sensor", "stdout", config);
 
         // Write enough to trigger rotation
         for i in 0..10 {
@@ -316,8 +562,10 @@ mod tests {
         let config = SensorLogConfig {
             max_bytes: 30,
             max_files: 2,
+            ..Default::default()
         };
-        let mut writer = RotatingLogWriter::new(tmp.path(), "test.sensor", "stderr", config);
+        let mut writer =
+            RotatingLogWriter::new(volume_transport(&tmp), "test.sensor", "stderr", config);
 
         // Write enough lines to rotate multiple times
         for i in 0..20 {

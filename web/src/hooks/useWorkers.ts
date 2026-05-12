@@ -28,6 +28,15 @@ export function useWorkers(params?: {
   });
 }
 
+export function useWorker(id: number | null | undefined) {
+  return useQuery({
+    queryKey: ["workers", id],
+    queryFn: async () => WorkersService.getWorker({ id: id! }),
+    enabled: !!id,
+    staleTime: 30000,
+  });
+}
+
 export function useCordonWorker() {
   const queryClient = useQueryClient();
   return useMutation({

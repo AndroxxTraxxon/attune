@@ -14,17 +14,21 @@ function formatDuration(ms: number): string {
 }
 import { useExecution, useCancelExecution } from "@/hooks/useExecutions";
 import { useAction } from "@/hooks/useActions";
-import { usePermissionSets } from "@/hooks/usePermissions";
+import { useIdentity, usePermissionSets } from "@/hooks/usePermissions";
+import { useEnforcement, useEvent } from "@/hooks/useEvents";
+import { useWorker } from "@/hooks/useWorkers";
 import { useExecutionStream } from "@/hooks/useExecutionStream";
 import { useExecutionHistory } from "@/hooks/useHistory";
 import { formatDistanceToNow } from "date-fns";
 import { ExecutionStatus } from "@/api";
 import type {
   ActionResponse,
+  EnforcementResponse,
+  EventResponse,
   ExecutionResponse,
   PermissionSetSummary,
 } from "@/api";
-import { useState, useMemo } from "react";
+import { useState, useMemo, type ReactNode } from "react";
 import { ChevronDown, RotateCcw, Loader2, XCircle } from "lucide-react";
 import {
   JsonValueDisplay,
@@ -62,6 +66,19 @@ const getStatusColor = (status: string) => {
       return "bg-gray-100 text-gray-800";
     case "abandoned":
       return "bg-red-100 text-red-600";
+    default:
+      return "bg-gray-100 text-gray-800";
+  }
+};
+
+const getEnforcementStatusColor = (status: string) => {
+  switch (status) {
+    case "processed":
+      return "bg-green-100 text-green-800";
+    case "disabled":
+      return "bg-gray-100 text-gray-800";
+    case "created":
+      return "bg-blue-100 text-blue-800";
     default:
       return "bg-gray-100 text-gray-800";
   }
@@ -130,6 +147,20 @@ export default function ExecutionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { data: executionData, isLoading, error } = useExecution(Number(id));
   const execution = executionData?.data as ExecutionResponse | undefined;
+  const { data: initiatorData } = useIdentity(execution?.executor ?? 0);
+  const { data: workerData } = useWorker(execution?.worker);
+  const {
+    data: enforcementData,
+    isLoading: enforcementLoading,
+    error: enforcementError,
+  } = useEnforcement(execution?.enforcement ?? 0);
+  const enforcement = enforcementData?.data as EnforcementResponse | undefined;
+  const {
+    data: eventData,
+    isLoading: eventLoading,
+    error: eventError,
+  } = useEvent(enforcement?.event ? Number(enforcement.event) : 0);
+  const event = eventData?.data as EventResponse | undefined;
 
   // Fetch the action so we can get param_schema for the re-run modal
   const { data: actionData } = useAction(execution?.action_ref || "");
@@ -425,7 +456,25 @@ export default function ExecutionDetailPage() {
                     Initiated By
                   </dt>
                   <dd className="mt-1 text-sm text-gray-900">
-                    {execution.executor}
+                    {initiatorData?.data ? (
+                      <div className="space-y-0.5">
+                        <Link
+                          to={`/access-control/identities/${execution.executor}`}
+                          className="text-blue-600 hover:text-blue-800 font-medium"
+                        >
+                          {initiatorData.data.display_name ||
+                            initiatorData.data.login}
+                        </Link>
+                        <div className="text-xs text-gray-500">
+                          {initiatorData.data.display_name && (
+                            <span>@{initiatorData.data.login} · </span>
+                          )}
+                          ID {execution.executor}
+                        </div>
+                      </div>
+                    ) : (
+                      <>Identity #{execution.executor}</>
+                    )}
                   </dd>
                 </div>
               )}
@@ -435,7 +484,17 @@ export default function ExecutionDetailPage() {
                     Worker ID
                   </dt>
                   <dd className="mt-1 text-sm text-gray-900">
-                    {execution.worker}
+                    {workerData ? (
+                      <div className="space-y-0.5">
+                        <div className="font-medium">{workerData.name}</div>
+                        <div className="text-xs text-gray-500">
+                          ID {execution.worker} · {workerData.worker_role} ·{" "}
+                          {workerData.health_state}
+                        </div>
+                      </div>
+                    ) : (
+                      <>Worker #{execution.worker}</>
+                    )}
                   </dd>
                 </div>
               )}
@@ -592,6 +651,16 @@ export default function ExecutionDetailPage() {
             )}
           </div>
 
+          <ExecutionTriggerContextPanel
+            enforcementId={execution.enforcement ?? null}
+            enforcement={enforcement}
+            event={event}
+            isLoading={enforcementLoading}
+            eventLoading={eventLoading}
+            error={enforcementError}
+            eventError={eventError}
+          />
+
           {/* Artifacts */}
           <ExecutionArtifactsPanel
             executionId={execution.id}
@@ -607,6 +676,209 @@ export default function ExecutionDetailPage() {
           entityId={execution.id}
           title="Execution History"
         />
+      </div>
+    </div>
+  );
+}
+
+function ExecutionTriggerContextPanel({
+  enforcementId,
+  enforcement,
+  event,
+  isLoading,
+  eventLoading,
+  error,
+  eventError,
+}: {
+  enforcementId: number | null;
+  enforcement?: EnforcementResponse;
+  event?: EventResponse;
+  isLoading: boolean;
+  eventLoading: boolean;
+  error: unknown;
+  eventError: unknown;
+}) {
+  if (!enforcementId) return null;
+
+  return (
+    <div className="bg-white shadow rounded-lg p-6">
+      <h2 className="text-lg font-semibold mb-1">Trigger Context</h2>
+      <p className="text-xs text-gray-500 mb-4">
+        Rule enforcement and event data that caused this execution to be
+        requested.
+      </p>
+
+      {isLoading && (
+        <div className="flex items-center py-4 text-sm text-gray-500">
+          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+          Loading enforcement…
+        </div>
+      )}
+
+      {!isLoading && (Boolean(error) || !enforcement) && (
+        <div className="rounded border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800">
+          Enforcement #{enforcementId} could not be loaded.
+        </div>
+      )}
+
+      {enforcement && (
+        <div className="space-y-4 text-sm">
+          <div className="rounded-lg border border-gray-200 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                to={`/enforcements/${enforcement.id}`}
+                className="font-medium text-blue-600 hover:text-blue-800"
+              >
+                Enforcement #{enforcement.id}
+              </Link>
+              <span
+                className={`px-2 py-0.5 text-xs rounded ${getEnforcementStatusColor(enforcement.status)}`}
+              >
+                {enforcement.status}
+              </span>
+              <span className="px-2 py-0.5 text-xs rounded bg-purple-50 text-purple-700">
+                {enforcement.condition}
+              </span>
+            </div>
+            <dl className="mt-3 space-y-2">
+              <CompactDetail label="Rule">
+                {enforcement.rule_ref ? (
+                  <Link
+                    to={`/rules/${enforcement.rule_ref}`}
+                    className="text-blue-600 hover:text-blue-800"
+                  >
+                    {enforcement.rule_ref}
+                  </Link>
+                ) : (
+                  <span className="text-gray-500">N/A</span>
+                )}
+              </CompactDetail>
+              <CompactDetail label="Trigger">
+                <Link
+                  to={`/triggers/${enforcement.trigger_ref}`}
+                  className="text-blue-600 hover:text-blue-800"
+                >
+                  {enforcement.trigger_ref}
+                </Link>
+              </CompactDetail>
+              <CompactDetail label="Resolved">
+                {enforcement.resolved_at
+                  ? new Date(enforcement.resolved_at).toLocaleString()
+                  : "Pending"}
+              </CompactDetail>
+            </dl>
+          </div>
+
+          {Object.keys(enforcement.conditions ?? {}).length > 0 && (
+            <CompactJsonSection
+              title="Rule Conditions"
+              value={enforcement.conditions}
+            />
+          )}
+
+          {isJsonObject(enforcement.config) &&
+            Object.keys(enforcement.config).length > 0 && (
+              <CompactJsonSection
+                title="Resolved Action Parameters"
+                value={enforcement.config}
+              />
+            )}
+
+          {Object.keys(enforcement.payload ?? {}).length > 0 && (
+            <CompactJsonSection
+              title="Enforcement Payload Snapshot"
+              value={enforcement.payload}
+            />
+          )}
+
+          {eventLoading && (
+            <div className="flex items-center py-2 text-sm text-gray-500">
+              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              Loading event…
+            </div>
+          )}
+
+          {!eventLoading && Boolean(eventError) && (
+            <div className="rounded border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800">
+              Event #{enforcement.event} could not be loaded.
+            </div>
+          )}
+
+          {!eventLoading &&
+            !eventError &&
+            !event &&
+            !enforcement.event && (
+              <div className="rounded border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
+                This enforcement has no linked event row.
+              </div>
+            )}
+
+          {event && (
+            <div className="rounded-lg border border-gray-200 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  to={`/events/${event.id}`}
+                  className="font-medium text-blue-600 hover:text-blue-800"
+                >
+                  Event #{event.id}
+                </Link>
+                <span className="px-2 py-0.5 text-xs rounded bg-blue-50 text-blue-700">
+                  {event.trigger_ref}
+                </span>
+              </div>
+              <dl className="mt-3 space-y-2">
+                <CompactDetail label="Created">
+                  {new Date(event.created).toLocaleString()}
+                </CompactDetail>
+                <CompactDetail label="Source">
+                  {event.source_ref || "N/A"}
+                </CompactDetail>
+              </dl>
+              {Object.keys(event.payload ?? {}).length > 0 && (
+                <div className="mt-3">
+                  <CompactJsonSection
+                    title="Event Payload"
+                    value={event.payload}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompactDetail({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <dt className="text-xs font-medium text-gray-500">{label}</dt>
+      <dd className="mt-0.5 text-gray-900 break-words">{children}</dd>
+    </div>
+  );
+}
+
+function CompactJsonSection({
+  title,
+  value,
+}: {
+  title: string;
+  value: unknown;
+}) {
+  return (
+    <div>
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+        {title}
+      </h3>
+      <div className="mt-1 max-h-56 overflow-auto">
+        <JsonValueDisplay value={value} />
       </div>
     </div>
   );

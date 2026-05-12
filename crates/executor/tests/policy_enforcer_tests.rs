@@ -107,6 +107,8 @@ async fn create_test_action(pool: &PgPool, pack_id: i64, suffix: &str) -> i64 {
         is_adhoc: false,
         accesses_mcp: false,
         default_execution_permission_set_refs: Vec::new(),
+        log_retention_policy: None,
+        log_retention_limit: None,
     };
 
     let action = ActionRepository::create(pool, action_input)

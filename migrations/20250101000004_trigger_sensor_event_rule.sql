@@ -135,12 +135,15 @@ CREATE TABLE sensor (
     worker_selector JSONB NOT NULL DEFAULT '{}'::jsonb,
     worker_tolerations JSONB NOT NULL DEFAULT '[]'::jsonb,
     worker_affinity JSONB NOT NULL DEFAULT '{}'::jsonb,
+    log_retention_policy artifact_retention_enum,
+    log_retention_limit INTEGER,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
     -- Constraints
     CONSTRAINT sensor_ref_lowercase CHECK (ref = LOWER(ref)),
-    CONSTRAINT sensor_ref_format CHECK (ref ~ '^[^.]+\.[^.]+$')
+    CONSTRAINT sensor_ref_format CHECK (ref ~ '^[^.]+\.[^.]+$'),
+    CONSTRAINT sensor_log_retention_limit_positive CHECK (log_retention_limit IS NULL OR log_retention_limit > 0)
 );
 
 -- Indexes
@@ -175,6 +178,8 @@ COMMENT ON COLUMN sensor.runtime_version_constraint IS 'Semver version constrain
 COMMENT ON COLUMN sensor.worker_selector IS 'Exact sensor-worker label selector required to run this sensor';
 COMMENT ON COLUMN sensor.worker_tolerations IS 'Tolerations allowing this sensor onto tainted sensor workers';
 COMMENT ON COLUMN sensor.worker_affinity IS 'Required/preferred/anti-affinity placement rules for sensor workers';
+COMMENT ON COLUMN sensor.log_retention_policy IS 'Optional per-sensor override for registered stdout/stderr log artifact retention policy. NULL inherits the service default.';
+COMMENT ON COLUMN sensor.log_retention_limit IS 'Optional per-sensor override for registered stdout/stderr log artifact retention limit. NULL inherits the service default.';
 
 -- ============================================================================
 -- EVENT TABLE
@@ -284,12 +289,15 @@ CREATE TABLE action (
     runtime_version_constraint TEXT,
     accesses_mcp BOOLEAN NOT NULL DEFAULT FALSE,
     default_execution_permission_set_refs TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    log_retention_policy artifact_retention_enum,
+    log_retention_limit INTEGER,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
     -- Constraints
     CONSTRAINT action_ref_lowercase CHECK (ref = LOWER(ref)),
-    CONSTRAINT action_ref_format CHECK (ref ~ '^[^.]+\.[^.]+$')
+    CONSTRAINT action_ref_format CHECK (ref ~ '^[^.]+\.[^.]+$'),
+    CONSTRAINT action_log_retention_limit_positive CHECK (log_retention_limit IS NULL OR log_retention_limit > 0)
 );
 
 -- Indexes
@@ -328,6 +336,8 @@ COMMENT ON COLUMN action.max_retries IS 'Maximum number of automatic retry attem
 COMMENT ON COLUMN action.runtime_version_constraint IS 'Semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0"). NULL means any version.';
 COMMENT ON COLUMN action.accesses_mcp IS 'Hint that this action may invoke the Attune MCP server (e.g., AI agent actions). When true, executions of this action may have child executions spawned via execution-scoped tokens; consumers (UI, CLI, timeline charts) can use this flag to optimistically render subtask views without waiting for children to appear.';
 COMMENT ON COLUMN action.default_execution_permission_set_refs IS 'Permission set refs applied to execution-scoped API tokens when executions do not explicitly override them. Empty means no execution API token is exposed to the action.';
+COMMENT ON COLUMN action.log_retention_policy IS 'Optional per-action override for stdout/stderr execution log artifact retention policy. NULL inherits worker.execution_log_retention_policy.';
+COMMENT ON COLUMN action.log_retention_limit IS 'Optional per-action override for stdout/stderr execution log artifact retention limit. NULL inherits worker.execution_log_retention_limit.';
 
 -- ============================================================================
 

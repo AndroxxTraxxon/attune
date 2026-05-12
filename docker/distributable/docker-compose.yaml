@@ -448,6 +448,7 @@ services:
       - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
       - packs_data:/opt/attune/packs:rw
       - runtime_envs:/opt/attune/runtime_envs
+      - artifacts_data:/opt/attune/artifacts
       - sensor_logs:/opt/attune/logs
     depends_on:
       init-agent:

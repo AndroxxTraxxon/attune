@@ -467,6 +467,8 @@ impl ActionFixture {
             is_adhoc: false,
             accesses_mcp: false,
             default_execution_permission_set_refs: Vec::new(),
+            log_retention_policy: None,
+            log_retention_limit: None,
         };
 
         ActionRepository::create(pool, input).await
@@ -1097,6 +1099,8 @@ impl SensorFixture {
             worker_selector: serde_json::json!({}),
             worker_tolerations: serde_json::json!([]),
             worker_affinity: serde_json::json!({}),
+            log_retention_policy: None,
+            log_retention_limit: None,
         };
 
         SensorRepository::create(pool, input).await

@@ -1003,6 +1003,34 @@ impl ArtifactVersionRepository {
             .await
             .map_err(Into::into)
     }
+
+    /// Find all file-backed versions for artifacts owned by a specific scope/owner.
+    /// Used by standalone sensor agents to copy locally staged sensor artifacts
+    /// back to the API-accessible artifact transport when a sensor process exits.
+    pub async fn find_file_versions_by_scope_and_owner<'e, E>(
+        executor: E,
+        scope: OwnerType,
+        owner: &str,
+    ) -> Result<Vec<ArtifactVersion>>
+    where
+        E: Executor<'e, Database = Postgres> + 'e,
+    {
+        let query = format!(
+            "SELECT {} \
+             FROM artifact_version av \
+             JOIN artifact a ON a.id = av.artifact \
+             WHERE av.file_path IS NOT NULL \
+               AND a.scope = $1 \
+               AND a.owner = $2",
+            Self::select_columns_with_alias("av")
+        );
+        sqlx::query_as::<_, ArtifactVersion>(&query)
+            .bind(scope)
+            .bind(owner)
+            .fetch_all(executor)
+            .await
+            .map_err(Into::into)
+    }
 }
 
 #[cfg(test)]

@@ -127,6 +127,7 @@ use attune_common::audit::{AuditCategory, AuditOutcome};
         crate::routes::runtimes::update_runtime,
         crate::routes::runtimes::delete_runtime,
         crate::routes::workers::list_workers,
+        crate::routes::workers::get_worker,
         crate::routes::workers::cordon_worker,
         crate::routes::workers::uncordon_worker,
 

@@ -361,6 +361,8 @@ mod tests {
             is_adhoc: false,
             accesses_mcp: false,
             default_execution_permission_set_refs: Vec::new(),
+            log_retention_policy: None,
+            log_retention_limit: None,
             parameter_delivery: attune_common::models::ParameterDelivery::default(),
             parameter_format: attune_common::models::ParameterFormat::default(),
             output_format: attune_common::models::OutputFormat::default(),

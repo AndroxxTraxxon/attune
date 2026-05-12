@@ -13,7 +13,7 @@
 //! so the `ProcessRuntime` uses version-specific interpreter binaries,
 //! environment commands, etc.
 
-use attune_common::artifact_transport::ArtifactFileTransport;
+use attune_common::artifact_transport::{sync_local_file_to_transport, ArtifactFileTransport};
 use attune_common::auth::jwt::{
     generate_execution_token_with_permission_sets_and_standard_access, JwtConfig,
 };
@@ -24,6 +24,7 @@ use attune_common::models::{
     runtime::Runtime as RuntimeModel,
     Action, Execution, ExecutionStatus, Worker,
 };
+use attune_common::repositories::action::ActionRepository;
 use attune_common::repositories::artifact::{
     default_content_type_for_artifact, ArtifactRepository, ArtifactVersionRepository,
     CreateArtifactInput, UpdateArtifactInput,
@@ -138,6 +139,12 @@ struct StderrLogPromotion {
     lock: Arc<AsyncMutex<()>>,
 }
 
+#[derive(Clone, Copy)]
+struct LogRetentionSettings {
+    policy: RetentionPolicyType,
+    limit: i32,
+}
+
 impl ActionExecutor {
     /// Create a new action executor
     #[allow(clippy::too_many_arguments)]
@@ -209,6 +216,7 @@ impl ActionExecutor {
 
         // Load action from database
         let action = self.load_action(&execution).await?;
+        let log_retention = self.effective_action_log_retention(&action);
 
         // Prepare execution context
         let mut context = match self.prepare_execution_context(&execution, &action).await {
@@ -230,11 +238,21 @@ impl ActionExecutor {
 
         let stdout_pending_path = context.stdout_log_path.clone();
         let stdout_promotion = stdout_pending_path.as_ref().map(|stdout_path| {
-            self.spawn_log_promotion(&execution, stdout_path, ExecutionLogArtifactStream::Stdout)
+            self.spawn_log_promotion(
+                &execution,
+                stdout_path,
+                ExecutionLogArtifactStream::Stdout,
+                log_retention,
+            )
         });
         let stderr_pending_path = context.stderr_log_path.clone();
         let stderr_promotion = stderr_pending_path.as_ref().map(|stderr_path| {
-            self.spawn_log_promotion(&execution, stderr_path, ExecutionLogArtifactStream::Stderr)
+            self.spawn_log_promotion(
+                &execution,
+                stderr_path,
+                ExecutionLogArtifactStream::Stderr,
+                log_retention,
+            )
         });
 
         // Execute the action
@@ -252,6 +270,7 @@ impl ActionExecutor {
                         stdout_path,
                         ExecutionLogArtifactStream::Stdout,
                         promotion,
+                        log_retention,
                     )
                     .await;
                 }
@@ -263,6 +282,7 @@ impl ActionExecutor {
                         stderr_path,
                         ExecutionLogArtifactStream::Stderr,
                         promotion,
+                        log_retention,
                     )
                     .await;
                 }
@@ -297,6 +317,7 @@ impl ActionExecutor {
                 stdout_path,
                 ExecutionLogArtifactStream::Stdout,
                 promotion,
+                log_retention,
             )
             .await;
         }
@@ -308,6 +329,7 @@ impl ActionExecutor {
                 stderr_path,
                 ExecutionLogArtifactStream::Stderr,
                 promotion,
+                log_retention,
             )
             .await;
         }
@@ -372,53 +394,34 @@ impl ActionExecutor {
 
         // Try to load by action ID if available
         if let Some(action_id) = execution.action {
-            let action = sqlx::query_as::<_, Action>("SELECT * FROM action WHERE id = $1")
-                .bind(action_id)
-                .fetch_optional(&self.pool)
-                .await?;
-
-            if let Some(action) = action {
+            if let Some(action) = ActionRepository::find_by_id(&self.pool, action_id).await? {
                 return Ok(action);
             }
         }
 
         // Fallback: look up by the full qualified action ref directly
-        let action = sqlx::query_as::<_, Action>("SELECT * FROM action WHERE ref = $1")
-            .bind(&execution.action_ref)
-            .fetch_optional(&self.pool)
-            .await?;
-
-        if let Some(action) = action {
+        if let Some(action) =
+            ActionRepository::find_by_ref(&self.pool, &execution.action_ref).await?
+        {
             return Ok(action);
         }
 
-        // Final fallback: parse action_ref as "pack.action" and query by pack ref
-        let parts: Vec<&str> = execution.action_ref.split('.').collect();
-        if parts.len() != 2 {
-            return Err(Error::validation(format!(
-                "Invalid action reference format: {}. Expected format: pack.action",
-                execution.action_ref
-            )));
+        Err(Error::not_found(
+            "Action",
+            "ref",
+            execution.action_ref.clone(),
+        ))
+    }
+
+    fn effective_action_log_retention(&self, action: &Action) -> LogRetentionSettings {
+        LogRetentionSettings {
+            policy: action
+                .log_retention_policy
+                .unwrap_or(self.execution_log_retention_policy),
+            limit: action
+                .log_retention_limit
+                .unwrap_or(self.execution_log_retention_limit),
         }
-
-        let pack_ref = parts[0];
-
-        // Query action by pack ref and full action ref
-        let action = sqlx::query_as::<_, Action>(
-            r#"
-            SELECT a.*
-            FROM action a
-            JOIN pack p ON a.pack = p.id
-            WHERE p.ref = $1 AND a.ref = $2
-            "#,
-        )
-        .bind(pack_ref)
-        .bind(&execution.action_ref)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or_else(|| Error::not_found("Action", "ref", execution.action_ref.clone()))?;
-
-        Ok(action)
     }
 
     /// Prepare execution context from execution and action data
@@ -1098,12 +1101,11 @@ impl ActionExecutor {
         execution: &Execution,
         pending_path: &Path,
         stream: ExecutionLogArtifactStream,
+        retention: LogRetentionSettings,
     ) -> StderrLogPromotion {
         let pool = self.pool.clone();
         let artifacts_dir = self.artifacts_dir.clone();
         let transport = Arc::clone(&self.transport);
-        let execution_log_retention_policy = self.execution_log_retention_policy;
-        let execution_log_retention_limit = self.execution_log_retention_limit;
         let execution = execution.clone();
         let pending_path = pending_path.to_path_buf();
         let lock = Arc::new(AsyncMutex::new(()));
@@ -1118,8 +1120,8 @@ impl ActionExecutor {
                     &artifacts_dir,
                     transport.as_ref(),
                     &execution,
-                    execution_log_retention_policy,
-                    execution_log_retention_limit,
+                    retention.policy,
+                    retention.limit,
                     stream,
                     &pending_path,
                 )
@@ -1139,6 +1141,7 @@ impl ActionExecutor {
         pending_path: &Path,
         stream: ExecutionLogArtifactStream,
         promotion: StderrLogPromotion,
+        retention: LogRetentionSettings,
     ) {
         {
             let _guard = promotion.lock.lock().await;
@@ -1147,8 +1150,8 @@ impl ActionExecutor {
                 &self.artifacts_dir,
                 self.transport.as_ref(),
                 execution,
-                self.execution_log_retention_policy,
-                self.execution_log_retention_limit,
+                retention.policy,
+                retention.limit,
                 stream,
                 pending_path,
             )
@@ -1287,11 +1290,14 @@ impl ActionExecutor {
         stream: ExecutionLogArtifactStream,
         pending_path: &Path,
     ) -> Result<Option<PathBuf>> {
-        // Pending files are always on local disk (even with API transport,
-        // they are staged locally before promotion)
+        let pending_relative_path = pending_path
+            .strip_prefix(artifacts_dir)
+            .ok()
+            .map(|path| path.to_string_lossy().to_string());
+
         let metadata = match tokio::fs::metadata(pending_path).await {
-            Ok(metadata) => metadata,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+            Ok(metadata) => Some(metadata),
+            Err(e) if e.kind() == ErrorKind::NotFound => None,
             Err(e) => {
                 return Err(Error::Internal(format!(
                     "Failed to stat pending stderr log '{}': {}",
@@ -1301,11 +1307,52 @@ impl ActionExecutor {
             }
         };
 
-        if metadata.len() == 0 {
-            let _ = tokio::fs::remove_file(pending_path).await;
-            Self::remove_empty_pending_parent_dirs(pending_path).await;
+        let content = if let Some(metadata) = metadata {
+            if metadata.len() == 0 {
+                let _ = tokio::fs::remove_file(pending_path).await;
+                Self::remove_empty_pending_parent_dirs(pending_path).await;
+                return Ok(None);
+            }
+
+            tokio::fs::read(pending_path).await.map_err(|e| {
+                Error::Internal(format!(
+                    "Failed to read pending {} log '{}': {}",
+                    stream.as_str(),
+                    pending_path.display(),
+                    e
+                ))
+            })?
+        } else if transport.transport_mode() != "volume" {
+            let Some(pending_relative_path) = pending_relative_path.as_deref() else {
+                return Ok(None);
+            };
+            match transport.file_size(pending_relative_path).await {
+                Ok(Some(size)) if size > 0 => transport
+                    .read_file(pending_relative_path)
+                    .await
+                    .map_err(|e| {
+                        Error::Internal(format!(
+                            "Failed to read pending {} log '{}' from {} transport: {}",
+                            stream.as_str(),
+                            pending_relative_path,
+                            transport.transport_mode(),
+                            e
+                        ))
+                    })?,
+                Ok(_) => return Ok(None),
+                Err(e) => {
+                    return Err(Error::Internal(format!(
+                        "Failed to stat pending {} log '{}' from {} transport: {}",
+                        stream.as_str(),
+                        pending_relative_path,
+                        transport.transport_mode(),
+                        e
+                    )));
+                }
+            }
+        } else {
             return Ok(None);
-        }
+        };
 
         let (final_path, relative_path) = Self::allocate_execution_log_artifact_with(
             pool,
@@ -1318,14 +1365,6 @@ impl ActionExecutor {
         )
         .await?;
 
-        // Read from local pending file, write to final location via transport
-        let content = tokio::fs::read(pending_path).await.map_err(|e| {
-            Error::Internal(format!(
-                "Failed to read pending stderr log '{}': {}",
-                pending_path.display(),
-                e
-            ))
-        })?;
         transport
             .write_file(&relative_path, &content, Some("text/plain"))
             .await
@@ -1337,8 +1376,12 @@ impl ActionExecutor {
                     e
                 ))
             })?;
-        let _ = tokio::fs::remove_file(pending_path).await;
-        Self::remove_empty_pending_parent_dirs(pending_path).await;
+        if pending_path.exists() {
+            let _ = tokio::fs::remove_file(pending_path).await;
+            Self::remove_empty_pending_parent_dirs(pending_path).await;
+        } else if let Some(pending_relative_path) = pending_relative_path {
+            let _ = transport.delete_file(&pending_relative_path).await;
+        }
 
         Ok(Some(final_path))
     }
@@ -1419,24 +1462,52 @@ impl ActionExecutor {
                 None => continue,
             };
 
-            let size_bytes = match self.transport.file_size(file_path).await {
-                Ok(Some(size)) => size as i64,
-                Ok(None) => {
-                    debug!(
-                        "Removing unwritten artifact version {} (artifact {}): file='{}'",
-                        ver.id, ver.artifact, file_path,
-                    );
-                    0
+            let local_synced_size = if self.transport.transport_mode() != "volume" {
+                match sync_local_file_to_transport(
+                    &self.artifacts_dir,
+                    self.transport.as_ref(),
+                    file_path,
+                    ver.content_type.as_deref(),
+                )
+                .await
+                {
+                    Ok(size) => size,
+                    Err(e) => {
+                        warn!(
+                            "Failed to copy local artifact file '{}' for version {} to {} transport: {}",
+                            file_path,
+                            ver.id,
+                            self.transport.transport_mode(),
+                            e,
+                        );
+                        continue;
+                    }
                 }
-                Err(e) => {
-                    warn!(
+            } else {
+                None
+            };
+
+            let size_bytes = match local_synced_size {
+                Some(size) => size as i64,
+                None => match self.transport.file_size(file_path).await {
+                    Ok(Some(size)) => size as i64,
+                    Ok(None) => {
+                        debug!(
+                            "Removing unwritten artifact version {} (artifact {}): file='{}'",
+                            ver.id, ver.artifact, file_path,
+                        );
+                        0
+                    }
+                    Err(e) => {
+                        warn!(
                         "Could not stat artifact file '{}' for version {}: {}. Setting size_bytes=0.",
                         file_path,
                         ver.id,
                         e,
                     );
-                    0
-                }
+                        0
+                    }
+                },
             };
 
             // If the file is empty, delete the version and clean up the file.

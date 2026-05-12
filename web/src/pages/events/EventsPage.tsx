@@ -15,6 +15,7 @@ import {
   useFilterSuggestions,
   useMergedSuggestions,
 } from "@/hooks/useFilterSuggestions";
+import { matchesRefFilter, packPrefix } from "@/utils/refFilters";
 import type { EventSummary } from "@/api";
 import Pagination from "@/components/executions/Pagination";
 
@@ -340,13 +341,13 @@ export default function EventsPage() {
             // Check if filtering and event matches filter
             if (
               debouncedFilters.trigger &&
-              newEvent.trigger_ref !== debouncedFilters.trigger
+              !matchesRefFilter(newEvent.trigger_ref, debouncedFilters.trigger)
             ) {
               return oldData;
             }
             if (
               debouncedFilters.rule &&
-              newEvent.rule_ref !== debouncedFilters.rule
+              !matchesRefFilter(newEvent.rule_ref, debouncedFilters.rule)
             ) {
               return oldData;
             }
@@ -427,8 +428,12 @@ export default function EventsPage() {
     const rules = new Set<string>();
 
     for (const event of events) {
-      if (event.trigger_ref) triggers.add(event.trigger_ref);
-      if (event.rule_ref) rules.add(event.rule_ref);
+      if (event.trigger_ref) {
+        triggers.add(event.trigger_ref);
+      }
+      if (event.rule_ref) {
+        rules.add(event.rule_ref);
+      }
     }
 
     return {
@@ -437,14 +442,42 @@ export default function EventsPage() {
     };
   }, [events]);
 
-  // Merge base entity suggestions + loaded data refs + WebSocket refs
+  const wildcardSuggestions = useMemo(() => {
+    const wildcards = new Set<string>();
+    const refs = [
+      ...loadedRefs.triggers,
+      ...loadedRefs.rules,
+      ...wsRefs.triggers,
+      ...wsRefs.rules,
+    ];
+
+    for (const pack of baseSuggestions.packNames) {
+      if (pack) wildcards.add(`${pack}.*`);
+    }
+    for (const ref of refs) {
+      const pack = packPrefix(ref);
+      if (pack) wildcards.add(`${pack}.*`);
+    }
+
+    return [...wildcards].sort();
+  }, [
+    baseSuggestions.packNames,
+    loadedRefs.triggers,
+    loadedRefs.rules,
+    wsRefs.triggers,
+    wsRefs.rules,
+  ]);
+
+  // Merge base entity suggestions + wildcard pack refs + loaded data refs + WebSocket refs
   const triggerSuggestions = useMergedSuggestions(
     baseSuggestions.triggerRefs,
+    wildcardSuggestions,
     loadedRefs.triggers,
     wsRefs.triggers,
   );
   const ruleSuggestions = useMergedSuggestions(
     baseSuggestions.ruleRefs,
+    wildcardSuggestions,
     loadedRefs.rules,
     wsRefs.rules,
   );
@@ -508,14 +541,14 @@ export default function EventsPage() {
             value={searchFilters.trigger}
             onChange={(value) => handleFilterChange("trigger", value)}
             suggestions={triggerSuggestions}
-            placeholder="e.g., core.webhook"
+            placeholder="e.g., core.webhook, core.*, or core.queue_*"
           />
           <AutocompleteInput
             label="Rule"
             value={searchFilters.rule}
             onChange={(value) => handleFilterChange("rule", value)}
             suggestions={ruleSuggestions}
-            placeholder="e.g., core.on_webhook"
+            placeholder="e.g., core.on_webhook, core.*, or core.queue_*"
           />
         </div>
         {data && (

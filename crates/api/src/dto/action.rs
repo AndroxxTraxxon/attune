@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use utoipa::ToSchema;
 use validator::Validate;
 
+use attune_common::models::enums::RetentionPolicyType;
 use attune_common::scheduling::{WorkerAffinity, WorkerToleration};
 
 /// Request DTO for creating a new action
@@ -91,6 +92,15 @@ pub struct CreateActionRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schema(example = json!(["core.agent_reader"]), default = json!([]))]
     pub default_execution_permission_set_refs: Vec<String>,
+
+    /// Optional per-action retention policy override for stdout/stderr execution log artifacts.
+    #[schema(example = "versions", nullable = true)]
+    pub log_retention_policy: Option<RetentionPolicyType>,
+
+    /// Optional per-action retention limit override for stdout/stderr execution log artifacts.
+    #[validate(range(min = 1))]
+    #[schema(example = 4, nullable = true)]
+    pub log_retention_limit: Option<i32>,
 }
 
 /// Request DTO for updating an action
@@ -154,6 +164,12 @@ pub struct UpdateActionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = json!(["core.agent_reader"]), nullable = true)]
     pub default_execution_permission_set_refs: Option<Vec<String>>,
+
+    /// Patch the per-action retention policy override for stdout/stderr execution log artifacts.
+    pub log_retention_policy: Option<LogRetentionPolicyPatch>,
+
+    /// Patch the per-action retention limit override for stdout/stderr execution log artifacts.
+    pub log_retention_limit: Option<LogRetentionLimitPatch>,
 }
 
 /// Explicit patch operation for a nullable runtime version constraint.
@@ -161,6 +177,22 @@ pub struct UpdateActionRequest {
 #[serde(tag = "op", content = "value", rename_all = "snake_case")]
 pub enum RuntimeVersionConstraintPatch {
     Set(String),
+    Clear,
+}
+
+/// Explicit patch operation for a nullable log retention policy override.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "op", content = "value", rename_all = "snake_case")]
+pub enum LogRetentionPolicyPatch {
+    Set(RetentionPolicyType),
+    Clear,
+}
+
+/// Explicit patch operation for a nullable log retention limit override.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "op", content = "value", rename_all = "snake_case")]
+pub enum LogRetentionLimitPatch {
+    Set(i32),
     Clear,
 }
 
@@ -253,6 +285,16 @@ pub struct ActionResponse {
     #[schema(example = json!(["core.agent_reader"]))]
     pub default_execution_permission_set_refs: Vec<String>,
 
+    /// Per-action retention policy override for stdout/stderr execution log artifacts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "versions", nullable = true)]
+    pub log_retention_policy: Option<RetentionPolicyType>,
+
+    /// Per-action retention limit override for stdout/stderr execution log artifacts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 4, nullable = true)]
+    pub log_retention_limit: Option<i32>,
+
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
@@ -335,6 +377,16 @@ pub struct ActionSummary {
     #[schema(example = json!(["core.agent_reader"]))]
     pub default_execution_permission_set_refs: Vec<String>,
 
+    /// Per-action retention policy override for stdout/stderr execution log artifacts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "versions", nullable = true)]
+    pub log_retention_policy: Option<RetentionPolicyType>,
+
+    /// Per-action retention limit override for stdout/stderr execution log artifacts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 4, nullable = true)]
+    pub log_retention_limit: Option<i32>,
+
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
@@ -372,6 +424,8 @@ impl From<attune_common::models::action::Action> for ActionResponse {
             is_adhoc: action.is_adhoc,
             accesses_mcp: action.accesses_mcp,
             default_execution_permission_set_refs: action.default_execution_permission_set_refs,
+            log_retention_policy: action.log_retention_policy,
+            log_retention_limit: action.log_retention_limit,
             created: action.created,
             updated: action.updated,
         }
@@ -402,6 +456,8 @@ impl From<attune_common::models::action::Action> for ActionSummary {
             workflow_def: action.workflow_def,
             accesses_mcp: action.accesses_mcp,
             default_execution_permission_set_refs: action.default_execution_permission_set_refs,
+            log_retention_policy: action.log_retention_policy,
+            log_retention_limit: action.log_retention_limit,
             created: action.created,
             updated: action.updated,
         }
@@ -591,6 +647,8 @@ mod tests {
             out_schema: None,
             accesses_mcp: None,
             default_execution_permission_set_refs: Vec::new(),
+            log_retention_policy: None,
+            log_retention_limit: None,
         };
 
         assert!(req.validate().is_err());
@@ -615,6 +673,8 @@ mod tests {
             out_schema: None,
             accesses_mcp: None,
             default_execution_permission_set_refs: Vec::new(),
+            log_retention_policy: None,
+            log_retention_limit: None,
         };
 
         assert!(req.validate().is_ok());
@@ -637,6 +697,8 @@ mod tests {
             out_schema: None,
             accesses_mcp: None,
             default_execution_permission_set_refs: None,
+            log_retention_policy: None,
+            log_retention_limit: None,
         };
 
         // Should be valid even with all None values

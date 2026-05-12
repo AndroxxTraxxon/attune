@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use utoipa::ToSchema;
 use validator::Validate;
 
+use attune_common::models::enums::RetentionPolicyType;
 use attune_common::scheduling::{WorkerAffinity, WorkerToleration};
 
 /// Request DTO for creating a new trigger
@@ -262,6 +263,15 @@ pub struct CreateSensorRequest {
     #[serde(default = "default_true")]
     #[schema(example = true)]
     pub enabled: bool,
+
+    /// Optional per-sensor retention policy override for registered stdout/stderr log artifacts.
+    #[schema(example = "versions", nullable = true)]
+    pub log_retention_policy: Option<RetentionPolicyType>,
+
+    /// Optional per-sensor retention limit override for registered stdout/stderr log artifacts.
+    #[validate(range(min = 1))]
+    #[schema(example = 4, nullable = true)]
+    pub log_retention_limit: Option<i32>,
 }
 
 /// Request DTO for updating a sensor
@@ -300,12 +310,32 @@ pub struct UpdateSensorRequest {
     /// Worker label affinity and anti-affinity for this sensor process.
     #[schema(nullable = true)]
     pub worker_affinity: Option<WorkerAffinity>,
+
+    /// Patch the per-sensor retention policy override for registered stdout/stderr log artifacts.
+    pub log_retention_policy: Option<LogRetentionPolicyPatch>,
+
+    /// Patch the per-sensor retention limit override for registered stdout/stderr log artifacts.
+    pub log_retention_limit: Option<LogRetentionLimitPatch>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 #[serde(tag = "op", content = "value", rename_all = "snake_case")]
 pub enum SensorJsonPatch {
     Set(JsonValue),
+    Clear,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "op", content = "value", rename_all = "snake_case")]
+pub enum LogRetentionPolicyPatch {
+    Set(RetentionPolicyType),
+    Clear,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "op", content = "value", rename_all = "snake_case")]
+pub enum LogRetentionLimitPatch {
+    Set(i32),
     Clear,
 }
 
@@ -365,6 +395,16 @@ pub struct SensorResponse {
     /// Worker label affinity and anti-affinity for this sensor process.
     pub worker_affinity: WorkerAffinity,
 
+    /// Per-sensor retention policy override for registered stdout/stderr log artifacts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "versions", nullable = true)]
+    pub log_retention_policy: Option<RetentionPolicyType>,
+
+    /// Per-sensor retention limit override for registered stdout/stderr log artifacts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 4, nullable = true)]
+    pub log_retention_limit: Option<i32>,
+
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
     pub created: DateTime<Utc>,
@@ -400,6 +440,16 @@ pub struct SensorSummary {
     /// Whether the sensor is enabled
     #[schema(example = true)]
     pub enabled: bool,
+
+    /// Per-sensor retention policy override for registered stdout/stderr log artifacts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "versions", nullable = true)]
+    pub log_retention_policy: Option<RetentionPolicyType>,
+
+    /// Per-sensor retention limit override for registered stdout/stderr log artifacts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 4, nullable = true)]
+    pub log_retention_limit: Option<i32>,
 
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
@@ -473,6 +523,8 @@ impl From<attune_common::models::trigger::Sensor> for SensorResponse {
             worker_selector,
             worker_tolerations,
             worker_affinity,
+            log_retention_policy: sensor.log_retention_policy,
+            log_retention_limit: sensor.log_retention_limit,
             created: sensor.created,
             updated: sensor.updated,
         }
@@ -489,6 +541,8 @@ impl From<attune_common::models::trigger::Sensor> for SensorSummary {
             label: sensor.label,
             description: sensor.description,
             enabled: sensor.enabled,
+            log_retention_policy: sensor.log_retention_policy,
+            log_retention_limit: sensor.log_retention_limit,
             created: sensor.created,
             updated: sensor.updated,
         }
@@ -549,6 +603,8 @@ mod tests {
             worker_tolerations: Vec::new(),
             worker_affinity: WorkerAffinity::default(),
             enabled: true,
+            log_retention_policy: None,
+            log_retention_limit: None,
         };
 
         assert!(req.validate().is_ok());
@@ -579,6 +635,8 @@ mod tests {
             worker_selector: None,
             worker_tolerations: None,
             worker_affinity: None,
+            log_retention_policy: None,
+            log_retention_limit: None,
         };
 
         assert!(req.validate().is_ok());

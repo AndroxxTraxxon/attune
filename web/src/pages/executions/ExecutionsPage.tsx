@@ -504,8 +504,15 @@ export default function ExecutionsPage() {
       >
         {/* Header - always visible */}
         <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3">
+          <div>
             <h1 className="text-3xl font-bold">Executions</h1>
+            {isFetching && hasActiveFilters && (
+              <p className="text-sm text-gray-500 mt-1">
+                Searching executions...
+              </p>
+            )}
+          </div>
+          <div className="flex items-center gap-4">
             <LiveStreamControl
               paused={livePaused}
               onTogglePaused={() => setLivePaused((paused) => !paused)}
@@ -513,11 +520,6 @@ export default function ExecutionsPage() {
               maxItems={DEFAULT_LIVE_LIST_MAX_ITEMS}
               itemLabel="executions"
             />
-            {isFetching && hasActiveFilters && (
-              <p className="text-sm text-gray-500">Searching executions...</p>
-            )}
-          </div>
-          <div className="flex items-center gap-4">
             {/* View mode toggle */}
             <div className="inline-flex rounded-lg border border-gray-300 bg-white shadow-sm">
               <button
