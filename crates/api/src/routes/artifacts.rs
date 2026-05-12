@@ -25,7 +25,10 @@ use axum::{
 };
 use futures::stream::Stream;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::{
+    io::{AsyncReadExt, AsyncSeekExt},
+    time::{sleep, Duration, Instant},
+};
 use tracing::{debug, warn};
 
 use attune_common::audit::{event_type, AuditCategory, AuditEventBuilder, AuditOutcome};
@@ -1944,12 +1947,17 @@ async fn serve_file_from_disk(
     content_type: Option<&str>,
 ) -> ApiResult<axum::response::Response> {
     let full_path = std::path::Path::new(artifacts_dir).join(file_path);
+    let wait_deadline = Instant::now() + Duration::from_millis(500);
 
-    if !full_path.exists() {
-        return Err(ApiError::NotFound(format!(
-            "File for version {} of artifact '{}' not found on disk (expected at '{}')",
-            version, artifact_ref, file_path,
-        )));
+    while !full_path.exists() {
+        if Instant::now() >= wait_deadline {
+            return Err(ApiError::NotFound(format!(
+                "File for version {} of artifact '{}' not found on disk (expected at '{}')",
+                version, artifact_ref, file_path,
+            )));
+        }
+
+        sleep(Duration::from_millis(25)).await;
     }
 
     let bytes = tokio::fs::read(&full_path).await.map_err(|e| {

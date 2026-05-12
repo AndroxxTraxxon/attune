@@ -14,6 +14,9 @@ import {
 import WorkflowExecutionTree from "@/components/executions/WorkflowExecutionTree";
 import ExecutionPreviewPanel from "@/components/executions/ExecutionPreviewPanel";
 import Pagination from "@/components/executions/Pagination";
+import LiveStreamControl, {
+  DEFAULT_LIVE_LIST_MAX_ITEMS,
+} from "@/components/common/LiveStreamControl";
 
 type ViewMode = "all" | "workflow";
 
@@ -241,7 +244,6 @@ const ExecutionsResultsTable = memo(
             </tbody>
           </table>
         </div>
-
       </div>
     );
   },
@@ -260,6 +262,7 @@ export default function ExecutionsPage() {
     if (param === "all" || param === "workflow") return param;
     return "all";
   });
+  const [livePaused, setLivePaused] = useState(false);
 
   // --- Filter input state (updates immediately on keystroke) ---
   const [page, setPage] = useState(1);
@@ -324,7 +327,11 @@ export default function ExecutionsPage() {
   }, [page, pageSize, debouncedFilters, debouncedStatuses, viewMode]);
 
   const { data, isLoading, isFetching, error } = useExecutions(queryParams);
-  const { isConnected } = useExecutionStream({ enabled: true });
+  const { isConnected } = useExecutionStream({
+    enabled: true,
+    paused: livePaused,
+    maxListItems: DEFAULT_LIVE_LIST_MAX_ITEMS,
+  });
 
   const executions = useMemo(() => data?.items || [], [data]);
   const total = data?.pagination?.total_items ?? undefined;
@@ -499,12 +506,13 @@ export default function ExecutionsPage() {
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-bold">Executions</h1>
-            {isConnected && (
-              <div className="flex items-center gap-1.5 text-xs text-green-600 bg-green-50 border border-green-200 rounded-full px-2.5 py-1">
-                <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
-                <span>Live</span>
-              </div>
-            )}
+            <LiveStreamControl
+              paused={livePaused}
+              onTogglePaused={() => setLivePaused((paused) => !paused)}
+              connected={isConnected}
+              maxItems={DEFAULT_LIVE_LIST_MAX_ITEMS}
+              itemLabel="executions"
+            />
             {isFetching && hasActiveFilters && (
               <p className="text-sm text-gray-500">Searching executions...</p>
             )}

@@ -226,6 +226,7 @@ Completion listener advances workflow → Schedules successor tasks → Complete
   - `packs_base_dir` - Where pack files are stored (default: `/opt/attune/packs`)
   - `runtime_envs_dir` - Where isolated runtime environments are created (default: `/opt/attune/runtime_envs`)
   - `artifacts_dir` - Where file-backed artifacts are stored (default: `/opt/attune/artifacts`). Shared volume between API and workers.
+  - `worker.execution_log_retention_policy` / `worker.execution_log_retention_limit` - Retention settings for per-execution stdout/stderr log artifacts. Defaults to `days` / `7`; policy supports `versions`, `days`, `hours`, or `minutes`.
   - `agent.binary_dir` - Directory containing agent binary files for download endpoint (default: `/opt/attune/agent`). Optional — only needed if serving agent binaries via `GET /api/v1/agent/binary`.
   - `agent.bootstrap_token` - Optional shared secret for authenticating agent binary downloads. If set, requests must provide it via the `X-Agent-Token` header. Tokens are not accepted in query strings.
 

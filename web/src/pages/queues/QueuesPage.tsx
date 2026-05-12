@@ -15,9 +15,11 @@ import { hasPermission } from "@/lib/permissions";
 function getMutationErrorMessage(error: unknown): string {
   const maybeApiError = error as { body?: { message?: string } };
   const maybeAxios = error as { response?: { data?: { message?: string } } };
-  return maybeApiError.body?.message ||
+  return (
+    maybeApiError.body?.message ||
     maybeAxios.response?.data?.message ||
-    (error instanceof Error ? error.message : "Failed to update queue");
+    (error instanceof Error ? error.message : "Failed to update queue")
+  );
 }
 
 interface QueueFlagToggleProps {
@@ -52,8 +54,12 @@ function QueueFlagToggle({
 export default function QueuesPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
-  const [enabledFilter, setEnabledFilter] = useState<"all" | "enabled" | "disabled">("all");
-  const [managementFilter, setManagementFilter] = useState<"all" | "api" | "pack">("all");
+  const [enabledFilter, setEnabledFilter] = useState<
+    "all" | "enabled" | "disabled"
+  >("all");
+  const [managementFilter, setManagementFilter] = useState<
+    "all" | "api" | "pack"
+  >("all");
   const [preferredQueueRef, setPreferredQueueRef] = useState("");
   const [statusError, setStatusError] = useState<string | null>(null);
   const pageSize = 20;
@@ -65,13 +71,9 @@ export default function QueuesPage() {
       pageSize,
       search: search.trim() || undefined,
       enabled:
-        enabledFilter === "all"
-          ? undefined
-          : enabledFilter === "enabled",
+        enabledFilter === "all" ? undefined : enabledFilter === "enabled",
       isAdhoc:
-        managementFilter === "all"
-          ? undefined
-          : managementFilter === "api",
+        managementFilter === "all" ? undefined : managementFilter === "api",
     }),
     [enabledFilter, managementFilter, page, search],
   );
@@ -85,14 +87,18 @@ export default function QueuesPage() {
   const actionDescriptionsByRef = useMemo(
     () =>
       new Map(
-        (actionsData?.items ?? []).map((action) => [action.ref, action.description]),
+        (actionsData?.items ?? []).map((action) => [
+          action.ref,
+          action.description,
+        ]),
       ),
     [actionsData?.items],
   );
-  const selectedQueueRef =
-    queues.some((queue) => queue.ref === preferredQueueRef)
-      ? preferredQueueRef
-      : queues[0]?.ref ?? "";
+  const selectedQueueRef = queues.some(
+    (queue) => queue.ref === preferredQueueRef,
+  )
+    ? preferredQueueRef
+    : (queues[0]?.ref ?? "");
   const {
     data: selectedQueueData,
     isLoading: isSelectedQueueLoading,
@@ -101,7 +107,9 @@ export default function QueuesPage() {
   const pagination = data?.pagination;
   const total = pagination?.total_items ?? 0;
   const hasActiveFilters =
-    search.trim().length > 0 || enabledFilter !== "all" || managementFilter !== "all";
+    search.trim().length > 0 ||
+    enabledFilter !== "all" ||
+    managementFilter !== "all";
 
   const selectedQueue = selectedQueueData?.data;
   const canUpdateQueues = hasPermission(user, "queues", "update");
@@ -135,7 +143,8 @@ export default function QueuesPage() {
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Work Queues</h1>
           <p className="mt-2 text-gray-600">
-            Browse queue definitions, inspect queue state, and manage queue processing.
+            Browse queue definitions, inspect queue state, and manage queue
+            processing.
           </p>
         </div>
         <Link
@@ -192,7 +201,9 @@ export default function QueuesPage() {
             <select
               value={managementFilter}
               onChange={(event) => {
-                setManagementFilter(event.target.value as typeof managementFilter);
+                setManagementFilter(
+                  event.target.value as typeof managementFilter,
+                );
                 setPage(1);
               }}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
@@ -232,13 +243,13 @@ export default function QueuesPage() {
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.8fr)_360px]">
         <div>
           <div className="mb-3 text-sm text-gray-600">
-            Select a queue row to inspect it. Use the inline toggles to control inserts and
-            executor processing.
+            Select a queue row to inspect it. Use the inline toggles to control
+            inserts and executor processing.
           </div>
           {canUpdateQueuesResolved && !canUpdateQueues && (
             <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              Queue status controls require the <span className="font-mono">queues:update</span>
-              {" "}permission.
+              Queue status controls require the{" "}
+              <span className="font-mono">queues:update</span> permission.
             </div>
           )}
 
@@ -285,7 +296,8 @@ export default function QueuesPage() {
                     {queues.map((queue) => {
                       const isSelected = queue.ref === selectedQueueRef;
                       const isUpdating =
-                        updateQueue.isPending && updateQueue.variables?.ref === queue.ref;
+                        updateQueue.isPending &&
+                        updateQueue.variables?.ref === queue.ref;
                       const actionDescription = actionDescriptionsByRef.get(
                         queue.dispatch_action_ref,
                       );
@@ -314,7 +326,9 @@ export default function QueuesPage() {
                                   isSelected ? "text-blue-700" : "text-blue-600"
                                 }`}
                               >
-                                {queue.pack_ref ? `${queue.pack_ref}: ${queue.label}` : queue.label}
+                                {queue.pack_ref
+                                  ? `${queue.pack_ref}: ${queue.label}`
+                                  : queue.label}
                               </Link>
                               <div className="truncate text-xs font-mono text-gray-500">
                                 {queue.ref}
@@ -335,22 +349,30 @@ export default function QueuesPage() {
                                 onChange={async (checked) =>
                                   updateOperationalFlag(queue, {
                                     accepting_new_items: checked,
-                                  })}
+                                  })
+                                }
                               />
                               <QueueFlagToggle
                                 label="Executor processing"
                                 checked={queue.enabled}
                                 disabled={isUpdating || !canUpdateQueues}
                                 onChange={async (checked) =>
-                                  updateOperationalFlag(queue, { enabled: checked })}
+                                  updateOperationalFlag(queue, {
+                                    enabled: checked,
+                                  })
+                                }
                               />
                             </div>
                             {isUpdating && (
-                              <div className="mt-2 text-xs text-gray-500">Saving…</div>
+                              <div className="mt-2 text-xs text-gray-500">
+                                Saving…
+                              </div>
                             )}
                           </td>
                           <td className="px-4 py-4 text-sm font-mono text-gray-700">
-                            <div className="truncate">{queue.dispatch_action_ref}</div>
+                            <div className="truncate">
+                              {queue.dispatch_action_ref}
+                            </div>
                             {actionDescription && (
                               <div className="mt-1 whitespace-normal break-words text-xs text-gray-500">
                                 {actionDescription}
@@ -387,7 +409,9 @@ export default function QueuesPage() {
           ) : isSelectedQueueLoading ? (
             <div className="rounded-lg bg-white py-10 text-center shadow">
               <div className="inline-block h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
-              <p className="mt-4 text-sm text-gray-600">Loading queue configuration...</p>
+              <p className="mt-4 text-sm text-gray-600">
+                Loading queue configuration...
+              </p>
             </div>
           ) : selectedQueueError || !selectedQueue ? (
             <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow">

@@ -18,6 +18,17 @@ interface UseEnforcementStreamOptions {
    * Defaults to true.
    */
   enabled?: boolean;
+
+  /**
+   * Whether live updates should be paused for this view.
+   */
+  paused?: boolean;
+
+  /**
+   * Maximum number of records retained in live-updated list caches.
+   * Defaults to 100.
+   */
+  maxListItems?: number;
 }
 
 /** Shape of data coming from WebSocket notifications for enforcements */
@@ -122,11 +133,20 @@ function hasUnsupportedFilters(
 export function useEnforcementStream(
   options: UseEnforcementStreamOptions = {},
 ) {
-  const { enforcementId, enabled = true } = options;
+  const {
+    enforcementId,
+    enabled = true,
+    paused = false,
+    maxListItems = 100,
+  } = options;
   const queryClient = useQueryClient();
 
   const handleNotification = useCallback(
     (raw: Notification) => {
+      if (paused) {
+        return;
+      }
+
       const notification = raw as unknown as EnforcementNotification;
       // Filter by enforcement ID if specified
       if (enforcementId && notification.entity_id !== enforcementId) {
@@ -193,11 +213,11 @@ export function useEnforcementStream(
 
           // Only add new enforcement if it matches the query parameters
           if (enforcementMatchesParams(enforcementData, queryParams)) {
-            // Add to beginning and cap at 50 items to prevent performance issues
+            // Add to beginning and cap retained items to prevent performance issues
             updatedData = [
               enforcementData as EnforcementSummary,
               ...old.data,
-            ].slice(0, 50);
+            ].slice(0, maxListItems);
           } else {
             // Don't modify the list if the new enforcement doesn't match the query
             return;
@@ -206,9 +226,11 @@ export function useEnforcementStream(
 
         const totalItemsDelta = existingIndex >= 0 ? 0 : 1;
         const page = old.pagination?.page ?? 1;
-        const pageSize = old.pagination?.page_size ?? 50;
+        const pageSize = old.pagination?.page_size ?? maxListItems;
         const hasExactTotal = old.pagination?.total_items != null;
-        const nextPagination = old.pagination ? { ...old.pagination } : undefined;
+        const nextPagination = old.pagination
+          ? { ...old.pagination }
+          : undefined;
 
         if (nextPagination) {
           nextPagination.has_previous = page > 1;
@@ -247,13 +269,13 @@ export function useEnforcementStream(
         });
       }
     },
-    [enforcementId, queryClient],
+    [enforcementId, maxListItems, paused, queryClient],
   );
 
   const { connected } = useEntityNotifications(
     "enforcement",
     handleNotification,
-    enabled,
+    enabled && !paused,
   );
 
   return {

@@ -246,11 +246,16 @@ function SensorDetail({ sensorRef }: { sensorRef: string }) {
   const [logStream, setLogStream] = useState<"stdout" | "stderr">("stderr");
   const [followLogs, setFollowLogs] = useState(false);
   const { data: logSummary } = useSensorLogs(sensorRef, Boolean(sensorRef));
+  const selectedLogEntry = logSummary?.logs.find(
+    (log) => log.stream === logStream,
+  );
+  const selectedLogAvailable = Boolean(selectedLogEntry?.artifact_id);
   const { data: logContent, isLoading: logLoading } = useSensorLog(
     sensorRef,
     logStream,
     200,
     followLogs,
+    selectedLogAvailable,
   );
 
   const handleDelete = async () => {
@@ -431,14 +436,17 @@ function SensorDetail({ sensorRef }: { sensorRef: string }) {
             </div>
             <div className="flex gap-2 mb-3">
               {(["stderr", "stdout"] as const).map((stream) => {
-                const entry = logSummary?.logs.find((log) => log.stream === stream);
+                const entry = logSummary?.logs.find(
+                  (log) => log.stream === stream,
+                );
                 return (
                   <button
                     key={stream}
                     onClick={() => setLogStream(stream)}
-                    className={`px-3 py-1 rounded text-sm ${
+                    disabled={!entry?.artifact_id}
+                    className={`px-3 py-1 rounded text-sm disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400 ${
                       logStream === stream
-                        ? "bg-blue-600 text-white"
+                        ? "bg-blue-600 text-white disabled:bg-gray-100 disabled:text-gray-500"
                         : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                     }`}
                   >
@@ -449,7 +457,11 @@ function SensorDetail({ sensorRef }: { sensorRef: string }) {
               })}
             </div>
             <pre className="bg-gray-950 text-gray-100 rounded p-4 overflow-auto max-h-96 text-xs whitespace-pre-wrap">
-              {logLoading ? "Loading log tail..." : logContent || "No log output available"}
+              {!selectedLogAvailable
+                ? `${logStream} log has not been created yet.`
+                : logLoading
+                  ? "Loading log tail..."
+                  : logContent || "No log output available"}
             </pre>
           </div>
         </div>

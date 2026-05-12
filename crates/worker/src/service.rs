@@ -389,6 +389,14 @@ impl WorkerService {
             .as_ref()
             .map(|w| w.max_stderr_bytes)
             .unwrap_or(10 * 1024 * 1024);
+        let execution_log_retention_policy = config
+            .worker
+            .as_ref()
+            .map(|w| w.execution_log_retention_policy);
+        let execution_log_retention_limit = config
+            .worker
+            .as_ref()
+            .map(|w| w.execution_log_retention_limit);
 
         // Get API URL from environment or construct from server config
         let api_url = std::env::var("ATTUNE_API_URL")
@@ -451,6 +459,8 @@ impl WorkerService {
             secret_manager,
             max_stdout_bytes,
             max_stderr_bytes,
+            execution_log_retention_policy,
+            execution_log_retention_limit,
             packs_base_dir.clone(),
             artifacts_dir,
             PathBuf::from(&config.runtime_envs_dir),

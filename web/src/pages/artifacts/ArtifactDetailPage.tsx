@@ -1,4 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
+import LiveStreamControl, {
+  DEFAULT_LIVE_LIST_MAX_ITEMS,
+} from "@/components/common/LiveStreamControl";
 import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -35,16 +38,16 @@ import {
 
 function TextContentViewer({
   artifactId,
-  versionId,
+  versionNumber,
   label,
 }: {
   artifactId: number;
-  versionId?: number;
+  versionNumber?: number;
   label: string;
 }) {
   // Track a fetch key so that when deps change we re-derive initial state
   // instead of calling setState synchronously inside useEffect.
-  const fetchKey = `${artifactId}:${versionId ?? "latest"}`;
+  const fetchKey = `${artifactId}:${versionNumber ?? "latest"}`;
   const [settledKey, setSettledKey] = useState<string | null>(null);
   const [content, setContent] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -55,8 +58,8 @@ function TextContentViewer({
     let cancelled = false;
 
     const token = localStorage.getItem("access_token");
-    const url = versionId
-      ? `${OpenAPI.BASE}/api/v1/artifacts/${artifactId}/versions/${versionId}/download`
+    const url = versionNumber
+      ? `${OpenAPI.BASE}/api/v1/artifacts/${artifactId}/versions/${versionNumber}/download`
       : `${OpenAPI.BASE}/api/v1/artifacts/${artifactId}/download`;
 
     fetch(url, { headers: { Authorization: `Bearer ${token}` } })
@@ -84,7 +87,7 @@ function TextContentViewer({
     return () => {
       cancelled = true;
     };
-  }, [artifactId, versionId, fetchKey]);
+  }, [artifactId, versionNumber, fetchKey]);
 
   if (isLoading) {
     return (
@@ -214,7 +217,7 @@ function VersionRow({
 
   const handleDownload = useCallback(async () => {
     const token = localStorage.getItem("access_token");
-    const url = `${OpenAPI.BASE}/api/v1/artifacts/${artifactId}/versions/${version.id}/download`;
+    const url = `${OpenAPI.BASE}/api/v1/artifacts/${artifactId}/versions/${version.version}/download`;
 
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
@@ -307,7 +310,7 @@ function VersionRow({
           <td colSpan={7} className="px-4 py-3">
             <TextContentViewer
               artifactId={artifactId}
-              versionId={version.id}
+              versionNumber={version.version}
               label={`v${version.version}`}
             />
           </td>
@@ -456,23 +459,45 @@ function ArtifactMetadata({ artifact }: { artifact: ArtifactResponse }) {
 // Versions list
 // ============================================================================
 
-function ArtifactVersionsList({ artifact }: { artifact: ArtifactResponse }) {
+function ArtifactVersionsList({
+  artifact,
+  livePaused,
+  onToggleLivePaused,
+  isConnected,
+}: {
+  artifact: ArtifactResponse;
+  livePaused: boolean;
+  onToggleLivePaused: () => void;
+  isConnected: boolean;
+}) {
   const { data, isLoading, error } = useArtifactVersions(artifact.id);
-  const versions = useMemo(() => data?.data || [], [data]);
+  const versions = useMemo(
+    () => (data?.data || []).slice(0, DEFAULT_LIVE_LIST_MAX_ITEMS),
+    [data],
+  );
 
   return (
     <div className="bg-white shadow rounded-lg overflow-hidden">
       <div className="px-6 py-4 border-b border-gray-200">
-        <div className="flex items-center gap-2">
-          <Hash className="h-5 w-5 text-gray-400" />
-          <h3 className="text-lg font-semibold text-gray-900">
-            Versions
-            {versions.length > 0 && (
-              <span className="ml-2 text-sm font-normal text-gray-500">
-                ({versions.length})
-              </span>
-            )}
-          </h3>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Hash className="h-5 w-5 text-gray-400" />
+            <h3 className="text-lg font-semibold text-gray-900">
+              Versions
+              {versions.length > 0 && (
+                <span className="ml-2 text-sm font-normal text-gray-500">
+                  ({versions.length})
+                </span>
+              )}
+            </h3>
+          </div>
+          <LiveStreamControl
+            paused={livePaused}
+            onTogglePaused={onToggleLivePaused}
+            connected={isConnected}
+            maxItems={DEFAULT_LIVE_LIST_MAX_ITEMS}
+            itemLabel="versions"
+          />
         </div>
       </div>
 
@@ -633,10 +658,13 @@ export default function ArtifactDetailPage() {
 
   const { data, isLoading, error } = useArtifact(artifactId);
   const artifact = data?.data;
+  const [livePaused, setLivePaused] = useState(false);
 
   // Subscribe to real-time updates for this artifact
-  useArtifactStream({
+  const { isConnected } = useArtifactStream({
+    artifactId,
     enabled: true,
+    paused: livePaused,
   });
 
   if (isLoading) {
@@ -699,7 +727,12 @@ export default function ArtifactDetailPage() {
 
       {/* Versions list */}
       <div className="mt-6">
-        <ArtifactVersionsList artifact={artifact} />
+        <ArtifactVersionsList
+          artifact={artifact}
+          livePaused={livePaused}
+          onToggleLivePaused={() => setLivePaused((paused) => !paused)}
+          isConnected={isConnected}
+        />
       </div>
     </div>
   );

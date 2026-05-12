@@ -12,6 +12,9 @@ import {
   useMergedSuggestions,
 } from "@/hooks/useFilterSuggestions";
 import Pagination from "@/components/executions/Pagination";
+import LiveStreamControl, {
+  DEFAULT_LIVE_LIST_MAX_ITEMS,
+} from "@/components/common/LiveStreamControl";
 
 // Memoized filter input component for non-ref fields (e.g. Event ID)
 const FilterInput = memo(
@@ -277,6 +280,7 @@ export default function EnforcementsPage() {
     const status = searchParams.get("status");
     return status ? [status] : [];
   });
+  const [livePaused, setLivePaused] = useState(false);
 
   // --- Debounced filter state (drives API calls, updates after delay) ---
   const [debouncedFilters, setDebouncedFilters] = useState(searchFilters);
@@ -322,7 +326,11 @@ export default function EnforcementsPage() {
   }, [page, pageSize, debouncedFilters, debouncedStatuses]);
 
   const { data, isLoading, isFetching, error } = useEnforcements(queryParams);
-  const { isConnected } = useEnforcementStream({ enabled: true });
+  const { isConnected } = useEnforcementStream({
+    enabled: true,
+    paused: livePaused,
+    maxListItems: DEFAULT_LIVE_LIST_MAX_ITEMS,
+  });
 
   const enforcements = useMemo(() => data?.items || [], [data]);
   const total = data?.pagination?.total_items ?? undefined;
@@ -405,12 +413,13 @@ export default function EnforcementsPage() {
             </p>
           )}
         </div>
-        {isConnected && (
-          <div className="flex items-center gap-2 text-sm text-green-600">
-            <div className="h-2 w-2 rounded-full bg-green-600 animate-pulse" />
-            <span>Live Updates</span>
-          </div>
-        )}
+        <LiveStreamControl
+          paused={livePaused}
+          onTogglePaused={() => setLivePaused((paused) => !paused)}
+          connected={isConnected}
+          maxItems={DEFAULT_LIVE_LIST_MAX_ITEMS}
+          itemLabel="enforcements"
+        />
       </div>
 
       {/* Filter section - always mounted, never unmounts during loading */}

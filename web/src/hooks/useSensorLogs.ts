@@ -16,11 +16,12 @@ export function useSensorLog(
   stream: "stdout" | "stderr",
   tail = 200,
   follow = false,
+  enabled = true,
 ) {
   return useQuery({
     queryKey: ["sensor-log", sensorRef, stream, tail, follow],
     queryFn: () => SensorLogsService.getSensorLog({ sensorRef, stream, tail }),
-    enabled: Boolean(sensorRef),
-    refetchInterval: follow ? 3000 : false,
+    enabled: enabled && Boolean(sensorRef),
+    refetchInterval: enabled && follow ? 3000 : false,
   });
 }

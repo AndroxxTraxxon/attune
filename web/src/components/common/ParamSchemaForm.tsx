@@ -1,5 +1,6 @@
 /* eslint-disable react-refresh/only-export-components -- extractProperties and validateParamSchema are shared utilities co-located with the form component */
 import { useState, useEffect } from "react";
+import SearchableSelect from "@/components/common/SearchableSelect";
 
 /** A JSON-compatible value that can appear in form data */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -30,6 +31,11 @@ export interface ParamSchemaProperty {
   position?: number;
   items?: Record<string, unknown>;
 }
+
+type EnumOption = {
+  value: string;
+  label: string;
+};
 
 export interface ParamSchema {
   [key: string]: ParamSchemaProperty;
@@ -143,6 +149,30 @@ function parseTemplateValue(raw: string, type: string): JsonValue {
  * This is essential for rule configuration, where parameter values may reference
  * event payloads, pack configs, keys, or system variables.
  */
+function EnumTextField({
+  value,
+  onChange,
+  options,
+  placeholder,
+  disabled,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: EnumOption[];
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <SearchableSelect
+      value={options.some((opt) => opt.value === value) ? value : ""}
+      onChange={(selected) => onChange(String(selected))}
+      options={options}
+      placeholder={placeholder || "Select..."}
+      disabled={disabled}
+    />
+  );
+}
+
 export default function ParamSchemaForm({
   schema,
   values,
@@ -255,6 +285,25 @@ export default function ParamSchemaForm({
           rows={3}
           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm disabled:bg-gray-100 disabled:cursor-not-allowed"
           placeholder={getTemplatePlaceholder(key, param)}
+        />
+      );
+    }
+
+    // In template mode, enum fields should stay as free text while still
+    // offering searchable suggestions for literal values.
+    if (param?.enum && param.enum.length > 0) {
+      return (
+        <EnumTextField
+          value={displayValue}
+          onChange={(nextValue) =>
+            handleInputChange(key, parseTemplateValue(nextValue, type))
+          }
+          options={param.enum.map((option: string) => ({
+            value: option,
+            label: option,
+          }))}
+          placeholder={getTemplatePlaceholder(key, param)}
+          disabled={isDisabled}
         />
       );
     }
@@ -390,22 +439,20 @@ export default function ParamSchemaForm({
         );
 
       default:
-        // String type - check for enum
+        // String type - enum fields use the same searchable text pattern
+        // as template-enabled fields so users can pick a value or type one.
         if (param?.enum && param.enum.length > 0) {
           return (
-            <select
-              value={value}
-              onChange={(e) => handleInputChange(key, e.target.value)}
+            <EnumTextField
+              value={String(value)}
+              onChange={(nextValue) => handleInputChange(key, nextValue)}
+              options={param.enum.map((option: string) => ({
+                value: option,
+                label: option,
+              }))}
+              placeholder={param?.description}
               disabled={isDisabled}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
-            >
-              <option value="">Select...</option>
-              {param.enum.map((option: string) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
+            />
           );
         }
 

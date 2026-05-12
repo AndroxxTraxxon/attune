@@ -515,6 +515,15 @@ pub struct WorkerConfig {
     #[serde(default = "default_max_stderr_bytes")]
     pub max_stderr_bytes: usize,
 
+    /// Retention policy for per-execution stdout/stderr log artifacts.
+    #[serde(default = "default_execution_log_retention_policy")]
+    pub execution_log_retention_policy: crate::models::enums::RetentionPolicyType,
+
+    /// Retention limit for per-execution stdout/stderr log artifacts.
+    /// Interpreted according to `execution_log_retention_policy`.
+    #[serde(default = "default_execution_log_retention_limit")]
+    pub execution_log_retention_limit: i32,
+
     /// Graceful shutdown timeout in seconds
     #[serde(default = "default_shutdown_timeout")]
     pub shutdown_timeout: Option<u64>,
@@ -546,6 +555,14 @@ fn default_max_stdout_bytes() -> usize {
 
 fn default_max_stderr_bytes() -> usize {
     10 * 1024 * 1024 // 10MB
+}
+
+fn default_execution_log_retention_policy() -> crate::models::enums::RetentionPolicyType {
+    crate::models::enums::RetentionPolicyType::Days
+}
+
+fn default_execution_log_retention_limit() -> i32 {
+    7
 }
 
 /// Sensor service configuration

@@ -18,6 +18,19 @@ interface UseExecutionStreamOptions {
    * Defaults to true.
    */
   enabled?: boolean;
+
+  /**
+   * Whether live list updates should be paused.
+   * Detail-query updates are also paused when this is true.
+   */
+  paused?: boolean;
+
+  /**
+   * Maximum number of records retained in live-updated list caches.
+   * Defaults to 100 for top-level execution lists. Child execution queries are
+   * intentionally not capped because workflow views need complete task lists.
+   */
+  maxListItems?: number;
 }
 
 /**
@@ -202,11 +215,20 @@ function hasUnsupportedFilters(
  * ```
  */
 export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
-  const { executionId, enabled = true } = options;
+  const {
+    executionId,
+    enabled = true,
+    paused = false,
+    maxListItems = 100,
+  } = options;
   const queryClient = useQueryClient();
 
   const handleNotification = useCallback(
     (notification: Notification) => {
+      if (paused) {
+        return;
+      }
+
       const executionNotification =
         notification as unknown as ExecutionNotification;
       // Filter by execution ID if specified
@@ -339,7 +361,10 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
               }
               updatedData = isChildQuery
                 ? [...old.items, executionData as ExecutionSummary]
-                : [executionData as ExecutionSummary, ...old.items].slice(0, 50);
+                : [executionData as ExecutionSummary, ...old.items].slice(
+                    0,
+                    maxListItems,
+                  );
               totalItemsDelta = 1;
             } else {
               // No boundary crossing: either both match (execution was
@@ -359,7 +384,10 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
               // other lists cap at 50 to prevent unbounded growth.
               updatedData = isChildQuery
                 ? [...old.items, executionData as ExecutionSummary]
-                : [executionData as ExecutionSummary, ...old.items].slice(0, 50);
+                : [executionData as ExecutionSummary, ...old.items].slice(
+                    0,
+                    maxListItems,
+                  );
               totalItemsDelta = 1;
             } else {
               return;
@@ -369,9 +397,13 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
 
         // Update the query with the new data
         const page = old.pagination?.page ?? 1;
-        const pageSize = old.pagination?.page_size ?? (isChildQuery ? old.items.length : 50);
+        const pageSize =
+          old.pagination?.page_size ??
+          (isChildQuery ? old.items.length : maxListItems);
         const hasExactTotal = old.pagination?.total_items != null;
-        const nextPagination = old.pagination ? { ...old.pagination } : undefined;
+        const nextPagination = old.pagination
+          ? { ...old.pagination }
+          : undefined;
 
         if (nextPagination) {
           nextPagination.has_previous = page > 1;
@@ -385,7 +417,11 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
             nextPagination.total_pages =
               pageSize > 0 ? Math.ceil(newTotal / pageSize) : 0;
             nextPagination.has_next = page * pageSize < newTotal;
-          } else if (!isChildQuery && totalItemsDelta > 0 && old.items.length >= pageSize) {
+          } else if (
+            !isChildQuery &&
+            totalItemsDelta > 0 &&
+            old.items.length >= pageSize
+          ) {
             nextPagination.has_next = true;
           }
         }
@@ -397,13 +433,13 @@ export function useExecutionStream(options: UseExecutionStreamOptions = {}) {
         });
       });
     },
-    [executionId, queryClient],
+    [executionId, maxListItems, paused, queryClient],
   );
 
   const { connected } = useEntityNotifications(
     "execution",
     handleNotification,
-    enabled,
+    enabled && !paused,
   );
 
   return {

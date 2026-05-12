@@ -207,6 +207,11 @@ worker:
   max_concurrent_tasks: 10
   heartbeat_interval: 30  # seconds
   task_timeout: 300       # seconds
+
+  # Per-execution stdout/stderr log artifact retention.
+  # Policy can be: versions, days, hours, or minutes.
+  execution_log_retention_policy: days
+  execution_log_retention_limit: 7
 ```
 
 ## Environment-Specific Configuration

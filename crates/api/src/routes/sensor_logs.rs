@@ -136,16 +136,16 @@ async fn get_sensor_log(
         .join(&sensor_ref)
         .join(format!("{}.log", stream));
 
-    let mut content = tokio::fs::read_to_string(&log_path).await.map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            ApiError::NotFound(format!(
-                "Sensor log file not found at '{}'",
-                log_path.display()
-            ))
-        } else {
-            ApiError::InternalServerError(format!("Failed to read sensor log: {}", e))
+    let mut content = match tokio::fs::read_to_string(&log_path).await {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(ApiError::InternalServerError(format!(
+                "Failed to read sensor log: {}",
+                e
+            )));
         }
-    })?;
+    };
 
     if let Some(tail) = query.tail.filter(|tail| *tail > 0) {
         let lines = content.lines().collect::<Vec<_>>();

@@ -7,6 +7,12 @@ import {
 
 interface UseArtifactStreamOptions {
   /**
+   * Optional artifact ID to filter updates for a specific artifact.
+   * If not provided, receives updates for all artifacts.
+   */
+  artifactId?: number;
+
+  /**
    * Optional execution ID to filter artifact updates for a specific execution.
    * If not provided, receives updates for all artifacts.
    */
@@ -17,6 +23,11 @@ interface UseArtifactStreamOptions {
    * Defaults to true.
    */
   enabled?: boolean;
+
+  /**
+   * Whether live artifact updates should be paused for this view.
+   */
+  paused?: boolean;
 }
 
 /** Shape of data coming from WebSocket notifications for artifacts */
@@ -61,25 +72,46 @@ interface ArtifactNotificationPayload {
  * ```
  */
 export function useArtifactStream(options: UseArtifactStreamOptions = {}) {
-  const { executionId, enabled = true } = options;
+  const { artifactId, executionId, enabled = true, paused = false } = options;
   const queryClient = useQueryClient();
 
   const handleNotification = useCallback(
     (raw: Notification) => {
+      if (paused) {
+        return;
+      }
+
       const notification = raw as unknown as ArtifactNotification;
       const payload = notification.payload;
+
+      // If we're filtering by artifact ID, only process matching artifacts
+      if (artifactId && notification.entity_id !== artifactId) {
+        return;
+      }
 
       // If we're filtering by execution ID, only process matching artifacts
       if (executionId && payload?.execution !== executionId) {
         return;
       }
 
-      const artifactId = notification.entity_id;
+      const updatedArtifactId = notification.entity_id;
       const artifactExecution = payload?.execution;
+
+      // Refresh artifact list caches so list pages pick up created/updated artifacts.
+      queryClient.invalidateQueries({
+        queryKey: ["artifacts", "list"],
+        exact: false,
+      });
 
       // Invalidate the specific artifact query (used by ProgressDetail, TextFileDetail)
       queryClient.invalidateQueries({
-        queryKey: ["artifacts", artifactId],
+        queryKey: ["artifacts", updatedArtifactId],
+      });
+
+      // Artifact update notifications can represent newly-created versions
+      // or size/finalization changes, so refresh the versions table too.
+      queryClient.invalidateQueries({
+        queryKey: ["artifacts", updatedArtifactId, "versions"],
       });
 
       // Invalidate the execution artifacts list query
@@ -97,7 +129,7 @@ export function useArtifactStream(options: UseArtifactStreamOptions = {}) {
           ["artifact_progress", artifactExecution],
           (old: ArtifactProgressSummary | undefined) => ({
             ...old,
-            artifactId,
+            artifactId: updatedArtifactId,
             name: payload.name ?? null,
             percent: payload.progress_percent as number,
             message: payload.progress_message ?? null,
@@ -107,13 +139,13 @@ export function useArtifactStream(options: UseArtifactStreamOptions = {}) {
         );
       }
     },
-    [executionId, queryClient],
+    [artifactId, executionId, paused, queryClient],
   );
 
   const { connected } = useEntityNotifications(
     "artifact",
     handleNotification,
-    enabled,
+    enabled && !paused,
   );
 
   return {

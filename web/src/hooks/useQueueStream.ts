@@ -9,6 +9,7 @@ import { queueKeys } from "@/hooks/useQueues";
 interface UseQueueStreamOptions {
   queueRef?: string;
   enabled?: boolean;
+  paused?: boolean;
 }
 
 interface WorkQueueNotificationPayload {
@@ -17,7 +18,9 @@ interface WorkQueueNotificationPayload {
 }
 
 function resolveQueueRef(notification: Notification): string | undefined {
-  const payload = notification.payload as WorkQueueNotificationPayload | undefined;
+  const payload = notification.payload as
+    | WorkQueueNotificationPayload
+    | undefined;
   if (notification.entity_type === "work_queue") {
     return payload?.ref;
   }
@@ -25,11 +28,15 @@ function resolveQueueRef(notification: Notification): string | undefined {
 }
 
 export function useQueueStream(options: UseQueueStreamOptions = {}) {
-  const { queueRef, enabled = true } = options;
+  const { queueRef, enabled = true, paused = false } = options;
   const queryClient = useQueryClient();
 
   const handleNotification = useCallback(
     (notification: Notification) => {
+      if (paused) {
+        return;
+      }
+
       const updatedQueueRef = resolveQueueRef(notification);
       if (queueRef && updatedQueueRef && updatedQueueRef !== queueRef) {
         return;
@@ -46,9 +53,21 @@ export function useQueueStream(options: UseQueueStreamOptions = {}) {
         });
       }
     },
-    [queryClient, queueRef],
+    [paused, queryClient, queueRef],
   );
 
-  useEntityNotifications("work_queue", handleNotification, enabled);
-  useEntityNotifications("work_queue_item", handleNotification, enabled);
+  const queueStream = useEntityNotifications(
+    "work_queue",
+    handleNotification,
+    enabled && !paused,
+  );
+  const queueItemStream = useEntityNotifications(
+    "work_queue_item",
+    handleNotification,
+    enabled && !paused,
+  );
+
+  return {
+    isConnected: queueStream.connected || queueItemStream.connected,
+  };
 }

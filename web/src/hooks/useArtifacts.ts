@@ -18,6 +18,8 @@ export type OwnerType = "system" | "pack" | "action" | "sensor" | "rule";
 
 export type RetentionPolicyType = "versions" | "days" | "hours" | "minutes";
 
+const MAX_ARTIFACT_VERSIONS_RETAINED = 100;
+
 export interface ArtifactSummary {
   id: number;
   ref: string;
@@ -195,7 +197,11 @@ export function useArtifactVersions(artifactId: number | undefined) {
           },
         },
       );
-      return response;
+
+      return {
+        ...response,
+        data: response.data.slice(0, MAX_ARTIFACT_VERSIONS_RETAINED),
+      };
     },
     enabled: !!artifactId,
     staleTime: 10000,

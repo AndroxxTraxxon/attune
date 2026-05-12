@@ -7,6 +7,9 @@ import {
   Notification,
 } from "@/contexts/WebSocketContext";
 import { Search, X } from "lucide-react";
+import LiveStreamControl, {
+  DEFAULT_LIVE_LIST_MAX_ITEMS,
+} from "@/components/common/LiveStreamControl";
 import AutocompleteInput from "@/components/common/AutocompleteInput";
 import {
   useFilterSuggestions,
@@ -245,6 +248,8 @@ export default function EventsPage() {
   // --- Autocomplete suggestions ---
   const baseSuggestions = useFilterSuggestions();
 
+  const [livePaused, setLivePaused] = useState(false);
+
   // Additional refs discovered via WebSocket notifications (accumulated over time)
   const [wsRefs, setWsRefs] = useState<{
     triggers: string[];
@@ -267,6 +272,10 @@ export default function EventsPage() {
   // Set up WebSocket for real-time event updates with stable callback
   const handleEventNotification = useCallback(
     (notification: Notification) => {
+      if (livePaused) {
+        return;
+      }
+
       if (notification.notification_type === "event_created") {
         const payload = notification.payload as Partial<EventSummary> & {
           payload?: unknown;
@@ -363,14 +372,18 @@ export default function EventsPage() {
                     currentPageSize > 0
                       ? Math.ceil(newTotal / currentPageSize)
                       : 0;
-                  nextPagination.has_next = currentPage * currentPageSize < newTotal;
+                  nextPagination.has_next =
+                    currentPage * currentPageSize < newTotal;
                 } else if (oldData.items.length >= currentPageSize) {
                   nextPagination.has_next = true;
                 }
               }
               return {
                 ...oldData,
-                items: [newEvent, ...oldData.items].slice(0, pageSize),
+                items: [newEvent, ...oldData.items].slice(
+                  0,
+                  DEFAULT_LIVE_LIST_MAX_ITEMS,
+                ),
                 pagination: nextPagination,
               };
             }
@@ -380,7 +393,8 @@ export default function EventsPage() {
               nextPagination.total_items = newTotal;
               nextPagination.total_pages =
                 currentPageSize > 0 ? Math.ceil(newTotal / currentPageSize) : 0;
-              nextPagination.has_next = currentPage * currentPageSize < newTotal;
+              nextPagination.has_next =
+                currentPage * currentPageSize < newTotal;
             }
 
             return {
@@ -391,12 +405,13 @@ export default function EventsPage() {
         );
       }
     },
-    [queryClient, queryParams, page, pageSize, debouncedFilters],
+    [queryClient, queryParams, page, pageSize, debouncedFilters, livePaused],
   );
 
   const { connected: wsConnected } = useEntityNotifications(
     "event",
     handleEventNotification,
+    !livePaused,
   );
 
   const { data, isLoading, isFetching, error } = useEvents(queryParams);
@@ -460,12 +475,13 @@ export default function EventsPage() {
               <p className="text-sm text-gray-500 mt-1">Searching events...</p>
             )}
           </div>
-          {wsConnected && (
-            <div className="flex items-center gap-2 text-sm text-green-600">
-              <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></div>
-              <span>Live updates</span>
-            </div>
-          )}
+          <LiveStreamControl
+            paused={livePaused}
+            onTogglePaused={() => setLivePaused((paused) => !paused)}
+            connected={wsConnected}
+            maxItems={DEFAULT_LIVE_LIST_MAX_ITEMS}
+            itemLabel="events"
+          />
         </div>
       </div>
 

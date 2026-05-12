@@ -8,6 +8,9 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
+import LiveStreamControl, {
+  DEFAULT_LIVE_LIST_MAX_ITEMS,
+} from "@/components/common/LiveStreamControl";
 import OnOffSwitch from "@/components/common/OnOffSwitch";
 import Pagination from "@/components/executions/Pagination";
 import QueueConfigSummary from "@/components/queues/QueueConfigSummary";
@@ -47,15 +50,31 @@ const STATUS_FILTERS: Array<{
     label: "Pending only",
     statuses: [WorkQueueItemStatus.QUEUED, WorkQueueItemStatus.RETRY],
   },
-  { value: WorkQueueItemStatus.QUEUED, label: "Queued", statuses: [WorkQueueItemStatus.QUEUED] },
-  { value: WorkQueueItemStatus.RETRY, label: "Retry", statuses: [WorkQueueItemStatus.RETRY] },
-  { value: WorkQueueItemStatus.LEASED, label: "Leased", statuses: [WorkQueueItemStatus.LEASED] },
+  {
+    value: WorkQueueItemStatus.QUEUED,
+    label: "Queued",
+    statuses: [WorkQueueItemStatus.QUEUED],
+  },
+  {
+    value: WorkQueueItemStatus.RETRY,
+    label: "Retry",
+    statuses: [WorkQueueItemStatus.RETRY],
+  },
+  {
+    value: WorkQueueItemStatus.LEASED,
+    label: "Leased",
+    statuses: [WorkQueueItemStatus.LEASED],
+  },
   {
     value: WorkQueueItemStatus.COMPLETED,
     label: "Completed",
     statuses: [WorkQueueItemStatus.COMPLETED],
   },
-  { value: WorkQueueItemStatus.FAILED, label: "Failed", statuses: [WorkQueueItemStatus.FAILED] },
+  {
+    value: WorkQueueItemStatus.FAILED,
+    label: "Failed",
+    statuses: [WorkQueueItemStatus.FAILED],
+  },
   {
     value: WorkQueueItemStatus.SKIPPED,
     label: "Skipped",
@@ -70,8 +89,10 @@ const STATUS_FILTERS: Array<{
 
 function getErrorMessage(error: unknown, fallback: string): string {
   const maybeAxios = error as { response?: { data?: { message?: string } } };
-  return maybeAxios.response?.data?.message ||
-    (error instanceof Error ? error.message : fallback);
+  return (
+    maybeAxios.response?.data?.message ||
+    (error instanceof Error ? error.message : fallback)
+  );
 }
 
 interface QueueFlagToggleProps {
@@ -129,18 +150,25 @@ export function QueueDetailPage() {
   const [enqueueSourceFilter, setEnqueueSourceFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("pending");
   const [showCreateItemModal, setShowCreateItemModal] = useState(false);
-  const [editingItem, setEditingItem] = useState<WorkQueueItemResponse | null>(null);
+  const [editingItem, setEditingItem] = useState<WorkQueueItemResponse | null>(
+    null,
+  );
   const [actionError, setActionError] = useState<string | null>(null);
   const [showRawConfigJson, setShowRawConfigJson] = useState(false);
+  const [livePaused, setLivePaused] = useState(false);
   const pageSize = 20;
 
   const { data, isLoading, error } = useQueue(queueRef);
   const updateQueue = useUpdateQueue();
-  useQueueStream({ queueRef });
+  const { isConnected: isQueueStreamConnected } = useQueueStream({
+    queueRef,
+    paused: livePaused,
+  });
   const queue = data?.data;
   const { data: actionData } = useAction(queue?.dispatch_action_ref || "");
   const statuses = useMemo(
-    () => STATUS_FILTERS.find((filter) => filter.value === statusFilter)?.statuses,
+    () =>
+      STATUS_FILTERS.find((filter) => filter.value === statusFilter)?.statuses,
     [statusFilter],
   );
 
@@ -167,7 +195,9 @@ export function QueueDetailPage() {
   const canUpdateQueues = hasPermission(user, "queues", "update");
   const canUpdateQueuesResolved = true;
   const queueFlagControlsDisabled =
-    !queue || updateQueue.isPending || (canUpdateQueuesResolved && !canUpdateQueues);
+    !queue ||
+    updateQueue.isPending ||
+    (canUpdateQueuesResolved && !canUpdateQueues);
 
   const clearItemFilters = () => {
     setItemKeyFilter("");
@@ -201,7 +231,9 @@ export function QueueDetailPage() {
       await deleteQueueItem.mutateAsync({ ref: queueRef, itemId: item.id });
       setActionError(null);
     } catch (deleteError) {
-      setActionError(getErrorMessage(deleteError, "Failed to delete queue item"));
+      setActionError(
+        getErrorMessage(deleteError, "Failed to delete queue item"),
+      );
     }
   };
 
@@ -238,6 +270,14 @@ export function QueueDetailPage() {
           </Link>
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <h1 className="text-3xl font-bold text-gray-900">{queue.label}</h1>
+            <LiveStreamControl
+              paused={livePaused}
+              onTogglePaused={() => setLivePaused((paused) => !paused)}
+              connected={isQueueStreamConnected}
+              maxItems={DEFAULT_LIVE_LIST_MAX_ITEMS}
+              itemLabel="queue updates"
+              showRetentionHint={false}
+            />
             {sourceBadge && (
               <span
                 className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${sourceBadge.classes}`}
@@ -258,10 +298,14 @@ export function QueueDetailPage() {
               disabled={queueFlagControlsDisabled}
               onChange={async (checked) => {
                 try {
-                  await updateOperationalFlag(updateQueue, queue, { enabled: checked });
+                  await updateOperationalFlag(updateQueue, queue, {
+                    enabled: checked,
+                  });
                   setActionError(null);
                 } catch (toggleError) {
-                  setActionError(getErrorMessage(toggleError, "Failed to update queue"));
+                  setActionError(
+                    getErrorMessage(toggleError, "Failed to update queue"),
+                  );
                 }
               }}
             />
@@ -277,15 +321,17 @@ export function QueueDetailPage() {
                   });
                   setActionError(null);
                 } catch (toggleError) {
-                  setActionError(getErrorMessage(toggleError, "Failed to update queue"));
+                  setActionError(
+                    getErrorMessage(toggleError, "Failed to update queue"),
+                  );
                 }
               }}
             />
           </div>
           {canUpdateQueuesResolved && !canUpdateQueues && (
             <p className="mt-3 text-sm text-gray-500">
-              Queue status controls require the <span className="font-mono">queues:update</span>
-              {" "}permission.
+              Queue status controls require the{" "}
+              <span className="font-mono">queues:update</span> permission.
             </p>
           )}
         </div>
@@ -345,11 +391,14 @@ export function QueueDetailPage() {
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Queue items</h2>
             <p className="mt-1 text-sm text-gray-500">
-              Pending items can be edited or deleted while they remain queued or retrying.
+              Pending items can be edited or deleted while they remain queued or
+              retrying.
             </p>
           </div>
           <div className="text-sm text-gray-600">
-            {itemTotal > 0 ? `${itemTotal} total item${itemTotal === 1 ? "" : "s"}` : "No items yet"}
+            {itemTotal > 0
+              ? `${itemTotal} total item${itemTotal === 1 ? "" : "s"}`
+              : "No items yet"}
             {isItemsFetching && !isItemsLoading ? " • refreshing…" : ""}
           </div>
         </div>
@@ -421,12 +470,16 @@ export function QueueDetailPage() {
           </div>
         ) : itemsError ? (
           <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-700">
-            {itemsError instanceof Error ? itemsError.message : "Failed to load queue items"}
+            {itemsError instanceof Error
+              ? itemsError.message
+              : "Failed to load queue items"}
           </div>
         ) : items.length === 0 ? (
           <div className="rounded-lg border border-dashed border-gray-300 px-6 py-12 text-center">
             <Eye className="mx-auto h-10 w-10 text-gray-400" />
-            <p className="mt-4 text-gray-600">No queue items match the current filters.</p>
+            <p className="mt-4 text-gray-600">
+              No queue items match the current filters.
+            </p>
           </div>
         ) : (
           <>
@@ -434,13 +487,27 @@ export function QueueDetailPage() {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">ID / key</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Status</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Priority</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Payload</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Metadata</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Requested / updated</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">Actions</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                      ID / key
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                      Status
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                      Priority
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                      Payload
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                      Metadata
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                      Requested / updated
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200 bg-white">
@@ -450,7 +517,9 @@ export function QueueDetailPage() {
                     return (
                       <tr key={item.id} className="hover:bg-gray-50">
                         <td className="px-4 py-4 align-top">
-                          <div className="text-sm font-semibold text-gray-900">#{item.id}</div>
+                          <div className="text-sm font-semibold text-gray-900">
+                            #{item.id}
+                          </div>
                           <div className="mt-1 font-mono text-xs text-gray-500">
                             {item.item_key || "—"}
                           </div>
@@ -459,7 +528,9 @@ export function QueueDetailPage() {
                           </div>
                         </td>
                         <td className="px-4 py-4 align-top whitespace-nowrap">
-                          <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${statusBadge.classes}`}>
+                          <span
+                            className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${statusBadge.classes}`}
+                          >
                             {statusBadge.label}
                           </span>
                           {!isMutable && (
@@ -487,9 +558,14 @@ export function QueueDetailPage() {
                         </td>
                         <td className="px-4 py-4 align-top text-xs text-gray-600">
                           <div>Created: {formatDateTime(item.created)}</div>
-                          <div className="mt-1">Updated: {formatDateTime(item.updated)}</div>
+                          <div className="mt-1">
+                            Updated: {formatDateTime(item.updated)}
+                          </div>
                           {item.lease_expires_at && (
-                            <div className="mt-1">Lease expires: {formatDateTime(item.lease_expires_at)}</div>
+                            <div className="mt-1">
+                              Lease expires:{" "}
+                              {formatDateTime(item.lease_expires_at)}
+                            </div>
                           )}
                         </td>
                         <td className="px-4 py-4 align-top text-right">
@@ -514,7 +590,9 @@ export function QueueDetailPage() {
                                 </button>
                               </>
                             ) : (
-                              <span className="text-xs text-gray-400">Immutable</span>
+                              <span className="text-xs text-gray-400">
+                                Immutable
+                              </span>
                             )}
                           </div>
                         </td>
@@ -531,7 +609,9 @@ export function QueueDetailPage() {
       <div className="rounded-lg bg-white p-5 shadow">
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Queue config</h2>
+            <h2 className="text-lg font-semibold text-gray-900">
+              Queue config
+            </h2>
             <p className="mt-1 text-sm text-gray-500">
               {showRawConfigJson
                 ? "Inspect the persisted queue item schema, action params, and queue config JSON."

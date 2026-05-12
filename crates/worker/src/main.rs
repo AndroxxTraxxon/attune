@@ -63,6 +63,9 @@ async fn main() -> Result<()> {
                 task_timeout: 300,
                 max_stdout_bytes: 10 * 1024 * 1024,
                 max_stderr_bytes: 10 * 1024 * 1024,
+                execution_log_retention_policy:
+                    attune_common::models::enums::RetentionPolicyType::Days,
+                execution_log_retention_limit: 7,
                 shutdown_timeout: Some(30),
                 stream_logs: true,
             });

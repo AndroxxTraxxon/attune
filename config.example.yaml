@@ -144,6 +144,8 @@ security:
 #   max_concurrent_tasks: 10
 #   heartbeat_interval: 30  # seconds
 #   task_timeout: 300       # seconds
+#   execution_log_retention_policy: days  # versions, days, hours, or minutes
+#   execution_log_retention_limit: 7      # interpreted by the selected policy
 
 # Packs directory (where automation pack files are stored)
 # packs_base_dir: /opt/attune/packs

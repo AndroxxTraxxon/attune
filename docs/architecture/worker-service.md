@@ -322,6 +322,8 @@ worker:
   max_concurrent_tasks: 10           # Max parallel executions
   heartbeat_interval: 30             # Seconds between heartbeats
   task_timeout: 300                  # Default task timeout (seconds)
+  execution_log_retention_policy: days  # stdout/stderr artifact retention policy: versions, days, hours, minutes
+  execution_log_retention_limit: 7      # Retention limit interpreted by the selected policy
 
 security:
   encryption_key: "your-encryption-key"  # Required for encrypted secrets

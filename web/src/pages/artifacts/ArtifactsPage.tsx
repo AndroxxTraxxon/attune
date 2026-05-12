@@ -1,6 +1,9 @@
 import { useState, useCallback, useMemo, useEffect, memo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Search, X, Eye, EyeOff, Download, Package } from "lucide-react";
+import LiveStreamControl, {
+  DEFAULT_LIVE_LIST_MAX_ITEMS,
+} from "@/components/common/LiveStreamControl";
 import Pagination from "@/components/executions/Pagination";
 import {
   useArtifactsList,
@@ -88,11 +91,14 @@ const ArtifactsResultsTable = memo(
 
     return (
       <div className="relative">
-        {isFetching && (
-          <div className="absolute inset-0 bg-white/60 z-10 flex items-center justify-center rounded-lg">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
-          </div>
-        )}
+        <div className="mb-2 h-4 text-xs text-gray-500">
+          {isFetching && (
+            <div className="flex items-center gap-2">
+              <div className="h-3 w-3 animate-spin rounded-full border-b-2 border-blue-600" />
+              <span>Refreshing artifacts…</span>
+            </div>
+          )}
+        </div>
 
         {error && (
           <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
@@ -228,7 +234,6 @@ const ArtifactsResultsTable = memo(
             </table>
           </div>
         </div>
-
       </div>
     );
   },
@@ -307,10 +312,15 @@ export default function ArtifactsPage() {
     debouncedExecution,
   ]);
 
+  const [livePaused, setLivePaused] = useState(false);
+
   const { data, isLoading, isFetching, error } = useArtifactsList(queryParams);
 
   // Subscribe to real-time artifact updates
-  useArtifactStream({ enabled: true });
+  const { isConnected } = useArtifactStream({
+    enabled: true,
+    paused: livePaused,
+  });
 
   const artifacts = useMemo(() => data?.items || [], [data]);
   const total = data?.pagination?.total_items || 0;
@@ -344,6 +354,14 @@ export default function ArtifactsPage() {
               Files, progress indicators, and data produced by executions
             </p>
           </div>
+          <LiveStreamControl
+            paused={livePaused}
+            onTogglePaused={() => setLivePaused((paused) => !paused)}
+            connected={isConnected}
+            maxItems={DEFAULT_LIVE_LIST_MAX_ITEMS}
+            itemLabel="artifacts"
+            showRetentionHint={false}
+          />
         </div>
       </div>
 
