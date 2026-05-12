@@ -1845,6 +1845,10 @@ mod tests {
             })),
             meta: None,
             last_heartbeat: None,
+            cordoned: false,
+            cordon_reason: None,
+            cordoned_by: None,
+            cordoned_at: None,
             created: Utc::now(),
             updated: Utc::now(),
         };
@@ -1916,6 +1920,10 @@ mod tests {
             capabilities: None,
             meta: None,
             last_heartbeat: None,
+            cordoned: false,
+            cordon_reason: None,
+            cordoned_by: None,
+            cordoned_at: None,
             created: Utc::now(),
             updated: Utc::now(),
         };

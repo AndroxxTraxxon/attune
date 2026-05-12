@@ -98,6 +98,43 @@ pub fn generate_refresh_token(
     generate_token(identity_id, login, config, TokenType::Refresh)
 }
 
+/// Generate a revokable refresh JWT backed by an integration token record.
+///
+/// The refresh token subject is the `integration_token.id`. The API refresh
+/// route resolves that record to an identity and fails closed after revocation,
+/// expiry, deletion, or identity freeze. Access JWTs minted from this refresh
+/// flow continue to use the identity ID as their subject.
+pub fn generate_integration_refresh_token(
+    integration_token_id: i64,
+    identity_id: i64,
+    login: &str,
+    config: &JwtConfig,
+) -> Result<String, JwtError> {
+    let now = Utc::now();
+    let exp = (now + Duration::seconds(config.refresh_token_expiration)).timestamp();
+
+    let claims = Claims {
+        sub: integration_token_id.to_string(),
+        login: login.to_string(),
+        iat: now.timestamp(),
+        exp,
+        token_type: TokenType::Refresh,
+        scope: Some("integration_token".to_string()),
+        metadata: Some(serde_json::json!({
+            "identity_id": identity_id,
+            "integration_token_id": integration_token_id,
+            "auth_method": "integration_token",
+        })),
+    };
+
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(config.secret.as_bytes()),
+    )
+    .map_err(|e| JwtError::EncodeError(e.to_string()))
+}
+
 /// Generate a JWT token with a specific type
 pub fn generate_token(
     identity_id: i64,

@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { PermissionsService } from "@/api";
+import apiClient from "@/lib/api-client";
 import type {
   CreateIdentityRequest,
   UpdateIdentityRequest,
@@ -7,6 +8,36 @@ import type {
   PermissionSetSummary,
   UpdatePermissionSetRequest,
 } from "@/api";
+
+export interface IntegrationToken {
+  id: number;
+  identity_id: number;
+  label: string;
+  description?: string | null;
+  token_prefix: string;
+  token_suffix: string;
+  created_by?: number | null;
+  expires_at?: string | null;
+  last_used_at?: string | null;
+  last_used_ip?: string | null;
+  revoked_at?: string | null;
+  revoked_by?: number | null;
+  revocation_reason?: string | null;
+  active: boolean;
+  created: string;
+  updated: string;
+}
+
+export interface CreateIntegrationTokenInput {
+  label: string;
+  description?: string | null;
+  expires_at?: string | null;
+}
+
+export interface CreateIntegrationTokenResponse {
+  token: string;
+  integration_token: IntegrationToken;
+}
 
 // Fetch all identities with pagination
 export function useIdentities(params?: { page?: number; pageSize?: number }) {
@@ -272,6 +303,94 @@ export function useUnfreezeIdentity() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["identities"] });
+    },
+  });
+}
+
+export function useIntegrationTokens(identityId: number) {
+  return useQuery({
+    queryKey: ["identities", identityId, "integration-tokens"],
+    queryFn: async () => {
+      const response = await apiClient.get<{ data: IntegrationToken[] }>(
+        `/api/v1/identities/${identityId}/integration-tokens`,
+      );
+      return response.data.data;
+    },
+    enabled: identityId > 0,
+    staleTime: 30000,
+  });
+}
+
+export function useCreateIntegrationToken() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      identityId,
+      data,
+    }: {
+      identityId: number;
+      data: CreateIntegrationTokenInput;
+    }) => {
+      const response = await apiClient.post<{
+        data: CreateIntegrationTokenResponse;
+      }>(`/api/v1/identities/${identityId}/integration-tokens`, data);
+      return response.data.data;
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ["identities", variables.identityId, "integration-tokens"],
+      });
+    },
+  });
+}
+
+export function useRevokeIntegrationToken() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      identityId,
+      tokenId,
+      reason,
+    }: {
+      identityId: number;
+      tokenId: number;
+      reason?: string;
+    }) => {
+      const response = await apiClient.post<{ data: IntegrationToken }>(
+        `/api/v1/identities/${identityId}/integration-tokens/${tokenId}/revoke`,
+        { reason },
+      );
+      return response.data.data;
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ["identities", variables.identityId, "integration-tokens"],
+      });
+    },
+  });
+}
+
+export function useDeleteIntegrationToken() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      identityId,
+      tokenId,
+    }: {
+      identityId: number;
+      tokenId: number;
+    }) => {
+      await apiClient.delete(
+        `/api/v1/identities/${identityId}/integration-tokens/${tokenId}`,
+      );
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ["identities", variables.identityId, "integration-tokens"],
+      });
     },
   });
 }

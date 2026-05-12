@@ -11,21 +11,35 @@
 //! - Monitoring sensor health and restarting failed sensors
 
 use anyhow::{anyhow, Result};
-use attune_common::models::{runtime::RuntimeExecutionConfig, Id, Sensor, Trigger};
+use attune_common::models::{
+    runtime::RuntimeExecutionConfig, Id, Sensor, SensorProcess, SensorProcessStatus, Trigger,
+};
+use attune_common::mq::{Connection, Publisher, PublisherConfig};
 use attune_common::repositories::{
-    FindById, List, RuntimeRepository, RuntimeVersionRepository, TriggerRepository,
-    WorkerRepository,
+    sensor_process::{
+        MarkSensorProcessFailedInput, MarkSensorProcessStoppedInput,
+        RecordSensorProcessAlertedInput, UpsertSensorProcessStartInput,
+    },
+    FindById, List, RuntimeRepository, RuntimeVersionRepository, SensorProcessRepository,
+    SensorRepository, TriggerRepository, WorkerRepository,
 };
 use attune_common::runtime_detection::normalize_runtime_name;
+use attune_common::scheduling::{
+    worker_labels_from_capabilities, worker_matches_placement, worker_taints_from_capabilities,
+};
+use attune_common::system_alert::{emit_core_alert, SystemAlert};
 use attune_common::version_matching::select_best_version;
+use chrono::Utc;
 
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use std::io;
-use std::path::PathBuf;
-use std::process::Stdio;
+use std::io::SeekFrom;
+use std::path::{Path, PathBuf};
+use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::process::{Child, Command};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -33,6 +47,12 @@ use tokio::time::{interval, timeout, Duration};
 use tracing::{debug, error, info, warn};
 
 use crate::api_client::ApiClient;
+
+const SENSOR_RESTART_BASE_DELAY: Duration = Duration::from_secs(5);
+const SENSOR_RESTART_MAX_DELAY: Duration = Duration::from_secs(300);
+const SENSOR_ALERT_FAILURE_THRESHOLD: i32 = 3;
+const STDERR_EXCERPT_MAX_BYTES: u64 = 16 * 1024;
+const STDERR_EXCERPT_MAX_LINES: usize = 80;
 
 fn existing_command_env(cmd: &Command, key: &str) -> Option<String> {
     cmd.as_std()
@@ -105,6 +125,109 @@ fn signal_process_group_or_process(pid: u32, signal: i32) {
     }
 }
 
+fn exit_signal(status: &ExitStatus) -> Option<i32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = status;
+        None
+    }
+}
+
+fn active_rule_count_i32(count: i64) -> i32 {
+    count.clamp(0, i32::MAX as i64) as i32
+}
+
+fn sensor_restart_backoff_delay(failure_count: i32) -> Duration {
+    let exponent = failure_count.max(1).saturating_sub(1).min(10) as u32;
+    let multiplier = 2_u64.saturating_pow(exponent);
+    let secs = SENSOR_RESTART_BASE_DELAY
+        .as_secs()
+        .saturating_mul(multiplier)
+        .min(SENSOR_RESTART_MAX_DELAY.as_secs());
+    Duration::from_secs(secs)
+}
+
+fn duration_to_chrono(duration: Duration) -> chrono::Duration {
+    chrono::Duration::from_std(duration)
+        .unwrap_or_else(|_| chrono::Duration::seconds(SENSOR_RESTART_MAX_DELAY.as_secs() as i64))
+}
+
+async fn read_sensor_stderr_excerpt_from_artifacts_dir(
+    artifacts_dir: &Path,
+    sensor_ref: &str,
+) -> Option<String> {
+    let path = artifacts_dir
+        .join("sensors")
+        .join(sensor_ref)
+        .join("stderr.log");
+
+    let mut file = match tokio::fs::File::open(&path).await {
+        Ok(file) => file,
+        Err(e) => {
+            debug!(
+                "No stderr excerpt available for sensor {} from {}: {}",
+                sensor_ref,
+                path.display(),
+                e
+            );
+            return None;
+        }
+    };
+
+    let len = match file.metadata().await {
+        Ok(meta) => meta.len(),
+        Err(e) => {
+            warn!(
+                "Failed to stat stderr log for sensor {} at {}: {}",
+                sensor_ref,
+                path.display(),
+                e
+            );
+            return None;
+        }
+    };
+
+    let start = len.saturating_sub(STDERR_EXCERPT_MAX_BYTES);
+    if let Err(e) = file.seek(SeekFrom::Start(start)).await {
+        warn!(
+            "Failed to seek stderr log for sensor {} at {}: {}",
+            sensor_ref,
+            path.display(),
+            e
+        );
+        return None;
+    }
+
+    let mut bytes = Vec::with_capacity((len - start) as usize);
+    if let Err(e) = file.read_to_end(&mut bytes).await {
+        warn!(
+            "Failed to read stderr log for sensor {} at {}: {}",
+            sensor_ref,
+            path.display(),
+            e
+        );
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines: Vec<&str> = text.lines().rev().take(STDERR_EXCERPT_MAX_LINES).collect();
+    lines.reverse();
+    let excerpt = lines.join("\n");
+    if excerpt.trim().is_empty() {
+        None
+    } else if start > 0 {
+        Some(format!("…\n{}", excerpt))
+    } else {
+        Some(excerpt)
+    }
+}
+
 async fn terminate_sensor_child(child: &mut Child, sensor_label: &str) {
     let Some(pid) = child.id() else {
         if let Err(e) = child.start_kill() {
@@ -153,6 +276,14 @@ pub struct SensorActivityMetrics {
     pub monitored_sensors: u64,
     pub running_sensors: u64,
     pub active_rules: u64,
+}
+
+#[derive(Debug)]
+struct ExitedSensorProcess {
+    sensor: Sensor,
+    status: Arc<RwLock<SensorStatus>>,
+    exit_code: Option<i32>,
+    signal: Option<i32>,
 }
 
 struct SensorManagerInner {
@@ -241,7 +372,7 @@ impl SensorManager {
                         "Starting sensor {} - has {} active rule(s)",
                         sensor.r#ref, count
                     );
-                    if let Err(e) = self.start_sensor(sensor).await {
+                    if let Err(e) = self.start_sensor(sensor, true).await {
                         error!("Failed to start sensor: {}", e);
                     }
                 }
@@ -322,13 +453,15 @@ impl SensorManager {
             }
 
             if let Some(parent) = env_dir.parent() {
-                tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                    anyhow!(
-                        "Failed to create runtime environment parent directory {}: {}",
-                        parent.display(),
-                        e
-                    )
-                })?;
+                attune_common::utils::create_shared_dir_all(parent)
+                    .await
+                    .map_err(|e| {
+                        anyhow!(
+                            "Failed to create runtime environment parent directory {}: {}",
+                            parent.display(),
+                            e
+                        )
+                    })?;
             }
 
             let resolved_cmd =
@@ -422,8 +555,13 @@ impl SensorManager {
     }
 
     /// Start a sensor instance
-    async fn start_sensor(&self, sensor: Sensor) -> Result<()> {
+    async fn start_sensor(&self, sensor: Sensor, reset_failure_count: bool) -> Result<()> {
         info!("Starting sensor {} ({})", sensor.r#ref, sensor.id);
+
+        if self.sensor_instance_running(sensor.id).await {
+            info!("Sensor {} is already running, skipping start", sensor.r#ref);
+            return Ok(());
+        }
 
         // Load all triggers that this sensor emits
         let triggers = TriggerRepository::find_by_sensor(&self.inner.db, sensor.id)
@@ -440,7 +578,7 @@ impl SensorManager {
 
         // All sensors are now standalone processes
         let instance = self
-            .start_standalone_sensor(sensor.clone(), triggers)
+            .start_standalone_sensor(sensor.clone(), triggers, reset_failure_count)
             .await?;
 
         // Store instance
@@ -456,6 +594,7 @@ impl SensorManager {
         &self,
         sensor: Sensor,
         triggers: Vec<Trigger>,
+        reset_failure_count: bool,
     ) -> Result<SensorInstance> {
         info!("Starting standalone sensor: {}", sensor.r#ref);
 
@@ -751,12 +890,150 @@ impl SensorManager {
             );
         }
 
+        self.persist_sensor_process_started(&sensor, child.id(), reset_failure_count)
+            .await;
+
         Ok(SensorInstance::new_standalone(
             sensor,
             child,
             stdout_handle,
             stderr_handle,
         ))
+    }
+
+    async fn persist_sensor_process_started(
+        &self,
+        sensor: &Sensor,
+        pid: Option<u32>,
+        reset_failure_count: bool,
+    ) {
+        let worker_id = self.inner.worker_id.load(Ordering::SeqCst);
+        if worker_id <= 0 {
+            warn!(
+                "Skipping sensor_process start persistence for {}: sensor worker_id is not set",
+                sensor.r#ref
+            );
+            return;
+        }
+
+        let worker = match WorkerRepository::find_by_id(&self.inner.db, worker_id).await {
+            Ok(Some(worker)) => worker,
+            Ok(None) => {
+                warn!(
+                    "Skipping sensor_process start persistence for {}: worker {} not found",
+                    sensor.r#ref, worker_id
+                );
+                return;
+            }
+            Err(e) => {
+                warn!(
+                    "Skipping sensor_process start persistence for {}: failed to load worker {}: {}",
+                    sensor.r#ref, worker_id, e
+                );
+                return;
+            }
+        };
+
+        let active_rule_count = match self.sensor_active_rule_count(sensor.id).await {
+            Ok(count) => active_rule_count_i32(count),
+            Err(e) => {
+                warn!(
+                    "Failed to count active rules while persisting sensor_process start for {}: {}",
+                    sensor.r#ref, e
+                );
+                0
+            }
+        };
+
+        if let Err(e) = SensorProcessRepository::upsert_starting_or_running(
+            &self.inner.db,
+            UpsertSensorProcessStartInput {
+                sensor: sensor.id,
+                sensor_ref: sensor.r#ref.clone(),
+                worker: worker_id,
+                worker_name: worker.name,
+                status: SensorProcessStatus::Running,
+                pid: pid.and_then(|p| i32::try_from(p).ok()),
+                started_at: Some(Utc::now()),
+                active_rule_count,
+                log_artifact_ref: Some(format!("sensor.{}.stderr", sensor.r#ref)),
+                meta: Some(serde_json::json!({
+                    "manager": "attune-sensor",
+                    "reset_failure_count": reset_failure_count,
+                })),
+                reset_failure_count,
+            },
+        )
+        .await
+        {
+            warn!(
+                "Failed to persist sensor_process start for {} on worker {}: {}",
+                sensor.r#ref, worker_id, e
+            );
+        }
+    }
+
+    async fn persist_sensor_process_stopped(&self, sensor: &Sensor) {
+        let worker_id = self.inner.worker_id.load(Ordering::SeqCst);
+        if worker_id <= 0 {
+            warn!(
+                "Skipping sensor_process stop persistence for {}: sensor worker_id is not set",
+                sensor.r#ref
+            );
+            return;
+        }
+
+        let active_rule_count = match self.sensor_active_rule_count(sensor.id).await {
+            Ok(count) => Some(active_rule_count_i32(count)),
+            Err(e) => {
+                warn!(
+                    "Failed to count active rules while persisting sensor_process stop for {}: {}",
+                    sensor.r#ref, e
+                );
+                None
+            }
+        };
+
+        if let Err(e) = SensorProcessRepository::mark_stopped(
+            &self.inner.db,
+            MarkSensorProcessStoppedInput {
+                sensor: sensor.id,
+                worker: worker_id,
+                stopped_at: Some(Utc::now()),
+                active_rule_count,
+            },
+        )
+        .await
+        {
+            warn!(
+                "Failed to persist sensor_process stop for {} on worker {}: {}",
+                sensor.r#ref, worker_id, e
+            );
+        }
+    }
+
+    async fn read_sensor_stderr_excerpt(&self, sensor_ref: &str) -> Option<String> {
+        read_sensor_stderr_excerpt_from_artifacts_dir(&self.inner.artifacts_dir, sensor_ref).await
+    }
+
+    async fn sensor_instance_running(&self, sensor_id: Id) -> bool {
+        let instance_state = {
+            let sensors = self.inner.sensors.read().await;
+            sensors
+                .get(&sensor_id)
+                .map(|instance| (instance.status.clone(), instance.child_process.is_some()))
+        };
+
+        let Some((status, has_child)) = instance_state else {
+            return false;
+        };
+
+        let status = status.read().await;
+        has_child && status.running && !status.failed
+    }
+
+    async fn forget_sensor_instance(&self, sensor_id: Id) {
+        self.inner.sensors.write().await.remove(&sensor_id);
     }
 
     /// Resolve a sensor's `runtime_version_constraint` against the locally
@@ -1087,16 +1364,422 @@ impl SensorManager {
     pub async fn stop_sensor(&self, sensor_id: Id) -> Result<()> {
         info!("Stopping sensor {}", sensor_id);
 
-        let mut sensors = self.inner.sensors.write().await;
+        let instance = {
+            let mut sensors = self.inner.sensors.write().await;
+            sensors.remove(&sensor_id)
+        };
 
-        if let Some(mut instance) = sensors.remove(&sensor_id) {
+        if let Some(mut instance) = instance {
+            let sensor = instance.sensor.clone();
             instance.stop().await;
+            self.persist_sensor_process_stopped(&sensor).await;
             info!("Sensor {} stopped", sensor_id);
         } else {
             warn!("Sensor {} not found in running instances", sensor_id);
         }
 
         Ok(())
+    }
+
+    async fn handle_unexpected_sensor_exit(&self, exited: ExitedSensorProcess) {
+        let manager_running = *self.inner.running.read().await;
+        {
+            let mut status = exited.status.write().await;
+            status.running = false;
+            status.failed = true;
+            status.failure_count = status.failure_count.saturating_add(1);
+            status.last_poll = Some(Utc::now());
+        }
+
+        if !manager_running {
+            debug!(
+                "Sensor {} exited while manager is stopping; treating as intentional stop",
+                exited.sensor.r#ref
+            );
+            self.persist_sensor_process_stopped(&exited.sensor).await;
+            self.forget_sensor_instance(exited.sensor.id).await;
+            return;
+        }
+
+        let active_rule_count = match self.sensor_active_rule_count(exited.sensor.id).await {
+            Ok(count) => active_rule_count_i32(count),
+            Err(e) => {
+                warn!(
+                    "Failed to count active rules after sensor {} exited: {}",
+                    exited.sensor.r#ref, e
+                );
+                0
+            }
+        };
+
+        if active_rule_count <= 0 {
+            info!(
+                "Sensor {} exited but has no active rules; marking stopped and not restarting",
+                exited.sensor.r#ref
+            );
+            self.persist_sensor_process_stopped(&exited.sensor).await;
+            self.forget_sensor_instance(exited.sensor.id).await;
+            return;
+        }
+
+        let worker_id = self.inner.worker_id.load(Ordering::SeqCst);
+        if worker_id <= 0 {
+            warn!(
+                "Sensor {} exited with active rules but worker_id is unset; cannot persist backoff or restart safely",
+                exited.sensor.r#ref
+            );
+            self.forget_sensor_instance(exited.sensor.id).await;
+            return;
+        }
+
+        let current_failure_count = SensorProcessRepository::find_by_sensor_and_worker(
+            &self.inner.db,
+            exited.sensor.id,
+            worker_id,
+        )
+        .await
+        .ok()
+        .flatten()
+        .map(|process| process.consecutive_failures.saturating_add(1))
+        .unwrap_or(1);
+        let backoff_delay = sensor_restart_backoff_delay(current_failure_count);
+        let next_restart_at = Utc::now() + duration_to_chrono(backoff_delay);
+        let stderr_excerpt = self.read_sensor_stderr_excerpt(&exited.sensor.r#ref).await;
+
+        let process = match SensorProcessRepository::mark_failed_or_backoff(
+            &self.inner.db,
+            MarkSensorProcessFailedInput {
+                sensor: exited.sensor.id,
+                worker: worker_id,
+                status: SensorProcessStatus::Backoff,
+                exit_code: exited.exit_code,
+                signal: exited.signal,
+                stopped_at: Some(Utc::now()),
+                stderr_excerpt: stderr_excerpt.clone(),
+                active_rule_count,
+                next_restart_at: Some(next_restart_at),
+            },
+        )
+        .await
+        {
+            Ok(process) => process,
+            Err(e) => {
+                warn!(
+                    "Failed to persist sensor_process backoff for {} on worker {}: {}",
+                    exited.sensor.r#ref, worker_id, e
+                );
+                None
+            }
+        };
+
+        if let Some(process) = process.as_ref() {
+            self.maybe_emit_sensor_failure_alert(
+                &exited.sensor,
+                process,
+                backoff_delay,
+                stderr_excerpt.as_deref(),
+            )
+            .await;
+        }
+
+        self.schedule_sensor_restart(exited.sensor.id, backoff_delay);
+    }
+
+    fn schedule_sensor_restart(&self, sensor_id: Id, delay: Duration) {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            manager.attempt_sensor_restart(sensor_id).await;
+        });
+    }
+
+    async fn attempt_sensor_restart(&self, sensor_id: Id) {
+        if !*self.inner.running.read().await {
+            debug!(
+                "Skipping sensor {} restart because sensor manager is no longer running",
+                sensor_id
+            );
+            return;
+        }
+
+        if !self.inner.sensors.read().await.contains_key(&sensor_id) {
+            debug!(
+                "Skipping sensor {} restart because no failed instance is awaiting restart",
+                sensor_id
+            );
+            return;
+        }
+
+        if self.sensor_instance_running(sensor_id).await {
+            debug!(
+                "Skipping sensor {} restart because an instance is already running",
+                sensor_id
+            );
+            return;
+        }
+
+        let sensor = match SensorRepository::find_by_id(&self.inner.db, sensor_id).await {
+            Ok(Some(sensor)) if sensor.enabled => sensor,
+            Ok(Some(sensor)) => {
+                info!(
+                    "Skipping restart for disabled sensor {} ({})",
+                    sensor.r#ref, sensor.id
+                );
+                self.persist_sensor_process_stopped(&sensor).await;
+                self.forget_sensor_instance(sensor.id).await;
+                return;
+            }
+            Ok(None) => {
+                info!(
+                    "Skipping restart for deleted sensor {}; no sensor row exists",
+                    sensor_id
+                );
+                self.forget_sensor_instance(sensor_id).await;
+                return;
+            }
+            Err(e) => {
+                warn!("Failed to load sensor {} for restart: {}", sensor_id, e);
+                return;
+            }
+        };
+
+        match self.sensor_active_rule_count(sensor.id).await {
+            Ok(count) if count > 0 => {}
+            Ok(_) => {
+                info!(
+                    "Skipping restart for sensor {} because it has no active rules",
+                    sensor.r#ref
+                );
+                self.persist_sensor_process_stopped(&sensor).await;
+                self.forget_sensor_instance(sensor.id).await;
+                return;
+            }
+            Err(e) => {
+                warn!(
+                    "Skipping restart for sensor {} because active-rule count failed: {}",
+                    sensor.r#ref, e
+                );
+                return;
+            }
+        }
+
+        match self.sensor_matches_this_worker(&sensor).await {
+            Ok(true) => {}
+            Ok(false) => {
+                info!(
+                    "Skipping restart for sensor {} because placement no longer matches this worker",
+                    sensor.r#ref
+                );
+                self.persist_sensor_process_stopped(&sensor).await;
+                self.forget_sensor_instance(sensor.id).await;
+                return;
+            }
+            Err(e) => {
+                warn!(
+                    "Skipping restart for sensor {} because placement evaluation failed: {}",
+                    sensor.r#ref, e
+                );
+                return;
+            }
+        }
+
+        if self.sensor_instance_running(sensor.id).await {
+            return;
+        }
+
+        info!("Restarting sensor {} after backoff", sensor.r#ref);
+        if let Err(e) = self.start_sensor(sensor.clone(), false).await {
+            warn!("Failed to restart sensor {}: {}", sensor.r#ref, e);
+            self.handle_sensor_restart_failure(sensor, e.to_string())
+                .await;
+        }
+    }
+
+    async fn handle_sensor_restart_failure(&self, sensor: Sensor, error_message: String) {
+        let worker_id = self.inner.worker_id.load(Ordering::SeqCst);
+        if worker_id <= 0 {
+            warn!(
+                "Cannot persist restart failure for sensor {} because worker_id is unset: {}",
+                sensor.r#ref, error_message
+            );
+            return;
+        }
+
+        let active_rule_count = match self.sensor_active_rule_count(sensor.id).await {
+            Ok(count) => active_rule_count_i32(count),
+            Err(e) => {
+                warn!(
+                    "Failed to count active rules after restart failure for sensor {}: {}",
+                    sensor.r#ref, e
+                );
+                0
+            }
+        };
+
+        if active_rule_count <= 0 {
+            self.persist_sensor_process_stopped(&sensor).await;
+            self.forget_sensor_instance(sensor.id).await;
+            return;
+        }
+
+        let next_failure_count = SensorProcessRepository::find_by_sensor_and_worker(
+            &self.inner.db,
+            sensor.id,
+            worker_id,
+        )
+        .await
+        .ok()
+        .flatten()
+        .map(|process| process.consecutive_failures.saturating_add(1))
+        .unwrap_or(1);
+        let backoff_delay = sensor_restart_backoff_delay(next_failure_count);
+        let next_restart_at = Utc::now() + duration_to_chrono(backoff_delay);
+        let stderr_excerpt = Some(format!("restart failed: {}", error_message));
+
+        let process = match SensorProcessRepository::mark_failed_or_backoff(
+            &self.inner.db,
+            MarkSensorProcessFailedInput {
+                sensor: sensor.id,
+                worker: worker_id,
+                status: SensorProcessStatus::Backoff,
+                exit_code: None,
+                signal: None,
+                stopped_at: Some(Utc::now()),
+                stderr_excerpt: stderr_excerpt.clone(),
+                active_rule_count,
+                next_restart_at: Some(next_restart_at),
+            },
+        )
+        .await
+        {
+            Ok(process) => process,
+            Err(e) => {
+                warn!(
+                    "Failed to persist restart backoff for sensor {} on worker {}: {}",
+                    sensor.r#ref, worker_id, e
+                );
+                None
+            }
+        };
+
+        if let Some(process) = process.as_ref() {
+            self.maybe_emit_sensor_failure_alert(
+                &sensor,
+                process,
+                backoff_delay,
+                stderr_excerpt.as_deref(),
+            )
+            .await;
+        }
+
+        self.schedule_sensor_restart(sensor.id, backoff_delay);
+    }
+
+    async fn maybe_emit_sensor_failure_alert(
+        &self,
+        sensor: &Sensor,
+        process: &SensorProcess,
+        backoff_delay: Duration,
+        stderr_excerpt: Option<&str>,
+    ) {
+        if process.active_rule_count <= 0
+            || process.consecutive_failures < SENSOR_ALERT_FAILURE_THRESHOLD
+            || process.last_alerted_failure_count >= process.consecutive_failures
+        {
+            return;
+        }
+
+        let alert = SystemAlert {
+            severity: "error".to_string(),
+            category: "sensor_process_health".to_string(),
+            failure_type: "sensor_process_repeated_failure".to_string(),
+            component_type: "sensor".to_string(),
+            component_id: Some(sensor.id),
+            component_ref: Some(sensor.r#ref.clone()),
+            worker_role: Some("sensor".to_string()),
+            observed_at: Utc::now(),
+            summary: format!(
+                "Sensor '{}' failed {} consecutive time(s); restarting after {}s backoff",
+                sensor.r#ref,
+                process.consecutive_failures,
+                backoff_delay.as_secs()
+            ),
+            details: serde_json::json!({
+                "sensor_id": sensor.id,
+                "sensor_ref": sensor.r#ref,
+                "worker_id": process.worker,
+                "worker_name": process.worker_name,
+                "process_status": process.status,
+                "consecutive_failures": process.consecutive_failures,
+                "last_exit_code": process.last_exit_code,
+                "last_signal": process.last_signal,
+                "backoff_delay_seconds": backoff_delay.as_secs(),
+                "next_restart_at": process.next_restart_at,
+                "active_rule_count": process.active_rule_count,
+                "stderr_excerpt": stderr_excerpt,
+            }),
+            correlation_id: Some(format!(
+                "sensor:{}:worker:{}:repeated_failure",
+                sensor.id, process.worker
+            )),
+        };
+
+        let emit_result = match Connection::connect(&self.inner.mq_url).await {
+            Ok(connection) => match Publisher::new(
+                &connection,
+                PublisherConfig {
+                    confirm_publish: true,
+                    timeout_secs: 30,
+                    exchange: "attune.events".to_string(),
+                },
+            )
+            .await
+            {
+                Ok(publisher) => emit_core_alert(&self.inner.db, Some(&publisher), alert).await,
+                Err(e) => {
+                    warn!(
+                        "Failed to create alert publisher for sensor {}: {}. Recording alert event without MQ publish.",
+                        sensor.r#ref, e
+                    );
+                    emit_core_alert(&self.inner.db, None, alert).await
+                }
+            },
+            Err(e) => {
+                warn!(
+                    "Failed to connect to MQ for sensor {} alert: {}. Recording alert event without MQ publish.",
+                    sensor.r#ref, e
+                );
+                emit_core_alert(&self.inner.db, None, alert).await
+            }
+        };
+
+        match emit_result {
+            Ok(Some(_)) => {
+                if let Err(e) = SensorProcessRepository::record_alerted(
+                    &self.inner.db,
+                    RecordSensorProcessAlertedInput {
+                        sensor: sensor.id,
+                        worker: process.worker,
+                        failure_count: process.consecutive_failures,
+                        alerted_at: Some(Utc::now()),
+                    },
+                )
+                .await
+                {
+                    warn!(
+                        "Failed to record sensor_process alert marker for sensor {} on worker {}: {}",
+                        sensor.r#ref, process.worker, e
+                    );
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                warn!(
+                    "Failed to emit repeated-failure alert for sensor {} on worker {}: {}",
+                    sensor.r#ref, process.worker, e
+                );
+            }
+        }
     }
 
     /// Handle rule changes (created, enabled, disabled)
@@ -1142,17 +1825,24 @@ impl SensorManager {
         .await?;
 
         for sensor in sensors {
-            // Check if sensor is running
-            let is_running = self.inner.sensors.read().await.contains_key(&sensor.id);
+            // Check if sensor is actively running
+            let is_running = self.sensor_instance_running(sensor.id).await;
 
             // Check if sensor should be running (has active rules across any trigger)
             let should_run = self.sensor_has_active_rules(sensor.id).await?;
 
             match (is_running, should_run) {
                 (false, true) => {
+                    if !self.sensor_matches_this_worker(&sensor).await? {
+                        debug!(
+                            "Skipping sensor {} because placement does not match this sensor worker",
+                            sensor.r#ref
+                        );
+                        continue;
+                    }
                     // Start sensor
                     info!("Starting sensor {} due to rule change", sensor.r#ref);
-                    if let Err(e) = self.start_sensor(sensor).await {
+                    if let Err(e) = self.start_sensor(sensor, true).await {
                         error!("Failed to start sensor: {}", e);
                     }
                 }
@@ -1164,6 +1854,16 @@ impl SensorManager {
                     }
                 }
                 (true, true) => {
+                    if !self.sensor_matches_this_worker(&sensor).await? {
+                        info!(
+                            "Stopping sensor {} because placement no longer matches this sensor worker",
+                            sensor.r#ref
+                        );
+                        if let Err(e) = self.stop_sensor(sensor.id).await {
+                            error!("Failed to stop sensor after placement mismatch: {}", e);
+                        }
+                        continue;
+                    }
                     // Restart sensor to pick up new trigger instances
                     info!(
                         "Restarting sensor {} to update trigger instances",
@@ -1173,7 +1873,7 @@ impl SensorManager {
                         error!("Failed to stop sensor: {}", e);
                     }
                     tokio::time::sleep(Duration::from_millis(100)).await;
-                    if let Err(e) = self.start_sensor(sensor).await {
+                    if let Err(e) = self.start_sensor(sensor, true).await {
                         error!("Failed to restart sensor: {}", e);
                     }
                 }
@@ -1196,22 +1896,58 @@ impl SensorManager {
 
             debug!("Sensor manager monitoring check");
 
-            let sensors = self.inner.sensors.read().await;
-            for (sensor_id, instance) in sensors.iter() {
-                let status = instance.status().await;
+            let exited = {
+                let mut sensors = self.inner.sensors.write().await;
+                let mut exited = Vec::new();
 
-                if status.failed {
-                    warn!(
-                        "Sensor {} has failed (failure_count: {})",
-                        sensor_id, status.failure_count
-                    );
+                for (sensor_id, instance) in sensors.iter_mut() {
+                    if let Some(child) = instance.child_process.as_mut() {
+                        match child.try_wait() {
+                            Ok(Some(exit_status)) => {
+                                warn!(
+                                    "Sensor {} ({}) exited unexpectedly: {:?}",
+                                    instance.sensor_ref, sensor_id, exit_status
+                                );
+                                if let Some(handle) = instance.stdout_handle.take() {
+                                    handle.abort();
+                                }
+                                if let Some(handle) = instance.stderr_handle.take() {
+                                    handle.abort();
+                                }
+                                instance.child_process = None;
+                                exited.push(ExitedSensorProcess {
+                                    sensor: instance.sensor.clone(),
+                                    status: instance.status.clone(),
+                                    exit_code: exit_status.code(),
+                                    signal: exit_signal(&exit_status),
+                                });
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                warn!(
+                                    "Failed to poll sensor {} ({}) process status: {}",
+                                    instance.sensor_ref, sensor_id, e
+                                );
+                            }
+                        }
+                    } else {
+                        let status = instance.status.try_read();
+                        if let Ok(status) = status {
+                            if status.failed {
+                                warn!(
+                                    "Sensor {} has failed (failure_count: {})",
+                                    sensor_id, status.failure_count
+                                );
+                            }
+                        }
+                    }
                 }
 
-                // Check if long-running process has died
-                if let Some(ref _child) = instance.child_process {
-                    // Note: We can't easily check if child is still running without blocking
-                    // This would need enhancement with a better process management approach
-                }
+                exited
+            };
+
+            for exited_process in exited {
+                self.handle_unexpected_sensor_exit(exited_process).await;
             }
         }
 
@@ -1313,14 +2049,31 @@ impl SensorManager {
 
         for sensor in sensors {
             // Skip sensors already running
-            if self.inner.sensors.read().await.contains_key(&sensor.id) {
+            if self.sensor_instance_running(sensor.id).await {
                 continue;
             }
 
             match self.sensor_has_active_rules(sensor.id).await {
                 Ok(true) => {
+                    match self.sensor_matches_this_worker(&sensor).await {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            debug!(
+                                "Reconcile: skipping sensor {} because placement does not match this sensor worker",
+                                sensor.r#ref
+                            );
+                            continue;
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Reconcile: failed to evaluate placement for sensor {}: {}",
+                                sensor.r#ref, e
+                            );
+                            continue;
+                        }
+                    }
                     info!("Reconcile: starting sensor {}", sensor.r#ref);
-                    if let Err(e) = self.start_sensor(sensor).await {
+                    if let Err(e) = self.start_sensor(sensor, true).await {
                         warn!("Reconcile: failed to start sensor: {}", e);
                     }
                 }
@@ -1333,6 +2086,26 @@ impl SensorManager {
                 }
             }
         }
+    }
+
+    async fn sensor_matches_this_worker(&self, sensor: &Sensor) -> Result<bool> {
+        let worker_id = self.inner.worker_id.load(Ordering::SeqCst);
+        if worker_id <= 0 {
+            return Ok(false);
+        }
+        let Some(worker) = WorkerRepository::find_by_id(&self.inner.db, worker_id).await? else {
+            return Ok(false);
+        };
+
+        let labels = worker_labels_from_capabilities(worker.capabilities.as_ref());
+        let taints = worker_taints_from_capabilities(worker.capabilities.as_ref());
+        Ok(worker_matches_placement(
+            &labels,
+            &taints,
+            &sensor.worker_selector_labels(),
+            &sensor.worker_toleration_specs(),
+            &sensor.worker_affinity_spec(),
+        ))
     }
 
     /// Get count of active sensors
@@ -1489,9 +2262,20 @@ mod tests {
         RuntimeEnvVarConfig, RuntimeEnvVarOperation, RuntimeEnvVarSpec,
     };
     use std::collections::HashMap;
-    use tempfile::NamedTempFile;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::fs;
     use tokio::io::{AsyncBufReadExt, BufReader};
+
+    fn test_workspace_path(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/sensor-manager-tests")
+            .join(format!("{}-{}-{}", name, std::process::id(), unique))
+    }
 
     #[test]
     fn test_sensor_status_default() {
@@ -1500,6 +2284,125 @@ mod tests {
         assert!(!status.failed);
         assert_eq!(status.failure_count, 0);
         assert!(status.last_poll.is_none());
+    }
+
+    #[test]
+    fn test_sensor_restart_backoff_delay_sequence_and_cap() {
+        let cases = [
+            (-1, 5),
+            (0, 5),
+            (1, 5),
+            (2, 10),
+            (3, 20),
+            (4, 40),
+            (5, 80),
+            (6, 160),
+            (7, 300),
+            (8, 300),
+            (100, 300),
+        ];
+
+        for (failure_count, expected_secs) in cases {
+            assert_eq!(
+                sensor_restart_backoff_delay(failure_count),
+                Duration::from_secs(expected_secs),
+                "failure_count={failure_count}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_active_rule_count_i32_clamps_values() {
+        assert_eq!(active_rule_count_i32(-1), 0);
+        assert_eq!(active_rule_count_i32(0), 0);
+        assert_eq!(active_rule_count_i32(42), 42);
+        assert_eq!(active_rule_count_i32(i32::MAX as i64), i32::MAX);
+        assert_eq!(active_rule_count_i32(i32::MAX as i64 + 1), i32::MAX);
+        assert_eq!(active_rule_count_i32(i64::MAX), i32::MAX);
+    }
+
+    #[test]
+    fn test_duration_to_chrono_converts_and_falls_back_on_overflow() {
+        assert_eq!(
+            duration_to_chrono(Duration::from_millis(1_500)),
+            chrono::Duration::milliseconds(1_500)
+        );
+        assert_eq!(
+            duration_to_chrono(Duration::MAX),
+            chrono::Duration::seconds(SENSOR_RESTART_MAX_DELAY.as_secs() as i64)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_sensor_stderr_excerpt_returns_none_for_missing_or_empty_logs() {
+        let artifacts_dir = test_workspace_path("stderr-empty");
+        let sensor_dir = artifacts_dir.join("sensors").join("core.test_sensor");
+        fs::create_dir_all(&sensor_dir).await.unwrap();
+
+        assert_eq!(
+            read_sensor_stderr_excerpt_from_artifacts_dir(&artifacts_dir, "missing.sensor").await,
+            None
+        );
+
+        fs::write(sensor_dir.join("stderr.log"), "\n\n")
+            .await
+            .unwrap();
+        assert_eq!(
+            read_sensor_stderr_excerpt_from_artifacts_dir(&artifacts_dir, "core.test_sensor").await,
+            None
+        );
+
+        fs::remove_dir_all(&artifacts_dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_read_sensor_stderr_excerpt_keeps_recent_lines() {
+        let artifacts_dir = test_workspace_path("stderr-lines");
+        let sensor_dir = artifacts_dir.join("sensors").join("core.test_sensor");
+        fs::create_dir_all(&sensor_dir).await.unwrap();
+        let log = (1..=100)
+            .map(|i| format!("line-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(sensor_dir.join("stderr.log"), log).await.unwrap();
+
+        let excerpt =
+            read_sensor_stderr_excerpt_from_artifacts_dir(&artifacts_dir, "core.test_sensor")
+                .await
+                .expect("stderr excerpt should be available");
+        let lines = excerpt.lines().collect::<Vec<_>>();
+
+        assert_eq!(lines.len(), STDERR_EXCERPT_MAX_LINES);
+        assert_eq!(lines.first(), Some(&"line-21"));
+        assert_eq!(lines.last(), Some(&"line-100"));
+        assert!(!excerpt.starts_with('…'));
+
+        fs::remove_dir_all(&artifacts_dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_read_sensor_stderr_excerpt_marks_truncated_byte_window() {
+        let artifacts_dir = test_workspace_path("stderr-truncated");
+        let sensor_dir = artifacts_dir.join("sensors").join("core.test_sensor");
+        fs::create_dir_all(&sensor_dir).await.unwrap();
+        let log = (1..=200)
+            .map(|i| format!("line-{i:03}: {}", "x".repeat(120)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(sensor_dir.join("stderr.log"), log).await.unwrap();
+
+        let excerpt =
+            read_sensor_stderr_excerpt_from_artifacts_dir(&artifacts_dir, "core.test_sensor")
+                .await
+                .expect("stderr excerpt should be available");
+        let lines = excerpt.lines().collect::<Vec<_>>();
+
+        assert!(excerpt.starts_with("…\n"));
+        assert!(lines.len() <= STDERR_EXCERPT_MAX_LINES + 1);
+        let expected_last_line = format!("line-200: {}", "x".repeat(120));
+        assert_eq!(lines.last().copied(), Some(expected_last_line.as_str()));
+
+        fs::remove_dir_all(&artifacts_dir).await.unwrap();
     }
 
     #[test]
@@ -1546,21 +2449,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_sensor_instance_stop_reaps_child_process() {
-        let script = NamedTempFile::new().unwrap();
-        fs::write(script.path(), "#!/bin/sh\ntrap '' TERM\nsleep 30 &\nwait\n")
+        let test_dir = test_workspace_path("sensor-stop");
+        fs::create_dir_all(&test_dir).await.unwrap();
+        let script = test_dir.join("sensor-stop.sh");
+        fs::write(&script, "#!/bin/sh\ntrap '' TERM\nsleep 30 &\nwait\n")
             .await
             .unwrap();
 
-        let mut perms = fs::metadata(script.path()).await.unwrap().permissions();
+        let mut perms = fs::metadata(&script).await.unwrap().permissions();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             perms.set_mode(0o755);
         }
-        fs::set_permissions(script.path(), perms).await.unwrap();
+        fs::set_permissions(&script, perms).await.unwrap();
 
         let mut cmd = Command::new("/bin/sh");
-        cmd.arg(script.path())
+        cmd.arg(&script)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -1592,6 +2497,9 @@ mod tests {
             enabled: true,
             param_schema: None,
             config: None,
+            worker_selector: serde_json::json!({}),
+            worker_tolerations: serde_json::json!([]),
+            worker_affinity: serde_json::json!({}),
             created: chrono::Utc::now(),
             updated: chrono::Utc::now(),
         };
@@ -1605,5 +2513,7 @@ mod tests {
             status.is_some(),
             "child process should be reaped after stop()"
         );
+
+        fs::remove_dir_all(&test_dir).await.unwrap();
     }
 }

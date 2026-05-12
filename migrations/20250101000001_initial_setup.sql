@@ -65,6 +65,21 @@ END $$;
 
 COMMENT ON TYPE worker_status_enum IS 'Worker operational status';
 
+-- SensorProcessStatus enum
+DO $$ BEGIN
+    CREATE TYPE sensor_process_status_enum AS ENUM (
+        'starting',
+        'running',
+        'stopped',
+        'failed',
+        'backoff'
+    );
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+COMMENT ON TYPE sensor_process_status_enum IS 'Lifecycle state of a managed sensor process';
+
 -- EnforcementStatus enum
 DO $$ BEGIN
     CREATE TYPE enforcement_status_enum AS ENUM (

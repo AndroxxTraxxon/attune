@@ -4,6 +4,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::time::Duration;
 
 /// Pagination parameters
@@ -198,6 +199,88 @@ pub fn redact_sensitive(s: &str) -> String {
         "*".repeat(redacted_chars),
         &s[s.len() - visible_chars..]
     )
+}
+
+/// Creates directories recursively with group-writable permissions (`0o2770`).
+///
+/// In multi-container Docker environments, services may run as different UIDs
+/// (e.g., API as UID 1000, workers as root) but share volumes. This function
+/// ensures that newly created directory components are:
+/// - Group-writable (`rwxrwx---`)
+/// - Setgid-flagged so child entries inherit the parent directory's group
+///
+/// The volume root must be owned by the shared group (GID 1000 / `attune`)
+/// and all containers must include that GID via `group_add` in Docker Compose.
+///
+/// Only directories that don't already exist are chmod'd — existing ones are
+/// left untouched.
+#[cfg(unix)]
+pub async fn create_shared_dir_all(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Collect ancestor components that need to be created
+    let mut to_create: Vec<&Path> = Vec::new();
+    {
+        let mut current = path;
+        while !current.exists() {
+            to_create.push(current);
+            match current.parent() {
+                Some(p) if p != current => current = p,
+                _ => break,
+            }
+        }
+    }
+
+    // Create the full tree first
+    tokio::fs::create_dir_all(path).await?;
+
+    // Set setgid + rwxrwx--- on each newly created component so child
+    // directories inherit the parent's group automatically.
+    for dir in &to_create {
+        let perms = std::fs::Permissions::from_mode(0o2770);
+        if let Err(e) = tokio::fs::set_permissions(dir, perms).await {
+            tracing::warn!(
+                "Failed to set 0o2770 on '{}': {} (cross-service writes may fail)",
+                dir.display(),
+                e
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Synchronous variant of [`create_shared_dir_all`].
+#[cfg(unix)]
+pub fn create_shared_dir_all_sync(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut to_create: Vec<&Path> = Vec::new();
+    {
+        let mut current = path;
+        while !current.exists() {
+            to_create.push(current);
+            match current.parent() {
+                Some(p) if p != current => current = p,
+                _ => break,
+            }
+        }
+    }
+
+    std::fs::create_dir_all(path)?;
+
+    for dir in &to_create {
+        let perms = std::fs::Permissions::from_mode(0o2770);
+        if let Err(e) = std::fs::set_permissions(dir, perms) {
+            tracing::warn!(
+                "Failed to set 0o2770 on '{}': {} (cross-service writes may fail)",
+                dir.display(),
+                e
+            );
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

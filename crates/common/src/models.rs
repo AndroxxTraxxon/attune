@@ -240,6 +240,17 @@ pub mod enums {
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, ToSchema)]
+    #[sqlx(type_name = "sensor_process_status_enum", rename_all = "lowercase")]
+    #[serde(rename_all = "lowercase")]
+    pub enum SensorProcessStatus {
+        Starting,
+        Running,
+        Stopped,
+        Failed,
+        Backoff,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, ToSchema)]
     #[sqlx(type_name = "worker_role_enum", rename_all = "lowercase")]
     #[serde(rename_all = "lowercase")]
     pub enum WorkerRole {
@@ -1019,6 +1030,11 @@ pub mod runtime {
         pub capabilities: Option<JsonDict>,
         pub meta: Option<JsonDict>,
         pub last_heartbeat: Option<DateTime<Utc>>,
+        #[sqlx(default)]
+        pub cordoned: bool,
+        pub cordon_reason: Option<String>,
+        pub cordoned_by: Option<Id>,
+        pub cordoned_at: Option<DateTime<Utc>>,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
     }
@@ -1067,6 +1083,52 @@ pub mod trigger {
         pub enabled: bool,
         pub param_schema: Option<JsonSchema>,
         pub config: Option<JsonValue>,
+        #[sqlx(default)]
+        pub worker_selector: JsonDict,
+        #[sqlx(default)]
+        pub worker_tolerations: JsonDict,
+        #[sqlx(default)]
+        pub worker_affinity: JsonDict,
+        pub created: DateTime<Utc>,
+        pub updated: DateTime<Utc>,
+    }
+
+    impl Sensor {
+        pub fn worker_selector_labels(&self) -> std::collections::BTreeMap<String, String> {
+            crate::scheduling::parse_worker_selector(&self.worker_selector).unwrap_or_default()
+        }
+
+        pub fn worker_toleration_specs(&self) -> Vec<crate::scheduling::WorkerToleration> {
+            crate::scheduling::parse_worker_tolerations(&self.worker_tolerations)
+                .unwrap_or_default()
+        }
+
+        pub fn worker_affinity_spec(&self) -> crate::scheduling::WorkerAffinity {
+            crate::scheduling::parse_worker_affinity(&self.worker_affinity).unwrap_or_default()
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+    pub struct SensorProcess {
+        pub id: Id,
+        pub sensor: Id,
+        pub sensor_ref: String,
+        pub worker: Id,
+        pub worker_name: String,
+        pub status: SensorProcessStatus,
+        pub pid: Option<i32>,
+        pub consecutive_failures: i32,
+        pub last_exit_code: Option<i32>,
+        pub last_signal: Option<i32>,
+        pub last_started_at: Option<DateTime<Utc>>,
+        pub last_stopped_at: Option<DateTime<Utc>>,
+        pub next_restart_at: Option<DateTime<Utc>>,
+        pub stderr_excerpt: Option<String>,
+        pub log_artifact_ref: Option<String>,
+        pub active_rule_count: i32,
+        pub last_alerted_failure_count: i32,
+        pub last_alerted_at: Option<DateTime<Utc>>,
+        pub meta: JsonDict,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
     }
@@ -1372,7 +1434,7 @@ pub mod execution {
         /// Provides direct access to workflow orchestration state without JOINs.
         /// The `workflow_execution` field within this metadata is separate from
         /// the `parent` field above, as they serve different query patterns.
-        #[sqlx(json, default)]
+        #[sqlx(json(nullable), default)]
         pub workflow_task: Option<WorkflowTaskMetadata>,
 
         pub created: DateTime<Utc>,
@@ -1486,6 +1548,27 @@ pub mod identity {
         pub permset: Id,
         pub role: String,
         pub created: DateTime<Utc>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+    pub struct IntegrationToken {
+        pub id: Id,
+        pub identity: Id,
+        pub label: String,
+        pub description: Option<String>,
+        #[serde(skip_serializing)]
+        pub token_hash: String,
+        pub token_prefix: String,
+        pub token_suffix: String,
+        pub created_by: Option<Id>,
+        pub expires_at: Option<DateTime<Utc>>,
+        pub last_used_at: Option<DateTime<Utc>>,
+        pub last_used_ip: Option<String>,
+        pub revoked_at: Option<DateTime<Utc>>,
+        pub revoked_by: Option<Id>,
+        pub revocation_reason: Option<String>,
+        pub created: DateTime<Utc>,
+        pub updated: DateTime<Utc>,
     }
 }
 
@@ -2179,6 +2262,7 @@ mod tests {
     use super::runtime::{
         RuntimeEnvVarConfig, RuntimeEnvVarOperation, RuntimeEnvVarSpec, RuntimeExecutionConfig,
     };
+    use super::SensorProcessStatus;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -2236,5 +2320,24 @@ mod tests {
             append.resolve(&vars, Some("/base/modules")),
             "/base/modules:/runtime_envs/example/python/node_modules"
         );
+    }
+
+    #[test]
+    fn sensor_process_status_serializes_as_lowercase() {
+        let cases = [
+            (SensorProcessStatus::Starting, "starting"),
+            (SensorProcessStatus::Running, "running"),
+            (SensorProcessStatus::Stopped, "stopped"),
+            (SensorProcessStatus::Failed, "failed"),
+            (SensorProcessStatus::Backoff, "backoff"),
+        ];
+
+        for (status, expected) in cases {
+            assert_eq!(serde_json::to_value(status).unwrap(), json!(expected));
+            assert_eq!(
+                serde_json::from_value::<SensorProcessStatus>(json!(expected)).unwrap(),
+                status
+            );
+        }
     }
 }

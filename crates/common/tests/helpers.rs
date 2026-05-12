@@ -1094,6 +1094,9 @@ impl SensorFixture {
             enabled: self.enabled,
             param_schema: self.param_schema,
             config: None,
+            worker_selector: serde_json::json!({}),
+            worker_tolerations: serde_json::json!([]),
+            worker_affinity: serde_json::json!({}),
         };
 
         SensorRepository::create(pool, input).await

@@ -234,7 +234,15 @@ CREATE TABLE attune.identity (
 **Note**: The `password_hash` column is optional to support:
 - External authentication providers (OAuth, SAML, etc.)
 - Service accounts that don't use password authentication
-- API key-based authentication (future implementation)
+- Integration-token authentication
+
+## Passwordless Integration Tokens
+
+Administrators can create revokable integration tokens for any identity through the access-control API/UI or CLI. The plaintext token is shown only once, and Attune stores only a hash plus safe display metadata.
+
+Integrations call `POST /auth/token-login` with the opaque token and receive the same `TokenResponse` shape as password, OIDC, and LDAP login. Access JWTs continue to use the identity id as `sub`, so normal RBAC applies. Refresh JWTs created by this flow use the integration-token record id as `sub`; `/auth/refresh` resolves that record and rejects refresh after the token is revoked, expired, deleted, or the owning identity is frozen.
+
+Already-issued access JWTs remain valid until their normal short expiration. Revoke tokens when an integration is decommissioned or a token may have been exposed.
 
 ## Security Best Practices
 
@@ -260,7 +268,7 @@ CREATE TABLE attune.identity (
 5. **Token Expiration**
    - Keep access tokens short-lived (1 hour recommended)
    - Use refresh tokens for long-lived sessions
-   - Implement token revocation for logout (future enhancement)
+   - Use integration-token revocation to stop future refresh for passwordless integrations
 
 ## Future Enhancements
 

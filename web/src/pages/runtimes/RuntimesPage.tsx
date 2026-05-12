@@ -18,7 +18,7 @@ import type { WorkerRuntimeSupport, WorkerSummary } from "@/api/workers";
 import RuntimeForm from "@/components/forms/RuntimeForm";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRuntimes, useRuntime, useDeleteRuntime } from "@/hooks/useRuntimes";
-import { useWorkers } from "@/hooks/useWorkers";
+import { useCordonWorker, useUncordonWorker, useWorkers } from "@/hooks/useWorkers";
 import { hasPermission } from "@/lib/permissions";
 
 function formatJson(value: unknown): string {
@@ -457,6 +457,8 @@ function WorkersTab({ canReadRuntimes }: { canReadRuntimes: boolean }) {
 }
 
 function WorkerCard({ worker }: { worker: WorkerSummary }) {
+  const cordonWorker = useCordonWorker();
+  const uncordonWorker = useUncordonWorker();
   const isSensorWorker = worker.worker_role === "sensor";
   const utilization = Math.max(
     0,
@@ -480,6 +482,11 @@ function WorkerCard({ worker }: { worker: WorkerSummary }) {
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full border border-gray-200 bg-gray-50 text-xs font-medium text-gray-700">
               {worker.worker_type}
             </span>
+            {worker.cordoned && (
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-xs font-medium text-amber-800">
+                cordoned
+              </span>
+            )}
           </div>
           <div className="mt-3 grid gap-2 text-sm text-gray-600 md:grid-cols-2 xl:grid-cols-4">
             <div>
@@ -500,6 +507,31 @@ function WorkerCard({ worker }: { worker: WorkerSummary }) {
               {formatDateTime(worker.updated)}
             </div>
           </div>
+        </div>
+
+        <div className="flex gap-2">
+          {worker.cordoned ? (
+            <button
+              onClick={() => uncordonWorker.mutate({ id: worker.id })}
+              disabled={uncordonWorker.isPending}
+              className="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-sm hover:bg-emerald-700 disabled:opacity-50"
+            >
+              Uncordon
+            </button>
+          ) : (
+            <button
+              onClick={() =>
+                cordonWorker.mutate({
+                  id: worker.id,
+                  reason: "Cordoned from worker inventory",
+                })
+              }
+              disabled={cordonWorker.isPending}
+              className="px-3 py-1.5 rounded-md bg-amber-600 text-white text-sm hover:bg-amber-700 disabled:opacity-50"
+            >
+              Cordon
+            </button>
+          )}
         </div>
 
         <div className="min-w-72 rounded-lg bg-gray-50 border border-gray-200 p-4">

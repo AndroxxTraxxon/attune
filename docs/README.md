@@ -23,6 +23,7 @@ Welcome to the Attune project documentation! This directory contains comprehensi
 
 ### Operations
 - **[Production Deployment](deployment/production-deployment.md)** - Deploy to production
+- **[Operational Visibility](deployment/operational-visibility.md)** - Worker cordon, health, alerts, execution reconciliation, and sensor logs
 - **[Operations Runbook](deployment/ops-runbook-queues.md)** - Troubleshooting and maintenance
 - **[Performance Optimization](performance/QUICKREF-performance-optimization.md)** - Performance tuning
 

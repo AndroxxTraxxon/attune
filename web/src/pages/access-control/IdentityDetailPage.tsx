@@ -12,6 +12,8 @@ import {
   User,
   FileJson,
   Search,
+  KeyRound,
+  Copy,
 } from "lucide-react";
 import {
   useIdentity,
@@ -22,6 +24,11 @@ import {
   useDeletePermissionAssignment,
   useFreezeIdentity,
   useUnfreezeIdentity,
+  useIntegrationTokens,
+  useCreateIntegrationToken,
+  useRevokeIntegrationToken,
+  useDeleteIntegrationToken,
+  type IntegrationToken,
 } from "@/hooks/usePermissions";
 
 interface RoleAssignment {
@@ -65,12 +72,21 @@ export default function IdentityDetailPage() {
   const deletePermMutation = useDeletePermissionAssignment();
   const freezeMutation = useFreezeIdentity();
   const unfreezeMutation = useUnfreezeIdentity();
+  const { data: integrationTokens = [] } = useIntegrationTokens(id);
+  const createTokenMutation = useCreateIntegrationToken();
+  const revokeTokenMutation = useRevokeIntegrationToken();
+  const deleteTokenMutation = useDeleteIntegrationToken();
 
   const [showAddRole, setShowAddRole] = useState(false);
   const [newRole, setNewRole] = useState("");
   const [showAssignPerm, setShowAssignPerm] = useState(false);
   const [selectedPermSetRef, setSelectedPermSetRef] = useState("");
   const [permSetSearch, setPermSetSearch] = useState("");
+  const [showCreateToken, setShowCreateToken] = useState(false);
+  const [tokenLabel, setTokenLabel] = useState("");
+  const [tokenDescription, setTokenDescription] = useState("");
+  const [tokenExpiresAt, setTokenExpiresAt] = useState("");
+  const [newTokenSecret, setNewTokenSecret] = useState<string | null>(null);
 
   const identity = (rawData as unknown as { data: IdentityDetail } | undefined)?.data;
 
@@ -132,6 +148,43 @@ export default function IdentityDetailPage() {
     } catch (err) {
       console.error("Failed to " + action + " identity:", err);
     }
+  };
+
+  const handleCreateIntegrationToken = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tokenLabel.trim()) return;
+    const response = await createTokenMutation.mutateAsync({
+      identityId: id,
+      data: {
+        label: tokenLabel.trim(),
+        description: tokenDescription.trim() || null,
+        expires_at: tokenExpiresAt ? new Date(tokenExpiresAt).toISOString() : null,
+      },
+    });
+    setNewTokenSecret(response.token);
+    setTokenLabel("");
+    setTokenDescription("");
+    setTokenExpiresAt("");
+    setShowCreateToken(false);
+  };
+
+  const handleRevokeIntegrationToken = async (token: IntegrationToken) => {
+    if (!window.confirm(`Revoke integration token "${token.label}"?`)) return;
+    await revokeTokenMutation.mutateAsync({
+      identityId: id,
+      tokenId: token.id,
+      reason: "Revoked from web UI",
+    });
+  };
+
+  const handleDeleteIntegrationToken = async (token: IntegrationToken) => {
+    if (!window.confirm(`Delete integration token metadata for "${token.label}"?`)) return;
+    await deleteTokenMutation.mutateAsync({ identityId: id, tokenId: token.id });
+  };
+
+  const copyNewToken = async () => {
+    if (!newTokenSecret) return;
+    await navigator.clipboard.writeText(newTokenSecret);
   };
 
   const formatDate = (dateString: string) => new Date(dateString).toLocaleString();
@@ -349,6 +402,101 @@ export default function IdentityDetailPage() {
             <ShieldCheck className="mx-auto h-8 w-8 text-gray-300" />
             <p className="mt-2 text-sm text-gray-500">No direct permission sets assigned</p>
             <p className="text-xs text-gray-400 mt-1">Permission sets can also be inherited through roles</p>
+          </div>
+        )}
+      </div>
+
+      {/* Integration Tokens Section */}
+      <div className="bg-white rounded-lg shadow p-6 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <KeyRound className="w-5 h-5 text-amber-500" />
+            <h2 className="text-lg font-semibold text-gray-900">Integration Tokens</h2>
+            <span className="text-sm text-gray-500">({integrationTokens.length})</span>
+          </div>
+          <button onClick={() => setShowCreateToken(!showCreateToken)} className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors">
+            <Plus className="w-4 h-4" /> Create Token
+          </button>
+        </div>
+
+        {newTokenSecret && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-amber-900">Copy this token now. It will not be shown again.</p>
+                <code className="mt-2 block break-all rounded bg-white px-3 py-2 text-xs text-amber-900 border border-amber-200">{newTokenSecret}</code>
+              </div>
+              <button type="button" onClick={copyNewToken} className="inline-flex items-center gap-1 rounded-md border border-amber-300 px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100">
+                <Copy className="w-3 h-3" /> Copy
+              </button>
+            </div>
+            <button type="button" onClick={() => setNewTokenSecret(null)} className="mt-3 text-xs text-amber-800 hover:text-amber-950">Dismiss</button>
+          </div>
+        )}
+
+        {showCreateToken && (
+          <form onSubmit={handleCreateIntegrationToken} className="mb-4 p-3 bg-gray-50 rounded-lg space-y-3">
+            <div>
+              <label className="block text-xs font-medium uppercase tracking-wide text-gray-500">Label</label>
+              <input value={tokenLabel} onChange={(e) => setTokenLabel(e.target.value)} required maxLength={255} placeholder="CI deploy bot" className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium uppercase tracking-wide text-gray-500">Description</label>
+              <textarea value={tokenDescription} onChange={(e) => setTokenDescription(e.target.value)} maxLength={2000} rows={2} placeholder="What this integration token is used for" className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium uppercase tracking-wide text-gray-500">Expires At</label>
+              <input type="datetime-local" value={tokenExpiresAt} onChange={(e) => setTokenExpiresAt(e.target.value)} className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setShowCreateToken(false)} className="px-3 py-2 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
+              <button type="submit" disabled={!tokenLabel.trim() || createTokenMutation.isPending} className="px-4 py-2 text-sm text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:opacity-50">
+                {createTokenMutation.isPending ? "Creating..." : "Create"}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {integrationTokens.length > 0 ? (
+          <div className="divide-y divide-gray-100">
+            {integrationTokens.map((token) => (
+              <div key={token.id} className="flex items-center justify-between py-3 gap-4">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-gray-900 truncate">{token.label}</span>
+                    <span className={"inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium " + (token.active ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-600")}>
+                      {token.active ? "Active" : "Inactive"}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-xs text-gray-500">
+                    <span className="font-mono">{token.token_prefix}...{token.token_suffix}</span>
+                    <span className="mx-2">·</span>
+                    <span>Created {formatDate(token.created)}</span>
+                    <span className="mx-2">·</span>
+                    <span>Expires {token.expires_at ? formatDate(token.expires_at) : "never"}</span>
+                    <span className="mx-2">·</span>
+                    <span>Last used {token.last_used_at ? formatDate(token.last_used_at) : "never"}</span>
+                  </div>
+                  {token.description && <p className="mt-1 text-xs text-gray-500 truncate">{token.description}</p>}
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {token.active && (
+                    <button onClick={() => handleRevokeIntegrationToken(token)} disabled={revokeTokenMutation.isPending} className="px-3 py-1.5 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md hover:bg-amber-100 disabled:opacity-50">
+                      Revoke
+                    </button>
+                  )}
+                  <button onClick={() => handleDeleteIntegrationToken(token)} disabled={deleteTokenMutation.isPending} className="text-red-400 hover:text-red-600 p-1 disabled:opacity-50" title="Delete token metadata">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-6">
+            <KeyRound className="mx-auto h-8 w-8 text-gray-300" />
+            <p className="mt-2 text-sm text-gray-500">No integration tokens</p>
+            <p className="text-xs text-gray-400 mt-1">Create a token to enable passwordless API login for an integration.</p>
           </div>
         )}
       </div>

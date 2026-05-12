@@ -1793,6 +1793,18 @@ impl<'a> PackComponentLoader<'a> {
                 .get("runtime_version")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
+            let worker_selector = data
+                .get("worker_selector")
+                .map(|value| serde_json::to_value(value).unwrap_or_else(|_| serde_json::json!({})))
+                .unwrap_or_else(|| serde_json::json!({}));
+            let worker_tolerations = data
+                .get("worker_tolerations")
+                .map(|value| serde_json::to_value(value).unwrap_or_else(|_| serde_json::json!([])))
+                .unwrap_or_else(|| serde_json::json!([]));
+            let worker_affinity = data
+                .get("worker_affinity")
+                .map(|value| serde_json::to_value(value).unwrap_or_else(|_| serde_json::json!({})))
+                .unwrap_or_else(|| serde_json::json!({}));
 
             // Upsert: update existing sensors so re-registration corrects
             // stale metadata (especially runtime assignments).
@@ -1816,6 +1828,9 @@ impl<'a> PackComponentLoader<'a> {
                         None => Patch::Clear,
                     }),
                     config: Some(config),
+                    worker_selector: Some(worker_selector.clone()),
+                    worker_tolerations: Some(worker_tolerations.clone()),
+                    worker_affinity: Some(worker_affinity.clone()),
                 };
 
                 match SensorRepository::update(self.pool, existing.id, update_input).await {
@@ -1851,6 +1866,9 @@ impl<'a> PackComponentLoader<'a> {
                 enabled,
                 param_schema,
                 config: Some(config),
+                worker_selector,
+                worker_tolerations,
+                worker_affinity,
             };
 
             match SensorRepository::create(self.pool, input).await {

@@ -106,8 +106,11 @@ trap cleanup EXIT
 
 # ── Step 1: Build ─────────────────────────────────────────────────────────
 if [[ "$DO_BUILD" == true ]]; then
-  log_header "Building Docker images (including e2e-tests)..."
-  compose build --quiet e2e-tests
+  log_header "Building Docker images..."
+  compose build --quiet \
+    e2e-tests \
+    migrations init-user init-pack-binaries init-packs init-agent \
+    api executor executor-2 notifier
   log_success "Build complete"
 fi
 
@@ -116,7 +119,7 @@ if [[ "$DO_STARTUP" == true ]]; then
   log_header "Starting Attune services..."
   # Start infrastructure + application services (not e2e-tests — that's run separately)
   compose up -d --no-deps \
-    postgres rabbitmq redis \
+    postgres rabbitmq \
     migrations init-user init-pack-binaries init-packs init-agent \
     api executor executor-2 worker-shell worker-python worker-node worker-full \
     sensor notifier

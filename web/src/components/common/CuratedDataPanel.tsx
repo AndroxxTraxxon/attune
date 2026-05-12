@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   type ParamSchemaProperty,
 } from "@/components/common/ParamSchemaForm";
@@ -44,12 +45,16 @@ export function SchemaValueRows({
   values,
   emptyMessage,
   maskSecrets = false,
+  hideUnprovided = false,
 }: {
   schema: unknown;
   values: unknown;
   emptyMessage: string;
   maskSecrets?: boolean;
+  /** When true, schema params with no provided value are hidden by default with a toggle to show all. */
+  hideUnprovided?: boolean;
 }) {
+  const [showAll, setShowAll] = useState(false);
   const schemaEntries = sortedSchemaEntries(schema);
   const valueObject = isJsonObject(values) ? values : {};
   const renderedKeys = new Set(schemaEntries.map(([key]) => key));
@@ -57,13 +62,26 @@ export function SchemaValueRows({
     ([key]) => !renderedKeys.has(key),
   );
 
+  // When hideUnprovided is active, filter out schema entries with no value
+  const filteredSchemaEntries =
+    hideUnprovided && !showAll
+      ? schemaEntries.filter(([key]) =>
+          Object.prototype.hasOwnProperty.call(valueObject, key) &&
+          valueObject[key] !== undefined &&
+          valueObject[key] !== null,
+        )
+      : schemaEntries;
+
+  const hiddenCount = schemaEntries.length - filteredSchemaEntries.length;
+
   if (schemaEntries.length === 0 && extraEntries.length === 0) {
     return <p className="text-sm text-gray-500">{emptyMessage}</p>;
   }
 
   return (
-    <div className="divide-y divide-gray-100 rounded-lg border border-gray-200">
-      {schemaEntries.map(([key, field]) => {
+    <div>
+      <div className="divide-y divide-gray-100 rounded-lg border border-gray-200">
+        {filteredSchemaEntries.map(([key, field]) => {
         const hasValue = Object.prototype.hasOwnProperty.call(valueObject, key);
         const value = hasValue ? valueObject[key] : undefined;
         return (
@@ -118,6 +136,18 @@ export function SchemaValueRows({
           </div>
         </div>
       ))}
+      </div>
+
+      {hideUnprovided && hiddenCount > 0 && (
+        <button
+          onClick={() => setShowAll(!showAll)}
+          className="mt-2 text-xs text-blue-600 hover:text-blue-800"
+        >
+          {showAll
+            ? "Hide unprovided parameters"
+            : `Show ${hiddenCount} unprovided parameter${hiddenCount !== 1 ? "s" : ""}`}
+        </button>
+      )}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { Link, useParams } from "react-router-dom";
 import { useSensors, useSensor, useDeleteSensor } from "@/hooks/useSensors";
+import { useSensorLog, useSensorLogs } from "@/hooks/useSensorLogs";
 import { useState, useMemo } from "react";
 import type { SensorSummary } from "@/api";
 import { ChevronDown, ChevronRight, Search, X } from "lucide-react";
@@ -242,6 +243,15 @@ function SensorDetail({ sensorRef }: { sensorRef: string }) {
   const { data: sensor, isLoading, error } = useSensor(sensorRef);
   const deleteSensor = useDeleteSensor();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [logStream, setLogStream] = useState<"stdout" | "stderr">("stderr");
+  const [followLogs, setFollowLogs] = useState(false);
+  const { data: logSummary } = useSensorLogs(sensorRef, Boolean(sensorRef));
+  const { data: logContent, isLoading: logLoading } = useSensorLog(
+    sensorRef,
+    logStream,
+    200,
+    followLogs,
+  );
 
   const handleDelete = async () => {
     try {
@@ -404,6 +414,43 @@ function SensorDetail({ sensorRef }: { sensorRef: string }) {
                 </dd>
               </div>
             </dl>
+          </div>
+
+          <div className="bg-white shadow rounded-lg p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-semibold">Sensor Logs</h2>
+              <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={followLogs}
+                  onChange={(event) => setFollowLogs(event.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                Follow
+              </label>
+            </div>
+            <div className="flex gap-2 mb-3">
+              {(["stderr", "stdout"] as const).map((stream) => {
+                const entry = logSummary?.logs.find((log) => log.stream === stream);
+                return (
+                  <button
+                    key={stream}
+                    onClick={() => setLogStream(stream)}
+                    className={`px-3 py-1 rounded text-sm ${
+                      logStream === stream
+                        ? "bg-blue-600 text-white"
+                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    }`}
+                  >
+                    {stream}
+                    {!entry?.artifact_id && " (not created)"}
+                  </button>
+                );
+              })}
+            </div>
+            <pre className="bg-gray-950 text-gray-100 rounded p-4 overflow-auto max-h-96 text-xs whitespace-pre-wrap">
+              {logLoading ? "Loading log tail..." : logContent || "No log output available"}
+            </pre>
           </div>
         </div>
 

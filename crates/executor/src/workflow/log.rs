@@ -108,7 +108,7 @@ impl WorkflowLogger {
 
         let full = self.artifacts_dir.join(rel);
         if let Some(parent) = full.parent() {
-            let _ = tokio::fs::create_dir_all(parent).await;
+            let _ = attune_common::utils::create_shared_dir_all(parent).await;
         }
         Ok(full)
     }

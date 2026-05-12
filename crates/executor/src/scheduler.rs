@@ -3563,11 +3563,13 @@ impl ExecutionScheduler {
         // Filter by worker status (only active workers)
         let active_workers: Vec<_> = compatible_workers
             .into_iter()
-            .filter(|w| w.status == Some(attune_common::models::enums::WorkerStatus::Active))
+            .filter(|w| {
+                w.status == Some(attune_common::models::enums::WorkerStatus::Active) && !w.cordoned
+            })
             .collect();
 
         if active_workers.is_empty() {
-            return Err(anyhow::anyhow!("No active workers available"));
+            return Err(anyhow::anyhow!("No active, uncordoned workers available"));
         }
 
         // Filter by heartbeat freshness (only workers with recent heartbeats)
@@ -4439,6 +4441,10 @@ mod tests {
             })),
             meta: None,
             last_heartbeat,
+            cordoned: false,
+            cordon_reason: None,
+            cordoned_by: None,
+            cordoned_at: None,
             created: Utc::now(),
             updated: Utc::now(),
         }

@@ -30,6 +30,8 @@ pub fn apply_sensor_name_override(config: &mut Config, name: String) {
             worker_name: Some(name),
             host: None,
             capabilities: None,
+            labels: Default::default(),
+            taints: Vec::new(),
             max_concurrent_sensors: None,
             heartbeat_interval: 30,
             poll_interval: 30,

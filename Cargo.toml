@@ -69,8 +69,6 @@ clap = { version = "4.6", features = ["derive"] }
 # Message queue / PubSub
 # RabbitMQ
 lapin = "4.5"
-# Redis
-redis = { version = "1.2", features = ["tokio-comp", "connection-manager"] }
 
 # JSON Schema
 schemars = { version = "1.2", features = ["chrono04"] }

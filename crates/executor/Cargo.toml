@@ -29,7 +29,6 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 clap = { workspace = true }
 lapin = { workspace = true }
-redis = { workspace = true }
 dashmap = { workspace = true }
 serde_yaml_ng = { workspace = true }
 validator = { workspace = true }

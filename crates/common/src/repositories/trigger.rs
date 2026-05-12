@@ -2,7 +2,7 @@
 //!
 //! This module provides CRUD operations and queries for Trigger and Sensor entities.
 
-use crate::models::{trigger::*, Id, JsonSchema};
+use crate::models::{trigger::*, Id, JsonDict, JsonSchema};
 use crate::Result;
 use serde_json::Value as JsonValue;
 use sqlx::{Executor, Postgres, QueryBuilder};
@@ -770,6 +770,10 @@ impl Repository for SensorRepository {
     }
 }
 
+const SENSOR_SELECT_COLUMNS: &str = "id, ref, pack, pack_ref, label, description, entrypoint, \
+     runtime, runtime_ref, runtime_version_constraint, enabled, param_schema, config, \
+     worker_selector, worker_tolerations, worker_affinity, created, updated";
+
 /// Input for creating a new sensor
 #[derive(Debug, Clone)]
 pub struct CreateSensorInput {
@@ -785,6 +789,9 @@ pub struct CreateSensorInput {
     pub enabled: bool,
     pub param_schema: Option<JsonSchema>,
     pub config: Option<JsonValue>,
+    pub worker_selector: JsonDict,
+    pub worker_tolerations: JsonDict,
+    pub worker_affinity: JsonDict,
 }
 
 /// Input for updating a sensor
@@ -799,6 +806,9 @@ pub struct UpdateSensorInput {
     pub enabled: Option<bool>,
     pub param_schema: Option<Patch<JsonSchema>>,
     pub config: Option<JsonValue>,
+    pub worker_selector: Option<JsonDict>,
+    pub worker_tolerations: Option<JsonDict>,
+    pub worker_affinity: Option<JsonDict>,
 }
 
 #[async_trait::async_trait]
@@ -807,16 +817,9 @@ impl FindById for SensorRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let sensor = sqlx::query_as::<_, Sensor>(
-            r#"
-            SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_ref, runtime_version_constraint,
-                   enabled,
-                   param_schema, config, created, updated
-            FROM sensor
-            WHERE id = $1
-            "#,
-        )
+        let sensor = sqlx::query_as::<_, Sensor>(&format!(
+            "SELECT {SENSOR_SELECT_COLUMNS} FROM sensor WHERE id = $1"
+        ))
         .bind(id)
         .fetch_optional(executor)
         .await?;
@@ -831,16 +834,9 @@ impl FindByRef for SensorRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let sensor = sqlx::query_as::<_, Sensor>(
-            r#"
-            SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_ref, runtime_version_constraint,
-                   enabled,
-                   param_schema, config, created, updated
-            FROM sensor
-            WHERE ref = $1
-            "#,
-        )
+        let sensor = sqlx::query_as::<_, Sensor>(&format!(
+            "SELECT {SENSOR_SELECT_COLUMNS} FROM sensor WHERE ref = $1"
+        ))
         .bind(ref_str)
         .fetch_optional(executor)
         .await?;
@@ -855,16 +851,9 @@ impl List for SensorRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let sensors = sqlx::query_as::<_, Sensor>(
-            r#"
-            SELECT id, ref, pack, pack_ref, label, description, entrypoint,
-                   runtime, runtime_ref, runtime_version_constraint,
-                   enabled,
-                   param_schema, config, created, updated
-            FROM sensor
-            ORDER BY ref ASC
-            "#,
-        )
+        let sensors = sqlx::query_as::<_, Sensor>(&format!(
+            "SELECT {SENSOR_SELECT_COLUMNS} FROM sensor ORDER BY ref ASC"
+        ))
         .fetch_all(executor)
         .await?;
 
@@ -880,18 +869,13 @@ impl Create for SensorRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let sensor = sqlx::query_as::<_, Sensor>(
-            r#"
-            INSERT INTO sensor (ref, pack, pack_ref, label, description, entrypoint,
-                                runtime, runtime_ref, runtime_version_constraint,
-                                enabled, param_schema, config)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-            RETURNING id, ref, pack, pack_ref, label, description, entrypoint,
-                      runtime, runtime_ref, runtime_version_constraint,
-                      enabled,
-                      param_schema, config, created, updated
-            "#,
-        )
+        let sensor = sqlx::query_as::<_, Sensor>(&format!(
+            "INSERT INTO sensor (ref, pack, pack_ref, label, description, entrypoint, \
+                 runtime, runtime_ref, runtime_version_constraint, enabled, param_schema, config, \
+                 worker_selector, worker_tolerations, worker_affinity) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+                 RETURNING {SENSOR_SELECT_COLUMNS}"
+        ))
         .bind(&input.r#ref)
         .bind(input.pack)
         .bind(&input.pack_ref)
@@ -904,6 +888,9 @@ impl Create for SensorRepository {
         .bind(input.enabled)
         .bind(&input.param_schema)
         .bind(&input.config)
+        .bind(&input.worker_selector)
+        .bind(&input.worker_tolerations)
+        .bind(&input.worker_affinity)
         .fetch_one(executor)
         .await?;
 
@@ -1011,6 +998,33 @@ impl Update for SensorRepository {
             has_updates = true;
         }
 
+        if let Some(worker_selector) = &input.worker_selector {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("worker_selector = ");
+            query.push_bind(worker_selector);
+            has_updates = true;
+        }
+
+        if let Some(worker_tolerations) = &input.worker_tolerations {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("worker_tolerations = ");
+            query.push_bind(worker_tolerations);
+            has_updates = true;
+        }
+
+        if let Some(worker_affinity) = &input.worker_affinity {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("worker_affinity = ");
+            query.push_bind(worker_affinity);
+            has_updates = true;
+        }
+
         if !has_updates {
             // No updates requested, fetch and return existing entity
             return Self::get_by_id(executor, id).await;
@@ -1018,7 +1032,8 @@ impl Update for SensorRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(" RETURNING id, ref, pack, pack_ref, label, description, entrypoint, runtime, runtime_ref, runtime_version_constraint, enabled, param_schema, config, created, updated");
+        query.push(" RETURNING ");
+        query.push(SENSOR_SELECT_COLUMNS);
 
         let sensor = query.build_query_as::<Sensor>().fetch_one(executor).await?;
 

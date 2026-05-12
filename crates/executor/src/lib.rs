@@ -16,6 +16,7 @@ pub mod retry_manager;
 pub mod scheduler;
 pub mod service;
 pub mod timeout_monitor;
+pub mod work_queue_events;
 pub mod worker_health;
 pub mod workflow;
 

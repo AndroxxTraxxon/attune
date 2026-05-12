@@ -464,6 +464,10 @@ mod tests {
             })),
             meta: None,
             last_heartbeat: Some(Utc::now()),
+            cordoned: false,
+            cordon_reason: None,
+            cordoned_by: None,
+            cordoned_at: None,
             created: Utc::now(),
             updated: Utc::now(),
         };

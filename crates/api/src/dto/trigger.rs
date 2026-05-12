@@ -3,8 +3,11 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::collections::BTreeMap;
 use utoipa::ToSchema;
 use validator::Validate;
+
+use attune_common::scheduling::{WorkerAffinity, WorkerToleration};
 
 /// Request DTO for creating a new trigger
 #[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
@@ -241,6 +244,20 @@ pub struct CreateSensorRequest {
     #[schema(value_type = Object, nullable = true, example = json!({"interval": 60, "threshold": 80}))]
     pub config: Option<JsonValue>,
 
+    /// Worker labels required for this sensor process.
+    #[serde(default)]
+    #[schema(value_type = Object, example = json!({"zone": "edge"}), default = json!({}))]
+    pub worker_selector: BTreeMap<String, String>,
+
+    /// Worker taints tolerated by this sensor process.
+    #[serde(default)]
+    #[schema(default = json!([]))]
+    pub worker_tolerations: Vec<WorkerToleration>,
+
+    /// Worker label affinity and anti-affinity for this sensor process.
+    #[serde(default)]
+    pub worker_affinity: WorkerAffinity,
+
     /// Whether the sensor is enabled
     #[serde(default = "default_true")]
     #[schema(example = true)]
@@ -271,6 +288,18 @@ pub struct UpdateSensorRequest {
     /// Whether the sensor is enabled
     #[schema(example = false)]
     pub enabled: Option<bool>,
+
+    /// Worker labels required for this sensor process.
+    #[schema(value_type = Object, nullable = true)]
+    pub worker_selector: Option<BTreeMap<String, String>>,
+
+    /// Worker taints tolerated by this sensor process.
+    #[schema(nullable = true)]
+    pub worker_tolerations: Option<Vec<WorkerToleration>>,
+
+    /// Worker label affinity and anti-affinity for this sensor process.
+    #[schema(nullable = true)]
+    pub worker_affinity: Option<WorkerAffinity>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -326,6 +355,15 @@ pub struct SensorResponse {
     /// Parameter schema (StackStorm-style with inline required/secret)
     #[schema(value_type = Object, nullable = true)]
     pub param_schema: Option<JsonValue>,
+
+    /// Worker labels required for this sensor process.
+    pub worker_selector: BTreeMap<String, String>,
+
+    /// Worker taints tolerated by this sensor process.
+    pub worker_tolerations: Vec<WorkerToleration>,
+
+    /// Worker label affinity and anti-affinity for this sensor process.
+    pub worker_affinity: WorkerAffinity,
 
     /// Creation timestamp
     #[schema(example = "2024-01-13T10:30:00Z")]
@@ -416,6 +454,10 @@ impl From<attune_common::models::trigger::Trigger> for TriggerSummary {
 /// Convert from Sensor model to SensorResponse
 impl From<attune_common::models::trigger::Sensor> for SensorResponse {
     fn from(sensor: attune_common::models::trigger::Sensor) -> Self {
+        let worker_selector = sensor.worker_selector_labels();
+        let worker_tolerations = sensor.worker_toleration_specs();
+        let worker_affinity = sensor.worker_affinity_spec();
+
         Self {
             id: sensor.id,
             r#ref: sensor.r#ref,
@@ -428,6 +470,9 @@ impl From<attune_common::models::trigger::Sensor> for SensorResponse {
             runtime_ref: sensor.runtime_ref,
             enabled: sensor.enabled,
             param_schema: sensor.param_schema,
+            worker_selector,
+            worker_tolerations,
+            worker_affinity,
             created: sensor.created,
             updated: sensor.updated,
         }
@@ -500,6 +545,9 @@ mod tests {
             trigger_ref: "test.trigger".to_string(),
             param_schema: None,
             config: None,
+            worker_selector: BTreeMap::new(),
+            worker_tolerations: Vec::new(),
+            worker_affinity: WorkerAffinity::default(),
             enabled: true,
         };
 
@@ -528,6 +576,9 @@ mod tests {
             entrypoint: Some("/sensors/test_v2.py".to_string()),
             param_schema: None,
             enabled: Some(false),
+            worker_selector: None,
+            worker_tolerations: None,
+            worker_affinity: None,
         };
 
         assert!(req.validate().is_ok());

@@ -197,23 +197,6 @@ services:
       - attune-network
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
-    container_name: attune-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - attune-network
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-
   # ============================================================================
   # Attune Services
   # ============================================================================
@@ -240,8 +223,6 @@ services:
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
       # Message Queue
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
-      # Redis
-      ATTUNE__REDIS__URL: redis://redis:6379
       # Worker config override
       ATTUNE__WORKER__WORKER_TYPE: container
     ports:
@@ -267,10 +248,7 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -294,7 +272,6 @@ services:
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
-      ATTUNE__REDIS__URL: redis://redis:6379
       ATTUNE__WORKER__WORKER_TYPE: container
     volumes:
       - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
@@ -312,8 +289,6 @@ services:
       postgres:
         condition: service_healthy
       rabbitmq:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "kill -0 1 || exit 1"]
@@ -340,7 +315,6 @@ services:
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
-      ATTUNE__REDIS__URL: redis://redis:6379
       ATTUNE__WORKER__WORKER_TYPE: container
     volumes:
       - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
@@ -358,8 +332,6 @@ services:
       postgres:
         condition: service_healthy
       rabbitmq:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "kill -0 1 || exit 1"]
@@ -380,6 +352,8 @@ services:
   worker-shell:
     image: debian:bookworm-slim
     container_name: attune-worker-shell
+    group_add:
+      - "1000"
     entrypoint:
       - /bin/sh
       - -c
@@ -434,6 +408,8 @@ services:
   worker-python:
     image: python:3.12-slim
     container_name: attune-worker-python
+    group_add:
+      - "1000"
     entrypoint:
       - /bin/sh
       - -c
@@ -488,6 +464,8 @@ services:
   worker-node:
     image: node:22-slim
     container_name: attune-worker-node
+    group_add:
+      - "1000"
     entrypoint:
       - /bin/sh
       - -c
@@ -542,6 +520,8 @@ services:
   worker-full:
     image: nikolaik/python-nodejs:python3.12-nodejs22-slim
     container_name: attune-worker-full
+    group_add:
+      - "1000"
     entrypoint:
       - /bin/sh
       - -c
@@ -599,6 +579,8 @@ services:
   sensor:
     image: nikolaik/python-nodejs:python3.12-nodejs22-slim
     container_name: attune-sensor
+    group_add:
+      - "1000"
     entrypoint: ["/opt/attune/agent/attune-sensor-agent"]
     stop_grace_period: 45s
     environment:
@@ -755,8 +737,6 @@ volumes:
   postgres_data:
     driver: local
   rabbitmq_data:
-    driver: local
-  redis_data:
     driver: local
   api_logs:
     driver: local

@@ -13,11 +13,6 @@ database:
   log_statements: false # Usually disabled in tests for cleaner output
   schema: null # Will be set per-test in test context
 
-# Test Redis (optional)
-redis:
-  url: redis://localhost:6379/1 # Use database 1 for tests
-  pool_size: 5
-
 # Test message queue (optional)
 message_queue:
   url: amqp://guest:guest@localhost:5672/%2f

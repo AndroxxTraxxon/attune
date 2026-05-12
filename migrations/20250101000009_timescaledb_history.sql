@@ -122,6 +122,41 @@ CREATE INDEX idx_worker_history_changed_fields
 COMMENT ON TABLE worker_history IS 'Append-only history of field-level changes to the worker table (TimescaleDB hypertable)';
 COMMENT ON COLUMN worker_history.entity_ref IS 'Denormalized worker name for JOIN-free queries';
 
+-- ----------------------------------------------------------------------------
+-- sensor_process_history
+-- ----------------------------------------------------------------------------
+
+CREATE TABLE sensor_process_history (
+    time             TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    operation        TEXT           NOT NULL,
+    entity_id        BIGINT         NOT NULL,
+    entity_ref       TEXT           NOT NULL,
+    worker_id        BIGINT,
+    worker_name      TEXT,
+    changed_fields   TEXT[]         NOT NULL DEFAULT '{}',
+    old_values       JSONB,
+    new_values       JSONB
+);
+
+SELECT create_hypertable('sensor_process_history', 'time',
+    chunk_time_interval => INTERVAL '7 days');
+
+CREATE INDEX idx_sensor_process_history_entity
+    ON sensor_process_history (entity_id, time DESC);
+CREATE INDEX idx_sensor_process_history_entity_ref
+    ON sensor_process_history (entity_ref, time DESC);
+CREATE INDEX idx_sensor_process_history_worker
+    ON sensor_process_history (worker_id, time DESC);
+CREATE INDEX idx_sensor_process_history_status_changes
+    ON sensor_process_history (time DESC)
+    WHERE 'status' = ANY(changed_fields);
+CREATE INDEX idx_sensor_process_history_changed_fields
+    ON sensor_process_history USING GIN (changed_fields);
+
+COMMENT ON TABLE sensor_process_history IS 'Append-only history of field-level changes to sensor_process live state';
+COMMENT ON COLUMN sensor_process_history.entity_ref IS 'Denormalized sensor ref for JOIN-free queries';
+COMMENT ON COLUMN sensor_process_history.worker_name IS 'Denormalized worker name for JOIN-free queries';
+
 -- ============================================================================
 -- CONVERT EVENT TABLE TO HYPERTABLE
 -- ============================================================================
@@ -247,7 +282,7 @@ COMMENT ON FUNCTION record_execution_history() IS 'Records field-level changes t
 
 -- ----------------------------------------------------------------------------
 -- worker history trigger
--- Tracked fields: name, status, capabilities, meta, host, port
+-- Tracked fields: name, status, capabilities, meta, host, port, cordon state
 -- Excludes: last_heartbeat when it is the only field that changed
 -- ----------------------------------------------------------------------------
 
@@ -266,15 +301,21 @@ BEGIN
                     'worker_type', NEW.worker_type,
                     'worker_role', NEW.worker_role,
                     'status', NEW.status,
+                    'capabilities', NEW.capabilities,
+                    'meta', NEW.meta,
                     'host', NEW.host,
-                    'port', NEW.port
+                    'port', NEW.port,
+                    'cordoned', NEW.cordoned,
+                    'cordon_reason', NEW.cordon_reason,
+                    'cordoned_by', NEW.cordoned_by,
+                    'cordoned_at', NEW.cordoned_at
                 ));
         RETURN NEW;
     END IF;
 
     IF TG_OP = 'DELETE' THEN
         INSERT INTO worker_history (time, operation, entity_id, entity_ref, changed_fields, old_values, new_values)
-        VALUES (NOW(), 'DELETE', OLD.id, OLD.name, '{}', NULL, NULL);
+        VALUES (NOW(), 'DELETE', OLD.id, OLD.name, '{}', to_jsonb(OLD), NULL);
         RETURN OLD;
     END IF;
 
@@ -315,6 +356,30 @@ BEGIN
         new_vals := new_vals || jsonb_build_object('port', NEW.port);
     END IF;
 
+    IF OLD.cordoned IS DISTINCT FROM NEW.cordoned THEN
+        changed := array_append(changed, 'cordoned');
+        old_vals := old_vals || jsonb_build_object('cordoned', OLD.cordoned);
+        new_vals := new_vals || jsonb_build_object('cordoned', NEW.cordoned);
+    END IF;
+
+    IF OLD.cordon_reason IS DISTINCT FROM NEW.cordon_reason THEN
+        changed := array_append(changed, 'cordon_reason');
+        old_vals := old_vals || jsonb_build_object('cordon_reason', OLD.cordon_reason);
+        new_vals := new_vals || jsonb_build_object('cordon_reason', NEW.cordon_reason);
+    END IF;
+
+    IF OLD.cordoned_by IS DISTINCT FROM NEW.cordoned_by THEN
+        changed := array_append(changed, 'cordoned_by');
+        old_vals := old_vals || jsonb_build_object('cordoned_by', OLD.cordoned_by);
+        new_vals := new_vals || jsonb_build_object('cordoned_by', NEW.cordoned_by);
+    END IF;
+
+    IF OLD.cordoned_at IS DISTINCT FROM NEW.cordoned_at THEN
+        changed := array_append(changed, 'cordoned_at');
+        old_vals := old_vals || jsonb_build_object('cordoned_at', OLD.cordoned_at);
+        new_vals := new_vals || jsonb_build_object('cordoned_at', NEW.cordoned_at);
+    END IF;
+
     -- Only record if something besides last_heartbeat changed.
     -- Pure heartbeat-only updates are excluded to avoid high-volume noise.
     IF array_length(changed, 1) > 0 THEN
@@ -327,6 +392,194 @@ END;
 $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION record_worker_history() IS 'Records field-level changes to worker table in worker_history hypertable. Excludes heartbeat-only updates.';
+
+-- ----------------------------------------------------------------------------
+-- sensor process history trigger
+-- ----------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION record_sensor_process_history()
+RETURNS TRIGGER AS $$
+DECLARE
+    changed TEXT[] := '{}';
+    old_vals JSONB := '{}';
+    new_vals JSONB := '{}';
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        INSERT INTO sensor_process_history (
+            time, operation, entity_id, entity_ref, worker_id, worker_name,
+            changed_fields, old_values, new_values
+        )
+        VALUES (
+            NEW.created,
+            'INSERT',
+            NEW.id,
+            NEW.sensor_ref,
+            NEW.worker,
+            NEW.worker_name,
+            '{}',
+            NULL,
+            jsonb_build_object(
+                'sensor', NEW.sensor,
+                'sensor_ref', NEW.sensor_ref,
+                'worker', NEW.worker,
+                'worker_name', NEW.worker_name,
+                'status', NEW.status,
+                'pid', NEW.pid,
+                'consecutive_failures', NEW.consecutive_failures,
+                'last_exit_code', NEW.last_exit_code,
+                'last_signal', NEW.last_signal,
+                'last_started_at', NEW.last_started_at,
+                'last_stopped_at', NEW.last_stopped_at,
+                'next_restart_at', NEW.next_restart_at,
+                'stderr_excerpt', NEW.stderr_excerpt,
+                'log_artifact_ref', NEW.log_artifact_ref,
+                'active_rule_count', NEW.active_rule_count,
+                'last_alerted_failure_count', NEW.last_alerted_failure_count,
+                'last_alerted_at', NEW.last_alerted_at,
+                'meta', NEW.meta
+            )
+        );
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        INSERT INTO sensor_process_history (
+            time, operation, entity_id, entity_ref, worker_id, worker_name,
+            changed_fields, old_values, new_values
+        )
+        VALUES (
+            NOW(),
+            'DELETE',
+            OLD.id,
+            OLD.sensor_ref,
+            OLD.worker,
+            OLD.worker_name,
+            '{}',
+            to_jsonb(OLD),
+            NULL
+        );
+        RETURN OLD;
+    END IF;
+
+    IF OLD.sensor_ref IS DISTINCT FROM NEW.sensor_ref THEN
+        changed := array_append(changed, 'sensor_ref');
+        old_vals := old_vals || jsonb_build_object('sensor_ref', OLD.sensor_ref);
+        new_vals := new_vals || jsonb_build_object('sensor_ref', NEW.sensor_ref);
+    END IF;
+
+    IF OLD.worker_name IS DISTINCT FROM NEW.worker_name THEN
+        changed := array_append(changed, 'worker_name');
+        old_vals := old_vals || jsonb_build_object('worker_name', OLD.worker_name);
+        new_vals := new_vals || jsonb_build_object('worker_name', NEW.worker_name);
+    END IF;
+
+    IF OLD.status IS DISTINCT FROM NEW.status THEN
+        changed := array_append(changed, 'status');
+        old_vals := old_vals || jsonb_build_object('status', OLD.status);
+        new_vals := new_vals || jsonb_build_object('status', NEW.status);
+    END IF;
+
+    IF OLD.pid IS DISTINCT FROM NEW.pid THEN
+        changed := array_append(changed, 'pid');
+        old_vals := old_vals || jsonb_build_object('pid', OLD.pid);
+        new_vals := new_vals || jsonb_build_object('pid', NEW.pid);
+    END IF;
+
+    IF OLD.consecutive_failures IS DISTINCT FROM NEW.consecutive_failures THEN
+        changed := array_append(changed, 'consecutive_failures');
+        old_vals := old_vals || jsonb_build_object('consecutive_failures', OLD.consecutive_failures);
+        new_vals := new_vals || jsonb_build_object('consecutive_failures', NEW.consecutive_failures);
+    END IF;
+
+    IF OLD.last_exit_code IS DISTINCT FROM NEW.last_exit_code THEN
+        changed := array_append(changed, 'last_exit_code');
+        old_vals := old_vals || jsonb_build_object('last_exit_code', OLD.last_exit_code);
+        new_vals := new_vals || jsonb_build_object('last_exit_code', NEW.last_exit_code);
+    END IF;
+
+    IF OLD.last_signal IS DISTINCT FROM NEW.last_signal THEN
+        changed := array_append(changed, 'last_signal');
+        old_vals := old_vals || jsonb_build_object('last_signal', OLD.last_signal);
+        new_vals := new_vals || jsonb_build_object('last_signal', NEW.last_signal);
+    END IF;
+
+    IF OLD.last_started_at IS DISTINCT FROM NEW.last_started_at THEN
+        changed := array_append(changed, 'last_started_at');
+        old_vals := old_vals || jsonb_build_object('last_started_at', OLD.last_started_at);
+        new_vals := new_vals || jsonb_build_object('last_started_at', NEW.last_started_at);
+    END IF;
+
+    IF OLD.last_stopped_at IS DISTINCT FROM NEW.last_stopped_at THEN
+        changed := array_append(changed, 'last_stopped_at');
+        old_vals := old_vals || jsonb_build_object('last_stopped_at', OLD.last_stopped_at);
+        new_vals := new_vals || jsonb_build_object('last_stopped_at', NEW.last_stopped_at);
+    END IF;
+
+    IF OLD.next_restart_at IS DISTINCT FROM NEW.next_restart_at THEN
+        changed := array_append(changed, 'next_restart_at');
+        old_vals := old_vals || jsonb_build_object('next_restart_at', OLD.next_restart_at);
+        new_vals := new_vals || jsonb_build_object('next_restart_at', NEW.next_restart_at);
+    END IF;
+
+    IF OLD.stderr_excerpt IS DISTINCT FROM NEW.stderr_excerpt THEN
+        changed := array_append(changed, 'stderr_excerpt');
+        old_vals := old_vals || jsonb_build_object('stderr_excerpt', OLD.stderr_excerpt);
+        new_vals := new_vals || jsonb_build_object('stderr_excerpt', NEW.stderr_excerpt);
+    END IF;
+
+    IF OLD.log_artifact_ref IS DISTINCT FROM NEW.log_artifact_ref THEN
+        changed := array_append(changed, 'log_artifact_ref');
+        old_vals := old_vals || jsonb_build_object('log_artifact_ref', OLD.log_artifact_ref);
+        new_vals := new_vals || jsonb_build_object('log_artifact_ref', NEW.log_artifact_ref);
+    END IF;
+
+    IF OLD.active_rule_count IS DISTINCT FROM NEW.active_rule_count THEN
+        changed := array_append(changed, 'active_rule_count');
+        old_vals := old_vals || jsonb_build_object('active_rule_count', OLD.active_rule_count);
+        new_vals := new_vals || jsonb_build_object('active_rule_count', NEW.active_rule_count);
+    END IF;
+
+    IF OLD.last_alerted_failure_count IS DISTINCT FROM NEW.last_alerted_failure_count THEN
+        changed := array_append(changed, 'last_alerted_failure_count');
+        old_vals := old_vals || jsonb_build_object('last_alerted_failure_count', OLD.last_alerted_failure_count);
+        new_vals := new_vals || jsonb_build_object('last_alerted_failure_count', NEW.last_alerted_failure_count);
+    END IF;
+
+    IF OLD.last_alerted_at IS DISTINCT FROM NEW.last_alerted_at THEN
+        changed := array_append(changed, 'last_alerted_at');
+        old_vals := old_vals || jsonb_build_object('last_alerted_at', OLD.last_alerted_at);
+        new_vals := new_vals || jsonb_build_object('last_alerted_at', NEW.last_alerted_at);
+    END IF;
+
+    IF OLD.meta IS DISTINCT FROM NEW.meta THEN
+        changed := array_append(changed, 'meta');
+        old_vals := old_vals || jsonb_build_object('meta', OLD.meta);
+        new_vals := new_vals || jsonb_build_object('meta', NEW.meta);
+    END IF;
+
+    IF array_length(changed, 1) > 0 THEN
+        INSERT INTO sensor_process_history (
+            time, operation, entity_id, entity_ref, worker_id, worker_name,
+            changed_fields, old_values, new_values
+        )
+        VALUES (
+            NEW.updated,
+            'UPDATE',
+            NEW.id,
+            NEW.sensor_ref,
+            NEW.worker,
+            NEW.worker_name,
+            changed,
+            old_vals,
+            new_vals
+        );
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION record_sensor_process_history() IS 'Records field-level changes to sensor_process in sensor_process_history hypertable';
 
 -- ============================================================================
 -- ATTACH TRIGGERS TO OPERATIONAL TABLES
@@ -341,6 +594,11 @@ CREATE TRIGGER worker_history_trigger
     AFTER INSERT OR UPDATE OR DELETE ON worker
     FOR EACH ROW
     EXECUTE FUNCTION record_worker_history();
+
+CREATE TRIGGER sensor_process_history_trigger
+    AFTER INSERT OR UPDATE OR DELETE ON sensor_process
+    FOR EACH ROW
+    EXECUTE FUNCTION record_sensor_process_history();
 
 -- ============================================================================
 -- COMPRESSION POLICIES
@@ -361,6 +619,13 @@ ALTER TABLE worker_history SET (
 );
 SELECT add_compression_policy('worker_history', INTERVAL '7 days');
 
+ALTER TABLE sensor_process_history SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'entity_id',
+    timescaledb.compress_orderby = 'time DESC'
+);
+SELECT add_compression_policy('sensor_process_history', INTERVAL '7 days');
+
 -- Event table (hypertable)
 ALTER TABLE event SET (
     timescaledb.compress,
@@ -375,6 +640,7 @@ SELECT add_compression_policy('event', INTERVAL '7 days');
 
 SELECT add_retention_policy('execution_history', INTERVAL '90 days');
 SELECT add_retention_policy('worker_history', INTERVAL '180 days');
+SELECT add_retention_policy('sensor_process_history', INTERVAL '180 days');
 SELECT add_retention_policy('event', INTERVAL '90 days');
 
 -- ============================================================================

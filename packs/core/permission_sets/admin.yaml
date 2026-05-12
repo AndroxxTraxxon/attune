@@ -27,7 +27,7 @@ grants:
   - resource: runtimes
     actions: [read, create, update, delete]
   - resource: workers
-    actions: [read]
+    actions: [read, manage]
   - resource: identities
     actions: [read, create, update, delete]
   - resource: permissions

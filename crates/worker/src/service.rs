@@ -222,7 +222,7 @@ impl WorkerService {
         // Execution processes write artifact files here; the API serves them from the same path.
         // nosemgrep: rust.actix.path-traversal.tainted-path.tainted-path -- Artifact storage root is a trusted deployment configuration value.
         let artifacts_dir = std::path::PathBuf::from(&config.artifacts_dir);
-        if let Err(e) = tokio::fs::create_dir_all(&artifacts_dir).await {
+        if let Err(e) = attune_common::utils::create_shared_dir_all(&artifacts_dir).await {
             warn!(
                 "Failed to create artifacts directory '{}': {}. File-backed artifacts may not work.",
                 artifacts_dir.display(),

@@ -52,22 +52,6 @@ rabbitmq:
     storageClassName: ""
   resources: {}
 
-redis:
-  enabled: true
-  host: ""
-  port: 6379
-  url: ""
-  image:
-    repository: redis
-    tag: 7-alpine
-  persistence:
-    enabled: true
-    accessModes:
-      - ReadWriteOnce
-    size: 8Gi
-    storageClassName: ""
-  resources: {}
-
 bootstrap:
   testUser:
     login: test@attune.local

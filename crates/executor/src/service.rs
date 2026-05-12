@@ -13,6 +13,7 @@ use attune_common::{
     config::Config,
     db::Database,
     mq::{Connection, Consumer, MessageQueueConfig, Publisher},
+    system_alert::{emit_core_alert, SystemAlert},
 };
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -372,8 +373,9 @@ impl ExecutorService {
         // Start worker heartbeat monitor
         info!("Starting worker heartbeat monitor...");
         let worker_pool = self.inner.pool.clone();
+        let worker_publisher = self.inner.publisher.clone();
         handles.push(tokio::spawn(async move {
-            Self::worker_heartbeat_monitor_loop(worker_pool, 60).await;
+            Self::worker_heartbeat_monitor_loop(worker_pool, worker_publisher, 60).await;
             Ok(())
         }));
 
@@ -488,7 +490,11 @@ impl ExecutorService {
     /// Worker heartbeat monitor loop
     ///
     /// Periodically checks for stale workers and marks them as inactive
-    async fn worker_heartbeat_monitor_loop(pool: PgPool, interval_secs: u64) {
+    async fn worker_heartbeat_monitor_loop(
+        pool: PgPool,
+        publisher: Arc<Publisher>,
+        interval_secs: u64,
+    ) {
         use attune_common::models::enums::WorkerStatus;
         use attune_common::repositories::{
             runtime::{UpdateWorkerInput, WorkerRepository},
@@ -544,6 +550,49 @@ impl ExecutorService {
                                 );
                             } else {
                                 deactivated_count += 1;
+                                if !worker.cordoned {
+                                    let alert = SystemAlert {
+                                        severity: "error".to_string(),
+                                        category: "worker_health".to_string(),
+                                        failure_type: "worker_missing_heartbeat".to_string(),
+                                        component_type: match worker.worker_role {
+                                            attune_common::models::WorkerRole::Action => {
+                                                "worker".to_string()
+                                            }
+                                            attune_common::models::WorkerRole::Sensor => {
+                                                "sensor_worker".to_string()
+                                            }
+                                        },
+                                        component_id: Some(worker.id),
+                                        component_ref: Some(worker.name.clone()),
+                                        worker_role: Some(
+                                            format!("{:?}", worker.worker_role).to_lowercase(),
+                                        ),
+                                        observed_at: Utc::now(),
+                                        summary: format!(
+                                            "Worker '{}' has no heartbeat and was marked inactive",
+                                            worker.name
+                                        ),
+                                        details: serde_json::json!({
+                                            "reason": "missing_heartbeat",
+                                            "worker_id": worker.id,
+                                            "worker_name": worker.name,
+                                            "worker_role": worker.worker_role,
+                                        }),
+                                        correlation_id: Some(format!(
+                                            "worker:{}:missing_heartbeat",
+                                            worker.id
+                                        )),
+                                    };
+                                    if let Err(e) =
+                                        emit_core_alert(&pool, Some(&publisher), alert).await
+                                    {
+                                        warn!(
+                                            "Failed to emit missing-heartbeat alert for worker {}: {}",
+                                            worker.id, e
+                                        );
+                                    }
+                                }
                             }
                             continue;
                         };
@@ -574,6 +623,51 @@ impl ExecutorService {
                                 );
                             } else {
                                 deactivated_count += 1;
+                                if !worker.cordoned {
+                                    let alert = SystemAlert {
+                                        severity: "error".to_string(),
+                                        category: "worker_health".to_string(),
+                                        failure_type: "worker_stale_heartbeat".to_string(),
+                                        component_type: match worker.worker_role {
+                                            attune_common::models::WorkerRole::Action => {
+                                                "worker".to_string()
+                                            }
+                                            attune_common::models::WorkerRole::Sensor => {
+                                                "sensor_worker".to_string()
+                                            }
+                                        },
+                                        component_id: Some(worker.id),
+                                        component_ref: Some(worker.name.clone()),
+                                        worker_role: Some(
+                                            format!("{:?}", worker.worker_role).to_lowercase(),
+                                        ),
+                                        observed_at: Utc::now(),
+                                        summary: format!(
+                                            "Worker '{}' heartbeat is stale and was marked inactive",
+                                            worker.name
+                                        ),
+                                        details: serde_json::json!({
+                                            "reason": "stale_heartbeat",
+                                            "worker_id": worker.id,
+                                            "worker_name": worker.name,
+                                            "worker_role": worker.worker_role,
+                                            "heartbeat_age_seconds": age_secs,
+                                            "staleness_threshold_seconds": max_age_secs,
+                                        }),
+                                        correlation_id: Some(format!(
+                                            "worker:{}:stale_heartbeat",
+                                            worker.id
+                                        )),
+                                    };
+                                    if let Err(e) =
+                                        emit_core_alert(&pool, Some(&publisher), alert).await
+                                    {
+                                        warn!(
+                                            "Failed to emit stale-heartbeat alert for worker {}: {}",
+                                            worker.id, e
+                                        );
+                                    }
+                                }
                             }
                         }
                     }

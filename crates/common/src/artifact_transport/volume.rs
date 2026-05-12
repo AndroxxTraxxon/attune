@@ -28,15 +28,17 @@ impl VolumeTransport {
         self.base_dir.join(file_path)
     }
 
-    /// Ensure parent directories exist for the given path.
+    /// Ensure parent directories exist with group-writable permissions.
     async fn ensure_parent(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).await.map_err(|e| {
-                Error::Io(format!(
-                    "Failed to create directory {}: {e}",
-                    parent.display()
-                ))
-            })?;
+            crate::utils::create_shared_dir_all(parent)
+                .await
+                .map_err(|e| {
+                    Error::Io(format!(
+                        "Failed to create directory {}: {e}",
+                        parent.display()
+                    ))
+                })?;
         }
         Ok(())
     }

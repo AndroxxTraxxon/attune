@@ -12,7 +12,7 @@ pub struct MessageQueueConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 
-    /// Message queue type (rabbitmq or redis)
+    /// Message queue type (rabbitmq)
     #[serde(default = "default_type")]
     pub r#type: String,
 

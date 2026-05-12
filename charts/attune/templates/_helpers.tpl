@@ -72,14 +72,6 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 {{- end -}}
 
-{{- define "attune.redisServiceName" -}}
-{{- if .Values.redis.host -}}
-{{- .Values.redis.host -}}
-{{- else -}}
-{{- printf "%s-redis" (include "attune.fullname" .) -}}
-{{- end -}}
-{{- end -}}
-
 {{- define "attune.databaseUrl" -}}
 {{- if .Values.database.url -}}
 {{- .Values.database.url -}}
@@ -93,14 +85,6 @@ app.kubernetes.io/component: {{ .component }}
 {{- .Values.rabbitmq.url -}}
 {{- else -}}
 {{- printf "amqp://%s:%s@%s:%v" .Values.rabbitmq.username .Values.rabbitmq.password (include "attune.rabbitmqServiceName" .) .Values.rabbitmq.port -}}
-{{- end -}}
-{{- end -}}
-
-{{- define "attune.redisUrl" -}}
-{{- if .Values.redis.url -}}
-{{- .Values.redis.url -}}
-{{- else -}}
-{{- printf "redis://%s:%v" (include "attune.redisServiceName" .) .Values.redis.port -}}
 {{- end -}}
 {{- end -}}
 

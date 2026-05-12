@@ -565,7 +565,6 @@ mod tests {
             service_name: "attune".to_string(),
             environment: "test".to_string(),
             database: attune_common::config::DatabaseConfig::default(),
-            redis: None,
             message_queue: None,
             server: attune_common::config::ServerConfig::default(),
             log: attune_common::config::LogConfig::default(),

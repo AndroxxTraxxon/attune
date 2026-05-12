@@ -41,10 +41,6 @@ artifacts_dir: "/var/lib/attune/artifacts"
 agent:
   binary_dir: "/var/lib/attune/agent"
 
-# Redis (optional)
-# redis:
-#   url: "redis://localhost:6379"
-
 # Logging
 # Set via RUST_LOG environment variable, e.g.:
 #   RUST_LOG=info,attune_api=debug

@@ -109,6 +109,22 @@ attune auth login --username admin
 # Prompts for password securely
 ```
 
+#### Passwordless Token Login
+```bash
+attune auth token-login --token attune_it_...
+# Or omit --token to prompt securely
+```
+
+#### Integration Token Management
+```bash
+attune auth token create --identity-id 42 --label "CI deploy bot"
+attune auth token list --identity-id 42
+attune auth token revoke --identity-id 42 7 --reason "rotated"
+attune auth token delete --identity-id 42 7 --yes
+```
+
+Created integration tokens are displayed once. Store them in the integration's secret manager and revoke old tokens after rotation.
+
 #### Logout
 ```bash
 attune auth logout

@@ -188,6 +188,63 @@ COMMENT ON COLUMN permission_set_role_assignment.role IS 'Opaque role/group labe
 -- ============================================================================
 
 -- ============================================================================
+-- INTEGRATION_TOKEN TABLE
+-- ============================================================================
+
+CREATE TABLE integration_token (
+    id BIGSERIAL PRIMARY KEY,
+    identity BIGINT NOT NULL REFERENCES identity(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    description TEXT,
+    token_hash TEXT NOT NULL UNIQUE,
+    token_prefix TEXT NOT NULL,
+    token_suffix TEXT NOT NULL,
+    created_by BIGINT REFERENCES identity(id) ON DELETE SET NULL,
+    expires_at TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
+    last_used_ip TEXT,
+    revoked_at TIMESTAMPTZ,
+    revoked_by BIGINT REFERENCES identity(id) ON DELETE SET NULL,
+    revocation_reason TEXT,
+    created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT integration_token_label_non_empty CHECK (length(trim(label)) > 0),
+    CONSTRAINT integration_token_revocation_consistent CHECK (
+        (revoked_at IS NULL AND revoked_by IS NULL AND revocation_reason IS NULL)
+        OR revoked_at IS NOT NULL
+    )
+);
+
+CREATE INDEX idx_integration_token_identity
+    ON integration_token(identity);
+CREATE INDEX idx_integration_token_created
+    ON integration_token(created DESC);
+CREATE INDEX idx_integration_token_active_lookup
+    ON integration_token(token_hash)
+    WHERE revoked_at IS NULL;
+CREATE INDEX idx_integration_token_expires_at
+    ON integration_token(expires_at)
+    WHERE expires_at IS NOT NULL;
+CREATE INDEX idx_integration_token_last_used_at
+    ON integration_token(last_used_at DESC NULLS LAST);
+
+CREATE TRIGGER update_integration_token_updated
+    BEFORE UPDATE ON integration_token
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_column();
+
+COMMENT ON TABLE integration_token IS 'Revokable passwordless credentials for integrations. The plaintext token is shown once at creation and only a hash is stored.';
+COMMENT ON COLUMN integration_token.identity IS 'Identity whose RBAC grants are used by access JWTs minted through this token';
+COMMENT ON COLUMN integration_token.token_hash IS 'Deterministic SHA-256 hash of the opaque plaintext token';
+COMMENT ON COLUMN integration_token.token_prefix IS 'Safe display prefix of the plaintext token for identification';
+COMMENT ON COLUMN integration_token.token_suffix IS 'Safe display suffix of the plaintext token for identification';
+COMMENT ON COLUMN integration_token.expires_at IS 'Optional expiration time after which token login and refresh fail';
+COMMENT ON COLUMN integration_token.revoked_at IS 'When set, token login and refresh fail immediately';
+
+-- ============================================================================
+
+-- ============================================================================
 -- POLICY TABLE
 -- ============================================================================
 

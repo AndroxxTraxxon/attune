@@ -343,13 +343,15 @@ impl ProcessRuntime {
 
         // Ensure parent directories exist
         if let Some(parent) = env_dir.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                RuntimeError::SetupError(format!(
-                    "Failed to create environment parent directory {}: {}",
-                    parent.display(),
-                    e
-                ))
-            })?;
+            attune_common::utils::create_shared_dir_all(parent)
+                .await
+                .map_err(|e| {
+                    RuntimeError::SetupError(format!(
+                        "Failed to create environment parent directory {}: {}",
+                        parent.display(),
+                        e
+                    ))
+                })?;
         }
 
         let resolved_cmd = RuntimeExecutionConfig::resolve_command(&env_cfg.create_command, vars);

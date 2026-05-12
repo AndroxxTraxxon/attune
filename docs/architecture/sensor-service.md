@@ -13,6 +13,7 @@ The **Sensor Service** is responsible for monitoring trigger conditions and gene
 3. **Event Generation**: Create event records when triggers fire
 4. **Rule Matching**: Find matching rules and create enforcements
 5. **Event Publishing**: Publish events to the message queue for processing
+6. **Operational Visibility**: Register sensor-worker health, expose rotating sensor logs, and honor sensor placement constraints
 
 ### Service Components
 
@@ -189,6 +190,8 @@ sensor:
   sensor_timeout: 300            # Sensor execution timeout (seconds)
   restart_on_error: true         # Restart sensors on error
   max_restart_attempts: 3        # Max restart attempts before disabling
+  labels: {}                     # Sensor-worker labels used by sensor placement
+  taints: []                     # Sensor-worker taints used by sensor placement
   
   # Webhook server (if enabled)
   webhook:
@@ -282,7 +285,7 @@ Published to `attune.events` exchange with routing key `enforcement.created`:
 The `SensorManager` component:
 
 1. **Loads Sensors**: Query database for enabled sensors
-2. **Starts Sensors**: Spawn async tasks for each sensor
+2. **Starts Sensors**: Spawn async tasks for each sensor whose placement matches this sensor worker
 3. **Monitors Health**: Track sensor status and restarts
 4. **Handles Errors**: Retry logic and failure tracking
 
@@ -357,6 +360,14 @@ impl SensorInstance {
     }
 }
 ```
+
+### Sensor placement and logs
+
+Pack sensors can declare `worker_selector`, `worker_tolerations`, and `worker_affinity`, using the same placement vocabulary as actions. Sensor workers register configured `sensor.labels` and `sensor.taints` in `worker.capabilities`; `SensorManager` evaluates those capabilities before starting or restarting a sensor process.
+
+Sensor stdout and stderr are written to rotating files under `{artifacts_dir}/sensors/{sensor_ref}/`. The API exposes stream metadata and tail reads through `GET /api/v1/sensors/{sensor_ref}/logs` and `GET /api/v1/sensors/{sensor_ref}/logs/{stream}?tail=N`, and the sensor detail page can follow stdout/stderr by polling the tail endpoint.
+
+Managed sensor process live state is persisted in `sensor_process` and changes are mirrored to `sensor_process_history`. The manager records process starts/stops, detects unexpected child exits with non-blocking `try_wait`, captures stderr excerpts, marks failed processes as `backoff`, restarts them with capped exponential backoff while active rules still depend on the sensor, and emits `core.alert` after repeated failures.
 
 ### Runtime Execution
 

@@ -38,7 +38,6 @@ For migration details and usage examples, see [`MIGRATION_TO_GENERATED_CLIENT.md
 **External Dependencies:**
 - PostgreSQL (database)
 - RabbitMQ (message queue)
-- Redis (optional cache)
 
 ---
 
@@ -114,7 +113,7 @@ pytest -m "container"
 
 1. **Start all services**:
    ```bash
-   docker-compose up -d postgres rabbitmq redis
+   docker-compose up -d postgres rabbitmq
    cargo run --bin attune-api &
    cargo run --bin attune-executor &
    cargo run --bin attune-worker &
@@ -333,10 +332,6 @@ docker run -d --name rabbitmq \
   -p 15672:15672 \
   rabbitmq:3-management
 
-# Optional: Redis
-docker run -d --name redis \
-  -p 6379:6379 \
-  redis:7
 ```
 
 **Database Setup:**

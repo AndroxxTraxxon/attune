@@ -487,12 +487,17 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let binary_path = temp_dir.path().join("test_binary.sh");
 
-        // Create a simple shell script as our "binary"
-        fs::write(
-            &binary_path,
-            "#!/bin/bash\necho 'Hello from native runtime'",
-        )
-        .unwrap();
+        // Create a simple shell script as our "binary" and ensure the file
+        // handle is closed before executing it (Linux returns ETXTBSY for
+        // executables still open for writing).
+        {
+            use std::io::Write;
+
+            let mut file = fs::File::create(&binary_path).unwrap();
+            file.write_all(b"#!/bin/bash\necho 'Hello from native runtime'\n")
+                .unwrap();
+            file.sync_all().unwrap();
+        }
 
         // Make it executable
         let metadata = fs::metadata(&binary_path).unwrap();

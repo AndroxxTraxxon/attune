@@ -1,8 +1,8 @@
 -- Migration: Execution and Operations
 -- Description: Creates execution, inquiry, rule, worker, and notification tables.
 --              Includes retry tracking, worker health views, and helper functions.
---              Consolidates former migrations: 000006 (execution_system), 000008
---              (worker_notification), 000014 (worker_table), and 20260209 (phase3).
+--              Consolidates former migrations: execution_system,
+--              worker_notification, worker_table, and 20260209 (phase3).
 --
 --              NOTE: `execution` remains a regular PostgreSQL table. Time-series
 --              audit and analytics are handled by `execution_history`.
@@ -273,6 +273,10 @@ CREATE TABLE worker (
     capabilities JSONB,
     meta JSONB,
     last_heartbeat TIMESTAMPTZ,
+    cordoned BOOLEAN NOT NULL DEFAULT FALSE,
+    cordon_reason TEXT,
+    cordoned_by BIGINT REFERENCES identity(id) ON DELETE SET NULL,
+    cordoned_at TIMESTAMPTZ,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -289,6 +293,8 @@ CREATE INDEX idx_worker_status_role ON worker(status, worker_role);
 CREATE INDEX idx_worker_capabilities_gin ON worker USING GIN (capabilities);
 CREATE INDEX idx_worker_meta_gin ON worker USING GIN (meta);
 CREATE INDEX idx_worker_capabilities_health_status ON worker USING GIN ((capabilities -> 'health' -> 'status'));
+CREATE INDEX idx_worker_cordoned ON worker(cordoned) WHERE cordoned = TRUE;
+CREATE INDEX idx_worker_role_cordoned_status ON worker(worker_role, cordoned, status);
 
 -- Trigger
 CREATE TRIGGER update_worker_updated
@@ -308,10 +314,80 @@ COMMENT ON COLUMN worker.status IS 'Worker operational status';
 COMMENT ON COLUMN worker.capabilities IS 'Worker capabilities (e.g., max_concurrent_executions, supported runtimes)';
 COMMENT ON COLUMN worker.meta IS 'Additional worker metadata';
 COMMENT ON COLUMN worker.last_heartbeat IS 'Timestamp of last heartbeat from worker';
+COMMENT ON COLUMN worker.cordoned IS 'Operator cordon flag: cordoned workers are intentionally unschedulable';
+COMMENT ON COLUMN worker.cordon_reason IS 'Optional operator-provided reason for cordoning the worker';
+COMMENT ON COLUMN worker.cordoned_by IS 'Identity that last cordoned this worker';
+COMMENT ON COLUMN worker.cordoned_at IS 'Timestamp when the worker was last cordoned';
 
 ALTER TABLE execution
     ADD CONSTRAINT execution_worker_fkey
     FOREIGN KEY (worker) REFERENCES worker(id) ON DELETE SET NULL;
+
+-- ============================================================================
+-- SENSOR_PROCESS TABLE
+-- ============================================================================
+
+CREATE TABLE sensor_process (
+    id                           BIGSERIAL PRIMARY KEY,
+    sensor                       BIGINT NOT NULL REFERENCES sensor(id) ON DELETE CASCADE,
+    sensor_ref                   TEXT NOT NULL,
+    worker                       BIGINT NOT NULL REFERENCES worker(id) ON DELETE CASCADE,
+    worker_name                  TEXT NOT NULL,
+    status                       sensor_process_status_enum NOT NULL DEFAULT 'starting',
+    pid                          INTEGER,
+    consecutive_failures         INTEGER NOT NULL DEFAULT 0,
+    last_exit_code               INTEGER,
+    last_signal                  INTEGER,
+    last_started_at              TIMESTAMPTZ,
+    last_stopped_at              TIMESTAMPTZ,
+    next_restart_at              TIMESTAMPTZ,
+    stderr_excerpt               TEXT,
+    log_artifact_ref             TEXT,
+    active_rule_count            INTEGER NOT NULL DEFAULT 0,
+    last_alerted_failure_count   INTEGER NOT NULL DEFAULT 0,
+    last_alerted_at              TIMESTAMPTZ,
+    meta                         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created                      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated                      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT sensor_process_pid_positive CHECK (pid IS NULL OR pid > 0),
+    CONSTRAINT sensor_process_failures_nonnegative CHECK (consecutive_failures >= 0),
+    CONSTRAINT sensor_process_active_rules_nonnegative CHECK (active_rule_count >= 0),
+    CONSTRAINT sensor_process_alerted_failures_nonnegative CHECK (last_alerted_failure_count >= 0)
+);
+
+CREATE UNIQUE INDEX ux_sensor_process_sensor_worker
+    ON sensor_process(sensor, worker);
+CREATE UNIQUE INDEX ux_sensor_process_sensor_ref_worker_name
+    ON sensor_process(sensor_ref, worker_name);
+CREATE INDEX idx_sensor_process_sensor
+    ON sensor_process(sensor);
+CREATE INDEX idx_sensor_process_sensor_ref
+    ON sensor_process(sensor_ref);
+CREATE INDEX idx_sensor_process_worker
+    ON sensor_process(worker);
+CREATE INDEX idx_sensor_process_worker_status
+    ON sensor_process(worker, status);
+CREATE INDEX idx_sensor_process_status
+    ON sensor_process(status);
+CREATE INDEX idx_sensor_process_next_restart
+    ON sensor_process(next_restart_at)
+    WHERE status = 'backoff' AND next_restart_at IS NOT NULL;
+CREATE INDEX idx_sensor_process_meta_gin
+    ON sensor_process USING GIN (meta);
+
+CREATE TRIGGER update_sensor_process_updated
+    BEFORE UPDATE ON sensor_process
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_column();
+
+COMMENT ON TABLE sensor_process IS 'Live durable state for managed pack sensor processes';
+COMMENT ON COLUMN sensor_process.sensor_ref IS 'Denormalized sensor ref for lookup and history after sensor changes';
+COMMENT ON COLUMN sensor_process.worker_name IS 'Denormalized owning worker name for lookup and history after worker changes';
+COMMENT ON COLUMN sensor_process.stderr_excerpt IS 'Recent stderr excerpt captured when a process exits unexpectedly';
+COMMENT ON COLUMN sensor_process.log_artifact_ref IS 'Artifact ref for the durable sensor process log stream';
+COMMENT ON COLUMN sensor_process.active_rule_count IS 'Number of enabled rules currently associated with this sensor';
+COMMENT ON COLUMN sensor_process.last_alerted_failure_count IS 'Failure count most recently included in a supervisor alert';
 
 -- ============================================================================
 -- NOTIFICATION TABLE

@@ -10,15 +10,16 @@
 
 use anyhow::Result;
 use attune_common::{
-    models::{enums::ExecutionStatus, Execution},
-    mq::{MessageEnvelope, MessageType, Publisher},
+    models::{enums::ExecutionStatus, Execution, Worker, WorkerStatus},
+    mq::{ExecutionCompletedPayload, MessageEnvelope, MessageType, Publisher},
     repositories::{
         execution::{UpdateExecutionInput, SELECT_COLUMNS as EXECUTION_COLUMNS},
-        ExecutionRepository,
+        runtime::WorkerRepository,
+        ExecutionRepository, FindById,
     },
+    system_alert::{emit_core_alert, SystemAlert},
 };
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -47,14 +48,6 @@ impl Default for TimeoutMonitorConfig {
             enabled: true,
         }
     }
-}
-
-/// Payload for execution completion messages
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExecutionCompletedPayload {
-    pub execution_id: i64,
-    pub status: ExecutionStatus,
-    pub result: Option<JsonValue>,
 }
 
 /// Monitors scheduled executions and fails those that timeout
@@ -95,6 +88,12 @@ impl ExecutionTimeoutMonitor {
             if let Err(e) = self.check_stale_executions().await {
                 error!("Error checking stale executions: {}", e);
                 // Continue running despite errors
+            }
+            if let Err(e) = self.reconcile_running_executions_on_dead_workers().await {
+                error!(
+                    "Error reconciling running executions on dead workers: {}",
+                    e
+                );
             }
         }
     }
@@ -205,7 +204,7 @@ impl ExecutionTimeoutMonitor {
         info!("Execution {} marked as failed in database", execution_id);
 
         // Publish completion notification
-        self.publish_completion_notification(execution_id, result)
+        self.publish_completion_notification(execution, ExecutionStatus::Failed, result)
             .await?;
 
         info!(
@@ -219,13 +218,17 @@ impl ExecutionTimeoutMonitor {
     /// Publish execution completion notification
     async fn publish_completion_notification(
         &self,
-        execution_id: i64,
+        execution: &Execution,
+        status: ExecutionStatus,
         result: JsonValue,
     ) -> Result<()> {
         let payload = ExecutionCompletedPayload {
-            execution_id,
-            status: ExecutionStatus::Failed,
+            execution_id: execution.id,
+            action_id: execution.action.unwrap_or_default(),
+            action_ref: execution.action_ref.clone(),
+            status: format!("{:?}", status),
             result: Some(result),
+            completed_at: Utc::now(),
         };
 
         let envelope = MessageEnvelope::new(MessageType::ExecutionCompleted, payload)
@@ -233,6 +236,142 @@ impl ExecutionTimeoutMonitor {
 
         // Publish to main executions exchange
         self.publisher.publish_envelope(&envelope).await?;
+
+        Ok(())
+    }
+
+    async fn reconcile_running_executions_on_dead_workers(&self) -> Result<()> {
+        let running_executions =
+            ExecutionRepository::find_by_status(&self.pool, ExecutionStatus::Running).await?;
+
+        for execution in running_executions
+            .into_iter()
+            .filter(|exec| exec.worker.is_some())
+        {
+            let Some(worker_id) = execution.worker else {
+                continue;
+            };
+            let Some(worker) = WorkerRepository::find_by_id(&self.pool, worker_id).await? else {
+                warn!(
+                    "Execution {} is running on missing worker {}, marking as abandoned",
+                    execution.id, worker_id
+                );
+                self.abandon_running_execution(&execution, None).await?;
+                continue;
+            };
+
+            if Self::worker_unavailable_for_running_execution(&worker) {
+                warn!(
+                    "Execution {} is running on unavailable worker {} (id={}), marking as abandoned",
+                    execution.id, worker.name, worker.id
+                );
+                self.abandon_running_execution(&execution, Some(worker))
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn worker_unavailable_for_running_execution(worker: &Worker) -> bool {
+        if matches!(
+            worker.status,
+            Some(WorkerStatus::Inactive | WorkerStatus::Error)
+        ) {
+            return true;
+        }
+
+        let Some(last_heartbeat) = worker.last_heartbeat else {
+            return true;
+        };
+        let max_age = chrono::Duration::seconds(90);
+        Utc::now().signed_duration_since(last_heartbeat) > max_age
+    }
+
+    async fn abandon_running_execution(
+        &self,
+        execution: &Execution,
+        worker: Option<Worker>,
+    ) -> Result<()> {
+        let now = Utc::now();
+        let worker_json = worker.as_ref().map(|worker| {
+            let heartbeat_age_seconds = worker
+                .last_heartbeat
+                .map(|last| now.signed_duration_since(last).num_seconds().max(0));
+            serde_json::json!({
+                "id": worker.id,
+                "name": worker.name,
+                "role": worker.worker_role,
+                "status": worker.status,
+                "last_heartbeat": worker.last_heartbeat,
+                "heartbeat_age_seconds": heartbeat_age_seconds,
+                "cordoned": worker.cordoned,
+            })
+        });
+        let result = serde_json::json!({
+            "error": "Execution abandoned because its worker became unavailable while running",
+            "abandoned_by": "execution_timeout_monitor",
+            "original_status": "running",
+            "worker": worker_json,
+            "reconciled_at": now,
+        });
+
+        let updated = ExecutionRepository::update_if_status(
+            &self.pool,
+            execution.id,
+            ExecutionStatus::Running,
+            UpdateExecutionInput {
+                status: Some(ExecutionStatus::Abandoned),
+                result: Some(result.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+        let Some(updated) = updated else {
+            debug!(
+                "Skipping abandoned reconciliation for execution {} because it already left Running",
+                execution.id
+            );
+            return Ok(());
+        };
+
+        self.publish_completion_notification(&updated, ExecutionStatus::Abandoned, result.clone())
+            .await?;
+
+        if let Some(worker) = worker.as_ref().filter(|worker| !worker.cordoned) {
+            let alert = SystemAlert {
+                severity: "error".to_string(),
+                category: "execution_reconciliation".to_string(),
+                failure_type: "execution_abandoned_worker_unavailable".to_string(),
+                component_type: "execution".to_string(),
+                component_id: Some(updated.id),
+                component_ref: Some(updated.action_ref.clone()),
+                worker_role: Some(format!("{:?}", worker.worker_role).to_lowercase()),
+                observed_at: now,
+                summary: format!(
+                    "Execution {} was abandoned because worker '{}' became unavailable",
+                    updated.id, worker.name
+                ),
+                details: serde_json::json!({
+                    "execution_id": updated.id,
+                    "action_ref": updated.action_ref.clone(),
+                    "worker_id": worker.id,
+                    "worker_name": worker.name,
+                    "worker_role": worker.worker_role,
+                    "worker_status": worker.status,
+                    "last_heartbeat": worker.last_heartbeat,
+                    "reconciliation_result": result,
+                }),
+                correlation_id: Some(format!("execution:{}:worker_unavailable", updated.id)),
+            };
+            if let Err(e) = emit_core_alert(&self.pool, Some(&self.publisher), alert).await {
+                warn!(
+                    "Failed to emit abandoned-execution alert for execution {}: {}",
+                    updated.id, e
+                );
+            }
+        }
 
         Ok(())
     }

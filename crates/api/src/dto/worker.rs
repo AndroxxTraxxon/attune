@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value as JsonValue;
 use utoipa::{IntoParams, ToSchema};
 
@@ -58,6 +58,22 @@ pub struct WorkerLoadSnapshot {
     pub max_concurrent_sensors: Option<u32>,
 }
 
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct CordonWorkerRequest {
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerHealthState {
+    Active,
+    Busy,
+    Cordoned,
+    Offline,
+    Error,
+    Inactive,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct WorkerSummary {
     #[schema(example = 1)]
@@ -82,6 +98,26 @@ pub struct WorkerSummary {
     #[schema(example = "2026-04-11T13:26:37Z", nullable = true)]
     pub last_heartbeat: Option<DateTime<Utc>>,
 
+    #[schema(example = 42, nullable = true)]
+    pub heartbeat_age_seconds: Option<i64>,
+
+    #[schema(example = false)]
+    pub heartbeat_stale: bool,
+
+    #[schema(example = false)]
+    pub cordoned: bool,
+
+    #[schema(nullable = true)]
+    pub cordon_reason: Option<String>,
+
+    #[schema(example = 1, nullable = true)]
+    pub cordoned_by: Option<i64>,
+
+    #[schema(example = "2026-04-11T13:26:37Z", nullable = true)]
+    pub cordoned_at: Option<DateTime<Utc>>,
+
+    pub health_state: WorkerHealthState,
+
     pub supported_runtimes: Vec<WorkerRuntimeSupport>,
 
     pub load: WorkerLoadSnapshot,
@@ -102,6 +138,34 @@ pub struct WorkerQueryParams {
     #[serde(default = "default_page_size")]
     #[param(example = 50, minimum = 1, maximum = 100)]
     pub page_size: u32,
+
+    #[serde(default)]
+    pub role: Option<WorkerRole>,
+
+    #[serde(default)]
+    pub status: Option<WorkerStatus>,
+
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    pub cordoned: Option<bool>,
+
+    #[serde(default)]
+    pub health_state: Option<WorkerHealthState>,
+}
+
+fn deserialize_optional_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    value
+        .map(|value| match value.to_ascii_lowercase().as_str() {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => Err(serde::de::Error::custom(
+                "provided string was not `true` or `false`",
+            )),
+        })
+        .transpose()
 }
 
 fn default_page() -> u32 {

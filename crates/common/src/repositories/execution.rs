@@ -134,7 +134,7 @@ pub struct ExecutionWithRefs {
     pub retry_reason: Option<String>,
     pub original_execution: Option<Id>,
     pub started_at: Option<DateTime<Utc>>,
-    #[sqlx(json, default)]
+    #[sqlx(json(nullable), default)]
     pub workflow_task: Option<WorkflowTaskMetadata>,
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,

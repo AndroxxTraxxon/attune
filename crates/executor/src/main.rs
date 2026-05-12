@@ -21,6 +21,7 @@ mod retry_manager;
 mod scheduler;
 mod service;
 mod timeout_monitor;
+mod work_queue_events;
 mod worker_health;
 mod workflow;
 

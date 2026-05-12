@@ -48,9 +48,6 @@ chrono = { workspace = true }
 # CLI
 clap = { workspace = true }
 
-# Redis (optional, for distributed notifications)
-redis = { workspace = true }
-
 # UUID
 uuid = { workspace = true }
 

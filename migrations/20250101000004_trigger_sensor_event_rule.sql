@@ -132,6 +132,9 @@ CREATE TABLE sensor (
     param_schema JSONB,
     config JSONB,
     runtime_version_constraint TEXT,
+    worker_selector JSONB NOT NULL DEFAULT '{}'::jsonb,
+    worker_tolerations JSONB NOT NULL DEFAULT '[]'::jsonb,
+    worker_affinity JSONB NOT NULL DEFAULT '{}'::jsonb,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -147,6 +150,9 @@ CREATE INDEX idx_sensor_runtime ON sensor(runtime);
 CREATE INDEX idx_sensor_enabled ON sensor(enabled) WHERE enabled = TRUE;
 CREATE INDEX idx_sensor_is_adhoc ON sensor(is_adhoc) WHERE is_adhoc = true;
 CREATE INDEX idx_sensor_created ON sensor(created DESC);
+CREATE INDEX idx_sensor_worker_selector_gin ON sensor USING GIN (worker_selector);
+CREATE INDEX idx_sensor_worker_tolerations_gin ON sensor USING GIN (worker_tolerations);
+CREATE INDEX idx_sensor_worker_affinity_gin ON sensor USING GIN (worker_affinity);
 
 -- Add FK from trigger.sensor → sensor(id) now that sensor table exists
 ALTER TABLE trigger ADD CONSTRAINT trigger_sensor_fk FOREIGN KEY (sensor) REFERENCES sensor(id) ON DELETE SET NULL;
@@ -166,6 +172,9 @@ COMMENT ON COLUMN sensor.runtime IS 'Runtime environment for execution';
 COMMENT ON COLUMN sensor.enabled IS 'Whether this sensor is active';
 COMMENT ON COLUMN sensor.is_adhoc IS 'True if sensor was manually created (ad-hoc), false if installed from pack';
 COMMENT ON COLUMN sensor.runtime_version_constraint IS 'Semver version constraint for the runtime (e.g., ">=3.12", ">=3.12,<4.0", "~18.0"). NULL means any version.';
+COMMENT ON COLUMN sensor.worker_selector IS 'Exact sensor-worker label selector required to run this sensor';
+COMMENT ON COLUMN sensor.worker_tolerations IS 'Tolerations allowing this sensor onto tainted sensor workers';
+COMMENT ON COLUMN sensor.worker_affinity IS 'Required/preferred/anti-affinity placement rules for sensor workers';
 
 -- ============================================================================
 -- EVENT TABLE

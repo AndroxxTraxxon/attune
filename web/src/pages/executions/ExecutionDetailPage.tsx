@@ -441,6 +441,30 @@ export default function ExecutionDetailPage() {
               )}
             </dl>
 
+            {/* Configuration — merged inline */}
+            {isJsonObject(execution.config) &&
+              Object.keys(execution.config).length > 0 && (
+                <div className="mt-6 border-t border-gray-200 pt-4">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-2">
+                    Configuration
+                  </h3>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Parameters used for this execution, annotated with the
+                    action parameter schema when available.
+                  </p>
+                  <SchemaValueRows
+                    schema={
+                      (actionData?.data as ActionResponse | undefined)
+                        ?.param_schema
+                    }
+                    values={execution.config}
+                    emptyMessage="No configuration parameters were captured for this execution."
+                    maskSecrets
+                    hideUnprovided
+                  />
+                </div>
+              )}
+
             {/* Inline progress bar (visible when execution has progress artifacts) */}
             {isRunning && (
               <ExecutionProgressBar
@@ -457,20 +481,18 @@ export default function ExecutionDetailPage() {
               />
             )}
 
-          <ExecutionConfigurationCard
-            config={execution.config}
-            action={actionData?.data as ActionResponse | undefined}
-          />
-
           <ExecutionResultCard
             result={execution.result}
             action={actionData?.data as ActionResponse | undefined}
             isWorkflow={isWorkflow}
           />
+        </div>
 
+        {/* Sidebar */}
+        <div className="space-y-6">
           {/* Timeline */}
           <div className="bg-white shadow rounded-lg p-6">
-            <h2 className="text-xl font-semibold mb-4">Timeline</h2>
+            <h2 className="text-lg font-semibold mb-4">Timeline</h2>
 
             {historyLoading && (
               <div className="flex items-center justify-center py-6">
@@ -491,10 +513,10 @@ export default function ExecutionDetailPage() {
                     />
                   </div>
                   <div className="flex-1">
-                    <p className="font-medium">
+                    <p className="font-medium text-sm">
                       {getStatusLabel(execution.status)}
                     </p>
-                    <p className="text-sm text-gray-500">
+                    <p className="text-xs text-gray-500">
                       {new Date(execution.created).toLocaleString()}
                     </p>
                   </div>
@@ -514,20 +536,20 @@ export default function ExecutionDetailPage() {
                     : null;
 
                   return (
-                    <div key={`${entry.status}-${idx}`} className="flex gap-4">
+                    <div key={`${entry.status}-${idx}`} className="flex gap-3">
                       <div className="flex flex-col items-center">
                         <div
-                          className={`w-3 h-3 rounded-full flex-shrink-0 ${getTimelineDotColor(entry.status)}${
+                          className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${getTimelineDotColor(entry.status)}${
                             isLast && isRunning ? " animate-pulse" : ""
                           }`}
                         />
                         {!isLast && (
-                          <div className="w-0.5 flex-1 min-h-[24px] bg-gray-200" />
+                          <div className="w-0.5 flex-1 min-h-[20px] bg-gray-200" />
                         )}
                       </div>
-                      <div className={`flex-1 ${!isLast ? "pb-4" : ""}`}>
+                      <div className={`flex-1 ${!isLast ? "pb-3" : ""}`}>
                         <div className="flex items-center gap-2">
-                          <p className="font-medium">
+                          <p className="font-medium text-sm">
                             {getStatusLabel(entry.status)}
                           </p>
                           <span
@@ -536,14 +558,16 @@ export default function ExecutionDetailPage() {
                             {entry.status}
                           </span>
                         </div>
-                        <p className="text-sm text-gray-500">
+                        <p className="text-xs text-gray-500">
                           {time.toLocaleString()}
-                          <span className="text-gray-400 ml-2 text-xs">
-                            ({formatDistanceToNow(time, { addSuffix: true })})
+                          <span className="text-gray-400 ml-1 text-[10px]">
+                            (
+                            {formatDistanceToNow(time, { addSuffix: true })}
+                            )
                           </span>
                         </p>
                         {durationMs !== null && durationMs > 0 && (
-                          <p className="text-xs text-gray-400 mt-0.5">
+                          <p className="text-[10px] text-gray-400 mt-0.5">
                             +{formatDuration(durationMs)} since previous
                           </p>
                         )}
@@ -553,78 +577,27 @@ export default function ExecutionDetailPage() {
                 })}
 
                 {isRunning && (
-                  <div className="flex gap-4 pt-4">
+                  <div className="flex gap-3 pt-3">
                     <div className="flex flex-col items-center">
-                      <div className="w-3 h-3 rounded-full bg-blue-500 animate-pulse" />
+                      <div className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse" />
                     </div>
                     <div className="flex-1">
-                      <p className="font-medium text-blue-600">In Progress…</p>
+                      <p className="font-medium text-sm text-blue-600">
+                        In Progress…
+                      </p>
                     </div>
                   </div>
                 )}
               </div>
             )}
           </div>
+
+          {/* Artifacts */}
+          <ExecutionArtifactsPanel
+            executionId={execution.id}
+            isRunning={isRunning}
+          />
         </div>
-
-        {/* Sidebar */}
-        <div className="space-y-6">
-          {/* Quick Info */}
-          <div className="bg-white shadow rounded-lg p-6">
-            <h2 className="text-lg font-semibold mb-4">Quick Info</h2>
-            <div className="space-y-3">
-              <div>
-                <p className="text-sm text-gray-600">Action</p>
-                <Link
-                  to={`/actions/${execution.action_ref}`}
-                  className="text-sm font-medium text-blue-600 hover:text-blue-800"
-                >
-                  {execution.action_ref}
-                </Link>
-              </div>
-              {execution.enforcement && (
-                <div>
-                  <p className="text-sm text-gray-600">Enforcement ID</p>
-                  <p className="text-sm font-medium">{execution.enforcement}</p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Quick Actions */}
-          <div className="bg-white shadow rounded-lg p-6">
-            <h2 className="text-lg font-semibold mb-4">Quick Actions</h2>
-            <div className="space-y-2">
-              <button
-                onClick={() => setShowRerunModal(true)}
-                disabled={!actionData?.data}
-                className="block w-full px-4 py-2 text-sm text-center bg-blue-50 hover:bg-blue-100 text-blue-700 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Re-Run with Same Parameters
-              </button>
-              <Link
-                to={`/actions/${execution.action_ref}`}
-                className="block w-full px-4 py-2 text-sm text-center bg-gray-100 hover:bg-gray-200 rounded"
-              >
-                View Action
-              </Link>
-              <Link
-                to={`/executions?action_ref=${execution.action_ref}`}
-                className="block w-full px-4 py-2 text-sm text-center bg-gray-100 hover:bg-gray-200 rounded"
-              >
-                View All Executions
-              </Link>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Artifacts */}
-      <div className="mt-6">
-        <ExecutionArtifactsPanel
-          executionId={execution.id}
-          isRunning={isRunning}
-        />
       </div>
 
       {/* Change History */}
@@ -639,33 +612,6 @@ export default function ExecutionDetailPage() {
   );
 }
 
-function ExecutionConfigurationCard({
-  config,
-  action,
-}: {
-  config: unknown;
-  action?: ActionResponse;
-}) {
-  if (!isJsonObject(config) || Object.keys(config).length === 0) {
-    return null;
-  }
-
-  return (
-    <div className="bg-white shadow rounded-lg p-6">
-      <h2 className="text-xl font-semibold mb-2">Configuration</h2>
-      <p className="text-sm text-gray-600 mb-4">
-        Parameters used for this execution, annotated with the action parameter
-        schema when available.
-      </p>
-      <SchemaValueRows
-        schema={action?.param_schema}
-        values={config}
-        emptyMessage="No configuration parameters were captured for this execution."
-        maskSecrets
-      />
-    </div>
-  );
-}
 
 function ExecutionResultCard({
   result,

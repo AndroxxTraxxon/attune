@@ -54,6 +54,8 @@ pub mod event_type {
         pub const REGISTER_SUCCESS: &str = "auth.register.success";
         pub const TOKEN_REFRESH_SUCCESS: &str = "auth.token_refresh.success";
         pub const TOKEN_REFRESH_FAILURE: &str = "auth.token_refresh.failure";
+        pub const TOKEN_LOGIN_SUCCESS: &str = "auth.token_login.success";
+        pub const TOKEN_LOGIN_FAILURE: &str = "auth.token_login.failure";
     }
 
     pub mod rbac {

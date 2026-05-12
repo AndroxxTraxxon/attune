@@ -10,22 +10,23 @@ use axum::{
 
 use validator::Validate;
 
-use attune_common::models::Identity;
+use attune_common::auth::hash_integration_token;
+use attune_common::models::{Identity, IntegrationToken};
 use attune_common::rbac::{Action, Grant, Resource};
 use attune_common::repositories::{
     identity::{
         CreateIdentityInput, IdentityRepository, IdentityRoleAssignmentRepository,
         PermissionSetRepository,
     },
-    Create, FindById,
+    Create, FindById, IntegrationTokenRepository,
 };
 
 use crate::{
     auth::{
         hash_password,
         jwt::{
-            generate_access_token, generate_refresh_token, generate_sensor_token, validate_token,
-            TokenType,
+            generate_access_token, generate_integration_refresh_token, generate_refresh_token,
+            generate_sensor_token, validate_token, TokenType,
         },
         middleware::RequireAuth,
         oidc::{
@@ -39,7 +40,8 @@ use crate::{
     dto::{
         ApiResponse, AuthSettingsResponse, ChangePasswordRequest, CurrentUserResponse,
         EffectivePermissionResponse, LoginRequest, ProviderProfileResponse, RefreshTokenRequest,
-        RegisterRequest, SuccessResponse, TokenResponse, UpdateCurrentUserRequest,
+        RegisterRequest, SuccessResponse, TokenLoginRequest, TokenResponse,
+        UpdateCurrentUserRequest,
     },
     middleware::error::ApiError,
     state::SharedState,
@@ -80,6 +82,7 @@ pub fn routes() -> Router<SharedState> {
     Router::new()
         .route("/settings", get(auth_settings))
         .route("/login", post(login))
+        .route("/token-login", post(token_login))
         .route("/oidc/login", get(oidc_login))
         .route("/callback", get(oidc_callback))
         .route("/ldap/login", post(ldap_login))
@@ -440,6 +443,137 @@ pub async fn login(
     Ok(Json(ApiResponse::new(response)))
 }
 
+/// Passwordless integration-token login endpoint.
+///
+/// POST /auth/token-login
+#[utoipa::path(
+    post,
+    path = "/auth/token-login",
+    tag = "auth",
+    request_body = TokenLoginRequest,
+    responses(
+        (status = 200, description = "Successfully logged in with integration token", body = inline(ApiResponse<TokenResponse>)),
+        (status = 401, description = "Invalid integration token"),
+        (status = 400, description = "Validation error")
+    )
+)]
+pub async fn token_login(
+    State(state): State<SharedState>,
+    Json(payload): Json<TokenLoginRequest>,
+) -> Result<Json<ApiResponse<TokenResponse>>, ApiError> {
+    use attune_common::audit::{event_type, AuditCategory, AuditEventBuilder, AuditOutcome};
+
+    let emit_failure = |reason: &str| {
+        state.audit_emitter.emit(
+            AuditEventBuilder::new(
+                AuditCategory::Auth,
+                event_type::auth::TOKEN_LOGIN_FAILURE,
+                AuditOutcome::Failure,
+            )
+            .with_details(serde_json::json!({ "reason": reason }))
+            .build(),
+        );
+    };
+
+    if let Err(e) = payload.validate() {
+        emit_failure("validation_error");
+        return Err(ApiError::ValidationError(format!(
+            "Invalid token login request: {}",
+            e
+        )));
+    }
+
+    let token_hash = hash_integration_token(&payload.token);
+    let integration_token =
+        match IntegrationTokenRepository::find_by_hash(&state.db, &token_hash).await? {
+            Some(token) if integration_token_is_active(&token) => token,
+            Some(_) => {
+                emit_failure("inactive_token");
+                return Err(ApiError::Unauthorized("Invalid token".to_string()));
+            }
+            None => {
+                emit_failure("unknown_token");
+                return Err(ApiError::Unauthorized("Invalid token".to_string()));
+            }
+        };
+
+    let identity = match active_identity_for_integration_token(&state, &integration_token).await {
+        Ok(identity) => identity,
+        Err(err) => {
+            emit_failure("invalid_identity");
+            return Err(err);
+        }
+    };
+
+    IntegrationTokenRepository::touch_last_used(&state.db, integration_token.id, None).await?;
+
+    let response = integration_token_response(&identity, integration_token.id, &state.jwt_config)?;
+
+    state.audit_emitter.emit(
+        AuditEventBuilder::new(
+            AuditCategory::Auth,
+            event_type::auth::TOKEN_LOGIN_SUCCESS,
+            AuditOutcome::Success,
+        )
+        .actor_identity(identity.id)
+        .actor_login(identity.login.clone())
+        .resource("integration_token")
+        .resource_id(integration_token.id)
+        .resource_ref(integration_token.label)
+        .build(),
+    );
+
+    Ok(Json(ApiResponse::new(response)))
+}
+
+fn integration_token_is_active(token: &IntegrationToken) -> bool {
+    token.revoked_at.is_none()
+        && token
+            .expires_at
+            .map(|expires_at| expires_at > chrono::Utc::now())
+            .unwrap_or(true)
+}
+
+async fn active_identity_for_integration_token(
+    state: &SharedState,
+    token: &IntegrationToken,
+) -> Result<Identity, ApiError> {
+    let identity = IdentityRepository::find_by_id(&state.db, token.identity)
+        .await?
+        .ok_or_else(|| ApiError::Unauthorized("Invalid token".to_string()))?;
+
+    if identity.frozen {
+        return Err(ApiError::Unauthorized("Invalid token".to_string()));
+    }
+
+    Ok(identity)
+}
+
+fn integration_token_response(
+    identity: &Identity,
+    integration_token_id: i64,
+    jwt_config: &crate::auth::jwt::JwtConfig,
+) -> Result<TokenResponse, ApiError> {
+    let access_token = generate_access_token(identity.id, &identity.login, jwt_config)?;
+    let refresh_token = generate_integration_refresh_token(
+        integration_token_id,
+        identity.id,
+        &identity.login,
+        jwt_config,
+    )?;
+
+    Ok(TokenResponse::new(
+        access_token,
+        refresh_token,
+        jwt_config.access_token_expiration,
+    )
+    .with_user(
+        identity.id,
+        identity.login.clone(),
+        identity.display_name.clone(),
+    ))
+}
+
 /// Register endpoint
 ///
 /// POST /auth/register
@@ -550,6 +684,10 @@ pub async fn refresh_token(
         return Err(ApiError::Unauthorized("Invalid token type".to_string()));
     }
 
+    if claims.scope.as_deref() == Some("integration_token") {
+        return refresh_integration_token(state, claims, browser_cookie_refresh).await;
+    }
+
     // Parse identity ID
     let identity_id: i64 = claims
         .sub
@@ -576,6 +714,42 @@ pub async fn refresh_token(
         refresh_token,
         state.jwt_config.access_token_expiration,
     );
+    let response_body = Json(ApiResponse::new(response.clone()));
+
+    if browser_cookie_refresh {
+        let mut http_response = response_body.into_response();
+        apply_cookies_to_headers(
+            http_response.headers_mut(),
+            &crate::auth::oidc::build_auth_cookies(&state, &response, ""),
+        )?;
+        return Ok(http_response);
+    }
+
+    Ok(response_body.into_response())
+}
+
+async fn refresh_integration_token(
+    state: SharedState,
+    claims: attune_common::auth::jwt::Claims,
+    browser_cookie_refresh: bool,
+) -> Result<Response, ApiError> {
+    let integration_token_id: i64 = claims
+        .sub
+        .parse()
+        .map_err(|_| ApiError::Unauthorized("Invalid or expired refresh token".to_string()))?;
+
+    let integration_token = IntegrationTokenRepository::find_by_id(&state.db, integration_token_id)
+        .await?
+        .filter(integration_token_is_active)
+        .ok_or_else(|| ApiError::Unauthorized("Invalid or expired refresh token".to_string()))?;
+
+    let identity = active_identity_for_integration_token(&state, &integration_token)
+        .await
+        .map_err(|_| ApiError::Unauthorized("Invalid or expired refresh token".to_string()))?;
+
+    IntegrationTokenRepository::touch_last_used(&state.db, integration_token.id, None).await?;
+
+    let response = integration_token_response(&identity, integration_token.id, &state.jwt_config)?;
     let response_body = Json(ApiResponse::new(response.clone()));
 
     if browser_cookie_refresh {

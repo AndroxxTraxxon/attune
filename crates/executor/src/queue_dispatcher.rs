@@ -39,6 +39,7 @@ use sqlx::PgPool;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use crate::work_queue_events;
 use crate::workflow::context::WorkflowContext;
 
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -78,6 +79,8 @@ struct PreparedDispatch {
     action_id: Option<i64>,
     action_ref: String,
     config: Option<JsonValue>,
+    queue: WorkQueue,
+    leased_item_ids: Vec<i64>,
 }
 
 /// Polling dispatcher for first-class work queues.
@@ -170,12 +173,37 @@ impl WorkQueueDispatcher {
             };
 
             if execution.status == ExecutionStatus::Requested {
+                let queue = WorkQueueRepository::find_by_id(&self.pool, dispatch.queue)
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "queue dispatch {} references missing queue {}",
+                            dispatch.id,
+                            dispatch.queue
+                        )
+                    })?;
+                let leased_item_ids = WorkQueueItemRepository::search(
+                    &self.pool,
+                    &WorkQueueItemSearchFilters {
+                        leased_execution: Some(execution.id),
+                        statuses: Some(vec![WorkQueueItemStatus::Leased]),
+                        limit: dispatch.leased_item_count.max(1) as u32,
+                        ..Default::default()
+                    },
+                )
+                .await?
+                .rows
+                .into_iter()
+                .map(|item| item.id)
+                .collect();
                 let prepared = PreparedDispatch {
                     dispatch_id: dispatch.id,
                     execution_id: execution.id,
                     action_id: execution.action,
                     action_ref: execution.action_ref.clone(),
                     config: execution.config.clone(),
+                    queue,
+                    leased_item_ids,
                 };
                 self.publish_dispatch(prepared).await?;
                 continue;
@@ -190,6 +218,39 @@ impl WorkQueueDispatcher {
                 },
             )
             .await?;
+
+            if let Some(queue) = WorkQueueRepository::find_by_id(&self.pool, dispatch.queue).await?
+            {
+                let leased_item_ids = WorkQueueItemRepository::search(
+                    &self.pool,
+                    &WorkQueueItemSearchFilters {
+                        leased_execution: Some(execution.id),
+                        statuses: Some(vec![WorkQueueItemStatus::Leased]),
+                        limit: dispatch.leased_item_count.max(1) as u32,
+                        ..Default::default()
+                    },
+                )
+                .await?
+                .rows
+                .into_iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>();
+                if let Err(error) = work_queue_events::maybe_emit_queue_started(
+                    &self.pool,
+                    &self.publisher,
+                    &queue,
+                    dispatch.id,
+                    execution.id,
+                    &leased_item_ids,
+                )
+                .await
+                {
+                    warn!(
+                        "Failed to emit queue_started event for queue '{}' dispatch {} during leased-dispatch reconciliation: {}",
+                        queue.r#ref, dispatch.id, error
+                    );
+                }
+            }
         }
 
         Ok(())
@@ -616,6 +677,8 @@ impl WorkQueueDispatcher {
             action_id: Some(context.action.id),
             action_ref: context.action.r#ref.clone(),
             config: execution.config.clone(),
+            queue: queue.clone(),
+            leased_item_ids: items.iter().map(|item| item.id).collect(),
         }))
     }
 
@@ -760,6 +823,11 @@ impl WorkQueueDispatcher {
     }
 
     async fn publish_dispatch(&self, dispatch: PreparedDispatch) -> Result<()> {
+        let queue = dispatch.queue.clone();
+        let leased_item_ids = dispatch.leased_item_ids.clone();
+        let dispatch_id = dispatch.dispatch_id;
+        let execution_id = dispatch.execution_id;
+
         let payload = ExecutionRequestedPayload {
             execution_id: dispatch.execution_id,
             action_id: dispatch.action_id,
@@ -783,9 +851,25 @@ impl WorkQueueDispatcher {
         )
         .await?;
 
+        if let Err(error) = work_queue_events::maybe_emit_queue_started(
+            &self.pool,
+            &self.publisher,
+            &queue,
+            dispatch_id,
+            execution_id,
+            &leased_item_ids,
+        )
+        .await
+        {
+            warn!(
+                "Failed to emit queue_started event for queue '{}' dispatch {}: {}",
+                queue.r#ref, dispatch_id, error
+            );
+        }
+
         debug!(
             "Dispatched work queue execution {} via dispatch record {}",
-            dispatch.execution_id, dispatch.dispatch_id
+            execution_id, dispatch_id
         );
 
         Ok(())

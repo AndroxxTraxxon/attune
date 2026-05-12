@@ -13,7 +13,7 @@ use crate::dto::{
     auth::{
         AuthSettingsResponse, ChangePasswordRequest, CurrentUserResponse,
         EffectivePermissionResponse, LoginRequest, ProviderProfileResponse, RefreshTokenRequest,
-        RegisterRequest, TokenResponse, UpdateCurrentUserRequest,
+        RegisterRequest, TokenLoginRequest, TokenResponse, UpdateCurrentUserRequest,
     },
     common::{ApiResponse, PaginatedResponse, PaginationMeta, SuccessResponse},
     event::{EnforcementResponse, EnforcementSummary, EventResponse, EventSummary},
@@ -29,10 +29,11 @@ use crate::dto::{
         UpdatePackRequest, WorkflowSyncResult,
     },
     permission::{
-        CreateIdentityRequest, CreateIdentityRoleAssignmentRequest,
-        CreatePermissionAssignmentRequest, CreatePermissionSetRoleAssignmentRequest,
-        IdentityResponse, IdentityRoleAssignmentResponse, IdentitySummary,
-        PermissionAssignmentResponse, PermissionSetRoleAssignmentResponse, PermissionSetSummary,
+        CreateIdentityRequest, CreateIdentityRoleAssignmentRequest, CreateIntegrationTokenRequest,
+        CreateIntegrationTokenResponse, CreatePermissionAssignmentRequest,
+        CreatePermissionSetRoleAssignmentRequest, IdentityResponse, IdentityRoleAssignmentResponse,
+        IdentitySummary, IntegrationTokenResponse, PermissionAssignmentResponse,
+        PermissionSetRoleAssignmentResponse, PermissionSetSummary, RevokeIntegrationTokenRequest,
         UpdateIdentityRequest, UpdatePermissionSetRequest,
     },
     rule::{CreateRuleRequest, RuleResponse, RuleSummary, UpdateRuleRequest},
@@ -46,7 +47,10 @@ use crate::dto::{
         CreateWorkQueueRequest, EnqueueWorkQueueItemRequest, UpdateWorkQueueItemRequest,
         UpdateWorkQueueRequest, WorkQueueItemResponse, WorkQueueResponse, WorkQueueSummary,
     },
-    worker::{WorkerLoadSnapshot, WorkerRuntimeSupport, WorkerSummary},
+    worker::{
+        CordonWorkerRequest, WorkerHealthState, WorkerLoadSnapshot, WorkerRuntimeSupport,
+        WorkerSummary,
+    },
     workflow::{CreateWorkflowRequest, UpdateWorkflowRequest, WorkflowResponse, WorkflowSummary},
 };
 
@@ -83,6 +87,7 @@ use attune_common::audit::{AuditCategory, AuditOutcome};
         // Authentication
         crate::routes::auth::auth_settings,
         crate::routes::auth::login,
+        crate::routes::auth::token_login,
         crate::routes::auth::ldap_login,
         crate::routes::auth::register,
         crate::routes::auth::refresh_token,
@@ -122,6 +127,8 @@ use attune_common::audit::{AuditCategory, AuditOutcome};
         crate::routes::runtimes::update_runtime,
         crate::routes::runtimes::delete_runtime,
         crate::routes::workers::list_workers,
+        crate::routes::workers::cordon_worker,
+        crate::routes::workers::uncordon_worker,
 
         // Work queues
         crate::routes::work_queues::list_queues,
@@ -220,6 +227,10 @@ use attune_common::audit::{AuditCategory, AuditOutcome};
         crate::routes::permissions::delete_permission_set_role_assignment,
         crate::routes::permissions::freeze_identity,
         crate::routes::permissions::unfreeze_identity,
+        crate::routes::permissions::list_integration_tokens,
+        crate::routes::permissions::create_integration_token,
+        crate::routes::permissions::revoke_integration_token,
+        crate::routes::permissions::delete_integration_token,
 
         // Workflows
         crate::routes::workflows::list_workflows,
@@ -289,6 +300,7 @@ use attune_common::audit::{AuditCategory, AuditOutcome};
 
             // Auth DTOs
             LoginRequest,
+            TokenLoginRequest,
             crate::routes::auth::LdapLoginRequest,
             RegisterRequest,
             RefreshTokenRequest,
@@ -322,6 +334,10 @@ use attune_common::audit::{AuditCategory, AuditOutcome};
             CreateIdentityRequest,
             UpdateIdentityRequest,
             IdentityResponse,
+            IntegrationTokenResponse,
+            CreateIntegrationTokenRequest,
+            CreateIntegrationTokenResponse,
+            RevokeIntegrationTokenRequest,
             PermissionSetSummary,
             UpdatePermissionSetRequest,
             PermissionAssignmentResponse,
@@ -338,7 +354,7 @@ use attune_common::audit::{AuditCategory, AuditOutcome};
             RuntimeSummary,
             WorkerLoadSnapshot,
             WorkerRuntimeSupport,
-            WorkerSummary,
+            CordonWorkerRequest, WorkerHealthState, WorkerSummary,
             IdentitySummary,
             CreateWorkQueueRequest,
             EnqueueWorkQueueItemRequest,

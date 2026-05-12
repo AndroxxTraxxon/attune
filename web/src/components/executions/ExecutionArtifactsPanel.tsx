@@ -29,7 +29,6 @@ interface ExecutionArtifactsPanelProps {
   executionId: number;
   /** Whether the execution is still running (enables polling) */
   isRunning?: boolean;
-  defaultCollapsed?: boolean;
 }
 
 function getArtifactTypeIcon(type: ArtifactType) {
@@ -203,6 +202,7 @@ function TextFileDetail({
         case "done":
           setStreamDone(true);
           setIsStreaming(false);
+          setIsWaiting(false);
           controller.abort();
           break;
         case "error":
@@ -269,6 +269,7 @@ function TextFileDetail({
       controller.abort();
       streamAbortRef.current = null;
       setIsStreaming(false);
+      setIsWaiting(false);
     };
   }, [artifactId, isRunning, scrollToBottom]);
 
@@ -292,73 +293,80 @@ function TextFileDetail({
       setLoadError(e instanceof Error ? e.message : "Unknown error");
     } finally {
       setIsLoadingContent(false);
+      setIsWaiting(false);
     }
   }, [artifactId]);
 
-  // When NOT running (execution completed), use download endpoint once.
+  // When NOT running (execution completed), use download endpoint to get final content.
+  // This also handles the transition from running → completed (stream was aborted,
+  // now fetch the full file).
   useEffect(() => {
     if (isRunning) return;
     fetchContent();
   }, [isRunning, fetchContent]);
 
   return (
-    <div className="border border-blue-200 bg-blue-50/50 rounded-lg p-4 mt-2">
-      <div className="flex items-center justify-between mb-3">
-        <h4 className="text-sm font-semibold text-blue-900 flex items-center gap-2">
-          <FileText className="h-4 w-4" />
-          {artifactName ?? "Text File"}
-        </h4>
-        <div className="flex items-center gap-2">
-          {isStreaming && !streamDone && (
-            <div className="flex items-center gap-1 text-xs text-green-600">
-              <Radio className="h-3 w-3 animate-pulse" />
-              <span>Streaming</span>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[80vh] flex flex-col m-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+          <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+            <FileText className="h-4 w-4 text-blue-500" />
+            {artifactName ?? "Text File"}
+          </h3>
+          <div className="flex items-center gap-2">
+            {isStreaming && !streamDone && (
+              <div className="flex items-center gap-1 text-xs text-green-600">
+                <Radio className="h-3 w-3 animate-pulse" />
+                <span>Streaming</span>
+              </div>
+            )}
+            {streamDone && (
+              <span className="text-xs text-gray-500">Stream complete</span>
+            )}
+            {isWaiting && (
+              <div className="flex items-center gap-1 text-xs text-amber-600">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                <span>Waiting for file…</span>
+              </div>
+            )}
+            <button
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-600 p-1 rounded"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-hidden p-4">
+          {isLoadingContent && !isWaiting && (
+            <div className="flex items-center gap-2 py-2 text-sm text-gray-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading content…
             </div>
           )}
-          {streamDone && (
-            <span className="text-xs text-gray-500">Stream complete</span>
+
+          {loadError && (
+            <p className="text-xs text-red-600 italic">Error: {loadError}</p>
           )}
-          {isWaiting && (
-            <div className="flex items-center gap-1 text-xs text-amber-600">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              <span>Waiting for file…</span>
+
+          {!isLoadingContent && !loadError && content !== null && (
+            <pre
+              ref={preRef}
+              onScroll={handleScroll}
+              className="h-full max-h-[60vh] overflow-y-auto bg-gray-900 text-gray-100 rounded p-3 text-xs font-mono whitespace-pre-wrap break-all"
+            >
+              {content || <span className="text-gray-500 italic">(empty)</span>}
+            </pre>
+          )}
+
+          {isWaiting && content === null && !loadError && (
+            <div className="bg-gray-900 rounded p-3 text-xs text-gray-500 italic">
+              Waiting for the worker to write the file…
             </div>
           )}
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 p-1 rounded"
-          >
-            <X className="h-4 w-4" />
-          </button>
         </div>
       </div>
-
-      {isLoadingContent && !isWaiting && (
-        <div className="flex items-center gap-2 py-2 text-sm text-gray-500">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Loading content…
-        </div>
-      )}
-
-      {loadError && (
-        <p className="text-xs text-red-600 italic">Error: {loadError}</p>
-      )}
-
-      {!isLoadingContent && !loadError && content !== null && (
-        <pre
-          ref={preRef}
-          onScroll={handleScroll}
-          className="max-h-64 overflow-y-auto bg-gray-900 text-gray-100 rounded p-3 text-xs font-mono whitespace-pre-wrap break-all"
-        >
-          {content || <span className="text-gray-500 italic">(empty)</span>}
-        </pre>
-      )}
-
-      {isWaiting && content === null && !loadError && (
-        <div className="bg-gray-900 rounded p-3 text-xs text-gray-500 italic">
-          Waiting for the worker to write the file…
-        </div>
-      )}
     </div>
   );
 }
@@ -396,93 +404,100 @@ function ProgressDetail({
       : null;
 
   return (
-    <div className="border border-amber-200 bg-amber-50/50 rounded-lg p-4 mt-2">
-      <div className="flex items-center justify-between mb-3">
-        <h4 className="text-sm font-semibold text-amber-900 flex items-center gap-2">
-          <BarChart3 className="h-4 w-4" />
-          {artifact?.name ?? "Progress"}
-        </h4>
-        <button
-          onClick={onClose}
-          className="text-gray-400 hover:text-gray-600 p-1 rounded"
-        >
-          <X className="h-4 w-4" />
-        </button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col m-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+          <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+            <BarChart3 className="h-4 w-4 text-amber-500" />
+            {artifact?.name ?? "Progress"}
+          </h3>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 p-1 rounded"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="p-5 overflow-y-auto">
+          {isLoading && (
+            <div className="flex items-center gap-2 py-2 text-sm text-gray-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading progress…
+            </div>
+          )}
+
+          {!isLoading && latestPercent != null && (
+            <div className="mb-4">
+              <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
+                <span>
+                  {latestEntry?.message
+                    ? String(latestEntry.message)
+                    : `${latestPercent}%`}
+                </span>
+                <span className="font-mono">{latestPercent}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2.5">
+                <div
+                  className="bg-amber-500 h-2.5 rounded-full transition-all duration-300"
+                  style={{ width: `${Math.min(latestPercent, 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {!isLoading && progressEntries.length > 0 && (
+            <div className="max-h-64 overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-gray-500 border-b border-gray-200">
+                    <th className="pb-1 pr-2">#</th>
+                    <th className="pb-1 pr-2">%</th>
+                    <th className="pb-1 pr-2">Message</th>
+                    <th className="pb-1">Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {progressEntries.map((entry, idx) => (
+                    <tr
+                      key={idx}
+                      className="border-b border-gray-100 last:border-0"
+                    >
+                      <td className="py-1 pr-2 text-gray-400 font-mono">
+                        {typeof entry.iteration === "number"
+                          ? entry.iteration
+                          : idx + 1}
+                      </td>
+                      <td className="py-1 pr-2 font-mono">
+                        {typeof entry.percent === "number"
+                          ? `${entry.percent}%`
+                          : "—"}
+                      </td>
+                      <td className="py-1 pr-2 text-gray-700 truncate max-w-[200px]">
+                        {entry.message ? String(entry.message) : "—"}
+                      </td>
+                      <td className="py-1 text-gray-400 whitespace-nowrap">
+                        {entry.timestamp
+                          ? formatDistanceToNow(
+                              new Date(String(entry.timestamp)),
+                              { addSuffix: true },
+                            )
+                          : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {!isLoading && progressEntries.length === 0 && (
+            <p className="text-xs text-gray-500 italic">
+              No progress entries yet.
+            </p>
+          )}
+        </div>
       </div>
-
-      {isLoading && (
-        <div className="flex items-center gap-2 py-2 text-sm text-gray-500">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Loading progress…
-        </div>
-      )}
-
-      {!isLoading && latestPercent != null && (
-        <div className="mb-3">
-          <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
-            <span>
-              {latestEntry?.message
-                ? String(latestEntry.message)
-                : `${latestPercent}%`}
-            </span>
-            <span className="font-mono">{latestPercent}%</span>
-          </div>
-          <div className="w-full bg-gray-200 rounded-full h-2.5">
-            <div
-              className="bg-amber-500 h-2.5 rounded-full transition-all duration-300"
-              style={{ width: `${Math.min(latestPercent, 100)}%` }}
-            />
-          </div>
-        </div>
-      )}
-
-      {!isLoading && progressEntries.length > 0 && (
-        <div className="max-h-48 overflow-y-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-left text-gray-500 border-b border-amber-200">
-                <th className="pb-1 pr-2">#</th>
-                <th className="pb-1 pr-2">%</th>
-                <th className="pb-1 pr-2">Message</th>
-                <th className="pb-1">Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              {progressEntries.map((entry, idx) => (
-                <tr
-                  key={idx}
-                  className="border-b border-amber-100 last:border-0"
-                >
-                  <td className="py-1 pr-2 text-gray-400 font-mono">
-                    {typeof entry.iteration === "number"
-                      ? entry.iteration
-                      : idx + 1}
-                  </td>
-                  <td className="py-1 pr-2 font-mono">
-                    {typeof entry.percent === "number"
-                      ? `${entry.percent}%`
-                      : "—"}
-                  </td>
-                  <td className="py-1 pr-2 text-gray-700 truncate max-w-[200px]">
-                    {entry.message ? String(entry.message) : "—"}
-                  </td>
-                  <td className="py-1 text-gray-400 whitespace-nowrap">
-                    {entry.timestamp
-                      ? formatDistanceToNow(new Date(String(entry.timestamp)), {
-                          addSuffix: true,
-                        })
-                      : "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {!isLoading && progressEntries.length === 0 && (
-        <p className="text-xs text-gray-500 italic">No progress entries yet.</p>
-      )}
     </div>
   );
 }
@@ -494,13 +509,12 @@ function ProgressDetail({
 export default function ExecutionArtifactsPanel({
   executionId,
   isRunning = false,
-  defaultCollapsed = false,
 }: ExecutionArtifactsPanelProps) {
-  const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
-  const [expandedProgressId, setExpandedProgressId] = useState<number | null>(
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [previewProgressId, setPreviewProgressId] = useState<number | null>(
     null,
   );
-  const [expandedTextFileId, setExpandedTextFileId] = useState<number | null>(
+  const [previewTextFileId, setPreviewTextFileId] = useState<number | null>(
     null,
   );
 
@@ -538,21 +552,13 @@ export default function ExecutionArtifactsPanel({
   return (
     <div className="bg-white shadow rounded-lg">
       {/* Header */}
-      <button
-        onClick={() => setIsCollapsed(!isCollapsed)}
-        className="w-full flex items-center justify-between p-6 text-left hover:bg-gray-50 rounded-lg transition-colors"
-      >
-        <div className="flex items-center gap-3">
-          {isCollapsed ? (
-            <ChevronRight className="h-5 w-5 text-gray-400" />
-          ) : (
-            <ChevronDown className="h-5 w-5 text-gray-400" />
-          )}
-          <Package className="h-5 w-5 text-indigo-500" />
-          <h2 className="text-xl font-semibold">Artifacts</h2>
+      <div className="flex items-center justify-between p-4">
+        <div className="flex items-center gap-2">
+          <Package className="h-4 w-4 text-indigo-500" />
+          <h2 className="text-lg font-semibold">Artifacts</h2>
           {!isLoading && (
-            <span className="text-sm text-gray-500">
-              ({summary.total} artifact{summary.total !== 1 ? "s" : ""})
+            <span className="text-xs text-gray-500">
+              ({summary.total})
             </span>
           )}
           {isRunning && (
@@ -562,32 +568,10 @@ export default function ExecutionArtifactsPanel({
             </div>
           )}
         </div>
-
-        {/* Summary badges */}
-        <div className="flex items-center gap-2">
-          {summary.files > 0 && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-              <FileText className="h-3 w-3" />
-              {summary.files}
-            </span>
-          )}
-          {summary.progress > 0 && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
-              <BarChart3 className="h-3 w-3" />
-              {summary.progress}
-            </span>
-          )}
-          {summary.other > 0 && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
-              {summary.other}
-            </span>
-          )}
-        </div>
-      </button>
+      </div>
 
       {/* Content */}
-      {!isCollapsed && (
-        <div className="px-6 pb-6">
+      <div className="px-4 pb-4">
           {isLoading && (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
@@ -605,18 +589,7 @@ export default function ExecutionArtifactsPanel({
           )}
 
           {!isLoading && !error && artifacts.length > 0 && (
-            <div className="space-y-2">
-              {/* Column headers */}
-              <div className="grid grid-cols-12 gap-3 px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider border-b border-gray-100">
-                <div className="col-span-1">Type</div>
-                <div className="col-span-4">Name</div>
-                <div className="col-span-3">Ref</div>
-                <div className="col-span-1">Size</div>
-                <div className="col-span-2">Created</div>
-                <div className="col-span-1">Actions</div>
-              </div>
-
-              {/* Artifact rows */}
+            <div className="divide-y divide-gray-100">
               {artifacts.map((artifact) => {
                 const badge = getArtifactTypeBadge(artifact.type);
                 const isProgress = artifact.type === "progress";
@@ -627,138 +600,84 @@ export default function ExecutionArtifactsPanel({
                   "file_image",
                   "file_datatable",
                 ].includes(artifact.type);
-                const isProgressExpanded = expandedProgressId === artifact.id;
-                const isTextExpanded = expandedTextFileId === artifact.id;
+                const isExpanded = expandedId === artifact.id;
 
                 return (
                   <div key={artifact.id}>
-                    <div
-                      className={`grid grid-cols-12 gap-3 px-3 py-3 rounded-lg hover:bg-gray-50 transition-colors items-center ${
-                        isProgress || isTextFile ? "cursor-pointer" : ""
-                      }`}
-                      onClick={() => {
-                        if (isProgress) {
-                          setExpandedProgressId(
-                            isProgressExpanded ? null : artifact.id,
-                          );
-                          setExpandedTextFileId(null);
-                        } else if (isTextFile) {
-                          setExpandedTextFileId(
-                            isTextExpanded ? null : artifact.id,
-                          );
-                          setExpandedProgressId(null);
-                        }
-                      }}
+                    {/* Compact row: icon + name + type badge */}
+                    <button
+                      className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-50 transition-colors rounded"
+                      onClick={() =>
+                        setExpandedId(isExpanded ? null : artifact.id)
+                      }
                     >
-                      {/* Type icon */}
-                      <div className="col-span-1 flex items-center">
-                        {getArtifactTypeIcon(artifact.type)}
-                      </div>
-
-                      {/* Name */}
-                      <div className="col-span-4 flex items-center gap-2 min-w-0">
-                        <span
-                          className="text-sm font-medium text-gray-900 truncate"
-                          title={artifact.name ?? artifact.ref}
-                        >
-                          {artifact.name ?? artifact.ref}
-                        </span>
-                        <span
-                          className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0 ${badge.classes}`}
-                        >
-                          {badge.label}
-                        </span>
-                      </div>
-
-                      {/* Ref */}
-                      <div className="col-span-3 min-w-0">
-                        <span
-                          className="text-xs text-gray-500 truncate block font-mono"
-                          title={artifact.ref}
-                        >
-                          {artifact.ref}
-                        </span>
-                      </div>
-
-                      {/* Size */}
-                      <div className="col-span-1 text-sm text-gray-500">
-                        {formatBytes(artifact.size_bytes)}
-                      </div>
-
-                      {/* Created */}
-                      <div className="col-span-2 text-xs text-gray-500">
-                        {formatDistanceToNow(new Date(artifact.created), {
-                          addSuffix: true,
-                        })}
-                      </div>
-
-                      {/* Actions */}
-                      <div
-                        className="col-span-1 flex items-center gap-1"
-                        onClick={(e) => e.stopPropagation()}
+                      {isExpanded ? (
+                        <ChevronDown className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                      )}
+                      {getArtifactTypeIcon(artifact.type)}
+                      <span
+                        className="text-sm text-gray-900 truncate flex-1 min-w-0"
+                        title={artifact.name ?? artifact.ref}
                       >
-                        {isProgress && (
-                          <button
-                            onClick={() => {
-                              setExpandedProgressId(
-                                isProgressExpanded ? null : artifact.id,
-                              );
-                              setExpandedTextFileId(null);
-                            }}
-                            className="p-1 rounded hover:bg-gray-200 text-gray-500 hover:text-amber-600"
-                            title="View progress"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </button>
-                        )}
-                        {isTextFile && (
-                          <button
-                            onClick={() => {
-                              setExpandedTextFileId(
-                                isTextExpanded ? null : artifact.id,
-                              );
-                              setExpandedProgressId(null);
-                            }}
-                            className="p-1 rounded hover:bg-gray-200 text-gray-500 hover:text-blue-600"
-                            title="Preview text content"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </button>
-                        )}
-                        {isFile && (
-                          <button
-                            onClick={() =>
-                              downloadArtifact(artifact.id, artifact.ref)
-                            }
-                            className="p-1 rounded hover:bg-gray-200 text-gray-500 hover:text-blue-600"
-                            title="Download latest version"
-                          >
-                            <Download className="h-4 w-4" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
+                        {artifact.name ?? artifact.ref}
+                      </span>
+                      <span
+                        className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0 ${badge.classes}`}
+                      >
+                        {badge.label}
+                      </span>
+                    </button>
 
-                    {/* Expanded progress detail */}
-                    {isProgress && isProgressExpanded && (
-                      <div className="px-3">
-                        <ProgressDetail
-                          artifactId={artifact.id}
-                          isRunning={isRunning}
-                          onClose={() => setExpandedProgressId(null)}
-                        />
-                      </div>
-                    )}
-
-                    {/* Expanded text file preview */}
-                    {isTextFile && isTextExpanded && (
-                      <div className="px-3">
-                        <TextFileDetail
-                          artifactId={artifact.id}
-                          artifactName={artifact.name}
-                          isRunning={isRunning}
-                          onClose={() => setExpandedTextFileId(null)}
-                        />
+                    {/* Expanded detail dropdown */}
+                    {isExpanded && (
+                      <div className="px-3 pb-3 ml-9 space-y-2">
+                        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                          <dt className="text-gray-500">Ref</dt>
+                          <dd className="font-mono text-gray-700 truncate" title={artifact.ref}>
+                            {artifact.ref}
+                          </dd>
+                          {artifact.size_bytes != null && artifact.size_bytes > 0 && (
+                            <>
+                              <dt className="text-gray-500">Size</dt>
+                              <dd className="text-gray-700">
+                                {formatBytes(artifact.size_bytes)}
+                              </dd>
+                            </>
+                          )}
+                          <dt className="text-gray-500">Created</dt>
+                          <dd className="text-gray-700">
+                            {formatDistanceToNow(new Date(artifact.created), {
+                              addSuffix: true,
+                            })}
+                          </dd>
+                        </dl>
+                        <div className="flex items-center gap-1 pt-1">
+                          {(isProgress || isTextFile) && (
+                            <button
+                              onClick={() => {
+                                if (isProgress) setPreviewProgressId(artifact.id);
+                                else setPreviewTextFileId(artifact.id);
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded hover:bg-gray-100 text-gray-600 hover:text-blue-600"
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                              Preview
+                            </button>
+                          )}
+                          {isFile && (
+                            <button
+                              onClick={() =>
+                                downloadArtifact(artifact.id, artifact.ref)
+                              }
+                              className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded hover:bg-gray-100 text-gray-600 hover:text-blue-600"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                              Download
+                            </button>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -766,8 +685,26 @@ export default function ExecutionArtifactsPanel({
               })}
             </div>
           )}
+
+          {/* Preview modals */}
+          {previewProgressId != null && (
+            <ProgressDetail
+              artifactId={previewProgressId}
+              isRunning={isRunning}
+              onClose={() => setPreviewProgressId(null)}
+            />
+          )}
+          {previewTextFileId != null && (
+            <TextFileDetail
+              artifactId={previewTextFileId}
+              artifactName={
+                artifacts.find((a) => a.id === previewTextFileId)?.name ?? null
+              }
+              isRunning={isRunning}
+              onClose={() => setPreviewTextFileId(null)}
+            />
+          )}
         </div>
-      )}
     </div>
   );
 }

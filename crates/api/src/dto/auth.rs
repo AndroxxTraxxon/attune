@@ -18,6 +18,15 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+/// Passwordless integration-token login request.
+#[derive(Debug, Clone, Serialize, Deserialize, Validate, ToSchema)]
+pub struct TokenLoginRequest {
+    /// Opaque integration token secret. Returned only once when an administrator creates the token.
+    #[validate(length(min = 1))]
+    #[schema(example = "attune_it_abc123...")]
+    pub token: String,
+}
+
 /// Register request
 #[derive(Debug, Clone, Serialize, Deserialize, Validate, ToSchema)]
 pub struct RegisterRequest {

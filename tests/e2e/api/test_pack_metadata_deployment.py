@@ -252,6 +252,25 @@ runner_type: shell
 entry_point: poller.sh
 trigger_types:
   - {pack_ref}.item_seen
+worker_selector:
+  zone: e2e
+worker_tolerations:
+  - key: dedicated
+    operator: equal
+    value: sensors
+    effect: no_schedule
+worker_affinity:
+  required:
+    - match_labels:
+        storage: ssd
+  preferred:
+    - weight: 50
+      preference:
+        match_labels:
+          zone: e2e
+  anti_affinity:
+    - match_labels:
+        overloaded: "true"
 parameters:
   interval:
     type: integer
@@ -384,6 +403,24 @@ parameters:
             assert sensor["pack_ref"] == pack_ref
             assert sensor["enabled"] is False
             assert sensor.get("entrypoint") == "poller.sh"
+            assert sensor.get("worker_selector") == {"zone": "e2e"}
+            assert sensor.get("worker_tolerations") == [
+                {
+                    "key": "dedicated",
+                    "operator": "equal",
+                    "value": "sensors",
+                    "effect": "no_schedule",
+                }
+            ]
+            assert sensor.get("worker_affinity", {}).get("required", [])[0].get(
+                "match_labels"
+            ) == {"storage": "ssd"}
+            assert sensor.get("worker_affinity", {}).get("preferred", [])[0].get(
+                "weight"
+            ) == 50
+            assert sensor.get("worker_affinity", {}).get("anti_affinity", [])[0].get(
+                "match_labels"
+            ) == {"overloaded": "true"}
 
             # ── 10. Trigger-sensor linkage ──
             # Refresh the trigger to check sensor linkage

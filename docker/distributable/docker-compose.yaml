@@ -158,23 +158,6 @@ services:
       - attune-network
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
-    container_name: attune-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - attune-network
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-
   api:
     image: ${ATTUNE_IMAGE_REGISTRY:-git.rdrx.app/attune-system}/attune/api:${ATTUNE_IMAGE_TAG:-latest}
     container_name: attune-api
@@ -186,7 +169,6 @@ services:
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
       ATTUNE__DATABASE__SCHEMA: public
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
-      ATTUNE__REDIS__URL: redis://redis:6379
       ATTUNE__WORKER__WORKER_TYPE: container
     ports:
       - "8080:8080"
@@ -210,8 +192,6 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -233,7 +213,6 @@ services:
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
       ATTUNE__DATABASE__SCHEMA: public
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
-      ATTUNE__REDIS__URL: redis://redis:6379
       ATTUNE__WORKER__WORKER_TYPE: container
     volumes:
       - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
@@ -250,8 +229,6 @@ services:
       postgres:
         condition: service_healthy
       rabbitmq:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "kill -0 1 || exit 1"]
@@ -565,8 +542,6 @@ volumes:
   postgres_data:
     driver: local
   rabbitmq_data:
-    driver: local
-  redis_data:
     driver: local
   api_logs:
     driver: local

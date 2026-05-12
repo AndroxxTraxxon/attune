@@ -10,6 +10,7 @@ use validator::Validate;
 
 use attune_common::{
     audit::{event_type, AuditCategory, AuditEventBuilder, AuditOutcome},
+    auth::generate_integration_token,
     models::identity::{Identity, IdentityRoleAssignment},
     rbac::{Action, AuthorizationContext, Resource},
     repositories::{
@@ -20,6 +21,7 @@ use attune_common::{
             PermissionSetRepository, PermissionSetRoleAssignmentRepository, UpdateIdentityInput,
             UpdatePermissionSetInput,
         },
+        integration_token::{CreateIntegrationTokenInput, IntegrationTokenRepository},
         Create, Delete, FindById, FindByRef, List, Update,
     },
 };
@@ -31,11 +33,12 @@ use crate::{
     dto::{
         common::{PaginatedResponse, PaginationParams},
         ApiResponse, CreateIdentityRequest, CreateIdentityRoleAssignmentRequest,
+        CreateIntegrationTokenRequest, CreateIntegrationTokenResponse,
         CreatePermissionAssignmentRequest, CreatePermissionSetRoleAssignmentRequest,
         IdentityResponse, IdentityRoleAssignmentResponse, IdentitySummary,
-        PermissionAssignmentResponse, PermissionSetQueryParams,
-        PermissionSetRoleAssignmentResponse, PermissionSetSummary, SuccessResponse,
-        UpdateIdentityRequest, UpdatePermissionSetRequest,
+        IntegrationTokenResponse, PermissionAssignmentResponse, PermissionSetQueryParams,
+        PermissionSetRoleAssignmentResponse, PermissionSetSummary, RevokeIntegrationTokenRequest,
+        SuccessResponse, UpdateIdentityRequest, UpdatePermissionSetRequest,
     },
     middleware::{ApiError, ApiResult},
     state::AppState,
@@ -920,6 +923,221 @@ pub async fn unfreeze_identity(
     set_identity_frozen(&state, &user, identity_id, false).await
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/identities/{id}/integration-tokens",
+    tag = "permissions",
+    params(
+        ("id" = i64, Path, description = "Identity ID")
+    ),
+    responses(
+        (status = 200, description = "List integration tokens", body = inline(ApiResponse<Vec<IntegrationTokenResponse>>)),
+        (status = 404, description = "Identity not found")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn list_integration_tokens(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(identity_id): Path<i64>,
+) -> ApiResult<impl IntoResponse> {
+    authorize_permissions(&state, &user, Resource::Identities, Action::Read).await?;
+    ensure_identity_exists(&state, identity_id).await?;
+
+    let tokens = IntegrationTokenRepository::list_by_identity(&state.db, identity_id).await?;
+    let response = tokens
+        .into_iter()
+        .map(IntegrationTokenResponse::from)
+        .collect::<Vec<_>>();
+
+    Ok((StatusCode::OK, Json(ApiResponse::new(response))))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/identities/{id}/integration-tokens",
+    tag = "permissions",
+    params(
+        ("id" = i64, Path, description = "Identity ID")
+    ),
+    request_body = CreateIntegrationTokenRequest,
+    responses(
+        (status = 201, description = "Integration token created", body = inline(ApiResponse<CreateIntegrationTokenResponse>)),
+        (status = 404, description = "Identity not found")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn create_integration_token(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path(identity_id): Path<i64>,
+    Json(request): Json<CreateIntegrationTokenRequest>,
+) -> ApiResult<impl IntoResponse> {
+    authorize_permissions(&state, &user, Resource::Identities, Action::Update).await?;
+    request.validate()?;
+    ensure_identity_exists(&state, identity_id).await?;
+
+    if request
+        .expires_at
+        .map(|expires_at| expires_at <= chrono::Utc::now())
+        .unwrap_or(false)
+    {
+        return Err(ApiError::BadRequest(
+            "Integration token expiration must be in the future".to_string(),
+        ));
+    }
+
+    let generated = generate_integration_token()?;
+    let label = request.label.trim().to_string();
+    let created_by = user
+        .identity_id()
+        .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+
+    let token = IntegrationTokenRepository::create(
+        &state.db,
+        CreateIntegrationTokenInput {
+            identity: identity_id,
+            label,
+            description: request.description,
+            token_hash: generated.hash,
+            token_prefix: generated.prefix,
+            token_suffix: generated.suffix,
+            created_by: Some(created_by),
+            expires_at: request.expires_at,
+        },
+    )
+    .await?;
+
+    emit_admin_audit(
+        &state,
+        &user,
+        event_type::admin::IDENTITY_UPDATED,
+        "integration_token",
+        Some(token.id),
+        Some(token.label.as_str()),
+        serde_json::json!({
+            "identity_id": identity_id,
+            "action": "created",
+            "expires_at": token.expires_at,
+        }),
+    );
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ApiResponse::new(CreateIntegrationTokenResponse {
+            token: generated.secret,
+            integration_token: IntegrationTokenResponse::from(token),
+        })),
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/identities/{id}/integration-tokens/{token_id}/revoke",
+    tag = "permissions",
+    params(
+        ("id" = i64, Path, description = "Identity ID"),
+        ("token_id" = i64, Path, description = "Integration token ID")
+    ),
+    request_body = RevokeIntegrationTokenRequest,
+    responses(
+        (status = 200, description = "Integration token revoked", body = inline(ApiResponse<IntegrationTokenResponse>)),
+        (status = 404, description = "Integration token not found")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn revoke_integration_token(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path((identity_id, token_id)): Path<(i64, i64)>,
+    Json(request): Json<RevokeIntegrationTokenRequest>,
+) -> ApiResult<impl IntoResponse> {
+    authorize_permissions(&state, &user, Resource::Identities, Action::Update).await?;
+    request.validate()?;
+    ensure_token_belongs_to_identity(&state, identity_id, token_id).await?;
+
+    let revoked_by = user
+        .identity_id()
+        .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+    let token = IntegrationTokenRepository::revoke(
+        &state.db,
+        token_id,
+        Some(revoked_by),
+        request.reason.as_deref(),
+    )
+    .await?;
+
+    emit_admin_audit(
+        &state,
+        &user,
+        event_type::admin::IDENTITY_UPDATED,
+        "integration_token",
+        Some(token.id),
+        Some(token.label.as_str()),
+        serde_json::json!({
+            "identity_id": identity_id,
+            "action": "revoked",
+            "reason": token.revocation_reason,
+        }),
+    );
+
+    Ok((
+        StatusCode::OK,
+        Json(ApiResponse::new(IntegrationTokenResponse::from(token))),
+    ))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/identities/{id}/integration-tokens/{token_id}",
+    tag = "permissions",
+    params(
+        ("id" = i64, Path, description = "Identity ID"),
+        ("token_id" = i64, Path, description = "Integration token ID")
+    ),
+    responses(
+        (status = 200, description = "Integration token deleted", body = inline(ApiResponse<SuccessResponse>)),
+        (status = 404, description = "Integration token not found")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn delete_integration_token(
+    State(state): State<Arc<AppState>>,
+    RequireAuth(user): RequireAuth,
+    Path((identity_id, token_id)): Path<(i64, i64)>,
+) -> ApiResult<impl IntoResponse> {
+    authorize_permissions(&state, &user, Resource::Identities, Action::Update).await?;
+    let token = ensure_token_belongs_to_identity(&state, identity_id, token_id).await?;
+
+    let deleted = IntegrationTokenRepository::delete(&state.db, token_id).await?;
+    if !deleted {
+        return Err(ApiError::NotFound(format!(
+            "Integration token '{}' not found",
+            token_id
+        )));
+    }
+
+    emit_admin_audit(
+        &state,
+        &user,
+        event_type::admin::IDENTITY_UPDATED,
+        "integration_token",
+        Some(token_id),
+        Some(token.label.as_str()),
+        serde_json::json!({
+            "identity_id": identity_id,
+            "action": "deleted",
+        }),
+    );
+
+    Ok((
+        StatusCode::OK,
+        Json(ApiResponse::new(SuccessResponse::new(
+            "Integration token deleted successfully",
+        ))),
+    ))
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/identities", get(list_identities).post(create_identity))
@@ -939,6 +1157,18 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route("/identities/{id}/freeze", post(freeze_identity))
         .route("/identities/{id}/unfreeze", post(unfreeze_identity))
+        .route(
+            "/identities/{id}/integration-tokens",
+            get(list_integration_tokens).post(create_integration_token),
+        )
+        .route(
+            "/identities/{id}/integration-tokens/{token_id}",
+            delete(delete_integration_token),
+        )
+        .route(
+            "/identities/{id}/integration-tokens/{token_id}/revoke",
+            post(revoke_integration_token),
+        )
         .route(
             "/identities/roles/{id}",
             delete(delete_identity_role_assignment),
@@ -983,6 +1213,32 @@ async fn authorize_permissions(
             },
         )
         .await
+}
+
+async fn ensure_identity_exists(state: &Arc<AppState>, identity_id: i64) -> ApiResult<Identity> {
+    IdentityRepository::find_by_id(&state.db, identity_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Identity '{}' not found", identity_id)))
+}
+
+async fn ensure_token_belongs_to_identity(
+    state: &Arc<AppState>,
+    identity_id: i64,
+    token_id: i64,
+) -> ApiResult<attune_common::models::IntegrationToken> {
+    ensure_identity_exists(state, identity_id).await?;
+    let token = IntegrationTokenRepository::find_by_id(&state.db, token_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Integration token '{}' not found", token_id)))?;
+
+    if token.identity != identity_id {
+        return Err(ApiError::NotFound(format!(
+            "Integration token '{}' not found",
+            token_id
+        )));
+    }
+
+    Ok(token)
 }
 
 fn validate_permission_grants(grants: &serde_json::Value) -> ApiResult<()> {
@@ -1060,7 +1316,7 @@ fn validate_grant_actions(grant: &attune_common::rbac::Grant) -> ApiResult<()> {
         ][..],
         Resource::Artifacts => &[Action::Read, Action::Create, Action::Update, Action::Delete][..],
         Resource::Runtimes => &[Action::Read, Action::Create, Action::Update, Action::Delete][..],
-        Resource::Workers => &[Action::Read][..],
+        Resource::Workers => &[Action::Read, Action::Manage][..],
         Resource::Identities => &[Action::Read, Action::Create, Action::Update, Action::Delete][..],
         Resource::Permissions => &[Action::Read, Action::Manage][..],
         Resource::AuditLog => &[Action::Read][..],

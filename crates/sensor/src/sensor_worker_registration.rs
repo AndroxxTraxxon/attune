@@ -10,6 +10,9 @@ use attune_common::config::Config;
 use attune_common::error::Result;
 use attune_common::models::{Worker, WorkerRole, WorkerStatus, WorkerType};
 use attune_common::runtime_detection::{normalize_runtime_name, RuntimeDetector};
+use attune_common::scheduling::{
+    validate_label_map, validate_taints, WORKER_LABELS_CAPABILITY_KEY, WORKER_TAINTS_CAPABILITY_KEY,
+};
 use chrono::Utc;
 use serde_json::json;
 use sqlx::{PgPool, Row};
@@ -174,6 +177,34 @@ impl SensorWorkerRegistration {
         );
 
         Self::inject_agent_capabilities(&mut capabilities);
+
+        if let Some(sensor_config) = config.sensor.as_ref() {
+            if let Err(err) = validate_label_map("sensor.labels", &sensor_config.labels) {
+                tracing::warn!(
+                    "Ignoring invalid sensor worker labels for '{}': {}",
+                    worker_name,
+                    err
+                );
+            } else if !sensor_config.labels.is_empty() {
+                capabilities.insert(
+                    WORKER_LABELS_CAPABILITY_KEY.to_string(),
+                    json!(sensor_config.labels),
+                );
+            }
+
+            if let Err(err) = validate_taints(&sensor_config.taints) {
+                tracing::warn!(
+                    "Ignoring invalid sensor worker taints for '{}': {}",
+                    worker_name,
+                    err
+                );
+            } else if !sensor_config.taints.is_empty() {
+                capabilities.insert(
+                    WORKER_TAINTS_CAPABILITY_KEY.to_string(),
+                    json!(sensor_config.taints),
+                );
+            }
+        }
 
         // Placeholder for runtimes (will be detected asynchronously)
         capabilities.insert("runtimes".to_string(), json!(Vec::<String>::new()));

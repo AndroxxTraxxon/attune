@@ -45,14 +45,6 @@ rabbitmq:
       - ReadWriteOnce
     size: 4Gi
 
-redis:
-  enabled: true
-  persistence:
-    enabled: true
-    accessModes:
-      - ReadWriteOnce
-    size: 2Gi
-
 bootstrap:
   testUser:
     login: test@attune.local

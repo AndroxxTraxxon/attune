@@ -403,20 +403,20 @@ pub struct UpdateWorkerInput {
     pub port: Option<i32>,
 }
 
+const WORKER_SELECT_COLUMNS: &str =
+    "id, name, worker_type, worker_role, runtime, host, port, status, \
+     capabilities, meta, last_heartbeat, cordoned, cordon_reason, cordoned_by, cordoned_at, \
+     created, updated";
+
 #[async_trait::async_trait]
 impl FindById for WorkerRepository {
     async fn find_by_id<'e, E>(executor: E, id: i64) -> Result<Option<Self::Entity>>
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let worker = sqlx::query_as::<_, Worker>(
-            r#"
-            SELECT id, name, worker_type, worker_role, runtime, host, port, status,
-                   capabilities, meta, last_heartbeat, created, updated
-            FROM worker
-            WHERE id = $1
-            "#,
-        )
+        let worker = sqlx::query_as::<_, Worker>(&format!(
+            "SELECT {WORKER_SELECT_COLUMNS} FROM worker WHERE id = $1"
+        ))
         .bind(id)
         .fetch_optional(executor)
         .await?;
@@ -431,14 +431,9 @@ impl List for WorkerRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let workers = sqlx::query_as::<_, Worker>(
-            r#"
-            SELECT id, name, worker_type, worker_role, runtime, host, port, status,
-                   capabilities, meta, last_heartbeat, created, updated
-            FROM worker
-            ORDER BY name ASC
-            "#,
-        )
+        let workers = sqlx::query_as::<_, Worker>(&format!(
+            "SELECT {WORKER_SELECT_COLUMNS} FROM worker ORDER BY name ASC"
+        ))
         .fetch_all(executor)
         .await?;
 
@@ -454,15 +449,12 @@ impl Create for WorkerRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let worker = sqlx::query_as::<_, Worker>(
-            r#"
-            INSERT INTO worker (name, worker_type, runtime, host, port, status,
-                                capabilities, meta)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            RETURNING id, name, worker_type, worker_role, runtime, host, port, status,
-                      capabilities, meta, last_heartbeat, created, updated
-            "#,
-        )
+        let worker = sqlx::query_as::<_, Worker>(&format!(
+            "INSERT INTO worker (name, worker_type, worker_role, runtime, host, port, status, \
+                 capabilities, meta, cordoned, cordon_reason, cordoned_by, cordoned_at) \
+                 VALUES ($1, $2, 'action', $3, $4, $5, $6, $7, $8, FALSE, NULL, NULL, NULL) \
+                 RETURNING {WORKER_SELECT_COLUMNS}"
+        ))
         .bind(&input.name)
         .bind(input.worker_type)
         .bind(input.runtime)
@@ -549,10 +541,8 @@ impl Update for WorkerRepository {
 
         query.push(", updated = NOW() WHERE id = ");
         query.push_bind(id);
-        query.push(
-            " RETURNING id, name, worker_type, worker_role, runtime, host, port, status, \
-             capabilities, meta, last_heartbeat, created, updated",
-        );
+        query.push(" RETURNING ");
+        query.push(WORKER_SELECT_COLUMNS);
 
         let worker = query.build_query_as::<Worker>().fetch_one(executor).await?;
 
@@ -576,20 +566,41 @@ impl Delete for WorkerRepository {
 }
 
 impl WorkerRepository {
+    pub async fn set_cordoned(
+        pool: &sqlx::PgPool,
+        id: Id,
+        cordoned: bool,
+        reason: Option<String>,
+        cordoned_by: Option<Id>,
+    ) -> Result<Worker> {
+        let worker = sqlx::query_as::<_, Worker>(&format!(
+            "UPDATE worker \
+             SET cordoned = $1, \
+                 cordon_reason = $2, \
+                 cordoned_by = $3, \
+                 cordoned_at = CASE WHEN $1 THEN NOW() ELSE NULL END, \
+                 updated = NOW() \
+             WHERE id = $4 \
+             RETURNING {WORKER_SELECT_COLUMNS}"
+        ))
+        .bind(cordoned)
+        .bind(reason)
+        .bind(cordoned_by)
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(worker)
+    }
+
     /// Find workers by status
     pub async fn find_by_status<'e, E>(executor: E, status: WorkerStatus) -> Result<Vec<Worker>>
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let workers = sqlx::query_as::<_, Worker>(
-            r#"
-            SELECT id, name, worker_type, worker_role, runtime, host, port, status,
-                   capabilities, meta, last_heartbeat, created, updated
-            FROM worker
-            WHERE status = $1
-            ORDER BY name ASC
-            "#,
-        )
+        let workers = sqlx::query_as::<_, Worker>(&format!(
+            "SELECT {WORKER_SELECT_COLUMNS} FROM worker WHERE status = $1 ORDER BY name ASC"
+        ))
         .bind(status)
         .fetch_all(executor)
         .await?;
@@ -602,15 +613,9 @@ impl WorkerRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let workers = sqlx::query_as::<_, Worker>(
-            r#"
-            SELECT id, name, worker_type, worker_role, runtime, host, port, status,
-                   capabilities, meta, last_heartbeat, created, updated
-            FROM worker
-            WHERE worker_type = $1
-            ORDER BY name ASC
-            "#,
-        )
+        let workers = sqlx::query_as::<_, Worker>(&format!(
+            "SELECT {WORKER_SELECT_COLUMNS} FROM worker WHERE worker_type = $1 ORDER BY name ASC"
+        ))
         .bind(worker_type)
         .fetch_all(executor)
         .await?;
@@ -636,14 +641,9 @@ impl WorkerRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let worker = sqlx::query_as::<_, Worker>(
-            r#"
-            SELECT id, name, worker_type, worker_role, runtime, host, port, status,
-                   capabilities, meta, last_heartbeat, created, updated
-            FROM worker
-            WHERE name = $1
-            "#,
-        )
+        let worker = sqlx::query_as::<_, Worker>(&format!(
+            "SELECT {WORKER_SELECT_COLUMNS} FROM worker WHERE name = $1"
+        ))
         .bind(name)
         .fetch_optional(executor)
         .await?;
@@ -657,13 +657,9 @@ impl WorkerRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         let workers = sqlx::query_as::<_, Worker>(
-            r#"
-            SELECT id, name, worker_type, worker_role, runtime, host, port, status,
-                   capabilities, meta, last_heartbeat, created, updated
-            FROM worker
-            WHERE worker_role = 'action'
-            ORDER BY name ASC
-            "#,
+            &format!(
+                "SELECT {WORKER_SELECT_COLUMNS} FROM worker WHERE worker_role = 'action' ORDER BY name ASC"
+            ),
         )
         .fetch_all(executor)
         .await?;

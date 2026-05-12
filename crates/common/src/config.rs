@@ -119,26 +119,6 @@ fn default_idle_timeout() -> u64 {
     600
 }
 
-/// Redis configuration for caching and pub/sub
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RedisConfig {
-    /// Redis connection URL
-    #[serde(default = "default_redis_url")]
-    pub url: String,
-
-    /// Connection pool size
-    #[serde(default = "default_redis_pool_size")]
-    pub pool_size: u32,
-}
-
-fn default_redis_url() -> String {
-    "redis://localhost:6379".to_string()
-}
-
-fn default_redis_pool_size() -> u32 {
-    10
-}
-
 /// Message queue configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageQueueConfig {
@@ -581,6 +561,14 @@ pub struct SensorConfig {
     /// Can be overridden by ATTUNE_SENSOR_RUNTIMES environment variable
     pub capabilities: Option<std::collections::HashMap<String, serde_json::Value>>,
 
+    /// Sensor worker placement labels used by sensor scheduling constraints.
+    #[serde(default)]
+    pub labels: std::collections::BTreeMap<String, String>,
+
+    /// Sensor worker taints that require matching sensor tolerations.
+    #[serde(default)]
+    pub taints: Vec<crate::scheduling::WorkerTaint>,
+
     /// Maximum concurrent sensors
     pub max_concurrent_sensors: Option<usize>,
 
@@ -807,10 +795,6 @@ pub struct Config {
     /// Database configuration
     #[serde(default)]
     pub database: DatabaseConfig,
-
-    /// Redis configuration
-    #[serde(default)]
-    pub redis: Option<RedisConfig>,
 
     /// Message queue configuration
     #[serde(default)]
@@ -1306,7 +1290,6 @@ mod tests {
             service_name: default_service_name(),
             environment: default_environment(),
             database: DatabaseConfig::default(),
-            redis: None,
             message_queue: None,
             server: ServerConfig::default(),
             log: LogConfig::default(),
@@ -1377,7 +1360,6 @@ mod tests {
             service_name: default_service_name(),
             environment: default_environment(),
             database: DatabaseConfig::default(),
-            redis: None,
             message_queue: None,
             server: ServerConfig::default(),
             log: LogConfig::default(),

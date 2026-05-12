@@ -51,12 +51,14 @@ The **Worker Service** is responsible for executing automation actions in the At
 - Update existing worker records to active status on restart
 - Deregister worker on shutdown (mark as inactive)
 - Update worker capabilities dynamically
+- Preserve operator cordon metadata separately from observed worker status
 
 **Key Implementation Details**:
 - Worker name defaults to hostname if not specified
 - Capabilities include supported runtimes (python, shell, node)
 - Worker type can be Local, Remote, or Container
 - Uses direct SQL queries for registration (no repository pattern needed)
+- `worker.status` describes observed health; `worker.cordoned` describes operator intent and makes the worker unschedulable while it may continue heartbeating
 
 **Database Table**: `attune.worker`
 
@@ -261,6 +263,7 @@ See `docs/secrets-management.md` for comprehensive documentation.
 - Publish execution status change notifications
 - Publish execution completion notifications
 - Handle graceful shutdown
+- Respect cordon state: cordoned workers are excluded from new scheduling, but existing work is not cancelled solely because of cordon
 
 **Message Flow**:
 ```
@@ -288,6 +291,13 @@ Executor (Scheduler)
 - Database and MQ connections initialized on startup
 - Graceful shutdown deregisters worker
 - Message handlers run async and report errors
+
+### Operational visibility
+
+- Worker list API responses include computed heartbeat age, stale-heartbeat flag, and health state.
+- Admin/operator users can cordon and uncordon action and sensor workers through `/api/v1/workers/{id}/cordon` and `/api/v1/workers/{id}/uncordon`.
+- The executor reconciles `running` executions on unavailable workers to `abandoned` and publishes the normal completion message so downstream workflow, queue, notifier, and history paths observe a terminal state.
+- Unexpected non-cordoned worker loss emits a structured `core.alert` event.
 
 ## Configuration
 

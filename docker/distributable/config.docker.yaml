@@ -30,11 +30,6 @@ message_queue:
   enable_dlq: true
   message_ttl: 3600 # seconds
 
-# Docker cache (Redis container)
-redis:
-  url: redis://redis:6379
-  pool_size: 10
-
 # API server configuration
 server:
   host: 0.0.0.0

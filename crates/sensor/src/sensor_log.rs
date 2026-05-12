@@ -82,7 +82,7 @@ impl RotatingLogWriter {
     async fn ensure_open(&mut self) -> std::io::Result<&mut tokio::fs::File> {
         if self.file.is_none() {
             if let Some(parent) = self.abs_path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
+                attune_common::utils::create_shared_dir_all(parent).await?;
             }
             // Check existing file size on re-open (sensor restart)
             match tokio::fs::metadata(&self.abs_path).await {

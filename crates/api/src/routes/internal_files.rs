@@ -48,13 +48,15 @@ async fn upload_file(
 
     // Ensure parent directory exists
     if let Some(parent) = full_path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            warn!("Failed to create directory for {file_path}: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to create directory: {e}"),
-            )
-        })?;
+        attune_common::utils::create_shared_dir_all(parent)
+            .await
+            .map_err(|e| {
+                warn!("Failed to create directory for {file_path}: {e}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to create directory: {e}"),
+                )
+            })?;
     }
 
     // Read body with size limit
@@ -145,12 +147,14 @@ async fn append_to_file(
     let full_path = std::path::Path::new(artifacts_dir).join(&file_path);
 
     if let Some(parent) = full_path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to create directory: {e}"),
-            )
-        })?;
+        attune_common::utils::create_shared_dir_all(parent)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to create directory: {e}"),
+                )
+            })?;
     }
 
     let bytes = axum::body::to_bytes(body, max_size as usize)

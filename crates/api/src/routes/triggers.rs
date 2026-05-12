@@ -7,6 +7,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use serde_json::json;
 use std::sync::Arc;
 use validator::Validate;
 
@@ -676,6 +677,12 @@ pub async fn create_sensor(
         enabled: request.enabled,
         param_schema: request.param_schema,
         config: request.config,
+        worker_selector: serde_json::to_value(request.worker_selector)
+            .unwrap_or_else(|_| json!({})),
+        worker_tolerations: serde_json::to_value(request.worker_tolerations)
+            .unwrap_or_else(|_| json!([])),
+        worker_affinity: serde_json::to_value(request.worker_affinity)
+            .unwrap_or_else(|_| json!({})),
     };
 
     let sensor = SensorRepository::create(&state.db, sensor_input).await?;
@@ -730,6 +737,15 @@ pub async fn update_sensor(
             SensorJsonPatch::Clear => Patch::Clear,
         }),
         config: None,
+        worker_selector: request
+            .worker_selector
+            .map(|value| serde_json::to_value(value).unwrap_or_else(|_| json!({}))),
+        worker_tolerations: request
+            .worker_tolerations
+            .map(|value| serde_json::to_value(value).unwrap_or_else(|_| json!([]))),
+        worker_affinity: request
+            .worker_affinity
+            .map(|value| serde_json::to_value(value).unwrap_or_else(|_| json!({}))),
     };
 
     let sensor = SensorRepository::update(&state.db, existing_sensor.id, update_input).await?;
@@ -814,6 +830,9 @@ pub async fn enable_sensor(
         enabled: Some(true),
         param_schema: None,
         config: None,
+        worker_selector: None,
+        worker_tolerations: None,
+        worker_affinity: None,
     };
 
     let sensor = SensorRepository::update(&state.db, existing_sensor.id, update_input).await?;
@@ -859,6 +878,9 @@ pub async fn disable_sensor(
         enabled: Some(false),
         param_schema: None,
         config: None,
+        worker_selector: None,
+        worker_tolerations: None,
+        worker_affinity: None,
     };
 
     let sensor = SensorRepository::update(&state.db, existing_sensor.id, update_input).await?;

@@ -34,8 +34,8 @@ pub use artifact::{
 };
 pub use auth::{
     AuthSettingsResponse, ChangePasswordRequest, CurrentUserResponse, EffectivePermissionResponse,
-    LoginRequest, ProviderProfileResponse, RefreshTokenRequest, RegisterRequest, TokenResponse,
-    UpdateCurrentUserRequest,
+    LoginRequest, ProviderProfileResponse, RefreshTokenRequest, RegisterRequest, TokenLoginRequest,
+    TokenResponse, UpdateCurrentUserRequest,
 };
 pub use common::{
     ApiResponse, PaginatedResponse, PaginationMeta, PaginationParams, SuccessResponse,
@@ -55,11 +55,12 @@ pub use inquiry::{
 pub use key::{CreateKeyRequest, KeyQueryParams, KeyResponse, KeySummary, UpdateKeyRequest};
 pub use pack::{CreatePackRequest, PackResponse, PackSummary, UpdatePackRequest};
 pub use permission::{
-    CreateIdentityRequest, CreateIdentityRoleAssignmentRequest, CreatePermissionAssignmentRequest,
+    CreateIdentityRequest, CreateIdentityRoleAssignmentRequest, CreateIntegrationTokenRequest,
+    CreateIntegrationTokenResponse, CreatePermissionAssignmentRequest,
     CreatePermissionSetRoleAssignmentRequest, IdentityResponse, IdentityRoleAssignmentResponse,
-    IdentitySummary, PermissionAssignmentResponse, PermissionSetQueryParams,
-    PermissionSetRoleAssignmentResponse, PermissionSetSummary, UpdateIdentityRequest,
-    UpdatePermissionSetRequest,
+    IdentitySummary, IntegrationTokenResponse, PermissionAssignmentResponse,
+    PermissionSetQueryParams, PermissionSetRoleAssignmentResponse, PermissionSetSummary,
+    RevokeIntegrationTokenRequest, UpdateIdentityRequest, UpdatePermissionSetRequest,
 };
 pub use rule::{CreateRuleRequest, RuleResponse, RuleSummary, UpdateRuleRequest};
 pub use runtime::{CreateRuntimeRequest, RuntimeResponse, RuntimeSummary, UpdateRuntimeRequest};
@@ -73,7 +74,10 @@ pub use work_queue::{
     UpdateWorkQueueRequest, WorkQueueItemQueryParams, WorkQueueItemResponse, WorkQueueQueryParams,
     WorkQueueResponse, WorkQueueSummary,
 };
-pub use worker::{WorkerLoadSnapshot, WorkerQueryParams, WorkerRuntimeSupport, WorkerSummary};
+pub use worker::{
+    CordonWorkerRequest, WorkerHealthState, WorkerLoadSnapshot, WorkerQueryParams,
+    WorkerRuntimeSupport, WorkerSummary,
+};
 pub use workflow::{
     CreateWorkflowRequest, UpdateWorkflowRequest, WorkflowResponse, WorkflowSearchParams,
     WorkflowSummary,

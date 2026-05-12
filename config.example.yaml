@@ -24,11 +24,6 @@ database:
   # PostgreSQL schema name (defaults to "attune" if not specified)
   schema: "attune"
 
-# Redis configuration (optional, for caching and pub/sub)
-redis:
-  url: redis://localhost:6379
-  pool_size: 10
-
 # Message queue configuration (optional, for async processing)
 message_queue:
   url: amqp://guest:guest@localhost:5672/%2f

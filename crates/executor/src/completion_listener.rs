@@ -36,7 +36,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     inquiry_handler::InquiryHandler, queue_manager::ExecutionQueueManager,
-    scheduler::ExecutionScheduler,
+    scheduler::ExecutionScheduler, work_queue_events,
 };
 
 /// Completion listener that handles execution completion messages
@@ -156,7 +156,7 @@ impl CompletionListener {
         let mut execution = ExecutionRepository::find_by_id(pool, execution_id).await?;
 
         if let Some(ref exec) = execution.clone() {
-            execution = Some(Self::handle_queue_dispatch_completion(pool, exec).await?);
+            execution = Some(Self::handle_queue_dispatch_completion(pool, publisher, exec).await?);
         }
 
         if let Some(ref exec) = execution {
@@ -319,6 +319,7 @@ impl CompletionListener {
 
     async fn handle_queue_dispatch_completion(
         pool: &PgPool,
+        publisher: &Publisher,
         execution: &Execution,
     ) -> Result<Execution> {
         let Some(dispatch) =
@@ -373,6 +374,7 @@ impl CompletionListener {
                 retry_limit,
                 "queue_dispatch_metadata_mismatch",
                 message,
+                publisher,
             )
             .await;
         }
@@ -389,6 +391,7 @@ impl CompletionListener {
                     "queue dispatch {} for execution {} had no leased items to finalize",
                     dispatch.id, execution.id
                 ),
+                publisher,
             )
             .await;
         }
@@ -409,6 +412,7 @@ impl CompletionListener {
                     retry_limit,
                     error_code,
                     message,
+                    publisher,
                 )
                 .await;
             }
@@ -471,6 +475,25 @@ impl CompletionListener {
             leased_items.len()
         );
 
+        if let Some(queue) = queue.as_ref() {
+            if let Err(error) = work_queue_events::maybe_emit_queue_empty(
+                pool,
+                publisher,
+                queue,
+                &dispatch,
+                execution.id,
+                leased_items.len(),
+                WorkQueueDispatchStatus::Completed,
+            )
+            .await
+            {
+                warn!(
+                    "Failed to emit queue_empty event for queue '{}' dispatch {}: {}",
+                    queue.r#ref, dispatch.id, error
+                );
+            }
+        }
+
         Ok(execution.clone())
     }
 
@@ -482,6 +505,7 @@ impl CompletionListener {
         retry_limit: u32,
         error_code: &str,
         error_message: String,
+        publisher: &Publisher,
     ) -> Result<Execution> {
         let mut tx = pool.begin().await?;
         let retry_error = json!({
@@ -567,6 +591,25 @@ impl CompletionListener {
                 .as_str()
                 .unwrap_or("queue acknowledgement failed")
         );
+
+        if let Some(queue) = WorkQueueRepository::find_by_id(pool, dispatch.queue).await? {
+            if let Err(error) = work_queue_events::maybe_emit_queue_empty(
+                pool,
+                publisher,
+                &queue,
+                dispatch,
+                updated_execution.id,
+                leased_items.len(),
+                dispatch_status,
+            )
+            .await
+            {
+                warn!(
+                    "Failed to emit queue_empty event for queue '{}' dispatch {}: {}",
+                    queue.r#ref, dispatch.id, error
+                );
+            }
+        }
 
         Ok(updated_execution)
     }

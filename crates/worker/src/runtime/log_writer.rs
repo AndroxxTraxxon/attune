@@ -206,7 +206,7 @@ impl BoundedLogFileWriter {
         let factory: WriterFactory = Box::new(move || {
             Box::pin(async move {
                 if let Some(parent) = path.parent() {
-                    tokio::fs::create_dir_all(parent).await?;
+                    attune_common::utils::create_shared_dir_all(parent).await?;
                 }
                 let file = tokio::fs::OpenOptions::new()
                     .create(true)

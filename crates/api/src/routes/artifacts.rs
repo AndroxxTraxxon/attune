@@ -755,17 +755,20 @@ pub async fn create_version_file(
         ))
     })?;
 
-    // Create the parent directory on disk
+    // Create the parent directory on disk with group-writable permissions
+    // so both API (UID 1000) and workers (root + GID 1000) can write.
     let artifacts_dir = &state.config.artifacts_dir;
     let full_path = std::path::Path::new(artifacts_dir).join(&file_path);
     if let Some(parent) = full_path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            ApiError::InternalServerError(format!(
-                "Failed to create artifact directory '{}': {}",
-                parent.display(),
-                e,
-            ))
-        })?;
+        attune_common::utils::create_shared_dir_all(parent)
+            .await
+            .map_err(|e| {
+                ApiError::InternalServerError(format!(
+                    "Failed to create artifact directory '{}': {}",
+                    parent.display(),
+                    e,
+                ))
+            })?;
     }
 
     let response = ArtifactVersionResponse::from(version);
@@ -1491,17 +1494,19 @@ pub async fn allocate_file_version_by_ref(
         ))
     })?;
 
-    // Create the parent directory on disk
+    // Create the parent directory on disk with group-writable permissions
     let artifacts_dir = &state.config.artifacts_dir;
     let full_path = std::path::Path::new(artifacts_dir).join(&file_path);
     if let Some(parent) = full_path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            ApiError::InternalServerError(format!(
-                "Failed to create artifact directory '{}': {}",
-                parent.display(),
-                e,
-            ))
-        })?;
+        attune_common::utils::create_shared_dir_all(parent)
+            .await
+            .map_err(|e| {
+                ApiError::InternalServerError(format!(
+                    "Failed to create artifact directory '{}': {}",
+                    parent.display(),
+                    e,
+                ))
+            })?;
     }
 
     let response = ArtifactVersionResponse::from(version);

@@ -4,6 +4,7 @@ import { useRules } from "@/hooks/useRules";
 import { useExecutions } from "@/hooks/useExecutions";
 import { useExecutionStream } from "@/hooks/useExecutionStream";
 import { useDashboardAnalytics } from "@/hooks/useAnalytics";
+import { useWorkers } from "@/hooks/useWorkers";
 import { Link } from "react-router-dom";
 import { ExecutionStatus } from "@/api";
 import { useMemo, useState } from "react";
@@ -34,6 +35,10 @@ export default function DashboardPage() {
     pageSize: 1,
     status: ExecutionStatus.RUNNING,
   });
+  const { data: workerHealthData, isLoading: workersLoading } = useWorkers({
+    page: 1,
+    pageSize: 100,
+  });
 
   // Subscribe to real-time execution updates
   // The hook automatically invalidates queries when updates arrive
@@ -52,6 +57,14 @@ export default function DashboardPage() {
   const totalActions = actionsData?.pagination?.total_items || 0;
   const activeRules = rulesData?.pagination?.total_items || 0;
   const runningCount = runningExecutions?.pagination?.total_items || 0;
+  const workers = workerHealthData?.items || [];
+  const offlineActionWorkers = workers.filter(
+    (worker) => worker.worker_role === "action" && worker.health_state === "offline",
+  );
+  const offlineSensorWorkers = workers.filter(
+    (worker) => worker.worker_role === "sensor" && worker.health_state === "offline",
+  );
+  const cordonedWorkers = workers.filter((worker) => worker.cordoned);
 
   // Calculate status distribution
   const statusDistribution = useMemo(() => {
@@ -139,7 +152,11 @@ export default function DashboardPage() {
   };
 
   const isLoading =
-    packsLoading || actionsLoading || rulesLoading || executionsLoading;
+    packsLoading ||
+    actionsLoading ||
+    rulesLoading ||
+    executionsLoading ||
+    workersLoading;
 
   return (
     <div className="p-6">
@@ -204,6 +221,43 @@ export default function DashboardPage() {
           <p className="text-xs text-gray-500 mt-2">Browse actions →</p>
         </Link>
       </div>
+
+      {(offlineActionWorkers.length > 0 ||
+        offlineSensorWorkers.length > 0 ||
+        cordonedWorkers.length > 0) && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-8">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-amber-900">
+                Worker health needs attention
+              </h2>
+              <p className="text-sm text-amber-800 mt-1">
+                {offlineActionWorkers.length} action worker(s) offline,{" "}
+                {offlineSensorWorkers.length} sensor worker(s) offline,{" "}
+                {cordonedWorkers.length} worker(s) cordoned.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {[...offlineActionWorkers, ...offlineSensorWorkers]
+                  .slice(0, 5)
+                  .map((worker) => (
+                    <span
+                      key={worker.id}
+                      className="inline-flex items-center px-2 py-1 rounded bg-white text-xs text-amber-900 border border-amber-200"
+                    >
+                      {worker.name} ({worker.worker_role})
+                    </span>
+                  ))}
+              </div>
+            </div>
+            <Link
+              to="/runtimes?tab=workers"
+              className="text-sm font-medium text-amber-900 hover:text-amber-700 whitespace-nowrap"
+            >
+              View workers →
+            </Link>
+          </div>
+        </div>
+      )}
 
       {/* Status Overview & Recent Activity */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

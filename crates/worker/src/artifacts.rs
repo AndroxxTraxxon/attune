@@ -55,7 +55,7 @@ impl ArtifactManager {
 
     /// Initialize the artifact storage directory
     pub async fn initialize(&self) -> Result<()> {
-        fs::create_dir_all(&self.base_dir)
+        attune_common::utils::create_shared_dir_all(&self.base_dir)
             .await
             .map_err(|e| Error::Internal(format!("Failed to create artifact directory: {}", e)))?;
 
@@ -76,7 +76,7 @@ impl ArtifactManager {
         stderr: &str,
     ) -> Result<Vec<Artifact>> {
         let exec_dir = self.get_execution_dir(execution_id);
-        fs::create_dir_all(&exec_dir)
+        attune_common::utils::create_shared_dir_all(&exec_dir)
             .await
             .map_err(|e| Error::Internal(format!("Failed to create execution directory: {}", e)))?;
 
@@ -160,7 +160,7 @@ impl ArtifactManager {
         result: &serde_json::Value,
     ) -> Result<Artifact> {
         let exec_dir = self.get_execution_dir(execution_id);
-        fs::create_dir_all(&exec_dir)
+        attune_common::utils::create_shared_dir_all(&exec_dir)
             .await
             .map_err(|e| Error::Internal(format!("Failed to create execution directory: {}", e)))?;
 
@@ -208,7 +208,7 @@ impl ArtifactManager {
         content_type: Option<&str>,
     ) -> Result<Artifact> {
         let exec_dir = self.get_execution_dir(execution_id);
-        fs::create_dir_all(&exec_dir)
+        attune_common::utils::create_shared_dir_all(&exec_dir)
             .await
             .map_err(|e| Error::Internal(format!("Failed to create execution directory: {}", e)))?;
 

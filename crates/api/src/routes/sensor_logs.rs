@@ -12,12 +12,12 @@ use std::sync::Arc;
 
 use attune_common::repositories::{artifact::ArtifactRepository, FindByRef};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::IntoResponse,
     routing::get,
     Json, Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::{
@@ -40,13 +40,15 @@ struct SensorLogEntry {
     artifact_id: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SensorLogQuery {
+    tail: Option<usize>,
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/api/v1/sensors/{sensor_ref}/logs", get(list_sensor_logs))
-        .route(
-            "/api/v1/sensors/{sensor_ref}/logs/{stream}",
-            get(get_sensor_log),
-        )
+        .route("/sensors/{sensor_ref}/logs", get(list_sensor_logs))
+        .route("/sensors/{sensor_ref}/logs/{stream}", get(get_sensor_log))
 }
 
 /// List available log streams for a sensor.
@@ -108,6 +110,7 @@ async fn get_sensor_log(
     RequireAuth(_user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path((sensor_ref, stream)): Path<(String, String)>,
+    Query(query): Query<SensorLogQuery>,
 ) -> ApiResult<impl IntoResponse> {
     if stream != "stdout" && stream != "stderr" {
         return Err(ApiError::ValidationError(
@@ -133,7 +136,7 @@ async fn get_sensor_log(
         .join(&sensor_ref)
         .join(format!("{}.log", stream));
 
-    let content = tokio::fs::read_to_string(&log_path).await.map_err(|e| {
+    let mut content = tokio::fs::read_to_string(&log_path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             ApiError::NotFound(format!(
                 "Sensor log file not found at '{}'",
@@ -143,6 +146,14 @@ async fn get_sensor_log(
             ApiError::InternalServerError(format!("Failed to read sensor log: {}", e))
         }
     })?;
+
+    if let Some(tail) = query.tail.filter(|tail| *tail > 0) {
+        let lines = content.lines().collect::<Vec<_>>();
+        if lines.len() > tail {
+            content = lines[lines.len() - tail..].join("\n");
+            content.push('\n');
+        }
+    }
 
     Ok((
         [(

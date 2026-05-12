@@ -86,7 +86,7 @@ pub fn write_sentinel(artifacts_dir: &str, api_url: &str) -> std::io::Result<()>
 
     // Ensure directory exists
     if let Some(parent) = sentinel_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        crate::utils::create_shared_dir_all_sync(parent)?;
     }
 
     let info = SentinelInfo {
