@@ -78,18 +78,22 @@ fn is_log_artifact_ref(artifact_ref: &str) -> bool {
     is_stream_ref && (artifact_ref.starts_with("execution.") || artifact_ref.starts_with("sensor."))
 }
 
-async fn resolve_artifact_retention(
-    state: &AppState,
-    user: &AuthenticatedUser,
-    artifact_ref: &str,
+struct ArtifactRetentionDefaults<'a> {
+    artifact_ref: &'a str,
     scope: OwnerType,
-    owner: &str,
+    owner: &'a str,
     execution: Option<i64>,
     requested_policy: Option<RetentionPolicyType>,
     requested_limit: Option<i32>,
     fallback_limit: i32,
+}
+
+async fn resolve_artifact_retention(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    defaults: ArtifactRetentionDefaults<'_>,
 ) -> ApiResult<(RetentionPolicyType, i32)> {
-    if let Some(limit) = requested_limit {
+    if let Some(limit) = defaults.requested_limit {
         if limit <= 0 {
             return Err(ApiError::BadRequest(
                 "retention_limit must be greater than zero".to_string(),
@@ -97,14 +101,16 @@ async fn resolve_artifact_retention(
         }
     }
 
-    if is_log_artifact_ref(artifact_ref) {
+    if is_log_artifact_ref(defaults.artifact_ref) {
         return Ok((
-            requested_policy.unwrap_or(RetentionPolicyType::Versions),
-            requested_limit.unwrap_or(fallback_limit),
+            defaults
+                .requested_policy
+                .unwrap_or(RetentionPolicyType::Versions),
+            defaults.requested_limit.unwrap_or(defaults.fallback_limit),
         ));
     }
 
-    let execution_id = execution.or_else(|| user.execution_id());
+    let execution_id = defaults.execution.or_else(|| user.execution_id());
     let mut default_policy = None;
     let mut default_limit = None;
 
@@ -116,15 +122,19 @@ async fn resolve_artifact_retention(
     }
 
     if default_policy.is_none() || default_limit.is_none() {
-        match scope {
+        match defaults.scope {
             OwnerType::Action => {
-                if let Some(action) = ActionRepository::find_by_ref(&state.db, owner).await? {
+                if let Some(action) =
+                    ActionRepository::find_by_ref(&state.db, defaults.owner).await?
+                {
                     default_policy = default_policy.or(action.artifact_retention_policy);
                     default_limit = default_limit.or(action.artifact_retention_limit);
                 }
             }
             OwnerType::Sensor => {
-                if let Some(sensor) = SensorRepository::find_by_ref(&state.db, owner).await? {
+                if let Some(sensor) =
+                    SensorRepository::find_by_ref(&state.db, defaults.owner).await?
+                {
                     default_policy = default_policy.or(sensor.artifact_retention_policy);
                     default_limit = default_limit.or(sensor.artifact_retention_limit);
                 }
@@ -134,10 +144,14 @@ async fn resolve_artifact_retention(
     }
 
     Ok((
-        requested_policy
+        defaults
+            .requested_policy
             .or(default_policy)
             .unwrap_or(RetentionPolicyType::Versions),
-        requested_limit.or(default_limit).unwrap_or(fallback_limit),
+        defaults
+            .requested_limit
+            .or(default_limit)
+            .unwrap_or(defaults.fallback_limit),
     ))
 }
 
@@ -303,13 +317,15 @@ pub async fn create_artifact(
     let (retention_policy, retention_limit) = resolve_artifact_retention(
         &state,
         &user,
-        &request.r#ref,
-        request.scope,
-        &request.owner,
-        None,
-        request.retention_policy,
-        request.retention_limit,
-        5,
+        ArtifactRetentionDefaults {
+            artifact_ref: &request.r#ref,
+            scope: request.scope,
+            owner: &request.owner,
+            execution: None,
+            requested_policy: request.retention_policy,
+            requested_limit: request.retention_limit,
+            fallback_limit: 5,
+        },
     )
     .await?;
 
@@ -1457,13 +1473,15 @@ pub async fn upload_version_by_ref(
             let (a_retention_policy, a_retention_limit) = resolve_artifact_retention(
                 &state,
                 &user,
-                &artifact_ref,
-                a_scope,
-                owner.as_deref().unwrap_or_default(),
-                execution_id,
-                requested_retention_policy,
-                requested_retention_limit,
-                10,
+                ArtifactRetentionDefaults {
+                    artifact_ref: &artifact_ref,
+                    scope: a_scope,
+                    owner: owner.as_deref().unwrap_or_default(),
+                    execution: execution_id,
+                    requested_policy: requested_retention_policy,
+                    requested_limit: requested_retention_limit,
+                    fallback_limit: 10,
+                },
             )
             .await?;
 
@@ -1569,13 +1587,15 @@ pub async fn allocate_file_version_by_ref(
             let (a_retention_policy, a_retention_limit) = resolve_artifact_retention(
                 &state,
                 &user,
-                &artifact_ref,
-                a_scope,
-                owner_ref,
-                execution,
-                request.retention_policy,
-                request.retention_limit,
-                10,
+                ArtifactRetentionDefaults {
+                    artifact_ref: &artifact_ref,
+                    scope: a_scope,
+                    owner: owner_ref,
+                    execution,
+                    requested_policy: request.retention_policy,
+                    requested_limit: request.retention_limit,
+                    fallback_limit: 10,
+                },
             )
             .await?;
 

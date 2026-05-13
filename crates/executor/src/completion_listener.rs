@@ -52,6 +52,12 @@ pub struct CompletionListener {
     artifacts_dir: Arc<String>,
 }
 
+struct QueueDispatchCompletionFailure {
+    retry_limit: u32,
+    error_code: &'static str,
+    error_message: String,
+}
+
 impl CompletionListener {
     fn retryable_mq_error(error: &anyhow::Error) -> Option<MqError> {
         let mq_error = error.downcast_ref::<MqError>()?;
@@ -371,9 +377,11 @@ impl CompletionListener {
                 execution,
                 &dispatch,
                 &leased_items,
-                retry_limit,
-                "queue_dispatch_metadata_mismatch",
-                message,
+                QueueDispatchCompletionFailure {
+                    retry_limit,
+                    error_code: "queue_dispatch_metadata_mismatch",
+                    error_message: message,
+                },
                 publisher,
             )
             .await;
@@ -385,12 +393,14 @@ impl CompletionListener {
                 execution,
                 &dispatch,
                 &leased_items,
-                retry_limit,
-                "queue_dispatch_items_missing",
-                format!(
-                    "queue dispatch {} for execution {} had no leased items to finalize",
-                    dispatch.id, execution.id
-                ),
+                QueueDispatchCompletionFailure {
+                    retry_limit,
+                    error_code: "queue_dispatch_items_missing",
+                    error_message: format!(
+                        "queue dispatch {} for execution {} had no leased items to finalize",
+                        dispatch.id, execution.id
+                    ),
+                },
                 publisher,
             )
             .await;
@@ -409,9 +419,11 @@ impl CompletionListener {
                     execution,
                     &dispatch,
                     &leased_items,
-                    retry_limit,
-                    error_code,
-                    message,
+                    QueueDispatchCompletionFailure {
+                        retry_limit,
+                        error_code,
+                        error_message: message,
+                    },
                     publisher,
                 )
                 .await;
@@ -502,15 +514,13 @@ impl CompletionListener {
         execution: &Execution,
         dispatch: &WorkQueueDispatch,
         leased_items: &[WorkQueueItem],
-        retry_limit: u32,
-        error_code: &str,
-        error_message: String,
+        failure: QueueDispatchCompletionFailure,
         publisher: &Publisher,
     ) -> Result<Execution> {
         let mut tx = pool.begin().await?;
         let retry_error = json!({
-            "code": error_code,
-            "message": error_message,
+            "code": failure.error_code,
+            "message": failure.error_message,
             "execution_id": execution.id,
             "dispatch_id": dispatch.id,
         });
@@ -519,7 +529,7 @@ impl CompletionListener {
             let new_status = Self::apply_retry_limit(
                 WorkQueueItemStatus::Retry,
                 leased_item.attempt_count,
-                retry_limit,
+                failure.retry_limit,
             );
             let updated_item = WorkQueueItemRepository::update_if_statuses(
                 &mut *tx,
@@ -568,7 +578,7 @@ impl CompletionListener {
                     status: Some(ExecutionStatus::Failed),
                     result: Some(Self::queue_ack_failure_result(
                         execution.result.clone(),
-                        error_code,
+                        failure.error_code,
                         retry_error["message"]
                             .as_str()
                             .unwrap_or("queue acknowledgement failed"),

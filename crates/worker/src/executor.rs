@@ -1120,8 +1120,7 @@ impl ActionExecutor {
                     &artifacts_dir,
                     transport.as_ref(),
                     &execution,
-                    retention.policy,
-                    retention.limit,
+                    retention,
                     stream,
                     &pending_path,
                 )
@@ -1150,8 +1149,7 @@ impl ActionExecutor {
                 &self.artifacts_dir,
                 self.transport.as_ref(),
                 execution,
-                retention.policy,
-                retention.limit,
+                retention,
                 stream,
                 pending_path,
             )
@@ -1285,8 +1283,7 @@ impl ActionExecutor {
         artifacts_dir: &Path,
         transport: &dyn ArtifactFileTransport,
         execution: &Execution,
-        retention_policy: RetentionPolicyType,
-        retention_limit: i32,
+        retention: LogRetentionSettings,
         stream: ExecutionLogArtifactStream,
         pending_path: &Path,
     ) -> Result<Option<PathBuf>> {
@@ -1359,8 +1356,8 @@ impl ActionExecutor {
             artifacts_dir,
             transport,
             execution,
-            retention_policy,
-            retention_limit,
+            retention.policy,
+            retention.limit,
             stream,
         )
         .await?;
