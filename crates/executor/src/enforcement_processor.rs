@@ -284,6 +284,12 @@ impl EnforcementProcessor {
             .as_ref()
             .map(|action| action.default_execution_permission_set_refs.clone())
             .unwrap_or_default();
+        let artifact_retention_policy = action
+            .as_ref()
+            .and_then(|action| action.artifact_retention_policy);
+        let artifact_retention_limit = action
+            .as_ref()
+            .and_then(|action| action.artifact_retention_limit);
 
         // Create the execution row first; scheduler-side policy enforcement
         // now handles both rule-triggered and manual executions uniformly.
@@ -306,6 +312,8 @@ impl EnforcementProcessor {
             enforcement: Some(enforcement.id),
             executor: Some(executor_identity),
             permission_set_refs,
+            artifact_retention_policy,
+            artifact_retention_limit,
             worker_selector: None,
             worker_tolerations: None,
             worker_affinity: None,

@@ -83,6 +83,8 @@ async fn setup_test_pack_and_action(pool: &PgPool) -> Result<(Pack, Action)> {
         is_adhoc: false,
         accesses_mcp: false,
         default_execution_permission_set_refs: Vec::new(),
+        artifact_retention_policy: None,
+        artifact_retention_limit: None,
         log_retention_policy: None,
         log_retention_limit: None,
     };
@@ -102,6 +104,8 @@ async fn create_test_execution(pool: &PgPool, action_id: i64) -> Result<Executio
         enforcement: None,
         executor: None,
         permission_set_refs: Vec::new(),
+        artifact_retention_policy: None,
+        artifact_retention_limit: None,
         worker_selector: None,
         worker_tolerations: None,
         worker_affinity: None,

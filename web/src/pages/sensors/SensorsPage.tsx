@@ -1,9 +1,19 @@
 import { Link, useParams } from "react-router-dom";
-import { useSensors, useSensor, useDeleteSensor } from "@/hooks/useSensors";
+import {
+  useSensors,
+  useSensor,
+  useDeleteSensor,
+  useUpdateSensor,
+} from "@/hooks/useSensors";
 import { useSensorLog, useSensorLogs } from "@/hooks/useSensorLogs";
 import { useState, useMemo } from "react";
-import type { SensorSummary } from "@/api";
-import { ChevronDown, ChevronRight, Search, X } from "lucide-react";
+import type { SensorResponse, SensorSummary } from "@/api";
+import { ChevronDown, ChevronRight, Search, Settings, X } from "lucide-react";
+import RetentionPolicyControls from "@/components/common/RetentionPolicyControls";
+import {
+  formatRetention,
+  type RetentionPolicy,
+} from "@/components/common/retentionPolicy";
 
 export default function SensorsPage() {
   const { ref } = useParams<{ ref?: string }>();
@@ -242,7 +252,9 @@ export default function SensorsPage() {
 function SensorDetail({ sensorRef }: { sensorRef: string }) {
   const { data: sensor, isLoading, error } = useSensor(sensorRef);
   const deleteSensor = useDeleteSensor();
+  const updateSensor = useUpdateSensor();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showConfigureModal, setShowConfigureModal] = useState(false);
   const [logStream, setLogStream] = useState<"stdout" | "stderr">("stderr");
   const [followLogs, setFollowLogs] = useState(false);
   const { data: logSummary } = useSensorLogs(sensorRef, Boolean(sensorRef));
@@ -307,6 +319,13 @@ function SensorDetail({ sensorRef }: { sensorRef: string }) {
           </div>
           <div className="flex gap-2">
             <button
+              onClick={() => setShowConfigureModal(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+            >
+              <Settings className="h-4 w-4" />
+              Configure
+            </button>
+            <button
               onClick={() => setShowDeleteConfirm(true)}
               disabled={deleteSensor.isPending}
               className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
@@ -345,6 +364,21 @@ function SensorDetail({ sensorRef }: { sensorRef: string }) {
             </div>
           </div>
         </div>
+      )}
+
+      {showConfigureModal && (
+        <ConfigureSensorRetentionModal
+          sensor={sensor.data}
+          isSaving={updateSensor.isPending}
+          onClose={() => setShowConfigureModal(false)}
+          onSave={async (payload) => {
+            await updateSensor.mutateAsync({
+              ref: sensorRef,
+              data: payload,
+            });
+            setShowConfigureModal(false);
+          }}
+        />
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -418,6 +452,35 @@ function SensorDetail({ sensorRef }: { sensorRef: string }) {
                   {new Date(sensor.data?.updated || "").toLocaleString()}
                 </dd>
               </div>
+              <div className="sm:col-span-2">
+                <dt className="text-sm font-medium text-gray-500">
+                  Retention Defaults
+                </dt>
+                <dd className="mt-1 flex flex-wrap gap-2">
+                  <span className="text-xs px-2 py-1 rounded bg-slate-50 text-slate-700">
+                    Logs:{" "}
+                    {formatRetention(
+                      sensor.data?.log_retention_policy as
+                        | RetentionPolicy
+                        | null
+                        | undefined,
+                      sensor.data?.log_retention_limit,
+                      "system default",
+                    )}
+                  </span>
+                  <span className="text-xs px-2 py-1 rounded bg-teal-50 text-teal-700">
+                    Non-log artifacts:{" "}
+                    {formatRetention(
+                      sensor.data?.artifact_retention_policy as
+                        | RetentionPolicy
+                        | null
+                        | undefined,
+                      sensor.data?.artifact_retention_limit,
+                      "system default",
+                    )}
+                  </span>
+                </dd>
+              </div>
             </dl>
           </div>
 
@@ -486,6 +549,114 @@ function SensorDetail({ sensorRef }: { sensorRef: string }) {
               </Link>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfigureSensorRetentionModal({
+  sensor,
+  isSaving,
+  onClose,
+  onSave,
+}: {
+  sensor?: SensorResponse;
+  isSaving: boolean;
+  onClose: () => void;
+  onSave: (payload: {
+    log_retention_policy: unknown;
+    log_retention_limit: unknown;
+    artifact_retention_policy: unknown;
+    artifact_retention_limit: unknown;
+  }) => Promise<void>;
+}) {
+  const [logRetention, setLogRetention] = useState<{
+    policy: RetentionPolicy | null;
+    limit: number | null;
+  }>({
+    policy: (sensor?.log_retention_policy as RetentionPolicy | undefined) ?? null,
+    limit: sensor?.log_retention_limit ?? null,
+  });
+  const [artifactRetention, setArtifactRetention] = useState<{
+    policy: RetentionPolicy | null;
+    limit: number | null;
+  }>({
+    policy:
+      (sensor?.artifact_retention_policy as RetentionPolicy | undefined) ??
+      null,
+    limit: sensor?.artifact_retention_limit ?? null,
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    setError(null);
+    try {
+      await onSave({
+        log_retention_policy: logRetention.policy
+          ? { op: "set", value: logRetention.policy }
+          : { op: "clear" },
+        log_retention_limit: logRetention.limit
+          ? { op: "set", value: logRetention.limit }
+          : { op: "clear" },
+        artifact_retention_policy: artifactRetention.policy
+          ? { op: "set", value: artifactRetention.policy }
+          : { op: "clear" },
+        artifact_retention_limit: artifactRetention.limit
+          ? { op: "set", value: artifactRetention.limit }
+          : { op: "clear" },
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save retention");
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-xl">
+        <div className="flex items-center justify-between px-6 py-4 border-b">
+          <h2 className="text-xl font-bold">Configure Sensor Retention</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="px-6 py-4 space-y-3">
+          <RetentionPolicyControls
+            title="Sensor logs"
+            description="Default retention for stdout/stderr log artifacts registered by this sensor."
+            policy={logRetention.policy}
+            limit={logRetention.limit}
+            onChange={setLogRetention}
+          />
+          <RetentionPolicyControls
+            title="Non-log artifacts"
+            description="Default retention for non-log artifacts associated with this sensor."
+            policy={artifactRetention.policy}
+            limit={artifactRetention.limit}
+            onChange={setArtifactRetention}
+          />
+          {error && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {error}
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-3 px-6 py-4 border-t">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded hover:bg-gray-200"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={isSaving}
+            className="px-4 py-2 text-sm text-white bg-blue-600 rounded hover:bg-blue-700 disabled:opacity-50"
+          >
+            {isSaving ? "Saving..." : "Save Retention"}
+          </button>
         </div>
       </div>
     </div>

@@ -296,6 +296,8 @@ pub async fn create_action(
         is_adhoc: true, // Actions created via API are ad-hoc (not from pack installation)
         accesses_mcp: request.accesses_mcp.unwrap_or(false),
         default_execution_permission_set_refs: request.default_execution_permission_set_refs,
+        artifact_retention_policy: request.artifact_retention_policy,
+        artifact_retention_limit: request.artifact_retention_limit,
         log_retention_policy: request.log_retention_policy,
         log_retention_limit: request.log_retention_limit,
     };
@@ -400,6 +402,14 @@ pub async fn update_action(
         output_format: None,
         accesses_mcp: request.accesses_mcp,
         default_execution_permission_set_refs: request.default_execution_permission_set_refs,
+        artifact_retention_policy: request.artifact_retention_policy.map(|patch| match patch {
+            LogRetentionPolicyPatch::Set(value) => Patch::Set(value),
+            LogRetentionPolicyPatch::Clear => Patch::Clear,
+        }),
+        artifact_retention_limit: request.artifact_retention_limit.map(|patch| match patch {
+            LogRetentionLimitPatch::Set(value) => Patch::Set(value),
+            LogRetentionLimitPatch::Clear => Patch::Clear,
+        }),
         log_retention_policy: request.log_retention_policy.map(|patch| match patch {
             LogRetentionPolicyPatch::Set(value) => Patch::Set(value),
             LogRetentionPolicyPatch::Clear => Patch::Clear,

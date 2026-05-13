@@ -1091,6 +1091,8 @@ pub mod trigger {
         pub worker_affinity: JsonDict,
         pub log_retention_policy: Option<RetentionPolicyType>,
         pub log_retention_limit: Option<i32>,
+        pub artifact_retention_policy: Option<RetentionPolicyType>,
+        pub artifact_retention_limit: Option<i32>,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
     }
@@ -1172,6 +1174,8 @@ pub mod action {
         pub default_execution_permission_set_refs: Vec<String>,
         pub log_retention_policy: Option<RetentionPolicyType>,
         pub log_retention_limit: Option<i32>,
+        pub artifact_retention_policy: Option<RetentionPolicyType>,
+        pub artifact_retention_limit: Option<i32>,
         #[sqlx(default)]
         pub parameter_delivery: ParameterDelivery,
         #[sqlx(default)]
@@ -1417,6 +1421,8 @@ pub mod execution {
         pub executor: Option<Id>,
         #[sqlx(default)]
         pub permission_set_refs: Vec<String>,
+        pub artifact_retention_policy: Option<RetentionPolicyType>,
+        pub artifact_retention_limit: Option<i32>,
         pub worker_selector: Option<JsonDict>,
         pub worker_tolerations: Option<JsonDict>,
         pub worker_affinity: Option<JsonDict>,

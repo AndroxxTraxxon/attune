@@ -6,6 +6,8 @@
  * Request DTO for creating a new sensor
  */
 export type CreateSensorRequest = {
+    artifact_retention_limit?: number | null;
+    artifact_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
     /**
      * Configuration values for this sensor instance (conforms to param_schema)
      */
@@ -26,6 +28,8 @@ export type CreateSensorRequest = {
      * Human-readable label
      */
     label: string;
+    log_retention_limit?: number | null;
+    log_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
     /**
      * Pack reference this sensor belongs to
      */
@@ -47,4 +51,3 @@ export type CreateSensorRequest = {
      */
     trigger_ref: string;
 };
-

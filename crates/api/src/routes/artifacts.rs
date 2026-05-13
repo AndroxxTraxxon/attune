@@ -36,11 +36,14 @@ use attune_common::models::enums::{
     ArtifactType, ArtifactVisibility, OwnerType, RetentionPolicyType,
 };
 use attune_common::repositories::{
+    action::ActionRepository,
     artifact::{
         default_content_type_for_artifact, is_file_backed_type, ref_to_dir_path,
         ArtifactRepository, ArtifactSearchFilters, ArtifactVersionRepository, CreateArtifactInput,
         CreateArtifactVersionInput, UpdateArtifactInput,
     },
+    execution::ExecutionRepository,
+    trigger::SensorRepository,
     Create, Delete, FindById, FindByRef, Patch, Update,
 };
 
@@ -69,6 +72,74 @@ use attune_common::rbac::{Action, AuthorizationContext, Resource};
 // ============================================================================
 // Artifact CRUD
 // ============================================================================
+
+fn is_log_artifact_ref(artifact_ref: &str) -> bool {
+    let is_stream_ref = artifact_ref.ends_with(".stdout") || artifact_ref.ends_with(".stderr");
+    is_stream_ref && (artifact_ref.starts_with("execution.") || artifact_ref.starts_with("sensor."))
+}
+
+async fn resolve_artifact_retention(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    artifact_ref: &str,
+    scope: OwnerType,
+    owner: &str,
+    execution: Option<i64>,
+    requested_policy: Option<RetentionPolicyType>,
+    requested_limit: Option<i32>,
+    fallback_limit: i32,
+) -> ApiResult<(RetentionPolicyType, i32)> {
+    if let Some(limit) = requested_limit {
+        if limit <= 0 {
+            return Err(ApiError::BadRequest(
+                "retention_limit must be greater than zero".to_string(),
+            ));
+        }
+    }
+
+    if is_log_artifact_ref(artifact_ref) {
+        return Ok((
+            requested_policy.unwrap_or(RetentionPolicyType::Versions),
+            requested_limit.unwrap_or(fallback_limit),
+        ));
+    }
+
+    let execution_id = execution.or_else(|| user.execution_id());
+    let mut default_policy = None;
+    let mut default_limit = None;
+
+    if let Some(execution_id) = execution_id {
+        if let Some(execution) = ExecutionRepository::find_by_id(&state.db, execution_id).await? {
+            default_policy = execution.artifact_retention_policy;
+            default_limit = execution.artifact_retention_limit;
+        }
+    }
+
+    if default_policy.is_none() || default_limit.is_none() {
+        match scope {
+            OwnerType::Action => {
+                if let Some(action) = ActionRepository::find_by_ref(&state.db, owner).await? {
+                    default_policy = default_policy.or(action.artifact_retention_policy);
+                    default_limit = default_limit.or(action.artifact_retention_limit);
+                }
+            }
+            OwnerType::Sensor => {
+                if let Some(sensor) = SensorRepository::find_by_ref(&state.db, owner).await? {
+                    default_policy = default_policy.or(sensor.artifact_retention_policy);
+                    default_limit = default_limit.or(sensor.artifact_retention_limit);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok((
+        requested_policy
+            .or(default_policy)
+            .unwrap_or(RetentionPolicyType::Versions),
+        requested_limit.or(default_limit).unwrap_or(fallback_limit),
+    ))
+}
 
 /// List artifacts with pagination and optional filters
 #[utoipa::path(
@@ -229,14 +300,27 @@ pub async fn create_artifact(
     )
     .await?;
 
+    let (retention_policy, retention_limit) = resolve_artifact_retention(
+        &state,
+        &user,
+        &request.r#ref,
+        request.scope,
+        &request.owner,
+        None,
+        request.retention_policy,
+        request.retention_limit,
+        5,
+    )
+    .await?;
+
     let input = CreateArtifactInput {
         r#ref: request.r#ref,
         scope: request.scope,
         owner: request.owner,
         r#type: request.r#type,
         visibility,
-        retention_policy: request.retention_policy,
-        retention_limit: request.retention_limit,
+        retention_policy,
+        retention_limit,
         name: request.name,
         description: request.description,
         content_type: request.content_type,
@@ -1305,7 +1389,7 @@ pub async fn upload_version_by_ref(
             s.parse::<i64>()
                 .map_err(|_| ApiError::BadRequest(format!("Invalid execution ID: '{}'", s)))?,
         ),
-        _ => None,
+        _ => user.execution_id(),
     };
 
     // Upsert: find existing artifact or create a new one
@@ -1356,21 +1440,32 @@ pub async fn upload_version_by_ref(
             )
             .await?;
 
-            // Parse retention
-            let a_retention_policy: RetentionPolicyType = match &retention_policy {
-                Some(rp) if !rp.is_empty() => {
-                    serde_json::from_value(serde_json::Value::String(rp.clone())).map_err(|_| {
-                        ApiError::BadRequest(format!("Invalid retention_policy: '{}'", rp))
-                    })?
-                }
-                _ => RetentionPolicyType::Versions,
+            let requested_retention_policy: Option<RetentionPolicyType> = match &retention_policy {
+                Some(rp) if !rp.is_empty() => Some(
+                    serde_json::from_value(serde_json::Value::String(rp.clone())).map_err(
+                        |_| ApiError::BadRequest(format!("Invalid retention_policy: '{}'", rp)),
+                    )?,
+                ),
+                _ => None,
             };
-            let a_retention_limit: i32 = match &retention_limit {
-                Some(rl) if !rl.is_empty() => rl.parse::<i32>().map_err(|_| {
+            let requested_retention_limit: Option<i32> = match &retention_limit {
+                Some(rl) if !rl.is_empty() => Some(rl.parse::<i32>().map_err(|_| {
                     ApiError::BadRequest(format!("Invalid retention_limit: '{}'", rl))
-                })?,
-                _ => 10,
+                })?),
+                _ => None,
             };
+            let (a_retention_policy, a_retention_limit) = resolve_artifact_retention(
+                &state,
+                &user,
+                &artifact_ref,
+                a_scope,
+                owner.as_deref().unwrap_or_default(),
+                execution_id,
+                requested_retention_policy,
+                requested_retention_limit,
+                10,
+            )
+            .await?;
 
             let create_input = CreateArtifactInput {
                 r#ref: artifact_ref.clone(),
@@ -1447,6 +1542,8 @@ pub async fn allocate_file_version_by_ref(
     Path(artifact_ref): Path<String>,
     Json(request): Json<AllocateFileVersionByRefRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    let execution = request.execution.or_else(|| user.execution_id());
+
     // Upsert: find existing artifact or create a new one
     let artifact = match ArtifactRepository::find_by_ref(&state.db, &artifact_ref).await? {
         Some(existing) => {
@@ -1468,17 +1565,26 @@ pub async fn allocate_file_version_by_ref(
 
             let a_scope = request.scope.unwrap_or(OwnerType::Action);
             let a_visibility = request.visibility.unwrap_or(ArtifactVisibility::Private);
-            let a_retention_policy = request
-                .retention_policy
-                .unwrap_or(RetentionPolicyType::Versions);
-            let a_retention_limit = request.retention_limit.unwrap_or(10);
+            let owner_ref = request.owner.as_deref().unwrap_or_default();
+            let (a_retention_policy, a_retention_limit) = resolve_artifact_retention(
+                &state,
+                &user,
+                &artifact_ref,
+                a_scope,
+                owner_ref,
+                execution,
+                request.retention_policy,
+                request.retention_limit,
+                10,
+            )
+            .await?;
 
             authorize_artifact_create(
                 &state,
                 &user,
                 &artifact_ref,
                 a_scope,
-                request.owner.as_deref().unwrap_or_default(),
+                owner_ref,
                 a_visibility,
             )
             .await?;
@@ -1512,7 +1618,6 @@ pub async fn allocate_file_version_by_ref(
     let content_type = request
         .content_type
         .unwrap_or_else(|| default_content_type_for_artifact(artifact.r#type));
-    let execution = request.execution.or_else(|| user.execution_id());
 
     let version = ArtifactVersionRepository::create_file_backed(
         &state.db,

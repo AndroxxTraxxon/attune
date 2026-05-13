@@ -426,6 +426,8 @@ impl ExecutionManager {
                 // token has the same security context.
                 executor: parent.executor,
                 permission_set_refs: parent.permission_set_refs.clone(),
+                artifact_retention_policy: parent.artifact_retention_policy,
+                artifact_retention_limit: parent.artifact_retention_limit,
                 worker_selector: parent.worker_selector.clone(),
                 worker_tolerations: parent.worker_tolerations.clone(),
                 worker_affinity: parent.worker_affinity.clone(),

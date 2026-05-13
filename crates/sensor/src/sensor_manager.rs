@@ -2636,6 +2636,8 @@ mod tests {
             worker_selector: serde_json::json!({}),
             worker_tolerations: serde_json::json!([]),
             worker_affinity: serde_json::json!({}),
+            artifact_retention_policy: None,
+            artifact_retention_limit: None,
             log_retention_policy: None,
             log_retention_limit: None,
             created: chrono::Utc::now(),

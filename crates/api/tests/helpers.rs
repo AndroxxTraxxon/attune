@@ -511,6 +511,8 @@ pub async fn create_test_action(pool: &PgPool, pack_id: i64, ref_name: &str) -> 
         is_adhoc: false,
         accesses_mcp: false,
         default_execution_permission_set_refs: Vec::new(),
+        artifact_retention_policy: None,
+        artifact_retention_limit: None,
         log_retention_policy: None,
         log_retention_limit: None,
     };

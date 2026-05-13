@@ -3,6 +3,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { OpenAPI } from "@/api";
 import type { ActionResponse } from "@/api";
 import MultiSelect from "@/components/common/MultiSelect";
+import RetentionPolicyControls from "@/components/common/RetentionPolicyControls";
+import {
+  formatRetention,
+  type RetentionPolicy,
+} from "@/components/common/retentionPolicy";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePermissionSets } from "@/hooks/usePermissions";
 import { STANDARD_EXECUTION_ACCESS_REF } from "@/lib/permissions";
@@ -96,6 +101,17 @@ export default function ExecuteActionModal({
     string[]
   >(initialPermissionSetRefs ?? []);
   const [isTokenAccessOpen, setIsTokenAccessOpen] = useState(false);
+  const [isArtifactRetentionOpen, setIsArtifactRetentionOpen] = useState(false);
+  const [overrideArtifactRetention, setOverrideArtifactRetention] =
+    useState(false);
+  const [artifactRetentionPolicy, setArtifactRetentionPolicy] =
+    useState<RetentionPolicy>(
+      (action.artifact_retention_policy as RetentionPolicy | undefined) ??
+        "versions",
+    );
+  const [artifactRetentionLimit, setArtifactRetentionLimit] = useState(
+    action.artifact_retention_limit ?? 5,
+  );
 
   const permissionSets = usePermissionSets(null, { enabled: isCoreAdmin });
   const allPermissionSetRefs =
@@ -135,6 +151,8 @@ export default function ExecuteActionModal({
       parameters: Record<string, JsonValue>;
       envVars: Array<{ key: string; value: string }>;
       permissionSetRefs?: string[];
+      artifactRetentionPolicy?: RetentionPolicy;
+      artifactRetentionLimit?: number;
     }) => {
       const token =
         typeof OpenAPI.TOKEN === "function"
@@ -164,6 +182,13 @@ export default function ExecuteActionModal({
             ...(params.permissionSetRefs === undefined
               ? {}
               : { permission_set_refs: params.permissionSetRefs }),
+            ...(params.artifactRetentionPolicy &&
+            params.artifactRetentionLimit
+              ? {
+                  artifact_retention_policy: params.artifactRetentionPolicy,
+                  artifact_retention_limit: params.artifactRetentionLimit,
+                }
+              : {}),
           }),
         },
       );
@@ -209,6 +234,12 @@ export default function ExecuteActionModal({
         parameters,
         envVars,
         permissionSetRefs,
+        artifactRetentionPolicy: overrideArtifactRetention
+          ? artifactRetentionPolicy
+          : undefined,
+        artifactRetentionLimit: overrideArtifactRetention
+          ? artifactRetentionLimit
+          : undefined,
       });
     } catch (err) {
       console.error("Failed to execute action:", err);
@@ -250,6 +281,13 @@ export default function ExecuteActionModal({
 
     return `Custom: ${allowedSelectedPermissionSetRefs.join(", ")}`;
   })();
+  const artifactRetentionSummary = overrideArtifactRetention
+    ? `Custom: ${formatRetention(artifactRetentionPolicy, artifactRetentionLimit)}`
+    : `Default: ${formatRetention(
+        action.artifact_retention_policy as RetentionPolicy | null | undefined,
+        action.artifact_retention_limit,
+        "versions / 5",
+      )}`;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -460,6 +498,54 @@ export default function ExecuteActionModal({
                   </div>
                 )}
               </div>
+            </div>
+          )}
+        </div>
+
+        <div className="mb-6 rounded-lg border border-gray-200">
+          <button
+            type="button"
+            onClick={() => setIsArtifactRetentionOpen((open) => !open)}
+            className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left hover:bg-gray-50"
+            aria-expanded={isArtifactRetentionOpen}
+          >
+            <span>
+              <span className="block text-sm font-semibold text-gray-700">
+                Artifact Retention
+              </span>
+              <span className="mt-1 block truncate text-xs text-gray-500">
+                {artifactRetentionSummary}
+              </span>
+            </span>
+            <ChevronDown
+              className={`h-4 w-4 flex-shrink-0 text-gray-400 transition-transform ${
+                isArtifactRetentionOpen ? "rotate-180" : ""
+              }`}
+            />
+          </button>
+          {isArtifactRetentionOpen && (
+            <div className="border-t border-gray-200 p-3">
+              <RetentionPolicyControls
+                title="Non-log artifact retention"
+                description="Applies only to artifacts this execution creates. Stdout/stderr logs use the action log-retention default."
+                policy={
+                  overrideArtifactRetention ? artifactRetentionPolicy : null
+                }
+                limit={overrideArtifactRetention ? artifactRetentionLimit : null}
+                inheritedLabel={`Use action default: ${formatRetention(
+                  action.artifact_retention_policy as
+                    | RetentionPolicy
+                    | null
+                    | undefined,
+                  action.artifact_retention_limit,
+                  "versions / 5",
+                )}`}
+                onChange={({ policy, limit }) => {
+                  setOverrideArtifactRetention(Boolean(policy || limit));
+                  if (policy) setArtifactRetentionPolicy(policy);
+                  if (limit) setArtifactRetentionLimit(limit);
+                }}
+              />
             </div>
           )}
         </div>

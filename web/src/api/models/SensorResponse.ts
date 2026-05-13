@@ -6,6 +6,8 @@
  * Response DTO for sensor information
  */
 export type SensorResponse = {
+    artifact_retention_limit?: number | null;
+    artifact_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
     /**
      * Creation timestamp
      */
@@ -30,6 +32,8 @@ export type SensorResponse = {
      * Human-readable label
      */
     label: string;
+    log_retention_limit?: number | null;
+    log_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
     /**
      * Pack ID (optional)
      */
@@ -59,4 +63,3 @@ export type SensorResponse = {
      */
     updated: string;
 };
-

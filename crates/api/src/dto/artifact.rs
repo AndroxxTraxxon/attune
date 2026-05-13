@@ -36,15 +36,14 @@ pub struct CreateArtifactRequest {
     /// If omitted, defaults to `public` for progress artifacts and `private` for all others.
     pub visibility: Option<ArtifactVisibility>,
 
-    /// Retention policy type
-    #[serde(default = "default_retention_policy")]
-    #[schema(example = "versions")]
-    pub retention_policy: RetentionPolicyType,
+    /// Retention policy type. If omitted, execution/action/sensor defaults may apply.
+    #[schema(example = "versions", nullable = true)]
+    pub retention_policy: Option<RetentionPolicyType>,
 
-    /// Retention limit (number of versions, days, hours, or minutes depending on policy)
-    #[serde(default = "default_retention_limit")]
-    #[schema(example = 5)]
-    pub retention_limit: i32,
+    /// Retention limit (number of versions, days, hours, or minutes depending on policy).
+    /// If omitted, execution/action/sensor defaults may apply.
+    #[schema(example = 5, nullable = true)]
+    pub retention_limit: Option<i32>,
 
     /// Human-readable name
     #[schema(example = "Build Log")]
@@ -61,14 +60,6 @@ pub struct CreateArtifactRequest {
     /// Initial structured data (for progress-type artifacts or metadata)
     #[schema(value_type = Option<Object>)]
     pub data: Option<JsonValue>,
-}
-
-fn default_retention_policy() -> RetentionPolicyType {
-    RetentionPolicyType::Versions
-}
-
-fn default_retention_limit() -> i32 {
-    5
 }
 
 /// Request DTO for updating an existing artifact
@@ -587,8 +578,8 @@ mod tests {
             "type": "file_text"
         }"#;
         let req: CreateArtifactRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.retention_policy, RetentionPolicyType::Versions);
-        assert_eq!(req.retention_limit, 5);
+        assert_eq!(req.retention_policy, None);
+        assert_eq!(req.retention_limit, None);
         assert!(
             req.visibility.is_none(),
             "Omitting visibility should deserialize as None (server applies type-aware default)"

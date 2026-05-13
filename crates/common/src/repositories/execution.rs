@@ -106,6 +106,8 @@ pub struct ExecutionWithRefs {
     pub enforcement: Option<Id>,
     pub executor: Option<Id>,
     pub permission_set_refs: Vec<String>,
+    pub artifact_retention_policy: Option<crate::models::enums::RetentionPolicyType>,
+    pub artifact_retention_limit: Option<i32>,
     pub worker_selector: Option<JsonDict>,
     pub worker_tolerations: Option<JsonDict>,
     pub worker_affinity: Option<JsonDict>,
@@ -133,7 +135,8 @@ pub struct ExecutionWithRefs {
 /// Rust struct, so `SELECT *` must never be used.
 pub const SELECT_COLUMNS: &str = "\
     id, action, action_ref, config, env_vars, parent, enforcement, \
-    executor, permission_set_refs, worker_selector, worker_tolerations, worker_affinity, \
+    executor, permission_set_refs, artifact_retention_policy, artifact_retention_limit, \
+    worker_selector, worker_tolerations, worker_affinity, \
     worker, status, result, retry_count, max_retries, retry_reason, \
     original_execution, started_at, workflow_task, created, updated";
 
@@ -156,6 +159,8 @@ pub struct CreateExecutionInput {
     pub enforcement: Option<Id>,
     pub executor: Option<Id>,
     pub permission_set_refs: Vec<String>,
+    pub artifact_retention_policy: Option<crate::models::enums::RetentionPolicyType>,
+    pub artifact_retention_limit: Option<i32>,
     pub worker_selector: Option<JsonDict>,
     pub worker_tolerations: Option<JsonDict>,
     pub worker_affinity: Option<JsonDict>,
@@ -242,8 +247,9 @@ impl Create for ExecutionRepository {
         let sql = format!(
             "INSERT INTO execution \
              (action, action_ref, config, env_vars, parent, enforcement, executor, permission_set_refs, \
-              worker_selector, worker_tolerations, worker_affinity, worker, status, result, workflow_task) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+              artifact_retention_policy, artifact_retention_limit, worker_selector, worker_tolerations, \
+              worker_affinity, worker, status, result, workflow_task) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
              RETURNING {SELECT_COLUMNS}"
         );
         sqlx::query_as::<_, Execution>(&sql)
@@ -255,6 +261,8 @@ impl Create for ExecutionRepository {
             .bind(input.enforcement)
             .bind(input.executor)
             .bind(&input.permission_set_refs)
+            .bind(input.artifact_retention_policy)
+            .bind(input.artifact_retention_limit)
             .bind(&input.worker_selector)
             .bind(&input.worker_tolerations)
             .bind(&input.worker_affinity)
@@ -308,9 +316,10 @@ impl ExecutionRepository {
         let sql = format!(
             "INSERT INTO execution \
              (action, action_ref, config, env_vars, parent, enforcement, executor, permission_set_refs, \
-              worker_selector, worker_tolerations, worker_affinity, worker, status, result, workflow_task, \
+              artifact_retention_policy, artifact_retention_limit, worker_selector, worker_tolerations, \
+              worker_affinity, worker, status, result, workflow_task, \
               retry_count, max_retries, retry_reason, original_execution) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
              RETURNING {SELECT_COLUMNS}"
         );
         sqlx::query_as::<_, Execution>(&sql)
@@ -322,6 +331,8 @@ impl ExecutionRepository {
             .bind(input.enforcement)
             .bind(input.executor)
             .bind(&input.permission_set_refs)
+            .bind(input.artifact_retention_policy)
+            .bind(input.artifact_retention_limit)
             .bind(&input.worker_selector)
             .bind(&input.worker_tolerations)
             .bind(&input.worker_affinity)

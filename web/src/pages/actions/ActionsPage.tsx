@@ -31,6 +31,11 @@ import {
 import ErrorDisplay from "@/components/common/ErrorDisplay";
 import ExecuteActionModal from "@/components/common/ExecuteActionModal";
 import MultiSelect from "@/components/common/MultiSelect";
+import RetentionPolicyControls from "@/components/common/RetentionPolicyControls";
+import {
+  formatRetention,
+  type RetentionPolicy,
+} from "@/components/common/retentionPolicy";
 import {
   WorkerSelectorEditor,
   WorkerTolerationsEditor,
@@ -823,7 +828,14 @@ function ActionDefaultsDisplay({ action }: { action: ActionResponse }) {
     (affinity.anti_affinity?.length ?? 0) > 0;
   const hasPlacement =
     selectorEntries.length > 0 || tolerations.length > 0 || hasAffinity;
-  const hasAnything = currentRefs.length > 0 || action.accesses_mcp || hasPlacement;
+  const hasRetention =
+    Boolean(action.log_retention_policy && action.log_retention_limit) ||
+    Boolean(action.artifact_retention_policy && action.artifact_retention_limit);
+  const hasAnything =
+    currentRefs.length > 0 ||
+    action.accesses_mcp ||
+    hasPlacement ||
+    hasRetention;
 
   if (!hasAnything) return null;
 
@@ -854,6 +866,36 @@ function ActionDefaultsDisplay({ action }: { action: ActionResponse }) {
             </dt>
             <dd>
               <PermissionSetRefChips refs={currentRefs} />
+            </dd>
+          </div>
+        )}
+
+        {/* Retention */}
+        {hasRetention && (
+          <div>
+            <dt className="text-sm font-medium text-gray-500 mb-1">
+              Retention Defaults
+            </dt>
+            <dd className="flex flex-wrap gap-2">
+              {action.log_retention_policy && action.log_retention_limit && (
+                <span className="text-xs px-2 py-1 rounded bg-slate-50 text-slate-700">
+                  Logs:{" "}
+                  {formatRetention(
+                    action.log_retention_policy as RetentionPolicy,
+                    action.log_retention_limit,
+                  )}
+                </span>
+              )}
+              {action.artifact_retention_policy &&
+                action.artifact_retention_limit && (
+                  <span className="text-xs px-2 py-1 rounded bg-teal-50 text-teal-700">
+                    Non-log artifacts:{" "}
+                    {formatRetention(
+                      action.artifact_retention_policy as RetentionPolicy,
+                      action.artifact_retention_limit,
+                    )}
+                  </span>
+                )}
             </dd>
           </div>
         )}
@@ -996,6 +1038,21 @@ function ConfigureActionModal({
   const [affinity, setAffinity] = useState<WorkerAffinity>(
     (action.worker_affinity as WorkerAffinity) ?? {},
   );
+  const [logRetention, setLogRetention] = useState<{
+    policy: RetentionPolicy | null;
+    limit: number | null;
+  }>({
+    policy: (action.log_retention_policy as RetentionPolicy | undefined) ?? null,
+    limit: action.log_retention_limit ?? null,
+  });
+  const [artifactRetention, setArtifactRetention] = useState<{
+    policy: RetentionPolicy | null;
+    limit: number | null;
+  }>({
+    policy:
+      (action.artifact_retention_policy as RetentionPolicy | undefined) ?? null,
+    limit: action.artifact_retention_limit ?? null,
+  });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -1044,6 +1101,18 @@ function ConfigureActionModal({
           worker_selector: hasSelector ? selector : null,
           worker_tolerations: hasTolerations ? tolerations : null,
           worker_affinity: hasAffinity ? affinity : null,
+          log_retention_policy: logRetention.policy
+            ? { op: "set", value: logRetention.policy }
+            : { op: "clear" },
+          log_retention_limit: logRetention.limit
+            ? { op: "set", value: logRetention.limit }
+            : { op: "clear" },
+          artifact_retention_policy: artifactRetention.policy
+            ? { op: "set", value: artifactRetention.policy }
+            : { op: "clear" },
+          artifact_retention_limit: artifactRetention.limit
+            ? { op: "set", value: artifactRetention.limit }
+            : { op: "clear" },
           // Preserve fields we don't edit in this modal
           runtime: action.runtime ?? null,
           required_worker_runtimes: action.required_worker_runtimes ?? {},
@@ -1160,6 +1229,29 @@ function ConfigureActionModal({
                 placeholder="Search and select permission sets..."
               />
             )}
+          </div>
+
+          {/* Retention Defaults */}
+          <div className="border-t pt-5">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">
+              Retention Defaults
+            </h3>
+            <div className="space-y-3">
+              <RetentionPolicyControls
+                title="Execution logs"
+                description="Default retention for stdout/stderr log artifacts produced by this action."
+                policy={logRetention.policy}
+                limit={logRetention.limit}
+                onChange={setLogRetention}
+              />
+              <RetentionPolicyControls
+                title="Non-log artifacts"
+                description="Default retention for artifacts created by executions of this action."
+                policy={artifactRetention.policy}
+                limit={artifactRetention.limit}
+                onChange={setArtifactRetention}
+              />
+            </div>
           </div>
 
           {/* Worker Placement */}

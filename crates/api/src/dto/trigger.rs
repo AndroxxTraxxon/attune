@@ -264,6 +264,15 @@ pub struct CreateSensorRequest {
     #[schema(example = true)]
     pub enabled: bool,
 
+    /// Optional per-sensor retention policy override for non-log artifacts created by sensor-owned executions.
+    #[schema(example = "versions", nullable = true)]
+    pub artifact_retention_policy: Option<RetentionPolicyType>,
+
+    /// Optional per-sensor retention limit override for non-log artifacts created by sensor-owned executions.
+    #[validate(range(min = 1))]
+    #[schema(example = 10, nullable = true)]
+    pub artifact_retention_limit: Option<i32>,
+
     /// Optional per-sensor retention policy override for registered stdout/stderr log artifacts.
     #[schema(example = "versions", nullable = true)]
     pub log_retention_policy: Option<RetentionPolicyType>,
@@ -310,6 +319,12 @@ pub struct UpdateSensorRequest {
     /// Worker label affinity and anti-affinity for this sensor process.
     #[schema(nullable = true)]
     pub worker_affinity: Option<WorkerAffinity>,
+
+    /// Patch the per-sensor retention policy override for non-log artifacts created by sensor-owned executions.
+    pub artifact_retention_policy: Option<LogRetentionPolicyPatch>,
+
+    /// Patch the per-sensor retention limit override for non-log artifacts created by sensor-owned executions.
+    pub artifact_retention_limit: Option<LogRetentionLimitPatch>,
 
     /// Patch the per-sensor retention policy override for registered stdout/stderr log artifacts.
     pub log_retention_policy: Option<LogRetentionPolicyPatch>,
@@ -395,6 +410,16 @@ pub struct SensorResponse {
     /// Worker label affinity and anti-affinity for this sensor process.
     pub worker_affinity: WorkerAffinity,
 
+    /// Per-sensor retention policy override for non-log artifacts created by sensor-owned executions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "versions", nullable = true)]
+    pub artifact_retention_policy: Option<RetentionPolicyType>,
+
+    /// Per-sensor retention limit override for non-log artifacts created by sensor-owned executions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 10, nullable = true)]
+    pub artifact_retention_limit: Option<i32>,
+
     /// Per-sensor retention policy override for registered stdout/stderr log artifacts.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(example = "versions", nullable = true)]
@@ -440,6 +465,16 @@ pub struct SensorSummary {
     /// Whether the sensor is enabled
     #[schema(example = true)]
     pub enabled: bool,
+
+    /// Per-sensor retention policy override for non-log artifacts created by sensor-owned executions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "versions", nullable = true)]
+    pub artifact_retention_policy: Option<RetentionPolicyType>,
+
+    /// Per-sensor retention limit override for non-log artifacts created by sensor-owned executions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 10, nullable = true)]
+    pub artifact_retention_limit: Option<i32>,
 
     /// Per-sensor retention policy override for registered stdout/stderr log artifacts.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -523,6 +558,8 @@ impl From<attune_common::models::trigger::Sensor> for SensorResponse {
             worker_selector,
             worker_tolerations,
             worker_affinity,
+            artifact_retention_policy: sensor.artifact_retention_policy,
+            artifact_retention_limit: sensor.artifact_retention_limit,
             log_retention_policy: sensor.log_retention_policy,
             log_retention_limit: sensor.log_retention_limit,
             created: sensor.created,
@@ -541,6 +578,8 @@ impl From<attune_common::models::trigger::Sensor> for SensorSummary {
             label: sensor.label,
             description: sensor.description,
             enabled: sensor.enabled,
+            artifact_retention_policy: sensor.artifact_retention_policy,
+            artifact_retention_limit: sensor.artifact_retention_limit,
             log_retention_policy: sensor.log_retention_policy,
             log_retention_limit: sensor.log_retention_limit,
             created: sensor.created,
@@ -603,6 +642,8 @@ mod tests {
             worker_tolerations: Vec::new(),
             worker_affinity: WorkerAffinity::default(),
             enabled: true,
+            artifact_retention_policy: None,
+            artifact_retention_limit: None,
             log_retention_policy: None,
             log_retention_limit: None,
         };
@@ -635,6 +676,8 @@ mod tests {
             worker_selector: None,
             worker_tolerations: None,
             worker_affinity: None,
+            artifact_retention_policy: None,
+            artifact_retention_limit: None,
             log_retention_policy: None,
             log_retention_limit: None,
         };

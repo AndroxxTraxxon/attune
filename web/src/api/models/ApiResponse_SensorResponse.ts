@@ -10,6 +10,8 @@ export type ApiResponse_SensorResponse = {
      * Response DTO for sensor information
      */
     data: {
+        artifact_retention_limit?: number | null;
+        artifact_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
         /**
          * Creation timestamp
          */
@@ -34,6 +36,8 @@ export type ApiResponse_SensorResponse = {
          * Human-readable label
          */
         label: string;
+        log_retention_limit?: number | null;
+        log_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
         /**
          * Pack ID (optional)
          */
@@ -68,4 +72,3 @@ export type ApiResponse_SensorResponse = {
      */
     message?: string | null;
 };
-

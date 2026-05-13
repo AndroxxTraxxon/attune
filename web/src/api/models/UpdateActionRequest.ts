@@ -12,6 +12,8 @@ export type UpdateActionRequest = {
      * Hint that this action may invoke the Attune MCP server and spawn child executions.
      */
     accesses_mcp?: boolean | null;
+    artifact_retention_limit?: any | null;
+    artifact_retention_policy?: any | null;
     /**
      * Default permission set refs for execution-scoped API tokens.
      */
@@ -28,6 +30,8 @@ export type UpdateActionRequest = {
      * Human-readable label
      */
     label?: string | null;
+    log_retention_limit?: any | null;
+    log_retention_policy?: any | null;
     /**
      * Output schema
      */
@@ -59,4 +63,3 @@ export type UpdateActionRequest = {
      */
     worker_tolerations?: any[] | null;
 };
-

@@ -13,6 +13,14 @@ export type ActionResponse = {
      */
     accesses_mcp: boolean;
     /**
+     * Per-action retention limit override for non-log artifacts created by executions.
+     */
+    artifact_retention_limit?: number | null;
+    /**
+     * Per-action retention policy override for non-log artifacts created by executions.
+     */
+    artifact_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
+    /**
      * Creation timestamp
      */
     created: string;
@@ -40,6 +48,14 @@ export type ActionResponse = {
      * Human-readable label
      */
     label: string;
+    /**
+     * Per-action retention limit override for stdout/stderr execution log artifacts.
+     */
+    log_retention_limit?: number | null;
+    /**
+     * Per-action retention policy override for stdout/stderr execution log artifacts.
+     */
+    log_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
     /**
      * Output schema
      */
@@ -97,4 +113,3 @@ export type ActionResponse = {
      */
     workflow_def?: number | null;
 };
-

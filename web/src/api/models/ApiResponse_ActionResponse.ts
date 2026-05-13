@@ -16,6 +16,8 @@ export type ApiResponse_ActionResponse = {
          * Hint that this action may invoke the Attune MCP server and spawn child executions.
          */
         accesses_mcp: boolean;
+        artifact_retention_limit?: number | null;
+        artifact_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
         /**
          * Creation timestamp
          */
@@ -44,6 +46,8 @@ export type ApiResponse_ActionResponse = {
          * Human-readable label
          */
         label: string;
+        log_retention_limit?: number | null;
+        log_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
         /**
          * Output schema
          */
@@ -106,4 +110,3 @@ export type ApiResponse_ActionResponse = {
      */
     message?: string | null;
 };
-

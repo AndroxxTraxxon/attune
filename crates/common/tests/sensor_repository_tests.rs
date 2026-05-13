@@ -182,6 +182,8 @@ async fn test_create_sensor_duplicate_ref_fails() {
         worker_selector: json!({}),
         worker_tolerations: json!([]),
         worker_affinity: json!({}),
+        artifact_retention_policy: None,
+        artifact_retention_limit: None,
         log_retention_policy: None,
         log_retention_limit: None,
     };
@@ -241,6 +243,8 @@ async fn test_create_sensor_invalid_ref_format_fails() {
             worker_selector: json!({}),
             worker_tolerations: json!([]),
             worker_affinity: json!({}),
+            artifact_retention_policy: None,
+            artifact_retention_limit: None,
             log_retention_policy: None,
             log_retention_limit: None,
         };
@@ -285,6 +289,8 @@ async fn test_create_sensor_invalid_pack_fails() {
         worker_selector: json!({}),
         worker_tolerations: json!([]),
         worker_affinity: json!({}),
+        artifact_retention_policy: None,
+        artifact_retention_limit: None,
         log_retention_policy: None,
         log_retention_limit: None,
     };
@@ -315,6 +321,8 @@ async fn test_create_sensor_invalid_runtime_fails() {
         worker_selector: json!({}),
         worker_tolerations: json!([]),
         worker_affinity: json!({}),
+        artifact_retention_policy: None,
+        artifact_retention_limit: None,
         log_retention_policy: None,
         log_retention_limit: None,
     };

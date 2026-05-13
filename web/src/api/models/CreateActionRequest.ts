@@ -13,6 +13,8 @@ export type CreateActionRequest = {
      * When true, consumers (UI, CLI, timeline charts) render subtask views eagerly.
      */
     accesses_mcp?: boolean | null;
+    artifact_retention_limit?: number | null;
+    artifact_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
     /**
      * Default permission set refs for execution-scoped API tokens.
      * Empty or omitted means executions of this action receive no API token by default.
@@ -30,6 +32,8 @@ export type CreateActionRequest = {
      * Human-readable label
      */
     label: string;
+    log_retention_limit?: number | null;
+    log_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
     /**
      * Output schema (flat format) defining expected outputs with inline required/secret
      */
@@ -72,4 +76,3 @@ export type CreateActionRequest = {
      */
     worker_tolerations?: Array<WorkerToleration>;
 };
-

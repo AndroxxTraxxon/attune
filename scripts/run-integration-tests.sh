@@ -90,6 +90,36 @@ compose() {
   docker compose "${COMPOSE_FILES[@]}" "$@"
 }
 
+wait_for_registered_worker() {
+  local name_substring="$1"
+  local max_wait="${2:-120}"
+  local elapsed=0
+  local count=0
+
+  log_info "Waiting for worker containing '${name_substring}' to register..."
+  while true; do
+    count="$(
+      compose exec -T postgres psql -U attune -d attune -tAc \
+        "SELECT COUNT(*) FROM worker WHERE name LIKE '%${name_substring}%' AND status IN ('active', 'busy')" \
+        2>/dev/null | tr -d '[:space:]'
+    )" || count=0
+
+    if [[ "${count:-0}" =~ ^[0-9]+$ ]] && [[ "$count" -ge 1 ]]; then
+      log_success "Standalone worker registered (${elapsed}s)"
+      return 0
+    fi
+
+    if [[ "$elapsed" -ge "$max_wait" ]]; then
+      log_error "Standalone worker did not register within ${max_wait}s"
+      compose logs --tail=80 worker-standalone sensor-standalone || true
+      return 1
+    fi
+
+    sleep 3
+    elapsed=$((elapsed + 3))
+  done
+}
+
 # ── Cleanup handler ───────────────────────────────────────────────────────
 cleanup() {
   local exit_code=$?
@@ -117,12 +147,18 @@ fi
 # ── Step 2: Start stack ───────────────────────────────────────────────────
 if [[ "$DO_STARTUP" == true ]]; then
   log_header "Starting Attune services..."
-  # Start infrastructure + application services (not e2e-tests — that's run separately)
-  compose up -d --no-deps \
-    postgres rabbitmq \
-    migrations init-user init-pack-binaries init-packs init-agent \
-    api executor executor-2 worker-shell worker-python worker-node worker-full \
+  SERVICES=(
+    postgres rabbitmq
+    migrations init-user init-pack-binaries init-packs init-agent
+    api executor executor-2 worker-shell worker-python worker-node worker-full
     sensor notifier
+  )
+  if [[ "$DO_STANDALONE" == true ]]; then
+    SERVICES+=(worker-standalone sensor-standalone)
+  fi
+
+  # Start infrastructure + application services (not e2e-tests — that's run separately)
+  compose up -d --no-deps "${SERVICES[@]}"
 
   # Wait for API health check
   log_info "Waiting for API to become healthy..."
@@ -142,6 +178,9 @@ if [[ "$DO_STARTUP" == true ]]; then
   # Brief pause for executor/worker registration
   log_info "Waiting for workers to register..."
   sleep 5
+  if [[ "$DO_STANDALONE" == true ]]; then
+    wait_for_registered_worker "standalone" 180
+  fi
   log_success "Stack ready"
 fi
 

@@ -6,6 +6,8 @@
  * Request DTO for updating a sensor
  */
 export type UpdateSensorRequest = {
+    artifact_retention_limit?: any | null;
+    artifact_retention_policy?: any | null;
     /**
      * Sensor description
      */
@@ -22,9 +24,10 @@ export type UpdateSensorRequest = {
      * Human-readable label
      */
     label?: string | null;
+    log_retention_limit?: any | null;
+    log_retention_policy?: any | null;
     /**
      * Parameter schema (StackStorm-style with inline required/secret)
      */
-    param_schema: any | null;
+    param_schema?: any | null;
 };
-

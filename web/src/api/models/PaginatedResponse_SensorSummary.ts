@@ -11,6 +11,8 @@ export type PaginatedResponse_SensorSummary = {
      * The page items
      */
     items: Array<{
+        artifact_retention_limit?: number | null;
+        artifact_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
         /**
          * Creation timestamp
          */
@@ -31,6 +33,8 @@ export type PaginatedResponse_SensorSummary = {
          * Human-readable label
          */
         label: string;
+        log_retention_limit?: number | null;
+        log_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
         /**
          * Pack reference (optional)
          */
@@ -49,4 +53,3 @@ export type PaginatedResponse_SensorSummary = {
      */
     pagination: PaginationMeta;
 };
-

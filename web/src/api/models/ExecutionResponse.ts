@@ -15,6 +15,8 @@ export type ExecutionResponse = {
      * Action reference
      */
     action_ref: string;
+    artifact_retention_limit?: number | null;
+    artifact_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
     /**
      * Execution configuration/parameters
      */
@@ -85,4 +87,3 @@ export type ExecutionResponse = {
      */
     workflow_task?: any | null;
 };
-

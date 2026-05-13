@@ -6,6 +6,8 @@
  * Simplified sensor response (for list endpoints)
  */
 export type SensorSummary = {
+    artifact_retention_limit?: number | null;
+    artifact_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
     /**
      * Creation timestamp
      */
@@ -26,6 +28,8 @@ export type SensorSummary = {
      * Human-readable label
      */
     label: string;
+    log_retention_limit?: number | null;
+    log_retention_policy?: 'versions' | 'days' | 'hours' | 'minutes' | null;
     /**
      * Pack reference (optional)
      */
@@ -39,4 +43,3 @@ export type SensorSummary = {
      */
     updated: string;
 };
-

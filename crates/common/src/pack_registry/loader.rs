@@ -1035,6 +1035,10 @@ impl<'a> PackComponentLoader<'a> {
             let log_retention_policy =
                 parse_log_retention_policy(data.get("log_retention_policy"))?;
             let log_retention_limit = parse_log_retention_limit(data.get("log_retention_limit"))?;
+            let artifact_retention_policy =
+                parse_log_retention_policy(data.get("artifact_retention_policy"))?;
+            let artifact_retention_limit =
+                parse_log_retention_limit(data.get("artifact_retention_limit"))?;
 
             // Check if action already exists — update in place if so
             if let Some(existing) = ActionRepository::find_by_ref(self.pool, &action_ref).await? {
@@ -1063,6 +1067,14 @@ impl<'a> PackComponentLoader<'a> {
                     default_execution_permission_set_refs: Some(
                         default_execution_permission_set_refs.clone(),
                     ),
+                    artifact_retention_policy: Some(match artifact_retention_policy {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
+                    artifact_retention_limit: Some(match artifact_retention_limit {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
                     log_retention_policy: Some(match log_retention_policy {
                         Some(value) => Patch::Set(value),
                         None => Patch::Clear,
@@ -1111,9 +1123,10 @@ impl<'a> PackComponentLoader<'a> {
                     worker_selector, worker_tolerations, worker_affinity,
                     param_schema, out_schema, is_adhoc, parameter_delivery, parameter_format,
                     output_format, accesses_mcp, default_execution_permission_set_refs,
-                    log_retention_policy, log_retention_limit
+                    log_retention_policy, log_retention_limit,
+                    artifact_retention_policy, artifact_retention_limit
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
                 RETURNING id
                 "#,
             )
@@ -1139,6 +1152,8 @@ impl<'a> PackComponentLoader<'a> {
             .bind(&default_execution_permission_set_refs)
             .bind(log_retention_policy)
             .bind(log_retention_limit)
+            .bind(artifact_retention_policy)
+            .bind(artifact_retention_limit)
             .fetch_one(self.pool)
             .await;
 
@@ -1822,6 +1837,10 @@ impl<'a> PackComponentLoader<'a> {
             let log_retention_policy =
                 parse_log_retention_policy(data.get("log_retention_policy"))?;
             let log_retention_limit = parse_log_retention_limit(data.get("log_retention_limit"))?;
+            let artifact_retention_policy =
+                parse_log_retention_policy(data.get("artifact_retention_policy"))?;
+            let artifact_retention_limit =
+                parse_log_retention_limit(data.get("artifact_retention_limit"))?;
 
             // Upsert: update existing sensors so re-registration corrects
             // stale metadata (especially runtime assignments).
@@ -1848,6 +1867,14 @@ impl<'a> PackComponentLoader<'a> {
                     worker_selector: Some(worker_selector.clone()),
                     worker_tolerations: Some(worker_tolerations.clone()),
                     worker_affinity: Some(worker_affinity.clone()),
+                    artifact_retention_policy: Some(match artifact_retention_policy {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
+                    artifact_retention_limit: Some(match artifact_retention_limit {
+                        Some(value) => Patch::Set(value),
+                        None => Patch::Clear,
+                    }),
                     log_retention_policy: Some(match log_retention_policy {
                         Some(value) => Patch::Set(value),
                         None => Patch::Clear,
@@ -1894,6 +1921,8 @@ impl<'a> PackComponentLoader<'a> {
                 worker_selector,
                 worker_tolerations,
                 worker_affinity,
+                artifact_retention_policy,
+                artifact_retention_limit,
                 log_retention_policy,
                 log_retention_limit,
             };

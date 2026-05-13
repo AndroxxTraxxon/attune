@@ -137,13 +137,16 @@ CREATE TABLE sensor (
     worker_affinity JSONB NOT NULL DEFAULT '{}'::jsonb,
     log_retention_policy artifact_retention_enum,
     log_retention_limit INTEGER,
+    artifact_retention_policy artifact_retention_enum,
+    artifact_retention_limit INTEGER,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
     -- Constraints
     CONSTRAINT sensor_ref_lowercase CHECK (ref = LOWER(ref)),
     CONSTRAINT sensor_ref_format CHECK (ref ~ '^[^.]+\.[^.]+$'),
-    CONSTRAINT sensor_log_retention_limit_positive CHECK (log_retention_limit IS NULL OR log_retention_limit > 0)
+    CONSTRAINT sensor_log_retention_limit_positive CHECK (log_retention_limit IS NULL OR log_retention_limit > 0),
+    CONSTRAINT sensor_artifact_retention_limit_positive CHECK (artifact_retention_limit IS NULL OR artifact_retention_limit > 0)
 );
 
 -- Indexes
@@ -180,6 +183,8 @@ COMMENT ON COLUMN sensor.worker_tolerations IS 'Tolerations allowing this sensor
 COMMENT ON COLUMN sensor.worker_affinity IS 'Required/preferred/anti-affinity placement rules for sensor workers';
 COMMENT ON COLUMN sensor.log_retention_policy IS 'Optional per-sensor override for registered stdout/stderr log artifact retention policy. NULL inherits the service default.';
 COMMENT ON COLUMN sensor.log_retention_limit IS 'Optional per-sensor override for registered stdout/stderr log artifact retention limit. NULL inherits the service default.';
+COMMENT ON COLUMN sensor.artifact_retention_policy IS 'Optional per-sensor default retention policy for non-log artifacts created by this sensor. NULL uses API defaults.';
+COMMENT ON COLUMN sensor.artifact_retention_limit IS 'Optional per-sensor default retention limit for non-log artifacts created by this sensor. NULL uses API defaults.';
 
 -- ============================================================================
 -- EVENT TABLE
@@ -291,13 +296,16 @@ CREATE TABLE action (
     default_execution_permission_set_refs TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     log_retention_policy artifact_retention_enum,
     log_retention_limit INTEGER,
+    artifact_retention_policy artifact_retention_enum,
+    artifact_retention_limit INTEGER,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
     -- Constraints
     CONSTRAINT action_ref_lowercase CHECK (ref = LOWER(ref)),
     CONSTRAINT action_ref_format CHECK (ref ~ '^[^.]+\.[^.]+$'),
-    CONSTRAINT action_log_retention_limit_positive CHECK (log_retention_limit IS NULL OR log_retention_limit > 0)
+    CONSTRAINT action_log_retention_limit_positive CHECK (log_retention_limit IS NULL OR log_retention_limit > 0),
+    CONSTRAINT action_artifact_retention_limit_positive CHECK (artifact_retention_limit IS NULL OR artifact_retention_limit > 0)
 );
 
 -- Indexes
@@ -338,6 +346,8 @@ COMMENT ON COLUMN action.accesses_mcp IS 'Hint that this action may invoke the A
 COMMENT ON COLUMN action.default_execution_permission_set_refs IS 'Permission set refs applied to execution-scoped API tokens when executions do not explicitly override them. Empty means no execution API token is exposed to the action.';
 COMMENT ON COLUMN action.log_retention_policy IS 'Optional per-action override for stdout/stderr execution log artifact retention policy. NULL inherits worker.execution_log_retention_policy.';
 COMMENT ON COLUMN action.log_retention_limit IS 'Optional per-action override for stdout/stderr execution log artifact retention limit. NULL inherits worker.execution_log_retention_limit.';
+COMMENT ON COLUMN action.artifact_retention_policy IS 'Optional per-action default retention policy for non-log artifacts created by executions of this action. NULL uses API defaults.';
+COMMENT ON COLUMN action.artifact_retention_limit IS 'Optional per-action default retention limit for non-log artifacts created by executions of this action. NULL uses API defaults.';
 
 -- ============================================================================
 

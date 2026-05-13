@@ -1379,6 +1379,12 @@ impl ExecutionScheduler {
                 enforcement: parent_execution.enforcement,
                 executor: parent_execution.executor,
                 permission_set_refs,
+                artifact_retention_policy: parent_execution
+                    .artifact_retention_policy
+                    .or(task_action.artifact_retention_policy),
+                artifact_retention_limit: parent_execution
+                    .artifact_retention_limit
+                    .or(task_action.artifact_retention_limit),
                 worker_selector,
                 worker_tolerations,
                 worker_affinity,
@@ -1534,6 +1540,8 @@ impl ExecutionScheduler {
                 enforcement: execution.enforcement,
                 executor: execution.executor,
                 permission_set_refs: execution.permission_set_refs.clone(),
+                artifact_retention_policy: execution.artifact_retention_policy,
+                artifact_retention_limit: execution.artifact_retention_limit,
                 worker_selector: execution.worker_selector.clone(),
                 worker_tolerations: execution.worker_tolerations.clone(),
                 worker_affinity: execution.worker_affinity.clone(),
@@ -1753,6 +1761,12 @@ impl ExecutionScheduler {
                 enforcement: parent_execution.enforcement,
                 executor: parent_execution.executor,
                 permission_set_refs,
+                artifact_retention_policy: parent_execution
+                    .artifact_retention_policy
+                    .or(task_action.artifact_retention_policy),
+                artifact_retention_limit: parent_execution
+                    .artifact_retention_limit
+                    .or(task_action.artifact_retention_limit),
                 worker_selector,
                 worker_tolerations,
                 worker_affinity,
@@ -1957,6 +1971,12 @@ impl ExecutionScheduler {
                     enforcement: parent_execution.enforcement,
                     executor: parent_execution.executor,
                     permission_set_refs,
+                    artifact_retention_policy: parent_execution
+                        .artifact_retention_policy
+                        .or(task_action.artifact_retention_policy),
+                    artifact_retention_limit: parent_execution
+                        .artifact_retention_limit
+                        .or(task_action.artifact_retention_limit),
                     worker_selector,
                     worker_tolerations,
                     worker_affinity,
@@ -2157,6 +2177,12 @@ impl ExecutionScheduler {
                         enforcement: parent_execution.enforcement,
                         executor: parent_execution.executor,
                         permission_set_refs,
+                        artifact_retention_policy: parent_execution
+                            .artifact_retention_policy
+                            .or(task_action.artifact_retention_policy),
+                        artifact_retention_limit: parent_execution
+                            .artifact_retention_limit
+                            .or(task_action.artifact_retention_limit),
                         worker_selector,
                         worker_tolerations,
                         worker_affinity,
@@ -4867,6 +4893,8 @@ mod tests {
             enforcement: None,
             executor: None,
             permission_set_refs: Vec::new(),
+            artifact_retention_policy: None,
+            artifact_retention_limit: None,
             worker_selector: None,
             worker_tolerations: None,
             worker_affinity: None,
@@ -4917,6 +4945,8 @@ mod tests {
             enforcement: None,
             executor: None,
             permission_set_refs: Vec::new(),
+            artifact_retention_policy: None,
+            artifact_retention_limit: None,
             worker_selector: None,
             worker_tolerations: None,
             worker_affinity: None,
@@ -5009,6 +5039,8 @@ mod tests {
             enforcement: None,
             executor: None,
             permission_set_refs: Vec::new(),
+            artifact_retention_policy: None,
+            artifact_retention_limit: None,
             worker_selector: None,
             worker_tolerations: None,
             worker_affinity: None,

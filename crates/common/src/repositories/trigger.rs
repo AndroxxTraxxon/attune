@@ -773,7 +773,7 @@ impl Repository for SensorRepository {
 const SENSOR_SELECT_COLUMNS: &str = "id, ref, pack, pack_ref, label, description, entrypoint, \
      runtime, runtime_ref, runtime_version_constraint, enabled, param_schema, config, \
      worker_selector, worker_tolerations, worker_affinity, log_retention_policy, \
-     log_retention_limit, created, updated";
+     log_retention_limit, artifact_retention_policy, artifact_retention_limit, created, updated";
 
 fn validate_log_retention_limit(limit: i32) -> Result<()> {
     if limit <= 0 {
@@ -804,6 +804,8 @@ pub struct CreateSensorInput {
     pub worker_affinity: JsonDict,
     pub log_retention_policy: Option<RetentionPolicyType>,
     pub log_retention_limit: Option<i32>,
+    pub artifact_retention_policy: Option<RetentionPolicyType>,
+    pub artifact_retention_limit: Option<i32>,
 }
 
 /// Input for updating a sensor
@@ -823,6 +825,8 @@ pub struct UpdateSensorInput {
     pub worker_affinity: Option<JsonDict>,
     pub log_retention_policy: Option<Patch<RetentionPolicyType>>,
     pub log_retention_limit: Option<Patch<i32>>,
+    pub artifact_retention_policy: Option<Patch<RetentionPolicyType>>,
+    pub artifact_retention_limit: Option<Patch<i32>>,
 }
 
 #[async_trait::async_trait]
@@ -886,13 +890,16 @@ impl Create for SensorRepository {
         if let Some(limit) = input.log_retention_limit {
             validate_log_retention_limit(limit)?;
         }
+        if let Some(limit) = input.artifact_retention_limit {
+            validate_log_retention_limit(limit)?;
+        }
 
         let sensor = sqlx::query_as::<_, Sensor>(&format!(
             "INSERT INTO sensor (ref, pack, pack_ref, label, description, entrypoint, \
                  runtime, runtime_ref, runtime_version_constraint, enabled, param_schema, config, \
                  worker_selector, worker_tolerations, worker_affinity, log_retention_policy, \
-                 log_retention_limit) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
+                 log_retention_limit, artifact_retention_policy, artifact_retention_limit) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) \
                  RETURNING {SENSOR_SELECT_COLUMNS}"
         ))
         .bind(&input.r#ref)
@@ -912,6 +919,8 @@ impl Create for SensorRepository {
         .bind(&input.worker_affinity)
         .bind(input.log_retention_policy)
         .bind(input.log_retention_limit)
+        .bind(input.artifact_retention_policy)
+        .bind(input.artifact_retention_limit)
         .fetch_one(executor)
         .await?;
 
@@ -928,6 +937,9 @@ impl Update for SensorRepository {
         E: Executor<'e, Database = Postgres> + 'e,
     {
         if let Some(Patch::Set(limit)) = &input.log_retention_limit {
+            validate_log_retention_limit(*limit)?;
+        }
+        if let Some(Patch::Set(limit)) = &input.artifact_retention_limit {
             validate_log_retention_limit(*limit)?;
         }
 
@@ -1068,6 +1080,30 @@ impl Update for SensorRepository {
             }
             query.push("log_retention_limit = ");
             match log_retention_limit {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<i32>::None),
+            };
+            has_updates = true;
+        }
+
+        if let Some(artifact_retention_policy) = input.artifact_retention_policy {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("artifact_retention_policy = ");
+            match artifact_retention_policy {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<RetentionPolicyType>::None),
+            };
+            has_updates = true;
+        }
+
+        if let Some(artifact_retention_limit) = input.artifact_retention_limit {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("artifact_retention_limit = ");
+            match artifact_retention_limit {
                 Patch::Set(value) => query.push_bind(value),
                 Patch::Clear => query.push_bind(Option::<i32>::None),
             };

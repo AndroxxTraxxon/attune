@@ -643,6 +643,8 @@ impl WorkQueueDispatcher {
                 enforcement: None,
                 executor: executor_identity,
                 permission_set_refs: context.action.default_execution_permission_set_refs.clone(),
+                artifact_retention_policy: context.action.artifact_retention_policy,
+                artifact_retention_limit: context.action.artifact_retention_limit,
                 worker_selector: None,
                 worker_tolerations: None,
                 worker_affinity: None,

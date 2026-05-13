@@ -93,6 +93,15 @@ pub struct CreateActionRequest {
     #[schema(example = json!(["core.agent_reader"]), default = json!([]))]
     pub default_execution_permission_set_refs: Vec<String>,
 
+    /// Optional per-action retention policy override for non-log artifacts created by executions.
+    #[schema(example = "versions", nullable = true)]
+    pub artifact_retention_policy: Option<RetentionPolicyType>,
+
+    /// Optional per-action retention limit override for non-log artifacts created by executions.
+    #[validate(range(min = 1))]
+    #[schema(example = 10, nullable = true)]
+    pub artifact_retention_limit: Option<i32>,
+
     /// Optional per-action retention policy override for stdout/stderr execution log artifacts.
     #[schema(example = "versions", nullable = true)]
     pub log_retention_policy: Option<RetentionPolicyType>,
@@ -164,6 +173,12 @@ pub struct UpdateActionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = json!(["core.agent_reader"]), nullable = true)]
     pub default_execution_permission_set_refs: Option<Vec<String>>,
+
+    /// Patch the per-action retention policy override for non-log artifacts created by executions.
+    pub artifact_retention_policy: Option<LogRetentionPolicyPatch>,
+
+    /// Patch the per-action retention limit override for non-log artifacts created by executions.
+    pub artifact_retention_limit: Option<LogRetentionLimitPatch>,
 
     /// Patch the per-action retention policy override for stdout/stderr execution log artifacts.
     pub log_retention_policy: Option<LogRetentionPolicyPatch>,
@@ -285,6 +300,16 @@ pub struct ActionResponse {
     #[schema(example = json!(["core.agent_reader"]))]
     pub default_execution_permission_set_refs: Vec<String>,
 
+    /// Per-action retention policy override for non-log artifacts created by executions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "versions", nullable = true)]
+    pub artifact_retention_policy: Option<RetentionPolicyType>,
+
+    /// Per-action retention limit override for non-log artifacts created by executions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 10, nullable = true)]
+    pub artifact_retention_limit: Option<i32>,
+
     /// Per-action retention policy override for stdout/stderr execution log artifacts.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(example = "versions", nullable = true)]
@@ -377,6 +402,16 @@ pub struct ActionSummary {
     #[schema(example = json!(["core.agent_reader"]))]
     pub default_execution_permission_set_refs: Vec<String>,
 
+    /// Per-action retention policy override for non-log artifacts created by executions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "versions", nullable = true)]
+    pub artifact_retention_policy: Option<RetentionPolicyType>,
+
+    /// Per-action retention limit override for non-log artifacts created by executions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 10, nullable = true)]
+    pub artifact_retention_limit: Option<i32>,
+
     /// Per-action retention policy override for stdout/stderr execution log artifacts.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(example = "versions", nullable = true)]
@@ -424,6 +459,8 @@ impl From<attune_common::models::action::Action> for ActionResponse {
             is_adhoc: action.is_adhoc,
             accesses_mcp: action.accesses_mcp,
             default_execution_permission_set_refs: action.default_execution_permission_set_refs,
+            artifact_retention_policy: action.artifact_retention_policy,
+            artifact_retention_limit: action.artifact_retention_limit,
             log_retention_policy: action.log_retention_policy,
             log_retention_limit: action.log_retention_limit,
             created: action.created,
@@ -456,6 +493,8 @@ impl From<attune_common::models::action::Action> for ActionSummary {
             workflow_def: action.workflow_def,
             accesses_mcp: action.accesses_mcp,
             default_execution_permission_set_refs: action.default_execution_permission_set_refs,
+            artifact_retention_policy: action.artifact_retention_policy,
+            artifact_retention_limit: action.artifact_retention_limit,
             log_retention_policy: action.log_retention_policy,
             log_retention_limit: action.log_retention_limit,
             created: action.created,
@@ -647,6 +686,8 @@ mod tests {
             out_schema: None,
             accesses_mcp: None,
             default_execution_permission_set_refs: Vec::new(),
+            artifact_retention_policy: None,
+            artifact_retention_limit: None,
             log_retention_policy: None,
             log_retention_limit: None,
         };
@@ -673,6 +714,8 @@ mod tests {
             out_schema: None,
             accesses_mcp: None,
             default_execution_permission_set_refs: Vec::new(),
+            artifact_retention_policy: None,
+            artifact_retention_limit: None,
             log_retention_policy: None,
             log_retention_limit: None,
         };
@@ -697,6 +740,8 @@ mod tests {
             out_schema: None,
             accesses_mcp: None,
             default_execution_permission_set_refs: None,
+            artifact_retention_policy: None,
+            artifact_retention_limit: None,
             log_retention_policy: None,
             log_retention_limit: None,
         };

@@ -6,6 +6,7 @@ use serde_json::Value as JsonValue;
 use utoipa::{IntoParams, ToSchema};
 
 use attune_common::models::enums::ExecutionStatus;
+use attune_common::models::enums::RetentionPolicyType;
 use attune_common::models::execution::WorkflowTaskMetadata;
 use attune_common::repositories::execution::ExecutionWithRefs;
 
@@ -29,6 +30,18 @@ pub struct CreateExecutionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = json!(["core.agent_reader"]), nullable = true)]
     pub permission_set_refs: Option<Vec<String>>,
+
+    /// Retention policy override for non-log artifacts created by this execution.
+    /// Omit to inherit the action default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "versions", nullable = true)]
+    pub artifact_retention_policy: Option<RetentionPolicyType>,
+
+    /// Retention limit override for non-log artifacts created by this execution.
+    /// Omit to inherit the action default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = 10, nullable = true)]
+    pub artifact_retention_limit: Option<i32>,
 
     /// Worker label selector override. Omit to inherit the action default;
     /// provide `{}` to explicitly clear selector requirements.
@@ -84,6 +97,16 @@ pub struct ExecutionResponse {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[schema(example = json!(["core.agent_reader"]))]
     pub permission_set_refs: Vec<String>,
+
+    /// Retention policy override for non-log artifacts created by this execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "versions", nullable = true)]
+    pub artifact_retention_policy: Option<RetentionPolicyType>,
+
+    /// Retention limit override for non-log artifacts created by this execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 10, nullable = true)]
+    pub artifact_retention_limit: Option<i32>,
 
     /// Worker selector override stored on the execution, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -284,6 +307,8 @@ impl From<attune_common::models::execution::Execution> for ExecutionResponse {
             enforcement: execution.enforcement,
             executor: execution.executor,
             permission_set_refs: execution.permission_set_refs,
+            artifact_retention_policy: execution.artifact_retention_policy,
+            artifact_retention_limit: execution.artifact_retention_limit,
             worker_selector: execution.worker_selector,
             worker_tolerations: execution.worker_tolerations,
             worker_affinity: execution.worker_affinity,

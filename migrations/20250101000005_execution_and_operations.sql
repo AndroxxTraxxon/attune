@@ -25,6 +25,8 @@ CREATE TABLE execution (
     enforcement BIGINT,
     executor BIGINT,
     permission_set_refs TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    artifact_retention_policy artifact_retention_enum,
+    artifact_retention_limit INTEGER,
     worker_selector JSONB,
     worker_tolerations JSONB,
     worker_affinity JSONB,
@@ -42,7 +44,9 @@ CREATE TABLE execution (
     retry_reason TEXT,
     original_execution BIGINT,
 
-    updated TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT execution_artifact_retention_limit_positive CHECK (artifact_retention_limit IS NULL OR artifact_retention_limit > 0)
 );
 
 -- Indexes
@@ -101,6 +105,8 @@ COMMENT ON COLUMN execution.parent IS 'Parent execution ID for workflow hierarch
 COMMENT ON COLUMN execution.enforcement IS 'Enforcement that triggered this execution';
 COMMENT ON COLUMN execution.executor IS 'Identity that initiated the execution';
 COMMENT ON COLUMN execution.permission_set_refs IS 'Permission set refs embedded in the execution-scoped API token. Empty means the worker omits ATTUNE_API_TOKEN.';
+COMMENT ON COLUMN execution.artifact_retention_policy IS 'Optional per-execution override for non-log artifacts created by this execution. NULL inherits the action/sensor default or API default.';
+COMMENT ON COLUMN execution.artifact_retention_limit IS 'Optional per-execution override for non-log artifacts created by this execution. NULL inherits the action/sensor default or API default.';
 COMMENT ON COLUMN execution.worker IS 'Assigned worker handling this execution';
 COMMENT ON COLUMN execution.status IS 'Current execution lifecycle status';
 COMMENT ON COLUMN execution.result IS 'Execution output/results';

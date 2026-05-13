@@ -684,6 +684,8 @@ pub async fn create_sensor(
             .unwrap_or_else(|_| json!([])),
         worker_affinity: serde_json::to_value(request.worker_affinity)
             .unwrap_or_else(|_| json!({})),
+        artifact_retention_policy: request.artifact_retention_policy,
+        artifact_retention_limit: request.artifact_retention_limit,
         log_retention_policy: request.log_retention_policy,
         log_retention_limit: request.log_retention_limit,
     };
@@ -749,6 +751,14 @@ pub async fn update_sensor(
         worker_affinity: request
             .worker_affinity
             .map(|value| serde_json::to_value(value).unwrap_or_else(|_| json!({}))),
+        artifact_retention_policy: request.artifact_retention_policy.map(|patch| match patch {
+            LogRetentionPolicyPatch::Set(value) => Patch::Set(value),
+            LogRetentionPolicyPatch::Clear => Patch::Clear,
+        }),
+        artifact_retention_limit: request.artifact_retention_limit.map(|patch| match patch {
+            LogRetentionLimitPatch::Set(value) => Patch::Set(value),
+            LogRetentionLimitPatch::Clear => Patch::Clear,
+        }),
         log_retention_policy: request.log_retention_policy.map(|patch| match patch {
             LogRetentionPolicyPatch::Set(value) => Patch::Set(value),
             LogRetentionPolicyPatch::Clear => Patch::Clear,
@@ -844,6 +854,8 @@ pub async fn enable_sensor(
         worker_selector: None,
         worker_tolerations: None,
         worker_affinity: None,
+        artifact_retention_policy: None,
+        artifact_retention_limit: None,
         log_retention_policy: None,
         log_retention_limit: None,
     };
@@ -894,6 +906,8 @@ pub async fn disable_sensor(
         worker_selector: None,
         worker_tolerations: None,
         worker_affinity: None,
+        artifact_retention_policy: None,
+        artifact_retention_limit: None,
         log_retention_policy: None,
         log_retention_limit: None,
     };

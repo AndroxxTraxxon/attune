@@ -18,6 +18,7 @@ use std::time::Duration;
 use tokio_stream::wrappers::BroadcastStream;
 
 use attune_common::models::enums::ExecutionStatus;
+use attune_common::models::enums::RetentionPolicyType;
 use attune_common::mq::{
     ExecutionCancelRequestedPayload, ExecutionRequestedPayload, MessageEnvelope, MessageType,
     Publisher,
@@ -179,6 +180,22 @@ pub async fn create_execution(
         parse_worker_affinity(worker_affinity)
             .map_err(|e| ApiError::BadRequest(format!("Invalid worker_affinity: {e}")))?;
     }
+    if let Some(limit) = request.artifact_retention_limit {
+        if limit <= 0 {
+            return Err(ApiError::BadRequest(
+                "artifact_retention_limit must be greater than zero".to_string(),
+            ));
+        }
+    }
+
+    let artifact_retention_policy = request
+        .artifact_retention_policy
+        .or(action.artifact_retention_policy)
+        .or(Some(RetentionPolicyType::Versions));
+    let artifact_retention_limit = request
+        .artifact_retention_limit
+        .or(action.artifact_retention_limit)
+        .or(Some(5));
 
     // Create execution input
     let execution_input = CreateExecutionInput {
@@ -196,6 +213,8 @@ pub async fn create_execution(
         enforcement: None,
         executor: executor_identity,
         permission_set_refs,
+        artifact_retention_policy,
+        artifact_retention_limit,
         worker_selector: request.worker_selector.clone(),
         worker_tolerations: request.worker_tolerations.clone(),
         worker_affinity: request.worker_affinity.clone(),
