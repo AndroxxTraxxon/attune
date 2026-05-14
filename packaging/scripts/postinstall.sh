@@ -20,6 +20,11 @@ for dir in /var/lib/attune /var/lib/attune/packs /var/lib/attune/runtime_envs \
     chmod 750 "$dir"
 done
 
+# The all-in-one installer keeps shipped binaries together under /opt.
+mkdir -p /opt/attune-system
+chown root:attune /opt/attune-system
+chmod 755 /opt/attune-system
+
 # Ensure config directory exists and has correct permissions
 mkdir -p /etc/attune
 chmod 750 /etc/attune
@@ -35,6 +40,14 @@ if [ -f /etc/attune/environment ]; then
     chmod 640 /etc/attune/environment
 fi
 
+if [ -x /opt/attune-system/attune-api ]; then
+    migrate_cmd="/opt/attune-system/attune-api --migrate"
+    service_set="attune-api attune-executor attune-supervisor attune-worker attune-sensor attune-notifier"
+else
+    migrate_cmd="attune-api --migrate"
+    service_set="attune-api attune-executor attune-supervisor attune-notifier"
+fi
+
 # Reload systemd if a service unit was installed
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload || true
@@ -46,7 +59,7 @@ echo ""
 echo "Next steps:"
 echo "  1. Edit /etc/attune/environment to set JWT_SECRET and ENCRYPTION_KEY"
 echo "  2. Edit /etc/attune/attune.yaml to configure database and RabbitMQ URLs"
-echo "  3. Run database migrations: attune-api --migrate (or use sqlx-cli)"
+echo "  3. Run database migrations: $migrate_cmd (or use sqlx-cli)"
 echo "  4. Enable and start services:"
-echo "     systemctl enable --now attune-api attune-executor attune-supervisor attune-notifier"
+echo "     systemctl enable --now $service_set"
 echo ""

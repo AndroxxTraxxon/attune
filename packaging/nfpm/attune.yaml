@@ -1,0 +1,177 @@
+# nfpm configuration for the all-in-one Attune installer package.
+name: attune
+arch: "${ARCH}"
+platform: linux
+version: "${VERSION}"
+section: admin
+priority: optional
+maintainer: "Attune <attune@rdrx.app>"
+description: "Attune — All-in-one installer for the Attune automation platform"
+vendor: "Attune"
+homepage: "https://git.rdrx.app/attune/attune"
+license: "Proprietary"
+
+depends:
+  - libc6 (>= 2.28)
+  - postgresql-16
+  - timescaledb-2-postgresql-16
+  - rabbitmq-server
+
+conflicts:
+  - attune-agent
+  - attune-api
+  - attune-cli
+  - attune-executor
+  - attune-notifier
+  - attune-supervisor
+
+replaces:
+  - attune-agent
+  - attune-api
+  - attune-cli
+  - attune-executor
+  - attune-notifier
+  - attune-supervisor
+
+contents:
+  - src: "${BUNDLE_DIR}/bin/attune-api"
+    dst: /opt/attune-system/attune-api
+    file_info:
+      mode: 0755
+
+  - src: "${BUNDLE_DIR}/bin/attune-executor"
+    dst: /opt/attune-system/attune-executor
+    file_info:
+      mode: 0755
+
+  - src: "${BUNDLE_DIR}/bin/attune-notifier"
+    dst: /opt/attune-system/attune-notifier
+    file_info:
+      mode: 0755
+
+  - src: "${BUNDLE_DIR}/bin/attune-supervisor"
+    dst: /opt/attune-system/attune-supervisor
+    file_info:
+      mode: 0755
+
+  - src: "${BUNDLE_DIR}/bin/attune-worker"
+    dst: /opt/attune-system/attune-worker
+    file_info:
+      mode: 0755
+
+  - src: "${BUNDLE_DIR}/bin/attune-sensor"
+    dst: /opt/attune-system/attune-sensor
+    file_info:
+      mode: 0755
+
+  - src: "${BUNDLE_DIR}/agent/attune"
+    dst: /opt/attune-system/attune
+    file_info:
+      mode: 0755
+
+  - src: "${BUNDLE_DIR}/agent/attune-mcp"
+    dst: /opt/attune-system/attune-mcp
+    file_info:
+      mode: 0755
+
+  - src: "${BUNDLE_DIR}/agent/attune-agent"
+    dst: /opt/attune-system/attune-agent
+    file_info:
+      mode: 0755
+
+  - src: "${BUNDLE_DIR}/agent/attune-sensor-agent"
+    dst: /opt/attune-system/attune-sensor-agent
+    file_info:
+      mode: 0755
+
+  - src: /opt/attune-system/attune
+    dst: /usr/bin/attune
+    type: symlink
+
+  - src: /opt/attune-system/attune-mcp
+    dst: /usr/bin/attune-mcp
+    type: symlink
+
+  - src: /opt/attune-system/attune
+    dst: /var/lib/attune/agent/attune
+    type: symlink
+
+  - src: /opt/attune-system/attune-mcp
+    dst: /var/lib/attune/agent/attune-mcp
+    type: symlink
+
+  - src: /opt/attune-system/attune-agent
+    dst: /var/lib/attune/agent/attune-agent
+    type: symlink
+
+  - src: /opt/attune-system/attune-sensor-agent
+    dst: /var/lib/attune/agent/attune-sensor-agent
+    type: symlink
+
+  - src: ../systemd-opt/attune-api.service
+    dst: /usr/lib/systemd/system/attune-api.service
+    file_info:
+      mode: 0644
+
+  - src: ../systemd-opt/attune-executor.service
+    dst: /usr/lib/systemd/system/attune-executor.service
+    file_info:
+      mode: 0644
+
+  - src: ../systemd-opt/attune-notifier.service
+    dst: /usr/lib/systemd/system/attune-notifier.service
+    file_info:
+      mode: 0644
+
+  - src: ../systemd-opt/attune-supervisor.service
+    dst: /usr/lib/systemd/system/attune-supervisor.service
+    file_info:
+      mode: 0644
+
+  - src: ../systemd-opt/attune-worker.service
+    dst: /usr/lib/systemd/system/attune-worker.service
+    file_info:
+      mode: 0644
+
+  - src: ../systemd-opt/attune-sensor.service
+    dst: /usr/lib/systemd/system/attune-sensor.service
+    file_info:
+      mode: 0644
+
+  - src: ../config/attune.yaml
+    dst: /etc/attune/attune.yaml
+    type: config|noreplace
+    file_info:
+      mode: 0640
+      group: attune
+
+  - src: ../config/environment
+    dst: /etc/attune/environment
+    type: config|noreplace
+    file_info:
+      mode: 0640
+      group: attune
+
+  - src: ../doc/attune-installer.txt
+    dst: /usr/share/doc/attune/README
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: ../scripts/postinstall.sh
+  preremove: ../scripts/preremove.sh
+  postremove: ../scripts/postremove.sh
+
+overrides:
+  rpm:
+    depends:
+      - glibc >= 2.28
+      - postgresql16-server
+      - timescaledb-2-postgresql-16
+      - rabbitmq-server
+  archlinux:
+    depends:
+      - glibc
+      - postgresql
+      - timescaledb
+      - rabbitmq

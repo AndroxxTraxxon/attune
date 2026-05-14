@@ -67,6 +67,7 @@ echo "Using nfpm: $(nfpm --version 2>&1 || echo 'unknown')"
 
 # Verify bundle contents
 for binary in bin/attune-api bin/attune-executor bin/attune-notifier bin/attune-supervisor \
+              bin/attune-worker bin/attune-sensor \
               agent/attune agent/attune-mcp agent/attune-agent agent/attune-sensor-agent; do
     if [ ! -f "$BUNDLE_DIR/$binary" ]; then
         echo "ERROR: Missing binary: $BUNDLE_DIR/$binary"

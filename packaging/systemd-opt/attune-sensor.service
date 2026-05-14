@@ -1,0 +1,31 @@
+[Unit]
+Description=Attune Sensor Service
+Documentation=https://git.rdrx.app/attune/attune
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=attune
+Group=attune
+ExecStart=/opt/attune-system/attune-sensor
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=-/etc/attune/environment
+WorkingDirectory=/var/lib/attune
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/attune /var/log/attune
+PrivateTmp=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=attune-sensor
+
+[Install]
+WantedBy=multi-user.target
+

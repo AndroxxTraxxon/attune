@@ -50,6 +50,31 @@ Tag behavior:
 - branch pushes publish `edge` and `sha-<12-char-sha>`
 - release tags like `v0.3.0` publish `0.3.0`, `latest`, and `sha-<12-char-sha>`
 
+Linux package branch builds use package-manager-safe versions such as
+`0.0.0.git.<run-number>.sha.<short-sha>`. If a broken publish ever leaves
+legacy `sha-*` package versions in the Debian/RPM/Arch registries, remove them
+with:
+
+```bash
+GITEA_USERNAME=<user> GITEA_TOKEN=<token> \
+  scripts/delete-legacy-gitea-linux-packages.sh --execute
+```
+
+Run the script without `--execute` first to preview the package versions and
+delete URLs. It discovers legacy versions from Debian, RPM, and Arch metadata,
+including RPM/Arch release-suffixed versions such as `sha-...-1`. It defaults
+to `https://git.rdrx.app`, namespace `attune-system`, Debian `stable/main`,
+RPM group `el9`, and Arch repository `core`.
+
+The Linux package set includes split packages for individual components and an
+all-in-one `attune` installer package. The all-in-one package is self-contained:
+it installs the API, executor, worker, sensor, notifier, supervisor, CLI, MCP,
+and agent binaries together under `/opt/attune-system/`, installs service units
+that run from that directory, and symlinks the interactive `attune` and
+`attune-mcp` commands into `/usr/bin`. It conflicts with the split `attune-*`
+packages so the same files are not owned by multiple packages. Use `attune-cli`
+for a CLI-only install, or `attune` for a cohesive local service install.
+
 Chart packaging behavior:
 
 - branch pushes package the chart as `0.0.0-edge.<run_number>`

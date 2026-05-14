@@ -13,6 +13,7 @@ if [ "$1" = "purge" ]; then
     rm -rf /var/lib/attune
     rm -rf /var/log/attune
     rm -rf /etc/attune
+    rm -rf /opt/attune-system
 
     # Remove attune user and group
     if getent passwd attune >/dev/null 2>&1; then

@@ -1,0 +1,25 @@
+Attune all-in-one installer package
+
+This package installs the Attune service, CLI, MCP, and agent binaries as a
+cohesive local deployment bundle under /opt/attune-system:
+
+  /opt/attune-system/attune-api
+  /opt/attune-system/attune-executor
+  /opt/attune-system/attune-notifier
+  /opt/attune-system/attune-supervisor
+  /opt/attune-system/attune-worker
+  /opt/attune-system/attune-sensor
+  /opt/attune-system/attune
+  /opt/attune-system/attune-mcp
+  /opt/attune-system/attune-agent
+  /opt/attune-system/attune-sensor-agent
+
+The attune and attune-mcp commands are also symlinked into /usr/bin for
+interactive use. The bundled agent binaries are symlinked into
+/var/lib/attune/agent so the API binary download endpoint can serve them with
+the packaged default configuration. After installation, configure
+/etc/attune/environment and /etc/attune/attune.yaml, run database migrations,
+then enable the services you want to run with systemd.
+
+Common service set:
+  systemctl enable --now attune-api attune-executor attune-supervisor attune-worker attune-sensor attune-notifier

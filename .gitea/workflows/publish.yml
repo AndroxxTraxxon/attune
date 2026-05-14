@@ -330,7 +330,9 @@ jobs:
             --bin attune-api \
             --bin attune-executor \
             --bin attune-notifier \
-            --bin attune-supervisor
+            --bin attune-supervisor \
+            --bin attune-worker \
+            --bin attune-sensor
 
       - name: Verify minimum glibc requirement
         shell: bash
@@ -351,7 +353,7 @@ jobs:
             [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ] && [ "$1" != "$2" ]
           }
 
-          for binary in attune-api attune-executor attune-notifier attune-supervisor; do
+          for binary in attune-api attune-executor attune-notifier attune-supervisor attune-worker attune-sensor; do
             min_glibc="$(get_min_glibc "${output_dir}/${binary}")"
             if [ -z "${min_glibc}" ]; then
               echo "Failed to determine glibc requirement for ${binary}"
@@ -395,6 +397,8 @@ jobs:
           cp "${service_output_dir}/attune-executor" "$bundle_root/bin/"
           cp "${service_output_dir}/attune-notifier" "$bundle_root/bin/"
           cp "${service_output_dir}/attune-supervisor" "$bundle_root/bin/"
+          cp "${service_output_dir}/attune-worker" "$bundle_root/bin/"
+          cp "${service_output_dir}/attune-sensor" "$bundle_root/bin/"
           cp "target/${MUSL_TARGET}/release/attune-agent" "$bundle_root/agent/"
           cp "target/${MUSL_TARGET}/release/attune-sensor-agent" "$bundle_root/agent/"
           cp "target/${MUSL_TARGET}/release/attune-mcp" "$bundle_root/agent/"
