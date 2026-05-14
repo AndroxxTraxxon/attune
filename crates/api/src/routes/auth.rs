@@ -186,6 +186,7 @@ fn resource_name(resource: Resource) -> &'static str {
         Resource::Artifacts => "artifacts",
         Resource::Runtimes => "runtimes",
         Resource::Workers => "workers",
+        Resource::Retention => "retention",
         Resource::Identities => "identities",
         Resource::Permissions => "permissions",
         Resource::AuditLog => "audit_log",

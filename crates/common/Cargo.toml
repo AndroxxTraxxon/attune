@@ -60,7 +60,6 @@ utoipa = { workspace = true }
 # JWT
 jsonwebtoken = { workspace = true }
 hmac = { workspace = true }
-signature = { workspace = true }
 
 # Encryption
 argon2 = { workspace = true }

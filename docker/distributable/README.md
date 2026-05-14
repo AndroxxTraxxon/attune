@@ -4,7 +4,7 @@ This directory is a distributable Docker bundle built from the main workspace co
 
 It is designed to run Attune without building the Rust services locally:
 
-- `api`, `executor`, `notifier`, `agent`, and `web` pull published images
+- `api`, `executor`, `supervisor`, `notifier`, `agent`, and `web` pull published images
 - database bootstrap, user bootstrap, and pack loading run from local scripts shipped in this bundle
 - workers and sensor still use stock runtime images plus the published injected agent binaries
 

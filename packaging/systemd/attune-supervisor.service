@@ -1,0 +1,30 @@
+[Unit]
+Description=Attune Supervisor Maintenance Service
+Documentation=https://git.rdrx.app/attune/attune
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=attune
+Group=attune
+ExecStart=/usr/bin/attune-supervisor
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=-/etc/attune/environment
+WorkingDirectory=/var/lib/attune
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/attune /var/log/attune
+PrivateTmp=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=attune-supervisor
+
+[Install]
+WantedBy=multi-user.target

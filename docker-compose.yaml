@@ -201,6 +201,43 @@ services:
   # Attune Services
   # ============================================================================
 
+  supervisor:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.optimized
+      args:
+        SERVICE: supervisor
+        BUILDKIT_INLINE_CACHE: 1
+    container_name: attune-supervisor
+    environment:
+      RUST_LOG: info
+      ATTUNE_CONFIG: /opt/attune/config/config.yaml
+      ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
+      ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
+      ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+    volumes:
+      - ${ATTUNE_DOCKER_CONFIG_PATH:-./config.docker.yaml}:/opt/attune/config/config.yaml:ro
+      - artifacts_data:/opt/attune/artifacts
+      - supervisor_logs:/opt/attune/logs
+    depends_on:
+      init-packs:
+        condition: service_completed_successfully
+      init-user:
+        condition: service_completed_successfully
+      migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - attune-network
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -742,6 +779,8 @@ volumes:
   api_logs:
     driver: local
   executor_logs:
+    driver: local
+  supervisor_logs:
     driver: local
   worker_shell_logs:
     driver: local

@@ -123,7 +123,11 @@ def _max_concurrent(children: list[dict]) -> int:
 
     current = 0
     maximum = 0
-    for _timestamp, delta in sorted(events, key=lambda item: (item[0], -item[1])):
+    # Treat execution windows as half-open intervals: [started_at, updated).
+    # A child that starts at the exact timestamp another child finishes did not
+    # run concurrently with it. Process end events before start events at the
+    # same timestamp to avoid over-counting boundary handoffs.
+    for _timestamp, delta in sorted(events, key=lambda item: (item[0], item[1])):
         current += delta
         maximum = max(maximum, current)
     return maximum

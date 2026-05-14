@@ -98,6 +98,34 @@ runtime_envs_dir: /opt/attune/runtime_envs
 # Pattern: {artifacts_dir}/{ref_slug}/v{version}.{ext}
 artifacts_dir: /opt/attune/artifacts
 
+retention:
+  enabled: true
+  check_interval_seconds: 3600
+  batch_size: 1000
+  dry_run: false
+  targets:
+    events:
+      max_age_seconds: 7776000
+    executions:
+      max_age_seconds: 7776000
+    audit_events:
+      max_age_seconds: 31536000
+
+maintenance:
+  enabled: true
+  artifact_cleanup_enabled: true
+  artifact_cleanup_batch_size: 100
+  monitoring_enabled: true
+  corrective_actions_enabled: true
+  stuck_execution_seconds: 3600
+  execution_remediation_seconds: 7200
+  stuck_queue_seconds: 900
+  queue_remediation_seconds: 1800
+  admission_remediation_seconds: 1800
+  retention_lag_alert_seconds: 86400
+  alert_limit_per_cycle: 25
+  alert_cooldown_seconds: 3600
+
 # Executor service configuration
 executor:
   scheduled_timeout: 300 # 5 minutes - fail executions stuck in SCHEDULED

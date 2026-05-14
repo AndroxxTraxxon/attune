@@ -130,6 +130,8 @@ use attune_common::audit::{AuditCategory, AuditOutcome};
         crate::routes::workers::get_worker,
         crate::routes::workers::cordon_worker,
         crate::routes::workers::uncordon_worker,
+        crate::routes::retention::get_retention_config,
+        crate::routes::retention::update_retention_config,
 
         // Work queues
         crate::routes::work_queues::list_queues,
@@ -356,6 +358,9 @@ use attune_common::audit::{AuditCategory, AuditOutcome};
             WorkerLoadSnapshot,
             WorkerRuntimeSupport,
             CordonWorkerRequest, WorkerHealthState, WorkerSummary,
+            attune_common::config::RetentionConfig,
+            attune_common::config::RetentionTargetsConfig,
+            attune_common::config::RetentionTargetConfig,
             IdentitySummary,
             CreateWorkQueueRequest,
             EnqueueWorkQueueItemRequest,

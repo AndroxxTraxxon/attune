@@ -80,6 +80,9 @@ images:
   notifier:
     repository: attune/notifier
     pullPolicy: IfNotPresent
+  supervisor:
+    repository: attune/supervisor
+    pullPolicy: IfNotPresent
   web:
     repository: attune/web
     pullPolicy: IfNotPresent
@@ -109,6 +112,9 @@ api:
     port: 8080
 
 executor:
+  replicaCount: 1
+
+supervisor:
   replicaCount: 1
 
 notifier:

@@ -2,6 +2,7 @@ import {
   CircleArrowRight,
   CircleDot,
   CirclePlay,
+  DatabaseZap,
   FolderArchive,
   Home,
   KeyRound,
@@ -31,5 +32,6 @@ export const navIcons = {
   queues: SquareStack,
   accessControl: ShieldCheck,
   auditLog: ScrollText,
+  retention: DatabaseZap,
   packs: Package,
 } as const;

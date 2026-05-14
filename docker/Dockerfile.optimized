@@ -1,4 +1,4 @@
-# Multi-stage Dockerfile for Attune Rust services (api, executor, notifier)
+# Multi-stage Dockerfile for Attune Rust services (api, executor, notifier, supervisor)
 #
 # Simple and robust: build the entire workspace, then copy the target binary.
 # No dummy sources, no selective crate copying, no fragile hacks.
@@ -7,6 +7,7 @@
 #   DOCKER_BUILDKIT=1 docker build --build-arg SERVICE=api -f docker/Dockerfile.optimized -t attune-api .
 #   DOCKER_BUILDKIT=1 docker build --build-arg SERVICE=executor -f docker/Dockerfile.optimized -t attune-executor .
 #   DOCKER_BUILDKIT=1 docker build --build-arg SERVICE=notifier -f docker/Dockerfile.optimized -t attune-notifier .
+#   DOCKER_BUILDKIT=1 docker build --build-arg SERVICE=supervisor -f docker/Dockerfile.optimized -t attune-supervisor .
 #
 # Note: Packs are NOT copied into the image — they are mounted as volumes at runtime.
 
@@ -39,6 +40,7 @@ COPY crates/executor/Cargo.toml ./crates/executor/Cargo.toml
 COPY crates/sensor/Cargo.toml ./crates/sensor/Cargo.toml
 COPY crates/worker/Cargo.toml ./crates/worker/Cargo.toml
 COPY crates/notifier/Cargo.toml ./crates/notifier/Cargo.toml
+COPY crates/supervisor/Cargo.toml ./crates/supervisor/Cargo.toml
 COPY crates/cli/Cargo.toml ./crates/cli/Cargo.toml
 
 # Create minimal stub sources so cargo can resolve the workspace and fetch deps.
@@ -51,6 +53,7 @@ RUN mkdir -p crates/common/src && echo "" > crates/common/src/lib.rs && \
     mkdir -p crates/worker/src && echo "fn main(){}" > crates/worker/src/main.rs && \
     echo "fn main(){}" > crates/worker/src/agent_main.rs && \
     mkdir -p crates/notifier/src && echo "fn main(){}" > crates/notifier/src/main.rs && \
+    mkdir -p crates/supervisor/src && echo "fn main(){}" > crates/supervisor/src/main.rs && \
     mkdir -p crates/cli/src && echo "fn main(){}" > crates/cli/src/main.rs
 
 # Download all dependencies (cached unless Cargo.toml/Cargo.lock change)
@@ -67,9 +70,10 @@ COPY crates/common/ ./crates/common/
 COPY crates/api/ ./crates/api/
 COPY crates/executor/ ./crates/executor/
 COPY crates/notifier/ ./crates/notifier/
+COPY crates/supervisor/ ./crates/supervisor/
 
 # Build only the Rust service binaries used by docker-compose.
-# Compiling this fixed trio keeps the layer shared across api/executor/notifier
+# Compiling this fixed set keeps the layer shared across api/executor/notifier/supervisor
 # builds without paying to compile worker, sensor, agent, timer, or CLI binaries.
 # target cache uses sharing=locked so concurrent service builds serialize
 # writes to the shared compilation cache instead of corrupting it.
@@ -85,6 +89,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=shared \
     --bin attune-api \
     --bin attune-executor \
     --bin attune-notifier \
+    --bin attune-supervisor \
     -j 4
 
 # Extract the requested service binary from the target cache.

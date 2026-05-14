@@ -300,6 +300,11 @@ def pytest_runtest_setup(item):
 
     Can be used for test-specific setup or to skip tests based on conditions.
     """
+    # Supervisor retention tests exercise the maintenance service directly
+    # against PostgreSQL and do not require the API process to be running.
+    if item.get_closest_marker("supervisor"):
+        return
+
     # Check if API is reachable before running tests
     api_url = os.getenv("ATTUNE_API_URL", "http://localhost:8080")
 

@@ -91,6 +91,10 @@ images:
     repository: attune-notifier
     tag: ""
     pullPolicy: IfNotPresent
+  supervisor:
+    repository: attune-supervisor
+    tag: ""
+    pullPolicy: IfNotPresent
   mcp:
     repository: attune-mcp
     tag: ""
@@ -136,6 +140,10 @@ api:
 
 executor:
   replicaCount: 2
+  resources: {}
+
+supervisor:
+  replicaCount: 1
   resources: {}
 
 notifier:

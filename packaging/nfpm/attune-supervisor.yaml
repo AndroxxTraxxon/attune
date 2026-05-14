@@ -1,0 +1,59 @@
+# nfpm configuration for attune-supervisor
+name: attune-supervisor
+arch: "${ARCH}"
+platform: linux
+version: "${VERSION}"
+section: admin
+priority: optional
+maintainer: "Attune <attune@rdrx.app>"
+description: "Attune Supervisor - database retention and maintenance service"
+vendor: "Attune"
+homepage: "https://git.rdrx.app/attune/attune"
+license: "Proprietary"
+
+depends:
+  - libc6 (>= 2.28)
+  - postgresql-16
+  - timescaledb-2-postgresql-16
+
+contents:
+  - src: "${BUNDLE_DIR}/bin/attune-supervisor"
+    dst: /usr/bin/attune-supervisor
+    file_info:
+      mode: 0755
+
+  - src: ../systemd/attune-supervisor.service
+    dst: /usr/lib/systemd/system/attune-supervisor.service
+    file_info:
+      mode: 0644
+
+  - src: ../config/attune.yaml
+    dst: /etc/attune/attune.yaml
+    type: config|noreplace
+    file_info:
+      mode: 0640
+      group: attune
+
+  - src: ../config/environment
+    dst: /etc/attune/environment
+    type: config|noreplace
+    file_info:
+      mode: 0640
+      group: attune
+
+scripts:
+  postinstall: ../scripts/postinstall.sh
+  preremove: ../scripts/preremove.sh
+  postremove: ../scripts/postremove.sh
+
+overrides:
+  rpm:
+    depends:
+      - glibc >= 2.28
+      - postgresql16-server
+      - timescaledb-2-postgresql-16
+  archlinux:
+    depends:
+      - glibc
+      - postgresql
+      - timescaledb

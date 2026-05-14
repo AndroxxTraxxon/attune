@@ -99,6 +99,7 @@ COPY crates/executor/Cargo.toml ./crates/executor/Cargo.toml
 COPY crates/sensor/Cargo.toml ./crates/sensor/Cargo.toml
 COPY crates/worker/Cargo.toml ./crates/worker/Cargo.toml
 COPY crates/notifier/Cargo.toml ./crates/notifier/Cargo.toml
+COPY crates/supervisor/Cargo.toml ./crates/supervisor/Cargo.toml
 COPY crates/cli/Cargo.toml ./crates/cli/Cargo.toml
 
 # Create minimal stub sources so cargo can resolve the workspace and fetch deps.
@@ -114,6 +115,7 @@ RUN mkdir -p crates/common/src && echo "" > crates/common/src/lib.rs && \
     mkdir -p crates/worker/src && echo "fn main(){}" > crates/worker/src/main.rs && \
     echo "fn main(){}" > crates/worker/src/agent_main.rs && \
     mkdir -p crates/notifier/src && echo "fn main(){}" > crates/notifier/src/main.rs && \
+    mkdir -p crates/supervisor/src && echo "fn main(){}" > crates/supervisor/src/main.rs && \
     mkdir -p crates/cli/src/bin && echo "" > crates/cli/src/lib.rs && \
     echo "fn main(){}" > crates/cli/src/main.rs && \
     echo "fn main(){}" > crates/cli/src/bin/attune-mcp.rs

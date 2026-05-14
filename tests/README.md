@@ -34,6 +34,7 @@ For migration details and usage examples, see [`MIGRATION_TO_GENERATED_CLIENT.md
 3. **Worker Service** (`attune-worker`) - Action execution
 4. **Sensor Service** (`attune-sensor`) - Event monitoring
 5. **Notifier Service** (`attune-notifier`) - Real-time notifications
+6. **Supervisor Service** (`attune-supervisor`) - Runtime retention and maintenance
 
 **External Dependencies:**
 - PostgreSQL (database)

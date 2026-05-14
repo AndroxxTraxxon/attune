@@ -66,7 +66,7 @@ fi
 echo "Using nfpm: $(nfpm --version 2>&1 || echo 'unknown')"
 
 # Verify bundle contents
-for binary in bin/attune-api bin/attune-executor bin/attune-notifier \
+for binary in bin/attune-api bin/attune-executor bin/attune-notifier bin/attune-supervisor \
               agent/attune agent/attune-mcp agent/attune-agent agent/attune-sensor-agent; do
     if [ ! -f "$BUNDLE_DIR/$binary" ]; then
         echo "ERROR: Missing binary: $BUNDLE_DIR/$binary"
@@ -88,10 +88,27 @@ esac
 FORMATS="deb rpm archlinux"
 CONFIGS=$(find "$NFPM_DIR" -name "*.yaml" -type f | sort)
 
+render_config() {
+    local config="$1"
+    local rendered_config="$2"
+    local rendered
+
+    # nfpm 2.41.1 does not expand these placeholders from the config file.
+    rendered="$(<"$config")"
+    rendered="${rendered//\$\{BUNDLE_DIR\}/$BUNDLE_DIR}"
+    rendered="${rendered//\$\{ARCH\}/$NFPM_ARCH}"
+    rendered="${rendered//\$\{VERSION\}/$VERSION}"
+    printf '%s\n' "$rendered" > "$rendered_config"
+}
+
 for config in $CONFIGS; do
     pkg_name=$(basename "$config" .yaml)
     echo ""
     echo "--- Building $pkg_name ---"
+
+    rendered_config="$(mktemp "$NFPM_DIR/.${pkg_name}.rendered.XXXXXX")"
+    render_config "$config" "$rendered_config"
+    trap 'rm -f "$rendered_config"' EXIT
 
     for format in $FORMATS; do
         echo "  Format: $format"
@@ -103,17 +120,20 @@ for config in $CONFIGS; do
             archlinux) ext="pkg.tar.zst" ;;
         esac
 
-        # Run nfpm with environment variable substitution
-        ARCH="$NFPM_ARCH" \
-        VERSION="$VERSION" \
-        BUNDLE_DIR="$BUNDLE_DIR" \
-        nfpm package \
-            --config "$config" \
-            --packager "$format" \
-            --target "$OUTPUT_DIR/"
+        (
+            # nfpm resolves relative content paths from the current directory.
+            cd "$NFPM_DIR"
+            nfpm package \
+                --config "$rendered_config" \
+                --packager "$format" \
+                --target "$OUTPUT_DIR/"
+        )
 
         echo "    ✓ Built $pkg_name.$ext"
     done
+
+    rm -f "$rendered_config"
+    trap - EXIT
 done
 
 echo ""

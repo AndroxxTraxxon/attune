@@ -127,6 +127,14 @@ pub mod event_type {
         pub const EXPORT_CONFIG_CHANGED: &str = "audit_log.export_config_changed";
     }
 
+    pub mod maintenance {
+        pub const RETENTION_CONFIG_UPDATED: &str = "maintenance.retention.config_updated";
+        pub const RETENTION_TARGET_COMPLETED: &str = "maintenance.retention.target_completed";
+        pub const RETENTION_TARGET_FAILED: &str = "maintenance.retention.target_failed";
+        pub const ARTIFACT_CLEANUP_COMPLETED: &str = "maintenance.artifact.cleanup_completed";
+        pub const CORRECTIVE_ACTION_APPLIED: &str = "maintenance.corrective_action.applied";
+    }
+
     pub mod security {
         pub const RATE_LIMITED: &str = "security.rate_limited";
         pub const WEBHOOK_SECRET_CHANGED: &str = "security.webhook_secret.changed";

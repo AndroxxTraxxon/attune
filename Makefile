@@ -1,4 +1,5 @@
 .PHONY: help build test clean run-api run-executor run-worker run-sensor run-notifier \
+        run-supervisor run-supervisor-release \
         check fmt clippy install-tools db-create db-migrate db-reset docker-build \
         docker-up docker-down docker-cache-warm docker-stop-system-services dev watch generate-agents-index \
         docker-build-workers docker-build-worker-base docker-build-worker-python \
@@ -48,6 +49,7 @@ help:
 	@echo "  make run-worker     - Run worker service"
 	@echo "  make run-sensor     - Run sensor service"
 	@echo "  make run-notifier   - Run notifier service"
+	@echo "  make run-supervisor - Run supervisor service"
 	@echo "  make dev            - Run all services in development mode"
 	@echo ""
 	@echo "Database:"
@@ -182,6 +184,12 @@ run-notifier:
 run-notifier-release:
 	cargo run --bin attune-notifier --release
 
+run-supervisor:
+	cargo run --bin attune-supervisor
+
+run-supervisor-release:
+	cargo run --bin attune-supervisor --release
+
 # Development mode (run all services)
 dev:
 	@echo "Starting all services in development mode..."
@@ -192,6 +200,7 @@ dev:
 	@echo "Terminal 3: make run-worker"
 	@echo "Terminal 4: make run-sensor"
 	@echo "Terminal 5: make run-notifier"
+	@echo "Terminal 6: make run-supervisor"
 
 # Watch for changes and rebuild
 watch:

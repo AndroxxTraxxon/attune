@@ -126,6 +126,35 @@ executor:
   timeout_check_interval: 30 # Check every 30 seconds
   enable_timeout_monitor: true
 
+# Runtime database retention managed by attune-supervisor.
+retention:
+  enabled: true
+  check_interval_seconds: 3600
+  batch_size: 1000
+  dry_run: false
+  targets:
+    events:
+      max_age_seconds: 7776000 # 90 days
+    executions:
+      max_age_seconds: 7776000 # 90 days
+    audit_events:
+      max_age_seconds: 31536000 # 365 days
+
+maintenance:
+  enabled: true
+  artifact_cleanup_enabled: true
+  artifact_cleanup_batch_size: 100
+  monitoring_enabled: true
+  corrective_actions_enabled: true
+  stuck_execution_seconds: 3600
+  execution_remediation_seconds: 7200
+  stuck_queue_seconds: 900
+  queue_remediation_seconds: 1800
+  admission_remediation_seconds: 1800
+  retention_lag_alert_seconds: 86400
+  alert_limit_per_cycle: 25
+  alert_cooldown_seconds: 3600
+
 # Agent binary distribution (optional - for local development)
 # Binary is built via: make build-agent
 # agent:

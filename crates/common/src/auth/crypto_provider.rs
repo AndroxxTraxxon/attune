@@ -13,9 +13,9 @@
 
 use hmac::{digest::KeyInit, Hmac, Mac};
 use jsonwebtoken::crypto::{CryptoProvider, JwkUtils, JwtSigner, JwtVerifier};
+use jsonwebtoken::signature::{self, Signer, Verifier};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey};
 use sha2::{Sha256, Sha384, Sha512};
-use signature::{Signer, Verifier};
 use std::sync::Once;
 
 type HmacSha256 = Hmac<Sha256>;

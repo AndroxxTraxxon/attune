@@ -28,6 +28,8 @@ grants:
     actions: [read, create, update, delete]
   - resource: workers
     actions: [read, manage]
+  - resource: retention
+    actions: [read, update]
   - resource: identities
     actions: [read, create, update, delete]
   - resource: permissions

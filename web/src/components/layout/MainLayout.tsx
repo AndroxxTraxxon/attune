@@ -181,6 +181,13 @@ const navSections: NavSection[] = [
         permissions: [{ resource: "audit_log" }],
       },
       {
+        to: "/retention",
+        label: "Runtime Retention",
+        icon: navIcons.retention,
+        color: "gray",
+        permissions: [{ resource: "retention" }],
+      },
+      {
         to: "/packs",
         label: "Pack Management",
         icon: navIcons.packs,

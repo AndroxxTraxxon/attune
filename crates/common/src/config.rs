@@ -39,6 +39,7 @@
 use config as config_crate;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use utoipa::ToSchema;
 
 /// Custom deserializer for fields that can be either a comma-separated string or an array
 mod string_or_vec {
@@ -772,6 +773,335 @@ fn default_sensor_log_max_files() -> u32 {
     4
 }
 
+/// Runtime database row retention settings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct RetentionTargetConfig {
+    /// Whether this retention target is processed.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Maximum row age in seconds. `None` means keep forever.
+    #[serde(default)]
+    pub max_age_seconds: Option<u64>,
+}
+
+impl RetentionTargetConfig {
+    pub fn enabled_with_days(days: u64) -> Self {
+        Self {
+            enabled: true,
+            max_age_seconds: Some(days * 24 * 60 * 60),
+        }
+    }
+
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            max_age_seconds: None,
+        }
+    }
+}
+
+/// Per-table runtime retention targets.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct RetentionTargetsConfig {
+    #[serde(default = "default_retention_events")]
+    pub events: RetentionTargetConfig,
+    #[serde(default = "default_retention_enforcements")]
+    pub enforcements: RetentionTargetConfig,
+    #[serde(default = "default_retention_executions")]
+    pub executions: RetentionTargetConfig,
+    #[serde(default = "default_retention_execution_history")]
+    pub execution_history: RetentionTargetConfig,
+    #[serde(default = "default_retention_worker_history")]
+    pub worker_history: RetentionTargetConfig,
+    #[serde(default = "default_retention_sensor_process_history")]
+    pub sensor_process_history: RetentionTargetConfig,
+    #[serde(default = "default_retention_audit_events")]
+    pub audit_events: RetentionTargetConfig,
+    #[serde(default = "default_retention_continuous_aggregates")]
+    pub continuous_aggregates: RetentionTargetConfig,
+    #[serde(default = "default_retention_notifications")]
+    pub notifications: RetentionTargetConfig,
+    #[serde(default = "default_retention_webhook_event_logs")]
+    pub webhook_event_logs: RetentionTargetConfig,
+    #[serde(default = "default_retention_inquiries")]
+    pub inquiries: RetentionTargetConfig,
+    #[serde(default = "default_retention_work_queue_items")]
+    pub work_queue_items: RetentionTargetConfig,
+    #[serde(default = "default_retention_work_queue_dispatches")]
+    pub work_queue_dispatches: RetentionTargetConfig,
+    #[serde(default = "default_retention_pack_test_executions")]
+    pub pack_test_executions: RetentionTargetConfig,
+    #[serde(default = "default_retention_execution_admission")]
+    pub execution_admission: RetentionTargetConfig,
+    #[serde(default = "default_retention_workers")]
+    pub workers: RetentionTargetConfig,
+    #[serde(default = "default_retention_sensor_processes")]
+    pub sensor_processes: RetentionTargetConfig,
+}
+
+impl Default for RetentionTargetsConfig {
+    fn default() -> Self {
+        Self {
+            events: default_retention_events(),
+            enforcements: default_retention_enforcements(),
+            executions: default_retention_executions(),
+            execution_history: default_retention_execution_history(),
+            worker_history: default_retention_worker_history(),
+            sensor_process_history: default_retention_sensor_process_history(),
+            audit_events: default_retention_audit_events(),
+            continuous_aggregates: default_retention_continuous_aggregates(),
+            notifications: default_retention_notifications(),
+            webhook_event_logs: default_retention_webhook_event_logs(),
+            inquiries: default_retention_inquiries(),
+            work_queue_items: default_retention_work_queue_items(),
+            work_queue_dispatches: default_retention_work_queue_dispatches(),
+            pack_test_executions: default_retention_pack_test_executions(),
+            execution_admission: default_retention_execution_admission(),
+            workers: default_retention_workers(),
+            sensor_processes: default_retention_sensor_processes(),
+        }
+    }
+}
+
+fn retention_days(days: u64) -> RetentionTargetConfig {
+    RetentionTargetConfig::enabled_with_days(days)
+}
+
+fn default_retention_events() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+fn default_retention_enforcements() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+fn default_retention_executions() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+fn default_retention_execution_history() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+fn default_retention_worker_history() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+fn default_retention_sensor_process_history() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+fn default_retention_audit_events() -> RetentionTargetConfig {
+    retention_days(90)
+}
+
+fn default_retention_continuous_aggregates() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+fn default_retention_notifications() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+fn default_retention_webhook_event_logs() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+fn default_retention_inquiries() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+fn default_retention_work_queue_items() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+fn default_retention_work_queue_dispatches() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+fn default_retention_pack_test_executions() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+fn default_retention_execution_admission() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+fn default_retention_workers() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+fn default_retention_sensor_processes() -> RetentionTargetConfig {
+    retention_days(30)
+}
+
+/// Supervisor-owned runtime retention configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct RetentionConfig {
+    /// Enable runtime row retention globally.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// How often the supervisor runs retention, in seconds.
+    #[serde(default = "default_retention_check_interval_seconds")]
+    pub check_interval_seconds: u64,
+
+    /// Maximum rows to delete per target per cycle for regular tables.
+    #[serde(default = "default_retention_batch_size")]
+    pub batch_size: i64,
+
+    /// Report candidates without deleting rows/chunks.
+    #[serde(default)]
+    pub dry_run: bool,
+
+    /// Advisory lock key used to make accidental multi-supervisor deployments safe.
+    #[serde(default = "default_retention_advisory_lock_key")]
+    pub advisory_lock_key: i64,
+
+    /// Per-target retention settings.
+    #[serde(default)]
+    pub targets: RetentionTargetsConfig,
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            check_interval_seconds: default_retention_check_interval_seconds(),
+            batch_size: default_retention_batch_size(),
+            dry_run: false,
+            advisory_lock_key: default_retention_advisory_lock_key(),
+            targets: RetentionTargetsConfig::default(),
+        }
+    }
+}
+
+fn default_retention_check_interval_seconds() -> u64 {
+    3600
+}
+
+fn default_retention_batch_size() -> i64 {
+    1000
+}
+
+fn default_retention_advisory_lock_key() -> i64 {
+    7_821_001
+}
+
+/// Supervisor maintenance jobs beyond runtime row retention.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorMaintenanceConfig {
+    /// Master switch for non-retention supervisor maintenance jobs.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Delete expired artifact versions according to per-artifact time policies.
+    #[serde(default = "default_true")]
+    pub artifact_cleanup_enabled: bool,
+
+    /// Maximum expired artifact versions to clean per supervisor cycle.
+    #[serde(default = "default_artifact_cleanup_batch_size")]
+    pub artifact_cleanup_batch_size: i64,
+
+    /// Detect stuck executions, queue leases, dispatches, and retention lag.
+    #[serde(default = "default_true")]
+    pub monitoring_enabled: bool,
+
+    /// Apply guarded corrective actions for stale runtime state.
+    #[serde(default = "default_true")]
+    pub corrective_actions_enabled: bool,
+
+    /// Alert when non-terminal executions are older than this many seconds.
+    #[serde(default = "default_stuck_execution_seconds")]
+    pub stuck_execution_seconds: u64,
+
+    /// Correct executions that remain stuck beyond this many seconds.
+    #[serde(default = "default_execution_remediation_seconds")]
+    pub execution_remediation_seconds: u64,
+
+    /// Alert when queue leases/dispatches are stale beyond this many seconds.
+    #[serde(default = "default_stuck_queue_seconds")]
+    pub stuck_queue_seconds: u64,
+
+    /// Correct queue leases/dispatches that remain stale beyond this many seconds.
+    #[serde(default = "default_queue_remediation_seconds")]
+    pub queue_remediation_seconds: u64,
+
+    /// Correct execution admission entries older than this many seconds when
+    /// their executions are terminal.
+    #[serde(default = "default_admission_remediation_seconds")]
+    pub admission_remediation_seconds: u64,
+
+    /// Alert when retention-eligible rows remain this long beyond their policy.
+    #[serde(default = "default_retention_lag_alert_seconds")]
+    pub retention_lag_alert_seconds: u64,
+
+    /// Maximum monitoring alerts emitted per supervisor cycle.
+    #[serde(default = "default_maintenance_alert_limit")]
+    pub alert_limit_per_cycle: i64,
+
+    /// Suppress duplicate alerts with the same correlation id for this duration.
+    #[serde(default = "default_maintenance_alert_cooldown_seconds")]
+    pub alert_cooldown_seconds: u64,
+}
+
+impl Default for SupervisorMaintenanceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            artifact_cleanup_enabled: true,
+            artifact_cleanup_batch_size: default_artifact_cleanup_batch_size(),
+            monitoring_enabled: true,
+            corrective_actions_enabled: true,
+            stuck_execution_seconds: default_stuck_execution_seconds(),
+            execution_remediation_seconds: default_execution_remediation_seconds(),
+            stuck_queue_seconds: default_stuck_queue_seconds(),
+            queue_remediation_seconds: default_queue_remediation_seconds(),
+            admission_remediation_seconds: default_admission_remediation_seconds(),
+            retention_lag_alert_seconds: default_retention_lag_alert_seconds(),
+            alert_limit_per_cycle: default_maintenance_alert_limit(),
+            alert_cooldown_seconds: default_maintenance_alert_cooldown_seconds(),
+        }
+    }
+}
+
+fn default_artifact_cleanup_batch_size() -> i64 {
+    100
+}
+
+fn default_stuck_execution_seconds() -> u64 {
+    60 * 60
+}
+
+fn default_execution_remediation_seconds() -> u64 {
+    2 * 60 * 60
+}
+
+fn default_stuck_queue_seconds() -> u64 {
+    15 * 60
+}
+
+fn default_queue_remediation_seconds() -> u64 {
+    30 * 60
+}
+
+fn default_admission_remediation_seconds() -> u64 {
+    30 * 60
+}
+
+fn default_retention_lag_alert_seconds() -> u64 {
+    24 * 60 * 60
+}
+
+fn default_maintenance_alert_limit() -> i64 {
+    25
+}
+
+fn default_maintenance_alert_cooldown_seconds() -> u64 {
+    60 * 60
+}
+
 /// Executor service configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutorConfig {
@@ -872,6 +1202,14 @@ pub struct Config {
     /// Pack upload safety limits (optional; sensible defaults are used when absent).
     #[serde(default)]
     pub pack_upload: PackUploadConfig,
+
+    /// Runtime database row retention configuration.
+    #[serde(default)]
+    pub retention: RetentionConfig,
+
+    /// Supervisor maintenance jobs beyond runtime row retention.
+    #[serde(default)]
+    pub maintenance: SupervisorMaintenanceConfig,
 }
 
 /// Safety limits applied during `POST /api/v1/packs/upload` archive extraction.
@@ -1185,6 +1523,43 @@ impl Config {
             )));
         }
 
+        if self.retention.check_interval_seconds == 0 {
+            return Err(crate::Error::validation(
+                "retention.check_interval_seconds must be greater than zero",
+            ));
+        }
+
+        if self.retention.batch_size <= 0 {
+            return Err(crate::Error::validation(
+                "retention.batch_size must be greater than zero",
+            ));
+        }
+
+        if self.maintenance.artifact_cleanup_batch_size <= 0 {
+            return Err(crate::Error::validation(
+                "maintenance.artifact_cleanup_batch_size must be greater than zero",
+            ));
+        }
+
+        if self.maintenance.alert_limit_per_cycle <= 0 {
+            return Err(crate::Error::validation(
+                "maintenance.alert_limit_per_cycle must be greater than zero",
+            ));
+        }
+
+        if self.maintenance.stuck_execution_seconds == 0
+            || self.maintenance.execution_remediation_seconds == 0
+            || self.maintenance.stuck_queue_seconds == 0
+            || self.maintenance.queue_remediation_seconds == 0
+            || self.maintenance.admission_remediation_seconds == 0
+            || self.maintenance.retention_lag_alert_seconds == 0
+            || self.maintenance.alert_cooldown_seconds == 0
+        {
+            return Err(crate::Error::validation(
+                "maintenance durations must be greater than zero",
+            ));
+        }
+
         Ok(())
     }
 
@@ -1322,6 +1697,8 @@ mod tests {
             executor: None,
             agent: None,
             pack_upload: PackUploadConfig::default(),
+            retention: RetentionConfig::default(),
+            maintenance: SupervisorMaintenanceConfig::default(),
         };
 
         assert_eq!(config.service_name, "attune");
@@ -1412,6 +1789,8 @@ mod tests {
             executor: None,
             agent: None,
             pack_upload: PackUploadConfig::default(),
+            retention: RetentionConfig::default(),
+            maintenance: SupervisorMaintenanceConfig::default(),
         };
 
         assert!(config.validate().is_ok());
@@ -1424,6 +1803,43 @@ mod tests {
         config.security.encryption_key = Some("a".repeat(32));
         config.security.jwt_secret = None;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn runtime_retention_defaults_are_safe() {
+        let retention = RetentionConfig::default();
+        assert!(retention.enabled);
+        assert_eq!(retention.check_interval_seconds, 3600);
+        assert_eq!(retention.batch_size, 1000);
+        assert_eq!(
+            retention.targets.events.max_age_seconds,
+            Some(30 * 24 * 60 * 60)
+        );
+        assert_eq!(
+            retention.targets.audit_events.max_age_seconds,
+            Some(90 * 24 * 60 * 60)
+        );
+    }
+
+    #[test]
+    fn retention_target_can_be_disabled_or_kept_forever() {
+        let retention: RetentionConfig = serde_json::from_value(serde_json::json!({
+            "targets": {
+                "events": {
+                    "enabled": false
+                },
+                "audit_events": {
+                    "enabled": true,
+                    "max_age_seconds": null
+                }
+            }
+        }))
+        .unwrap();
+
+        assert!(!retention.targets.events.enabled);
+        assert_eq!(retention.targets.events.max_age_seconds, None);
+        assert!(retention.targets.audit_events.enabled);
+        assert_eq!(retention.targets.audit_events.max_age_seconds, None);
     }
 
     #[test]

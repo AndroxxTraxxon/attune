@@ -61,6 +61,7 @@ export function requirementsForPath(
       requirements: [{ resource: "identities" }, { resource: "permissions" }],
     },
     { prefix: "/audit-log", requirements: [{ resource: "audit_log" }] },
+    { prefix: "/retention", requirements: [{ resource: "retention" }] },
     { prefix: "/packs", requirements: [{ resource: "packs" }] },
     {
       prefix: "/runtimes",

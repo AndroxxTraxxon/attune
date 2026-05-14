@@ -202,6 +202,67 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "attune.fullname" . }}-artifacts
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "attune.fullname" . }}-supervisor
+  labels:
+    {{- include "attune.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.supervisor.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "attune.componentLabels" (dict "root" . "component" "supervisor") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "attune.componentLabels" (dict "root" . "component" "supervisor") | nindent 8 }}
+    spec:
+      {{- if .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.global.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-schema
+          image: postgres:16-alpine
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              until PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT to_regclass('${DB_SCHEMA}.identity')" | grep -q identity; do
+                echo "waiting for schema";
+                sleep 2;
+              done
+          envFrom:
+            - secretRef:
+                name: {{ include "attune.secretName" . }}
+      containers:
+        - name: supervisor
+          image: {{ include "attune.image" (dict "root" . "image" .Values.images.supervisor) }}
+          imagePullPolicy: {{ .Values.images.supervisor.pullPolicy }}
+          envFrom:
+            - secretRef:
+                name: {{ include "attune.secretName" . }}
+          env:
+            - name: ATTUNE_CONFIG
+              value: /opt/attune/config.yaml
+            - name: ATTUNE__DATABASE__SCHEMA
+              value: {{ .Values.database.schema | quote }}
+          resources:
+            {{- toYaml .Values.supervisor.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /opt/attune/config.yaml
+              subPath: config.yaml
+            - name: artifacts
+              mountPath: /opt/attune/artifacts
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "attune.fullname" . }}-config
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: {{ include "attune.fullname" . }}-artifacts
+---
 apiVersion: v1
 kind: Service
 metadata:

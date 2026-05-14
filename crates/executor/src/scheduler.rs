@@ -198,41 +198,104 @@ fn build_workflow_result_payload(
     }
 }
 
-fn reconcile_authoritative_non_item_task_statuses<I>(
+fn reconcile_authoritative_task_statuses<I>(
     completed_tasks: &mut Vec<String>,
     failed_tasks: &mut Vec<String>,
     child_tasks: I,
 ) where
-    I: IntoIterator<Item = (String, Option<i32>, ExecutionStatus)>,
+    I: IntoIterator<Item = (String, Option<i32>, ExecutionStatus, Option<String>, i32)>,
 {
+    #[derive(Default)]
+    struct TaskState {
+        completed_count: usize,
+        failed_count: usize,
+        non_terminal_count: usize,
+    }
+
+    struct LatestAttempt {
+        retry_count: i32,
+        status: ExecutionStatus,
+    }
+
+    let mut latest_attempts: HashMap<(String, Option<i32>), LatestAttempt> = HashMap::new();
+    let mut task_states: HashMap<String, TaskState> = HashMap::new();
+    let mut handled_failed_tasks = HashSet::new();
+
+    for (task_name, task_index, status, triggered_by, retry_count) in child_tasks {
+        if let Some(triggered_by) = triggered_by {
+            handled_failed_tasks.insert(triggered_by);
+        }
+
+        let key = (task_name, task_index);
+        let should_replace = latest_attempts
+            .get(&key)
+            .map(|existing| retry_count >= existing.retry_count)
+            .unwrap_or(true);
+
+        if should_replace {
+            latest_attempts.insert(
+                key,
+                LatestAttempt {
+                    retry_count,
+                    status,
+                },
+            );
+        }
+    }
+
+    for ((task_name, _task_index), attempt) in latest_attempts {
+        let state = task_states.entry(task_name).or_default();
+        match attempt.status {
+            ExecutionStatus::Completed => {
+                state.completed_count += 1;
+            }
+            ExecutionStatus::Failed | ExecutionStatus::Timeout => {
+                state.failed_count += 1;
+            }
+            ExecutionStatus::Cancelled | ExecutionStatus::Abandoned => {
+                state.failed_count += 1;
+            }
+            _ => {
+                state.non_terminal_count += 1;
+            }
+        }
+    }
+
     let mut authoritative_completed = HashSet::new();
     let mut authoritative_failed = HashSet::new();
 
-    for (task_name, task_index, status) in child_tasks {
-        if task_index.is_some() {
+    for (task_name, state) in task_states {
+        if state.non_terminal_count > 0 {
             continue;
         }
 
-        match status {
-            ExecutionStatus::Completed => {
+        if state.failed_count > 0 {
+            if handled_failed_tasks.contains(&task_name) {
                 authoritative_completed.insert(task_name);
-            }
-            ExecutionStatus::Failed | ExecutionStatus::Timeout => {
+            } else {
                 authoritative_failed.insert(task_name);
             }
-            _ => {}
+        } else if state.completed_count > 0 {
+            authoritative_completed.insert(task_name);
+        }
+    }
+
+    completed_tasks.retain(|task_name| {
+        !authoritative_completed.contains(task_name) && !authoritative_failed.contains(task_name)
+    });
+    failed_tasks.retain(|task_name| {
+        !authoritative_completed.contains(task_name) && !authoritative_failed.contains(task_name)
+    });
+
+    for task_name in authoritative_failed {
+        if !failed_tasks.contains(&task_name) {
+            failed_tasks.push(task_name);
         }
     }
 
     for task_name in authoritative_completed {
-        if !completed_tasks.contains(&task_name) && !failed_tasks.contains(&task_name) {
+        if !completed_tasks.contains(&task_name) {
             completed_tasks.push(task_name);
-        }
-    }
-
-    for task_name in authoritative_failed {
-        if !failed_tasks.contains(&task_name) && !completed_tasks.contains(&task_name) {
-            failed_tasks.push(task_name);
         }
     }
 }
@@ -2834,7 +2897,9 @@ impl ExecutionScheduler {
                 .and_then(|n| n.concurrency)
                 .unwrap_or(1);
 
-            let free_slots = concurrency_limit.saturating_sub(in_flight_count.0 as usize);
+            let free_slots = concurrency_limit
+                .saturating_sub(in_flight_count.0 as usize)
+                .min(1);
 
             if free_slots > 0 {
                 if let Err(e) = Self::publish_pending_with_items_children_with_conn(
@@ -2971,34 +3036,23 @@ impl ExecutionScheduler {
             }
         }
 
-        reconcile_authoritative_non_item_task_statuses(
+        reconcile_authoritative_task_statuses(
             &mut completed_tasks,
             &mut failed_tasks,
             child_executions.iter().filter_map(|child| {
                 child.workflow_task.as_ref().and_then(|wt| {
-                    (wt.workflow_execution == workflow_execution_id)
-                        .then(|| (wt.task_name.clone(), wt.task_index, child.status))
+                    (wt.workflow_execution == workflow_execution_id).then(|| {
+                        (
+                            wt.task_name.clone(),
+                            wt.task_index,
+                            child.status,
+                            wt.triggered_by.clone(),
+                            wt.retry_count,
+                        )
+                    })
                 })
             }),
         );
-        let handled_failed_tasks: HashSet<String> = child_executions
-            .iter()
-            .filter_map(|child| {
-                child.workflow_task.as_ref().and_then(|wt| {
-                    (wt.workflow_execution == workflow_execution_id && wt.task_index.is_none())
-                        .then(|| wt.triggered_by.clone())
-                        .flatten()
-                })
-            })
-            .collect();
-        if !handled_failed_tasks.is_empty() {
-            failed_tasks.retain(|task_name| !handled_failed_tasks.contains(task_name));
-            for task_name in handled_failed_tasks {
-                if !completed_tasks.contains(&task_name) {
-                    completed_tasks.push(task_name);
-                }
-            }
-        }
 
         // -----------------------------------------------------------------
         // Rebuild the WorkflowContext from persisted state + completed task
@@ -4477,6 +4531,75 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_authoritative_task_statuses_preserves_unhandled_parallel_failure() {
+        let mut completed_tasks = vec!["success_1".to_string(), "success_2".to_string()];
+        let mut failed_tasks = Vec::new();
+
+        reconcile_authoritative_task_statuses(
+            &mut completed_tasks,
+            &mut failed_tasks,
+            vec![
+                (
+                    "success_1".to_string(),
+                    None,
+                    ExecutionStatus::Completed,
+                    None,
+                    0,
+                ),
+                (
+                    "failure".to_string(),
+                    None,
+                    ExecutionStatus::Failed,
+                    None,
+                    0,
+                ),
+                (
+                    "success_2".to_string(),
+                    None,
+                    ExecutionStatus::Completed,
+                    None,
+                    0,
+                ),
+            ],
+        );
+
+        assert!(completed_tasks.contains(&"success_1".to_string()));
+        assert!(completed_tasks.contains(&"success_2".to_string()));
+        assert!(failed_tasks.contains(&"failure".to_string()));
+    }
+
+    #[test]
+    fn reconcile_authoritative_task_statuses_marks_handled_failure_completed() {
+        let mut completed_tasks = Vec::new();
+        let mut failed_tasks = vec!["validate".to_string()];
+
+        reconcile_authoritative_task_statuses(
+            &mut completed_tasks,
+            &mut failed_tasks,
+            vec![
+                (
+                    "validate".to_string(),
+                    None,
+                    ExecutionStatus::Failed,
+                    None,
+                    0,
+                ),
+                (
+                    "repair".to_string(),
+                    None,
+                    ExecutionStatus::Completed,
+                    Some("validate".to_string()),
+                    0,
+                ),
+            ],
+        );
+
+        assert!(completed_tasks.contains(&"validate".to_string()));
+        assert!(completed_tasks.contains(&"repair".to_string()));
+        assert!(!failed_tasks.contains(&"validate".to_string()));
+    }
+
+    #[test]
     fn test_heartbeat_freshness_with_recent_heartbeat() {
         // Worker with heartbeat 30 seconds ago (within limit)
         let worker = create_test_worker("test-worker", 30);
@@ -4967,11 +5090,11 @@ mod tests {
     }
 
     #[test]
-    fn test_reconcile_authoritative_non_item_task_statuses_backfills_join_predecessors() {
+    fn test_reconcile_authoritative_task_statuses_backfills_join_predecessors() {
         let mut completed_tasks = vec!["security_scan".to_string()];
         let mut failed_tasks = Vec::new();
 
-        reconcile_authoritative_non_item_task_statuses(
+        reconcile_authoritative_task_statuses(
             &mut completed_tasks,
             &mut failed_tasks,
             vec![
@@ -4979,18 +5102,37 @@ mod tests {
                     "build_artifacts".to_string(),
                     None,
                     ExecutionStatus::Completed,
+                    None,
+                    0,
                 ),
-                ("run_linter".to_string(), None, ExecutionStatus::Completed),
+                (
+                    "run_linter".to_string(),
+                    None,
+                    ExecutionStatus::Completed,
+                    None,
+                    0,
+                ),
                 (
                     "security_scan".to_string(),
                     None,
                     ExecutionStatus::Completed,
+                    None,
+                    0,
                 ),
-                // with_items children must not make the parent task look done
+                // Incomplete with_items children must not make the parent task look done.
                 (
                     "process_items".to_string(),
                     Some(0),
                     ExecutionStatus::Completed,
+                    None,
+                    0,
+                ),
+                (
+                    "process_items".to_string(),
+                    Some(1),
+                    ExecutionStatus::Running,
+                    None,
+                    0,
                 ),
             ],
         );
@@ -5003,28 +5145,79 @@ mod tests {
     }
 
     #[test]
-    fn test_reconcile_authoritative_non_item_task_statuses_backfills_failures() {
+    fn test_reconcile_authoritative_task_statuses_backfills_failures() {
         let mut completed_tasks = Vec::new();
         let mut failed_tasks = Vec::new();
 
-        reconcile_authoritative_non_item_task_statuses(
+        reconcile_authoritative_task_statuses(
             &mut completed_tasks,
             &mut failed_tasks,
             vec![
-                ("build_artifacts".to_string(), None, ExecutionStatus::Failed),
-                ("security_scan".to_string(), None, ExecutionStatus::Timeout),
+                (
+                    "build_artifacts".to_string(),
+                    None,
+                    ExecutionStatus::Failed,
+                    None,
+                    0,
+                ),
+                (
+                    "security_scan".to_string(),
+                    None,
+                    ExecutionStatus::Timeout,
+                    None,
+                    0,
+                ),
                 (
                     "process_items".to_string(),
                     Some(1),
                     ExecutionStatus::Failed,
+                    None,
+                    0,
                 ),
             ],
         );
 
         assert!(failed_tasks.contains(&"build_artifacts".to_string()));
         assert!(failed_tasks.contains(&"security_scan".to_string()));
-        assert!(!failed_tasks.contains(&"process_items".to_string()));
+        assert!(failed_tasks.contains(&"process_items".to_string()));
         assert!(completed_tasks.is_empty());
+    }
+
+    #[test]
+    fn test_reconcile_authoritative_task_statuses_uses_latest_retry_attempt() {
+        let mut completed_tasks = Vec::new();
+        let mut failed_tasks = vec!["flaky_task".to_string()];
+
+        reconcile_authoritative_task_statuses(
+            &mut completed_tasks,
+            &mut failed_tasks,
+            vec![
+                (
+                    "flaky_task".to_string(),
+                    None,
+                    ExecutionStatus::Failed,
+                    None,
+                    0,
+                ),
+                (
+                    "flaky_task".to_string(),
+                    None,
+                    ExecutionStatus::Failed,
+                    None,
+                    1,
+                ),
+                (
+                    "flaky_task".to_string(),
+                    None,
+                    ExecutionStatus::Completed,
+                    None,
+                    2,
+                ),
+            ],
+        );
+
+        assert!(completed_tasks.contains(&"flaky_task".to_string()));
+        assert!(!failed_tasks.contains(&"flaky_task".to_string()));
     }
 
     #[test]

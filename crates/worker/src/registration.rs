@@ -580,6 +580,8 @@ mod tests {
             agent: None,
             pack_upload: attune_common::config::PackUploadConfig::default(),
             artifacts: attune_common::config::ArtifactsConfig::default(),
+            retention: attune_common::config::RetentionConfig::default(),
+            maintenance: attune_common::config::SupervisorMaintenanceConfig::default(),
         };
         let mut registration = WorkerRegistration::new(pool, &config);
 

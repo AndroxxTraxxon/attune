@@ -60,6 +60,28 @@ pack_registry:
   allowed_source_hosts:
     - registry.attune.example.com
 
+# Runtime retention is available in tests but runs in dry-run mode by default.
+retention:
+  enabled: true
+  check_interval_seconds: 3600
+  batch_size: 100
+  dry_run: true
+
+maintenance:
+  enabled: true
+  artifact_cleanup_enabled: true
+  artifact_cleanup_batch_size: 25
+  monitoring_enabled: true
+  corrective_actions_enabled: true
+  stuck_execution_seconds: 3600
+  execution_remediation_seconds: 7200
+  stuck_queue_seconds: 900
+  queue_remediation_seconds: 1800
+  admission_remediation_seconds: 1800
+  retention_lag_alert_seconds: 86400
+  alert_limit_per_cycle: 25
+  alert_cooldown_seconds: 3600
+
 # Test worker configuration
 # worker:
 #   name: attune-test-worker
