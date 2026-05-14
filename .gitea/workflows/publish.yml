@@ -552,11 +552,20 @@ jobs:
         shell: bash
         env:
           IMAGE_TAG: ${{ needs.metadata.outputs.image_tag }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          # Use image_tag for version (strips leading 'v' for semver compliance)
+          set -euo pipefail
+
+          # Use image_tag for version (strips leading 'v' for release tags).
           version="${IMAGE_TAG#v}"
-          # nfpm requires valid semver — replace any non-semver chars
-          version=$(echo "$version" | sed 's/[^0-9a-zA-Z.+~-]/_/g')
+          # Linux package managers require versions to start with a digit, and
+          # branch builds also need monotonic upgrade ordering. Keep release tags
+          # unchanged, but turn SHA image tags into ordered package versions like
+          # 0.0.0.git.123.sha.abc123.
+          version="$(printf '%s' "$version" | sed 's/[^0-9A-Za-z.+~]/./g')"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]'; then
+            version="0.0.0.git.${RUN_NUMBER}.${version}"
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Package version: $version"
 
