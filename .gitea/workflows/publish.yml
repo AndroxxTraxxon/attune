@@ -584,15 +584,40 @@ jobs:
           registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
           registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
 
+          upload_with_retry() {
+            local package_file="$1"
+            local upload_url="$2"
+            local response_file="$3"
+            local status
+            local attempt
+            local max_attempts=5
+            local delay_seconds=2
+
+            for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+              echo "  Upload attempt ${attempt}/${max_attempts}" >&2
+              status=$(curl -sS -o "$response_file" -w '%{http_code}' \
+                -u "${registry_username}:${registry_password}" \
+                --upload-file "$package_file" \
+                "$upload_url")
+
+              if [[ "$status" =~ ^5[0-9][0-9]$ && "$attempt" -lt "$max_attempts" ]]; then
+                echo "  ⚠ Registry returned HTTP $status; retrying in ${delay_seconds}s" >&2
+                sleep "$delay_seconds"
+                delay_seconds=$((delay_seconds * 2))
+                continue
+              fi
+
+              printf '%s' "$status"
+              return 0
+            done
+          }
+
           for deb_file in dist/packages/*.deb; do
             [ -f "$deb_file" ] || continue
             echo "Publishing $(basename "$deb_file") to Debian registry"
 
             upload_url="${GITEA_BASE_URL}/api/packages/${PACKAGE_NAMESPACE}/debian/pool/stable/main/upload"
-            status=$(curl -sS -o /tmp/deb-upload-response.txt -w '%{http_code}' \
-              -u "${registry_username}:${registry_password}" \
-              --upload-file "$deb_file" \
-              "$upload_url")
+            status=$(upload_with_retry "$deb_file" "$upload_url" /tmp/deb-upload-response.txt)
 
             case "$status" in
               201) echo "  ✓ Published" ;;
@@ -615,15 +640,40 @@ jobs:
           registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
           registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
 
+          upload_with_retry() {
+            local package_file="$1"
+            local upload_url="$2"
+            local response_file="$3"
+            local status
+            local attempt
+            local max_attempts=5
+            local delay_seconds=2
+
+            for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+              echo "  Upload attempt ${attempt}/${max_attempts}" >&2
+              status=$(curl -sS -o "$response_file" -w '%{http_code}' \
+                -u "${registry_username}:${registry_password}" \
+                --upload-file "$package_file" \
+                "$upload_url")
+
+              if [[ "$status" =~ ^5[0-9][0-9]$ && "$attempt" -lt "$max_attempts" ]]; then
+                echo "  ⚠ Registry returned HTTP $status; retrying in ${delay_seconds}s" >&2
+                sleep "$delay_seconds"
+                delay_seconds=$((delay_seconds * 2))
+                continue
+              fi
+
+              printf '%s' "$status"
+              return 0
+            done
+          }
+
           for rpm_file in dist/packages/*.rpm; do
             [ -f "$rpm_file" ] || continue
             echo "Publishing $(basename "$rpm_file") to RPM registry"
 
             upload_url="${GITEA_BASE_URL}/api/packages/${PACKAGE_NAMESPACE}/rpm/el9/upload"
-            status=$(curl -sS -o /tmp/rpm-upload-response.txt -w '%{http_code}' \
-              -u "${registry_username}:${registry_password}" \
-              --upload-file "$rpm_file" \
-              "$upload_url")
+            status=$(upload_with_retry "$rpm_file" "$upload_url" /tmp/rpm-upload-response.txt)
 
             case "$status" in
               201) echo "  ✓ Published" ;;
@@ -646,15 +696,40 @@ jobs:
           registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
           registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
 
+          upload_with_retry() {
+            local package_file="$1"
+            local upload_url="$2"
+            local response_file="$3"
+            local status
+            local attempt
+            local max_attempts=5
+            local delay_seconds=2
+
+            for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+              echo "  Upload attempt ${attempt}/${max_attempts}" >&2
+              status=$(curl -sS -o "$response_file" -w '%{http_code}' \
+                -u "${registry_username}:${registry_password}" \
+                --upload-file "$package_file" \
+                "$upload_url")
+
+              if [[ "$status" =~ ^5[0-9][0-9]$ && "$attempt" -lt "$max_attempts" ]]; then
+                echo "  ⚠ Registry returned HTTP $status; retrying in ${delay_seconds}s" >&2
+                sleep "$delay_seconds"
+                delay_seconds=$((delay_seconds * 2))
+                continue
+              fi
+
+              printf '%s' "$status"
+              return 0
+            done
+          }
+
           for pkg_file in dist/packages/*.pkg.tar.zst; do
             [ -f "$pkg_file" ] || continue
             echo "Publishing $(basename "$pkg_file") to Arch registry"
 
             upload_url="${GITEA_BASE_URL}/api/packages/${PACKAGE_NAMESPACE}/arch/core"
-            status=$(curl -sS -o /tmp/arch-upload-response.txt -w '%{http_code}' \
-              -u "${registry_username}:${registry_password}" \
-              --upload-file "$pkg_file" \
-              "$upload_url")
+            status=$(upload_with_retry "$pkg_file" "$upload_url" /tmp/arch-upload-response.txt)
 
             case "$status" in
               201) echo "  ✓ Published" ;;
