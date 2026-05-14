@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { DatabaseZap, RotateCcw, Save } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { hasPermission } from "@/lib/permissions";
@@ -55,27 +55,63 @@ function cloneConfig(config: RetentionConfig): RetentionConfig {
 export default function RetentionConfigPage() {
   const { user } = useAuth();
   const canUpdate = hasPermission(user, "retention", "update");
-  const { data, isLoading, error } = useRetentionConfig();
+  const { data, dataUpdatedAt, isLoading, error } = useRetentionConfig();
   const updateRetention = useUpdateRetentionConfig();
-  const [draft, setDraft] = useState<RetentionConfig | null>(null);
-  const [targetDays, setTargetDays] = useState<Record<string, string>>({});
 
   const loadedConfig = data?.data ?? null;
 
-  useEffect(() => {
-    if (!loadedConfig) {
-      return;
-    }
-    setDraft(cloneConfig(loadedConfig));
-    setTargetDays(
-      Object.fromEntries(
-        retentionTargetKeys.map((key) => [
-          key,
-          secondsToDays(loadedConfig.targets[key].max_age_seconds),
-        ]),
-      ),
+  if (error) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">
+        Failed to load retention configuration.
+      </div>
     );
-  }, [loadedConfig]);
+  }
+
+  if (isLoading || !loadedConfig) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
+      </div>
+    );
+  }
+
+  return (
+    <RetentionConfigEditor
+      key={dataUpdatedAt}
+      loadedConfig={loadedConfig}
+      canUpdate={canUpdate}
+      updateRetention={updateRetention}
+    />
+  );
+}
+
+interface RetentionConfigEditorProps {
+  loadedConfig: RetentionConfig;
+  canUpdate: boolean;
+  updateRetention: ReturnType<typeof useUpdateRetentionConfig>;
+}
+
+function retentionTargetDays(config: RetentionConfig): Record<string, string> {
+  return Object.fromEntries(
+    retentionTargetKeys.map((key) => [
+      key,
+      secondsToDays(config.targets[key].max_age_seconds),
+    ]),
+  );
+}
+
+function RetentionConfigEditor({
+  loadedConfig,
+  canUpdate,
+  updateRetention,
+}: RetentionConfigEditorProps) {
+  const [draft, setDraft] = useState<RetentionConfig>(() =>
+    cloneConfig(loadedConfig),
+  );
+  const [targetDays, setTargetDays] = useState<Record<string, string>>(() =>
+    retentionTargetDays(loadedConfig),
+  );
 
   const validationError = useMemo(() => {
     if (!draft) {
@@ -145,22 +181,6 @@ export default function RetentionConfigPage() {
     }
     updateRetention.mutate(draft);
   };
-
-  if (isLoading || !draft) {
-    return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">
-        Failed to load retention configuration.
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6">
