@@ -5,7 +5,7 @@ This repository now includes:
 - A GitHub Actions publish workflow at `.github/workflows/publish.yml`
 - OCI-published container images for the Kubernetes deployment path
 - A Helm chart at `charts/attune`
-- Linux package and Docker distribution archives attached to GitHub Releases on tag builds
+- Linux package, Docker distribution, Helm chart, binary bundle, and combined build-artifact archives
 
 ## What Gets Published
 
@@ -29,6 +29,12 @@ Linux packages are uploaded as workflow artifacts for branch builds and attached
 to GitHub Releases for tag builds. GitHub Packages does not provide native
 Debian/RPM/Arch repository hosting, so the workflow no longer publishes apt,
 dnf, or pacman repositories.
+
+Every publish run that produces downloadable artifacts also creates a combined
+`attune-build-artifacts-<image_tag>.zip` workflow artifact. The zip contains the
+binary bundles, Linux packages, Docker distribution bundle, Helm chart package,
+and a `metadata.json` file for the run. Tag builds attach that combined zip to
+the GitHub Release.
 
 ## Required GitHub Repository Configuration
 

@@ -38,6 +38,7 @@ on:
       - "v*"
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST }}
   REGISTRY_NAMESPACE: ${{ vars.CONTAINER_REGISTRY_NAMESPACE }}
   GNU_GLIBC_VERSION: "2.28"
@@ -180,7 +181,7 @@ jobs:
       linux_packages: ${{ steps.filter.outputs.linux_packages }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -272,10 +273,10 @@ jobs:
         include: ${{ fromJSON(needs.metadata.outputs.rust_bundle_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Cache Rust toolchain
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.rustup/toolchains
@@ -294,7 +295,7 @@ jobs:
             ${{ matrix.musl_target }}
 
       - name: Cache Cargo registry + index
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index
@@ -306,7 +307,7 @@ jobs:
             cargo-registry-
 
       - name: Cache Cargo build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: target
           key: cargo-publish-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}
@@ -467,7 +468,7 @@ jobs:
           tar -C "dist/bundle/${BUNDLE_ARCH}" -czf "dist/attune-binaries-${BUNDLE_ARCH}.tar.gz" .
 
       - name: Upload binary bundle artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: attune-binaries-${{ matrix.arch }}
           path: dist/attune-binaries-${{ matrix.arch }}.tar.gz
@@ -489,10 +490,10 @@ jobs:
         include: ${{ fromJSON(needs.metadata.outputs.linux_package_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download binary bundle artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: attune-binaries-${{ matrix.arch }}
           path: dist/artifacts
@@ -555,7 +556,7 @@ jobs:
           ./scripts/build-linux-packages.sh "$BUNDLE_DIR" "$ARCH" "$VERSION"
 
       - name: Upload Linux package artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: attune-linux-packages-${{ matrix.arch }}
           path: dist/packages/*
@@ -709,7 +710,7 @@ jobs:
     if: needs.changes.outputs.docker_dist == 'true'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build docker dist bundle
         shell: bash
@@ -718,7 +719,7 @@ jobs:
           bash scripts/package-docker-dist.sh docker/distributable artifacts/attune-docker-dist.tar.gz
 
       - name: Upload docker dist artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: attune-docker-dist
           path: artifacts/attune-docker-dist.tar.gz
@@ -866,11 +867,11 @@ jobs:
     if: needs.changes.outputs.helm == 'true'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Cache Helm binary
         id: cache-helm
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/attune/helm/4.1.4
           key: helm-v4.1.4-linux-amd64
@@ -907,6 +908,14 @@ jobs:
             --app-version "${{ needs.metadata.outputs.image_tag }}" \
             --destination dist/helm
 
+      - name: Upload Helm chart artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: attune-helm-chart
+          path: dist/helm/*.tgz
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Publish Helm chart package
         shell: bash
         env:
@@ -939,6 +948,212 @@ jobs:
               --password-stdin
           helm push "${package_file}" "${chart_repository}"
 
+  publish-artifact-archive:
+    name: Publish Combined Artifact Archive
+    runs-on: ubuntu-24.04
+    needs:
+      - metadata
+      - build-rust-bundles
+      - publish-linux-packages
+      - publish-docker-dist
+      - publish-helm-chart
+    if: |
+      !cancelled() &&
+      (
+        needs.build-rust-bundles.result == 'success' ||
+        needs.publish-linux-packages.result == 'success' ||
+        needs.publish-docker-dist.result == 'success' ||
+        needs.publish-helm-chart.result == 'success'
+      )
+    steps:
+      - name: Download workflow artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist/all-artifacts
+
+      - name: Create combined artifact archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist/archive
+          archive_name="attune-build-artifacts-${{ needs.metadata.outputs.image_tag }}.zip"
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZipFile
+
+          artifact_root = Path("dist/all-artifacts")
+          archive_path = Path("dist/archive") / os.environ["ARCHIVE_NAME"]
+
+          metadata = {
+              "git_sha": os.environ["GITHUB_SHA"],
+              "ref": os.environ["GITHUB_REF"],
+              "image_tag": os.environ["IMAGE_TAG"],
+              "image_tags": os.environ["IMAGE_TAGS"],
+              "chart_version": os.environ["CHART_VERSION"],
+              "registry": os.environ["REGISTRY"],
+              "namespace": os.environ["NAMESPACE"],
+          }
+
+          with ZipFile(archive_path, "w", ZIP_DEFLATED) as zf:
+              zf.writestr("metadata.json", json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+              for path in sorted(artifact_root.rglob("*")):
+                  if path.is_file():
+                      zf.write(path, path.relative_to(artifact_root))
+          PY
+
+          echo "archive_name=${archive_name}" >> "$GITHUB_ENV"
+          echo "Created dist/archive/${archive_name}"
+        env:
+          ARCHIVE_NAME: attune-build-artifacts-${{ needs.metadata.outputs.image_tag }}.zip
+          IMAGE_TAG: ${{ needs.metadata.outputs.image_tag }}
+          IMAGE_TAGS: ${{ needs.metadata.outputs.image_tags }}
+          CHART_VERSION: ${{ needs.metadata.outputs.chart_version }}
+          REGISTRY: ${{ needs.metadata.outputs.registry }}
+          NAMESPACE: ${{ needs.metadata.outputs.namespace }}
+
+      - name: Upload combined artifact archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: attune-build-artifacts
+          path: dist/archive/${{ env.archive_name }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Attach combined archive to GitHub release
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          api_base="https://api.github.com"
+          upload_api_base="https://uploads.github.com"
+          auth_header="Authorization: Bearer ${GITHUB_TOKEN}"
+          accept_header="Accept: application/vnd.github+json"
+          api_version_header="X-GitHub-Api-Version: 2022-11-28"
+          owner_repo="${OWNER_REPO}"
+          tag_name="${TAG_NAME}"
+          archive_path="dist/archive/${archive_name}"
+          asset_name="${archive_name}"
+
+          release_response_file="$(mktemp)"
+          status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
+            -H "${auth_header}" \
+            -H "${accept_header}" \
+            -H "${api_version_header}" \
+            "${api_base}/repos/${owner_repo}/releases/tags/${tag_name}")"
+
+          if [ "${status_code}" = "404" ]; then
+            create_payload="$(TAG_NAME="${tag_name}" python3 - <<'PY'
+          import json
+          import os
+
+          tag = os.environ["TAG_NAME"]
+          print(json.dumps({
+              "tag_name": tag,
+              "name": tag,
+              "draft": False,
+              "prerelease": "-" in tag,
+          }))
+          PY
+          )"
+
+            status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
+              -H "${auth_header}" \
+              -H "${accept_header}" \
+              -H "${api_version_header}" \
+              -H "Content-Type: application/json" \
+              -X POST \
+              -d "${create_payload}" \
+              "${api_base}/repos/${owner_repo}/releases")"
+
+            if [ "${status_code}" = "422" ]; then
+              status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
+                -H "${auth_header}" \
+                -H "${accept_header}" \
+                -H "${api_version_header}" \
+                "${api_base}/repos/${owner_repo}/releases/tags/${tag_name}")"
+            fi
+          fi
+
+          case "${status_code}" in
+            200|201)
+              ;;
+            *)
+              echo "Failed to fetch or create release for tag ${tag_name}"
+              cat "${release_response_file}"
+              exit 1
+              ;;
+          esac
+
+          release_id="$(python3 - "${release_response_file}" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], "r", encoding="utf-8") as fh:
+              data = json.load(fh)
+          print(data["id"])
+          PY
+          )"
+
+          existing_asset_id="$(python3 - "${release_response_file}" "${asset_name}" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], "r", encoding="utf-8") as fh:
+              data = json.load(fh)
+          name = sys.argv[2]
+          for asset in data.get("assets", []):
+              if asset.get("name") == name:
+                  print(asset["id"])
+                  break
+          PY
+          )"
+
+          if [ -n "${existing_asset_id}" ]; then
+            curl -sS \
+              -H "${auth_header}" \
+              -H "${accept_header}" \
+              -H "${api_version_header}" \
+              -X DELETE \
+              "${api_base}/repos/${owner_repo}/releases/assets/${existing_asset_id}" \
+              >/dev/null
+          fi
+
+          encoded_asset_name="$(ASSET_NAME="${asset_name}" python3 - <<'PY'
+          import os
+          import urllib.parse
+
+          print(urllib.parse.quote(os.environ["ASSET_NAME"], safe=""))
+          PY
+          )"
+
+          upload_response_file="$(mktemp)"
+          status_code="$(curl -sS -o "${upload_response_file}" -w '%{http_code}' \
+            -H "${auth_header}" \
+            -H "${accept_header}" \
+            -H "${api_version_header}" \
+            -H "Content-Type: application/zip" \
+            --data-binary "@${archive_path}" \
+            "${upload_api_base}/repos/${owner_repo}/releases/${release_id}/assets?name=${encoded_asset_name}")"
+
+          case "${status_code}" in
+            201)
+              ;;
+            *)
+              echo "Failed to upload release asset ${asset_name}"
+              cat "${upload_response_file}"
+              exit 1
+              ;;
+          esac
+
   publish-rust-images:
     name: Publish ${{ matrix.image.name }} (${{ matrix.arch }})
     runs-on: ${{ matrix.runner_label }}
@@ -954,13 +1169,13 @@ jobs:
         include: ${{ fromJSON(needs.metadata.outputs.rust_image_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to registry
         shell: bash
@@ -993,7 +1208,7 @@ jobs:
           EOF
 
       - name: Download binary bundle artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: attune-binaries-${{ matrix.arch }}
           path: dist/artifact
@@ -1099,13 +1314,13 @@ jobs:
         include: ${{ fromJSON(needs.metadata.outputs.web_image_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Configure OCI registry auth
         shell: bash
@@ -1216,7 +1431,7 @@ jobs:
           - attune/web
     steps:
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Configure OCI registry auth
         shell: bash
