@@ -1,40 +1,46 @@
-# Gitea Registry And Helm Publishing
+# GitHub Packages And Helm Publishing
 
 This repository now includes:
 
-- A Gitea Actions publish workflow at `.gitea/workflows/publish.yml`
+- A GitHub Actions publish workflow at `.github/workflows/publish.yml`
 - OCI-published container images for the Kubernetes deployment path
 - A Helm chart at `charts/attune`
+- Linux package and Docker distribution archives attached to GitHub Releases on tag builds
 
 ## What Gets Published
 
-The workflow publishes these images to the Gitea OCI registry:
+The workflow publishes these images to GitHub Container Registry by default:
 
 - `attune/api`
 - `attune/executor`
 - `attune/notifier`
+- `attune/supervisor`
 - `attune/agent`
 - `attune/web`
 - `attune/migrations`
 - `attune/init-user`
 - `attune/init-packs`
 
-The Helm chart is pushed to Gitea's Helm package registry:
+The Helm chart is pushed as an OCI chart:
 
-- `https://<gitea-host>/api/packages/<namespace>/helm`
+- `oci://ghcr.io/<namespace>/attune/charts`
 
-## Required Gitea Repository Configuration
+Linux packages are uploaded as workflow artifacts for branch builds and attached
+to GitHub Releases for tag builds. GitHub Packages does not provide native
+Debian/RPM/Arch repository hosting, so the workflow no longer publishes apt,
+dnf, or pacman repositories.
+
+## Required GitHub Repository Configuration
 
 Set these variables:
 
-- `CLUSTER_GITEA_HOST`: Registry hostname only, for example `gitea.example.com`
-- `CONTAINER_REGISTRY_NAMESPACE`: Optional override for the registry namespace. If omitted, the workflow uses the repository owner.
-- `CONTAINER_REGISTRY_INSECURE`: Optional boolean override for plain HTTP registry access. If omitted, the workflow auto-detects `*.svc.cluster.local` registry hosts and treats them as insecure/plain HTTP. Set this explicitly to force either behavior.
+- `CONTAINER_REGISTRY_HOST`: Optional registry hostname override. If omitted, the workflow uses `ghcr.io`.
+- `CONTAINER_REGISTRY_NAMESPACE`: Optional override for the registry namespace. If omitted, the workflow uses the repository owner lowercased. GHCR publishes with a lowercased namespace.
 
 Set one of these authentication options:
 
 - Preferred: `CONTAINER_REGISTRY_USERNAME` and `CONTAINER_REGISTRY_PASSWORD`
-- Fallback: allow the workflow `GITHUB_TOKEN` or Gitea-provided token to push packages
+- Fallback: allow the workflow `GITHUB_TOKEN` to push packages and release assets
 
 ## Publish Behavior
 
@@ -51,20 +57,7 @@ Tag behavior:
 - release tags like `v0.3.0` publish `0.3.0`, `latest`, and `sha-<12-char-sha>`
 
 Linux package branch builds use package-manager-safe versions such as
-`0.0.0.git.<run-number>.sha.<short-sha>`. If a broken publish ever leaves
-legacy `sha-*` package versions in the Debian/RPM/Arch registries, remove them
-with:
-
-```bash
-GITEA_USERNAME=<user> GITEA_TOKEN=<token> \
-  scripts/delete-legacy-gitea-linux-packages.sh --execute
-```
-
-Run the script without `--execute` first to preview the package versions and
-delete URLs. It discovers legacy versions from Debian, RPM, and Arch metadata,
-including RPM/Arch release-suffixed versions such as `sha-...-1`. It defaults
-to `https://git.rdrx.app`, namespace `attune-system`, Debian `stable/main`,
-RPM group `el9`, and Arch repository `core`.
+`0.0.0.git.<run-number>.sha.<short-sha>`.
 
 The Linux package set includes split packages for individual components and an
 all-in-one `attune` installer package. The all-in-one package is self-contained:
@@ -85,30 +78,15 @@ Chart packaging behavior:
 Log in to the registry:
 
 ```bash
-helm registry login gitea.example.com --username <user>
-```
-
-For a plain HTTP internal registry:
-
-```bash
-helm registry login gitea-http.gitea.svc.cluster.local --username <user> --plain-http
-```
-
-Add the Helm package repository:
-
-```bash
-helm repo add attune https://gitea.example.com/api/packages/<namespace>/helm \
-  --username <user> \
-  --password <token>
-helm repo update
+helm registry login ghcr.io --username <user>
 ```
 
 Install the chart:
 
 ```bash
-helm install attune attune/attune \
+helm install attune oci://ghcr.io/<namespace>/attune/charts/attune \
   --version 0.3.0 \
-  --set global.imageRegistry=gitea.example.com \
+  --set global.imageRegistry=ghcr.io \
   --set global.imageNamespace=<namespace> \
   --set global.imageTag=0.3.0 \
   --set web.config.apiUrl=https://attune.example.com/api \
@@ -118,9 +96,9 @@ helm install attune attune/attune \
 For a branch build:
 
 ```bash
-helm install attune attune/attune \
+helm install attune oci://ghcr.io/<namespace>/attune/charts/attune \
   --version 0.0.0-edge.<run_number> \
-  --set global.imageRegistry=gitea.example.com \
+  --set global.imageRegistry=ghcr.io \
   --set global.imageNamespace=<namespace> \
   --set global.imageTag=edge
 ```

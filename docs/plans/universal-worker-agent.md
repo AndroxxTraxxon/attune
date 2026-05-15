@@ -827,7 +827,7 @@ This ensures the agent can work with new runtimes immediately, even if the runti
 - Runtime auto-detect by default; explicit `runtimes` list override
 - Custom env vars, resource limits, log level, termination grace period
 - `images.agent` added to `values.yaml` for registry-aware image resolution
-- `attune-agent` image added to the Gitea Actions publish workflow (`agent-init` target)
+- `attune-agent` image added to the GitHub Actions publish workflow (`agent-init` target)
 - `NOTES.txt` updated to list enabled agent workers on install
 - Quick-reference docs at `docs/QUICKREF-kubernetes-agent-workers.md`
 

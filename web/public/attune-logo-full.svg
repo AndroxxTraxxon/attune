@@ -1,152 +1,523 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 512" width="800" height="512">
-  <defs>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 800 512"
+   width="800"
+   height="512"
+   version="1.1"
+   id="svg25"
+   sodipodi:docname="attune-logo-full.svg"
+   inkscape:version="1.4.4 (dcaf3e7d9e, 2026-05-05)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview25"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="1.0566406"
+     inkscape:cx="400.32532"
+     inkscape:cy="255.5268"
+     inkscape:window-width="1453"
+     inkscape:window-height="872"
+     inkscape:window-x="2011"
+     inkscape:window-y="244"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="svg25" />
+  <defs
+     id="defs11">
     <!-- Primary gradient: deep indigo to vibrant blue -->
-    <linearGradient id="grad-primary" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#4F46E5" />
-      <stop offset="50%" stop-color="#6366F1" />
-      <stop offset="100%" stop-color="#818CF8" />
+    <linearGradient
+       id="grad-primary"
+       x1="0%"
+       y1="0%"
+       x2="100%"
+       y2="100%">
+      <stop
+         offset="0%"
+         stop-color="#4F46E5"
+         id="stop1" />
+      <stop
+         offset="50%"
+         stop-color="#6366F1"
+         id="stop2" />
+      <stop
+         offset="100%"
+         stop-color="#818CF8"
+         id="stop3" />
     </linearGradient>
-
     <!-- Accent gradient: teal to cyan for flow lines -->
-    <linearGradient id="grad-accent" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#14B8A6" />
-      <stop offset="100%" stop-color="#22D3EE" />
+    <linearGradient
+       id="grad-accent"
+       x1="0%"
+       y1="0%"
+       x2="100%"
+       y2="100%">
+      <stop
+         offset="0%"
+         stop-color="#14B8A6"
+         id="stop4" />
+      <stop
+         offset="100%"
+         stop-color="#22D3EE"
+         id="stop5" />
     </linearGradient>
-
     <!-- Glow gradient for the resonance ring -->
-    <linearGradient id="grad-glow" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#818CF8" />
-      <stop offset="50%" stop-color="#6366F1" />
-      <stop offset="100%" stop-color="#14B8A6" />
+    <linearGradient
+       id="grad-glow"
+       x1="0%"
+       y1="0%"
+       x2="100%"
+       y2="100%">
+      <stop
+         offset="0%"
+         stop-color="#818CF8"
+         id="stop6" />
+      <stop
+         offset="50%"
+         stop-color="#6366F1"
+         id="stop7" />
+      <stop
+         offset="100%"
+         stop-color="#14B8A6"
+         id="stop8" />
     </linearGradient>
-
     <!-- Text gradient (left to right for horizontal text) -->
-    <linearGradient id="grad-text" x1="0%" y1="0%" x2="100%" y2="20%">
-      <stop offset="0%" stop-color="#4F46E5" />
-      <stop offset="50%" stop-color="#6366F1" />
-      <stop offset="100%" stop-color="#818CF8" />
+    <linearGradient
+       id="grad-text"
+       x1="0%"
+       y1="0%"
+       x2="100%"
+       y2="20%">
+      <stop
+         offset="0%"
+         stop-color="#4F46E5"
+         id="stop9" />
+      <stop
+         offset="50%"
+         stop-color="#6366F1"
+         id="stop10" />
+      <stop
+         offset="100%"
+         stop-color="#818CF8"
+         id="stop11" />
     </linearGradient>
-
     <!-- Subtle shadow for depth -->
-    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#4F46E5" flood-opacity="0.2" />
+    <filter
+       id="shadow"
+       x="-0.15277778"
+       y="-0.032163743"
+       width="1.3055556"
+       height="1.0643275">
+      <feDropShadow
+         dx="0"
+         dy="2"
+         stdDeviation="4"
+         flood-color="#4F46E5"
+         flood-opacity="0.2" />
     </filter>
   </defs>
-
   <!-- Resonance arcs — left side (centered on crossbar y=330) -->
-  <g transform="translate(0,0)">
-    <animateTransform attributeName="transform" type="translate" values="0 0; -4 0; 0 0" dur="3s" repeatCount="indefinite" />
-    <path d="M 118 274 Q 88 330 118 386"
-          fill="none" stroke="url(#grad-accent)" stroke-width="6" stroke-linecap="round" opacity="0.5">
-      <animate attributeName="opacity" values="0.3;0.6;0.3" dur="3s" repeatCount="indefinite" />
-      <animate attributeName="stroke-width" values="4;8;4" dur="3s" repeatCount="indefinite" />
+  <g
+     transform="translate(0,0)"
+     id="g11">
+    <animateTransform
+       attributeName="transform"
+       type="translate"
+       values="0 0; -4 0; 0 0"
+       dur="3s"
+       repeatCount="indefinite" />
+    <path
+       d="M 118 274 Q 88 330 118 386"
+       fill="none"
+       stroke="url(#grad-accent)"
+       stroke-width="6"
+       stroke-linecap="round"
+       opacity="0.5"
+       id="path11">
+      <animate
+         attributeName="opacity"
+         values="0.3;0.6;0.3"
+         dur="3s"
+         repeatCount="indefinite" />
+      <animate
+         attributeName="stroke-width"
+         values="4;8;4"
+         dur="3s"
+         repeatCount="indefinite" />
     </path>
   </g>
-  <g transform="translate(0,0)">
-    <animateTransform attributeName="transform" type="translate" values="0 0; -5 0; 0 0" dur="3s" begin="0.3s" repeatCount="indefinite" />
-    <path d="M 98 254 Q 58 330 98 406"
-          fill="none" stroke="url(#grad-accent)" stroke-width="4.5" stroke-linecap="round" opacity="0.35">
-      <animate attributeName="opacity" values="0.2;0.45;0.2" dur="3s" begin="0.3s" repeatCount="indefinite" />
-      <animate attributeName="stroke-width" values="3;6;3" dur="3s" begin="0.3s" repeatCount="indefinite" />
+  <g
+     transform="translate(0,0)"
+     id="g12">
+    <animateTransform
+       attributeName="transform"
+       type="translate"
+       values="0 0; -5 0; 0 0"
+       dur="3s"
+       begin="0.3s"
+       repeatCount="indefinite" />
+    <path
+       d="M 98 254 Q 58 330 98 406"
+       fill="none"
+       stroke="url(#grad-accent)"
+       stroke-width="4.5"
+       stroke-linecap="round"
+       opacity="0.35"
+       id="path12">
+      <animate
+         attributeName="opacity"
+         values="0.2;0.45;0.2"
+         dur="3s"
+         begin="0.3s"
+         repeatCount="indefinite" />
+      <animate
+         attributeName="stroke-width"
+         values="3;6;3"
+         dur="3s"
+         begin="0.3s"
+         repeatCount="indefinite" />
     </path>
   </g>
-  <g transform="translate(0,0)">
-    <animateTransform attributeName="transform" type="translate" values="0 0; -6 0; 0 0" dur="3s" begin="0.6s" repeatCount="indefinite" />
-    <path d="M 80 234 Q 30 330 80 426"
-          fill="none" stroke="url(#grad-accent)" stroke-width="3" stroke-linecap="round" opacity="0.2">
-      <animate attributeName="opacity" values="0.1;0.3;0.1" dur="3s" begin="0.6s" repeatCount="indefinite" />
-      <animate attributeName="stroke-width" values="2;4;2" dur="3s" begin="0.6s" repeatCount="indefinite" />
+  <g
+     transform="translate(0,0)"
+     id="g13">
+    <animateTransform
+       attributeName="transform"
+       type="translate"
+       values="0 0; -6 0; 0 0"
+       dur="3s"
+       begin="0.6s"
+       repeatCount="indefinite" />
+    <path
+       d="M 80 234 Q 30 330 80 426"
+       fill="none"
+       stroke="url(#grad-accent)"
+       stroke-width="3"
+       stroke-linecap="round"
+       opacity="0.2"
+       id="path13">
+      <animate
+         attributeName="opacity"
+         values="0.1;0.3;0.1"
+         dur="3s"
+         begin="0.6s"
+         repeatCount="indefinite" />
+      <animate
+         attributeName="stroke-width"
+         values="2;4;2"
+         dur="3s"
+         begin="0.6s"
+         repeatCount="indefinite" />
     </path>
   </g>
-
   <!-- Stylized 'A' — inverted tuning fork -->
-  <g filter="url(#shadow)">
+  <g
+     filter="url(#shadow)"
+     id="g16">
     <!-- Single U-shaped resonator: left foot → up left leg → curve through apex → down right leg → right foot -->
-    <path d="M 170 412 L 170 278 Q 170 248 200 228 Q 206 224 212 228 Q 242 248 242 278 L 242 412"
-          fill="none" stroke="url(#grad-primary)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" />
-
+    <path
+       d="M 170 412 L 170 278 Q 170 248 200 228 Q 206 224 212 228 Q 242 248 242 278 L 242 412"
+       fill="none"
+       stroke="url(#grad-primary)"
+       stroke-width="22"
+       stroke-linecap="round"
+       stroke-linejoin="round"
+       id="path14" />
     <!-- Handle / stem above the apex -->
-    <path d="M 206 70 L 206 224"
-          fill="none" stroke="url(#grad-primary)" stroke-width="22" stroke-linecap="round" />
-
+    <path
+       d="M 206 70 L 206 224"
+       fill="none"
+       stroke="url(#grad-primary)"
+       stroke-width="22"
+       stroke-linecap="round"
+       id="path15" />
     <!-- Crossbar of the A -->
-    <path d="M 174 330 L 238 330"
-          fill="none" stroke="url(#grad-primary)" stroke-width="14" stroke-linecap="round" />
+    <path
+       d="M 174 330 L 238 330"
+       fill="none"
+       stroke="url(#grad-primary)"
+       stroke-width="14"
+       stroke-linecap="round"
+       id="path16" />
   </g>
-
   <!-- Stem dots (orchestration flow along the handle) -->
-  <circle cx="206" cy="120" r="5" fill="#22D3EE" opacity="0.6">
-    <animate attributeName="opacity" values="0.3;0.7;0.3" dur="2.5s" begin="0.2s" repeatCount="indefinite" />
-    <animate attributeName="r" values="3;6;3" dur="2.5s" begin="0.2s" repeatCount="indefinite" />
+  <circle
+     cx="206"
+     cy="120"
+     r="5"
+     fill="#22D3EE"
+     opacity="0.6"
+     id="circle16">
+    <animate
+       attributeName="opacity"
+       values="0.3;0.7;0.3"
+       dur="2.5s"
+       begin="0.2s"
+       repeatCount="indefinite" />
+    <animate
+       attributeName="r"
+       values="3;6;3"
+       dur="2.5s"
+       begin="0.2s"
+       repeatCount="indefinite" />
   </circle>
-  <circle cx="206" cy="150" r="6" fill="#14B8A6" opacity="0.7">
-    <animate attributeName="opacity" values="0.4;0.8;0.4" dur="2.5s" begin="0.6s" repeatCount="indefinite" />
-    <animate attributeName="r" values="4;7;4" dur="2.5s" begin="0.6s" repeatCount="indefinite" />
+  <circle
+     cx="206"
+     cy="150"
+     r="6"
+     fill="#14B8A6"
+     opacity="0.7"
+     id="circle17">
+    <animate
+       attributeName="opacity"
+       values="0.4;0.8;0.4"
+       dur="2.5s"
+       begin="0.6s"
+       repeatCount="indefinite" />
+    <animate
+       attributeName="r"
+       values="4;7;4"
+       dur="2.5s"
+       begin="0.6s"
+       repeatCount="indefinite" />
   </circle>
-  <circle cx="206" cy="182" r="5" fill="#22D3EE" opacity="0.6">
-    <animate attributeName="opacity" values="0.3;0.7;0.3" dur="2.5s" begin="1.0s" repeatCount="indefinite" />
-    <animate attributeName="r" values="3;6;3" dur="2.5s" begin="1.0s" repeatCount="indefinite" />
+  <circle
+     cx="206"
+     cy="182"
+     r="5"
+     fill="#22D3EE"
+     opacity="0.6"
+     id="circle18">
+    <animate
+       attributeName="opacity"
+       values="0.3;0.7;0.3"
+       dur="2.5s"
+       begin="1.0s"
+       repeatCount="indefinite" />
+    <animate
+       attributeName="r"
+       values="3;6;3"
+       dur="2.5s"
+       begin="1.0s"
+       repeatCount="indefinite" />
   </circle>
-
   <!-- Crossbar event node dots on the A -->
-  <circle cx="194" cy="330" r="7" fill="#14B8A6" opacity="0.8">
-    <animate attributeName="r" values="5;8;5" dur="2s" repeatCount="indefinite" />
-    <animate attributeName="opacity" values="0.6;1;0.6" dur="2s" repeatCount="indefinite" />
+  <circle
+     cx="194"
+     cy="330"
+     r="7"
+     fill="#14B8A6"
+     opacity="0.8"
+     id="circle19">
+    <animate
+       attributeName="r"
+       values="5;8;5"
+       dur="2s"
+       repeatCount="indefinite" />
+    <animate
+       attributeName="opacity"
+       values="0.6;1;0.6"
+       dur="2s"
+       repeatCount="indefinite" />
   </circle>
-  <circle cx="218" cy="330" r="7" fill="#22D3EE" opacity="0.8">
-    <animate attributeName="r" values="5;8;5" dur="2s" begin="0.5s" repeatCount="indefinite" />
-    <animate attributeName="opacity" values="0.6;1;0.6" dur="2s" begin="0.5s" repeatCount="indefinite" />
+  <circle
+     cx="218"
+     cy="330"
+     r="7"
+     fill="#22D3EE"
+     opacity="0.8"
+     id="circle20">
+    <animate
+       attributeName="r"
+       values="5;8;5"
+       dur="2s"
+       begin="0.5s"
+       repeatCount="indefinite" />
+    <animate
+       attributeName="opacity"
+       values="0.6;1;0.6"
+       dur="2s"
+       begin="0.5s"
+       repeatCount="indefinite" />
   </circle>
-
   <!-- Left branching dot from the A crossbar -->
-  <circle cx="154" cy="330" r="5" fill="url(#grad-accent)" opacity="0.6">
-    <animate attributeName="opacity" values="0.3;0.7;0.3" dur="2.5s" begin="0.5s" repeatCount="indefinite" />
-    <animate attributeName="r" values="3;6;3" dur="2.5s" begin="0.5s" repeatCount="indefinite" />
+  <circle
+     cx="154"
+     cy="330"
+     r="5"
+     fill="url(#grad-accent)"
+     opacity="0.6"
+     id="circle21">
+    <animate
+       attributeName="opacity"
+       values="0.3;0.7;0.3"
+       dur="2.5s"
+       begin="0.5s"
+       repeatCount="indefinite" />
+    <animate
+       attributeName="r"
+       values="3;6;3"
+       dur="2.5s"
+       begin="0.5s"
+       repeatCount="indefinite" />
   </circle>
-  <line x1="169" y1="330" x2="159" y2="330" stroke="url(#grad-accent)" stroke-width="2" stroke-linecap="round" opacity="0.5" />
-
+  <line
+     x1="169"
+     y1="330"
+     x2="159"
+     y2="330"
+     stroke="url(#grad-accent)"
+     stroke-width="2"
+     stroke-linecap="round"
+     opacity="0.5"
+     id="line21" />
   <!-- Apex dot at the top of the A -->
-  <circle cx="206" cy="66" r="10" fill="url(#grad-primary)" opacity="0.9" />
-
+  <circle
+     cx="206"
+     cy="66"
+     r="10"
+     fill="url(#grad-primary)"
+     opacity="0.9"
+     id="circle22" />
   <!-- "ttune" text — vertically centered on crossbar y=330 -->
-  <text x="260" y="372"
-        font-family="'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
-        font-size="130"
-        font-weight="600"
-        letter-spacing="-2"
-        fill="url(#grad-text)"
-        filter="url(#shadow)">ttune</text>
-
+  <text
+     x="260"
+     y="372"
+     font-family="'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+     font-size="130"
+     font-weight="600"
+     letter-spacing="-2"
+     fill="url(#grad-text)"
+     filter="url(#shadow)"
+     id="text22"
+     style="-inkscape-font-specification:'Inter Bold';font-family:Inter;font-weight:bold;font-style:normal;font-stretch:normal;font-variant:normal">ttune</text>
   <!-- Right-side branching dot (connects text to resonance arcs) -->
-  <circle cx="583" cy="330" r="5" fill="url(#grad-accent)" opacity="0.6">
-    <animate attributeName="opacity" values="0.3;0.7;0.3" dur="2.5s" repeatCount="indefinite" />
-    <animate attributeName="r" values="3;6;3" dur="2.5s" repeatCount="indefinite" />
+  <circle
+     cx="583"
+     cy="330"
+     r="5"
+     fill="url(#grad-accent)"
+     opacity="0.6"
+     id="circle23">
+    <animate
+       attributeName="opacity"
+       values="0.3;0.7;0.3"
+       dur="2.5s"
+       repeatCount="indefinite" />
+    <animate
+       attributeName="r"
+       values="3;6;3"
+       dur="2.5s"
+       repeatCount="indefinite" />
   </circle>
-  <line x1="570" y1="330" x2="578" y2="330" stroke="url(#grad-accent)" stroke-width="2" stroke-linecap="round" opacity="0.5" />
-
+  <line
+     x1="570"
+     y1="330"
+     x2="578"
+     y2="330"
+     stroke="url(#grad-accent)"
+     stroke-width="2"
+     stroke-linecap="round"
+     opacity="0.5"
+     id="line23" />
   <!-- Resonance arcs — right side (close to the 'e', centered on y=330) -->
-  <g transform="translate(0,0)">
-    <animateTransform attributeName="transform" type="translate" values="0 0; 4 0; 0 0" dur="3s" repeatCount="indefinite" />
-    <path d="M 609 274 Q 639 330 609 386"
-          fill="none" stroke="url(#grad-accent)" stroke-width="6" stroke-linecap="round" opacity="0.5">
-      <animate attributeName="opacity" values="0.3;0.6;0.3" dur="3s" repeatCount="indefinite" />
-      <animate attributeName="stroke-width" values="4;8;4" dur="3s" repeatCount="indefinite" />
+  <g
+     transform="translate(0,0)"
+     id="g23">
+    <animateTransform
+       attributeName="transform"
+       type="translate"
+       values="0 0; 4 0; 0 0"
+       dur="3s"
+       repeatCount="indefinite" />
+    <path
+       d="M 609 274 Q 639 330 609 386"
+       fill="none"
+       stroke="url(#grad-accent)"
+       stroke-width="6"
+       stroke-linecap="round"
+       opacity="0.5"
+       id="path23">
+      <animate
+         attributeName="opacity"
+         values="0.3;0.6;0.3"
+         dur="3s"
+         repeatCount="indefinite" />
+      <animate
+         attributeName="stroke-width"
+         values="4;8;4"
+         dur="3s"
+         repeatCount="indefinite" />
     </path>
   </g>
-  <g transform="translate(0,0)">
-    <animateTransform attributeName="transform" type="translate" values="0 0; 5 0; 0 0" dur="3s" begin="0.3s" repeatCount="indefinite" />
-    <path d="M 629 254 Q 669 330 629 406"
-          fill="none" stroke="url(#grad-accent)" stroke-width="4.5" stroke-linecap="round" opacity="0.35">
-      <animate attributeName="opacity" values="0.2;0.45;0.2" dur="3s" begin="0.3s" repeatCount="indefinite" />
-      <animate attributeName="stroke-width" values="3;6;3" dur="3s" begin="0.3s" repeatCount="indefinite" />
+  <g
+     transform="translate(0,0)"
+     id="g24">
+    <animateTransform
+       attributeName="transform"
+       type="translate"
+       values="0 0; 5 0; 0 0"
+       dur="3s"
+       begin="0.3s"
+       repeatCount="indefinite" />
+    <path
+       d="M 629 254 Q 669 330 629 406"
+       fill="none"
+       stroke="url(#grad-accent)"
+       stroke-width="4.5"
+       stroke-linecap="round"
+       opacity="0.35"
+       id="path24">
+      <animate
+         attributeName="opacity"
+         values="0.2;0.45;0.2"
+         dur="3s"
+         begin="0.3s"
+         repeatCount="indefinite" />
+      <animate
+         attributeName="stroke-width"
+         values="3;6;3"
+         dur="3s"
+         begin="0.3s"
+         repeatCount="indefinite" />
     </path>
   </g>
-  <g transform="translate(0,0)">
-    <animateTransform attributeName="transform" type="translate" values="0 0; 6 0; 0 0" dur="3s" begin="0.6s" repeatCount="indefinite" />
-    <path d="M 647 234 Q 697 330 647 426"
-          fill="none" stroke="url(#grad-accent)" stroke-width="3" stroke-linecap="round" opacity="0.2">
-      <animate attributeName="opacity" values="0.1;0.3;0.1" dur="3s" begin="0.6s" repeatCount="indefinite" />
-      <animate attributeName="stroke-width" values="2;4;2" dur="3s" begin="0.6s" repeatCount="indefinite" />
+  <g
+     transform="translate(0,0)"
+     id="g25">
+    <animateTransform
+       attributeName="transform"
+       type="translate"
+       values="0 0; 6 0; 0 0"
+       dur="3s"
+       begin="0.6s"
+       repeatCount="indefinite" />
+    <path
+       d="M 647 234 Q 697 330 647 426"
+       fill="none"
+       stroke="url(#grad-accent)"
+       stroke-width="3"
+       stroke-linecap="round"
+       opacity="0.2"
+       id="path25">
+      <animate
+         attributeName="opacity"
+         values="0.1;0.3;0.1"
+         dur="3s"
+         begin="0.6s"
+         repeatCount="indefinite" />
+      <animate
+         attributeName="stroke-width"
+         values="2;4;2"
+         dur="3s"
+         begin="0.6s"
+         repeatCount="indefinite" />
     </path>
   </g>
 </svg>

@@ -1,5 +1,9 @@
 name: Publish Images and Helm Chart
 
+permissions:
+  contents: write
+  packages: write
+
 on:
   workflow_dispatch:
     inputs:
@@ -34,10 +38,8 @@ on:
       - "v*"
 
 env:
-  REGISTRY_HOST: ${{ vars.CLUSTER_GITEA_HOST }}
+  REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST }}
   REGISTRY_NAMESPACE: ${{ vars.CONTAINER_REGISTRY_NAMESPACE }}
-  REGISTRY_PLAIN_HTTP: ${{ vars.CONTAINER_REGISTRY_INSECURE }}
-  ARTIFACT_REPOSITORY: attune/build-artifacts
   GNU_GLIBC_VERSION: "2.28"
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
@@ -45,21 +47,21 @@ env:
   RUSTUP_MAX_RETRIES: 10
   RUST_MIN_STACK: 67108864
   SQLX_OFFLINE: true
-  RUNNER_TOOL_CACHE: /toolcache
 
 jobs:
   metadata:
     name: Resolve Publish Metadata
-    runs-on: build-amd64
+    runs-on: ubuntu-24.04
     outputs:
       registry: ${{ steps.meta.outputs.registry }}
       namespace: ${{ steps.meta.outputs.namespace }}
-      registry_plain_http: ${{ steps.meta.outputs.registry_plain_http }}
-      gitea_base_url: ${{ steps.meta.outputs.gitea_base_url }}
       image_tag: ${{ steps.meta.outputs.image_tag }}
       image_tags: ${{ steps.meta.outputs.image_tags }}
       chart_version: ${{ steps.meta.outputs.chart_version }}
-      artifact_ref_base: ${{ steps.meta.outputs.artifact_ref_base }}
+      rust_bundle_matrix: ${{ steps.meta.outputs.rust_bundle_matrix }}
+      linux_package_matrix: ${{ steps.meta.outputs.linux_package_matrix }}
+      rust_image_matrix: ${{ steps.meta.outputs.rust_image_matrix }}
+      web_image_matrix: ${{ steps.meta.outputs.web_image_matrix }}
     steps:
       - name: Resolve tags and registry paths
         id: meta
@@ -70,49 +72,18 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
           RUN_NUMBER: ${{ github.run_number }}
+          TARGET_ARCH: ${{ inputs.target_arch }}
         run: |
           set -euo pipefail
 
-          registry="${REGISTRY_HOST}"
+          registry="${REGISTRY_HOST:-ghcr.io}"
           namespace="${REGISTRY_NAMESPACE}"
-          registry_plain_http_raw="${REGISTRY_PLAIN_HTTP:-}"
-          registry_host_only="${registry%%:*}"
-          registry_plain_http_default="false"
-
-          if [ -z "$registry" ]; then
-            echo "CLUSTER_GITEA_HOST app variable is required"
-            exit 1
-          fi
 
           if [ -z "$namespace" ]; then
-            namespace="${REPOSITORY_OWNER}"
+            namespace="$(printf '%s' "${REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           fi
-
-          if printf '%s' "$registry_host_only" | grep -Eq '(^|[.])svc[.]cluster[.]local$'; then
-            registry_plain_http_default="true"
-          fi
-
-          if [ -n "$registry_plain_http_raw" ]; then
-            case "$(printf '%s' "$registry_plain_http_raw" | tr '[:upper:]' '[:lower:]')" in
-              1|true|yes|on)
-                registry_plain_http="true"
-                ;;
-              0|false|no|off)
-                registry_plain_http="false"
-                ;;
-              *)
-                echo "CONTAINER_REGISTRY_INSECURE must be a boolean when set"
-                exit 1
-                ;;
-            esac
-          else
-            registry_plain_http="$registry_plain_http_default"
-          fi
-
-          if [ "$registry_plain_http" = "true" ]; then
-            gitea_base_url="http://${registry}"
-          else
-            gitea_base_url="https://${registry}"
+          if [ "$registry" = "ghcr.io" ]; then
+            namespace="$(printf '%s' "${namespace}" | tr '[:upper:]' '[:lower:]')"
           fi
 
           short_sha="$(printf '%s' "${COMMIT_SHA}" | cut -c1-12)"
@@ -129,22 +100,78 @@ jobs:
             chart_version="0.0.0-edge.${RUN_NUMBER}"
           fi
 
-          artifact_ref_base="${registry}/${namespace}/${ARTIFACT_REPOSITORY}"
-
           {
             echo "registry=$registry"
             echo "namespace=$namespace"
-            echo "registry_plain_http=$registry_plain_http"
-             echo "gitea_base_url=$gitea_base_url"
-             echo "image_tag=$version"
-             echo "image_tags=$image_tags"
-             echo "chart_version=$chart_version"
-             echo "artifact_ref_base=$artifact_ref_base"
-           } >> "$GITHUB_OUTPUT"
+            echo "image_tag=$version"
+            echo "image_tags=$image_tags"
+            echo "chart_version=$chart_version"
+          } >> "$GITHUB_OUTPUT"
+
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+
+          target_arch = os.environ.get("TARGET_ARCH") or "all"
+          selected_arches = ["amd64", "arm64"] if target_arch == "all" else [target_arch]
+
+          rust_bundles = {
+              "amd64": {
+                  "arch": "amd64",
+                  "runner_label": "ubuntu-24.04",
+                  "service_rust_target": "x86_64-unknown-linux-gnu",
+                  "service_target": "x86_64-unknown-linux-gnu.2.28",
+                  "musl_target": "x86_64-unknown-linux-musl",
+              },
+              "arm64": {
+                  "arch": "arm64",
+                  "runner_label": "ubuntu-24.04",
+                  "service_rust_target": "aarch64-unknown-linux-gnu",
+                  "service_target": "aarch64-unknown-linux-gnu.2.28",
+                  "musl_target": "aarch64-unknown-linux-musl",
+              },
+          }
+          linux_packages = {
+              "amd64": {"arch": "amd64", "runner_label": "ubuntu-24.04", "nfpm_arch": "amd64"},
+              "arm64": {"arch": "arm64", "runner_label": "ubuntu-24.04", "nfpm_arch": "arm64"},
+          }
+          web_images = {
+              "amd64": {"arch": "amd64", "runner_label": "ubuntu-24.04", "platform": "linux/amd64"},
+              "arm64": {"arch": "arm64", "runner_label": "ubuntu-24.04", "platform": "linux/arm64"},
+          }
+          rust_image_templates = [
+              {"name": "api", "repository": "attune/api", "source_path": "bin/attune-api", "dockerfile": "docker/Dockerfile.runtime"},
+              {"name": "executor", "repository": "attune/executor", "source_path": "bin/attune-executor", "dockerfile": "docker/Dockerfile.runtime"},
+              {"name": "notifier", "repository": "attune/notifier", "source_path": "bin/attune-notifier", "dockerfile": "docker/Dockerfile.runtime"},
+              {"name": "supervisor", "repository": "attune/supervisor", "source_path": "bin/attune-supervisor", "dockerfile": "docker/Dockerfile.runtime"},
+              {"name": "agent", "repository": "attune/agent", "source_path": "agent/attune-agent", "dockerfile": "docker/Dockerfile.agent-package"},
+              {"name": "migrations", "repository": "attune/migrations", "source_path": "", "dockerfile": "docker/Dockerfile.migrations-package"},
+              {"name": "init-user", "repository": "attune/init-user", "source_path": "", "dockerfile": "docker/Dockerfile.init-user-package"},
+              {"name": "init-packs", "repository": "attune/init-packs", "source_path": "", "dockerfile": "docker/Dockerfile.init-packs-package"},
+          ]
+
+          def selected(mapping):
+              return [mapping[arch] for arch in selected_arches]
+
+          rust_images = []
+          for arch in selected_arches:
+              for image in rust_image_templates:
+                  rust_images.append({
+                      "arch": arch,
+                      "runner_label": "ubuntu-24.04",
+                      "platform": web_images[arch]["platform"],
+                      "image": image,
+                  })
+
+          print(f"rust_bundle_matrix={json.dumps(selected(rust_bundles), separators=(',', ':'))}")
+          print(f"linux_package_matrix={json.dumps(selected(linux_packages), separators=(',', ':'))}")
+          print(f"rust_image_matrix={json.dumps(rust_images, separators=(',', ':'))}")
+          print(f"web_image_matrix={json.dumps(selected(web_images), separators=(',', ':'))}")
+          PY
 
   changes:
     name: Detect Changed Paths
-    runs-on: build-amd64
+    runs-on: ubuntu-24.04
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       helm: ${{ steps.filter.outputs.helm }}
@@ -197,7 +224,7 @@ jobs:
               rust="true"; helm="true"; web="true"; docker_dist="true"; linux_packages="true"
             else
               while IFS= read -r f; do
-                if [ "$f" = ".gitea/workflows/publish.yml" ]; then
+                if [ "$f" = ".github/workflows/publish.yml" ]; then
                   rust="true"; helm="true"; web="true"; docker_dist="true"; linux_packages="true"
                   continue
                 fi
@@ -238,24 +265,11 @@ jobs:
       - metadata
       - changes
     if: |
-      needs.changes.outputs.rust == 'true' &&
-      (github.event_name != 'workflow_dispatch' ||
-      inputs.target_arch == 'all' ||
-      inputs.target_arch == matrix.arch)
+      needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: amd64
-            runner_label: build-amd64
-            service_rust_target: x86_64-unknown-linux-gnu
-            service_target: x86_64-unknown-linux-gnu.2.28
-            musl_target: x86_64-unknown-linux-musl
-          - arch: arm64
-            runner_label: build-amd64
-            service_rust_target: aarch64-unknown-linux-gnu
-            service_target: aarch64-unknown-linux-gnu.2.28
-            musl_target: aarch64-unknown-linux-musl
+        include: ${{ fromJSON(needs.metadata.outputs.rust_bundle_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -304,14 +318,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          apt-get update
-          apt-get install -y pkg-config libssl-dev file binutils python3 python3-pip
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev file binutils python3 python3-pip
 
       - name: Install Zig
         shell: bash
         run: |
           set -euo pipefail
-          pip3 install --break-system-packages --no-cache-dir ziglang
+          python3 -m pip install --user --break-system-packages --no-cache-dir ziglang
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Install cargo-zigbuild
         shell: bash
@@ -377,6 +392,42 @@ jobs:
             --bin attune-mcp \
             --bin attune
 
+      - name: Verify binary architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "${{ matrix.arch }}" in
+            amd64) expected_pattern="x86-64" ;;
+            arm64) expected_pattern="aarch64" ;;
+            *)
+              echo "Unsupported architecture: ${{ matrix.arch }}"
+              exit 1
+              ;;
+          esac
+
+          verify_arch() {
+            local binary_path="$1"
+            local description
+            description="$(file "$binary_path")"
+            echo "$description"
+            if ! printf '%s' "$description" | grep -Eiq "$expected_pattern"; then
+              echo "Expected $binary_path to be a ${{ matrix.arch }} binary matching '${expected_pattern}'"
+              exit 1
+            fi
+          }
+
+          service_output_dir="target/${{ matrix.service_rust_target }}/release"
+          musl_output_dir="target/${{ matrix.musl_target }}/release"
+
+          for binary in attune-api attune-executor attune-notifier attune-supervisor attune-worker attune-sensor; do
+            verify_arch "${service_output_dir}/${binary}"
+          done
+
+          for binary in attune-agent attune-sensor-agent attune-mcp attune; do
+            verify_arch "${musl_output_dir}/${binary}"
+          done
+
       - name: Assemble binary bundle
         shell: bash
         env:
@@ -415,70 +466,13 @@ jobs:
 
           tar -C "dist/bundle/${BUNDLE_ARCH}" -czf "dist/attune-binaries-${BUNDLE_ARCH}.tar.gz" .
 
-      - name: Publish binary bundle generic package
-        shell: bash
-        env:
-          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
-          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR_NAME: ${{ github.actor }}
-          BUNDLE_ARCH: ${{ matrix.arch }}
-          IMAGE_TAG: ${{ needs.metadata.outputs.image_tag }}
-          GITEA_BASE_URL: ${{ needs.metadata.outputs.gitea_base_url }}
-          PACKAGE_NAMESPACE: ${{ needs.metadata.outputs.namespace }}
-        run: |
-          set -euo pipefail
-          registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
-          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
-          artifact_file="attune-binaries-${BUNDLE_ARCH}.tar.gz"
-          package_name="$(basename "${ARTIFACT_REPOSITORY}")-${BUNDLE_ARCH}"
-          package_version="rust-binaries-${IMAGE_TAG}"
-          package_url="${GITEA_BASE_URL}/api/packages/${PACKAGE_NAMESPACE}/generic/${package_name}/${package_version}/${artifact_file}"
-
-          if [ -z "$registry_password" ]; then
-            echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
-            exit 1
-          fi
-
-          cp "dist/${artifact_file}" "${artifact_file}"
-
-          echo "Publishing binary bundle generic package"
-          echo "  package_name: ${package_name}"
-          echo "  package_version: ${package_version}"
-          echo "  package_url: ${package_url}"
-          echo "  artifact_file: ${artifact_file}"
-
-          # Generic packages reject overwriting the same file name. Delete it first on reruns.
-          delete_status="$(curl -sS -o /tmp/rust-binaries-delete-response.txt -w '%{http_code}' \
-            -u "${registry_username}:${registry_password}" \
-            -X DELETE \
-            "${package_url}")"
-
-          case "${delete_status}" in
-            204|404)
-              ;;
-            *)
-              echo "Failed to prepare binary bundle upload target"
-              cat /tmp/rust-binaries-delete-response.txt
-              exit 1
-              ;;
-          esac
-
-          upload_status="$(curl -sS -o /tmp/rust-binaries-upload-response.txt -w '%{http_code}' \
-            -u "${registry_username}:${registry_password}" \
-            --upload-file "${artifact_file}" \
-            -X PUT \
-            "${package_url}")"
-
-          case "${upload_status}" in
-            201)
-              ;;
-            *)
-              echo "Failed to publish binary bundle generic package"
-              cat /tmp/rust-binaries-upload-response.txt
-              exit 1
-              ;;
-          esac
+      - name: Upload binary bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: attune-binaries-${{ matrix.arch }}
+          path: dist/attune-binaries-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
 
   publish-linux-packages:
     name: Publish Linux Packages (${{ matrix.arch }})
@@ -488,50 +482,27 @@ jobs:
       - changes
       - build-rust-bundles
     if: |
-      needs.changes.outputs.linux_packages == 'true' &&
-      (github.event_name != 'workflow_dispatch' ||
-      inputs.target_arch == 'all' ||
-      inputs.target_arch == matrix.arch)
+      needs.changes.outputs.linux_packages == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: amd64
-            runner_label: build-amd64
-            nfpm_arch: amd64
-          - arch: arm64
-            runner_label: build-arm64
-            nfpm_arch: arm64
+        include: ${{ fromJSON(needs.metadata.outputs.linux_package_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download binary bundle
+      - name: Download binary bundle artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: attune-binaries-${{ matrix.arch }}
+          path: dist/artifacts
+
+      - name: Extract binary bundle
         shell: bash
-        env:
-          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
-          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR_NAME: ${{ github.actor }}
-          IMAGE_TAG: ${{ needs.metadata.outputs.image_tag }}
-          GITEA_BASE_URL: ${{ needs.metadata.outputs.gitea_base_url }}
-          PACKAGE_NAMESPACE: ${{ needs.metadata.outputs.namespace }}
-          BUNDLE_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
-          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
-          package_name="$(basename "${ARTIFACT_REPOSITORY}")-${BUNDLE_ARCH}"
-          package_version="rust-binaries-${IMAGE_TAG}"
-          artifact_file="attune-binaries-${BUNDLE_ARCH}.tar.gz"
-          package_url="${GITEA_BASE_URL}/api/packages/${PACKAGE_NAMESPACE}/generic/${package_name}/${package_version}/${artifact_file}"
-
-          echo "Downloading binary bundle from ${package_url}"
-          curl -sS -f -u "${registry_username}:${registry_password}" \
-            -o "${artifact_file}" "${package_url}"
-
           mkdir -p dist/bundle
-          tar -xzf "${artifact_file}" -C dist/bundle
+          tar -xzf "dist/artifacts/attune-binaries-${{ matrix.arch }}.tar.gz" -C dist/bundle
           echo "Bundle contents:"
           find dist/bundle -type f | sort
 
@@ -583,177 +554,155 @@ jobs:
           set -euo pipefail
           ./scripts/build-linux-packages.sh "$BUNDLE_DIR" "$ARCH" "$VERSION"
 
-      - name: Publish Debian packages
+      - name: Upload Linux package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: attune-linux-packages-${{ matrix.arch }}
+          path: dist/packages/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Attach Linux packages to GitHub release
+        if: github.ref_type == 'tag'
         shell: bash
         env:
-          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
-          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR_NAME: ${{ github.actor }}
-          GITEA_BASE_URL: ${{ needs.metadata.outputs.gitea_base_url }}
-          PACKAGE_NAMESPACE: ${{ needs.metadata.outputs.namespace }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
-          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
 
-          upload_with_retry() {
-            local package_file="$1"
-            local upload_url="$2"
-            local response_file="$3"
-            local status
-            local attempt
-            local max_attempts=5
-            local delay_seconds=2
+          api_base="https://api.github.com"
+          auth_header="Authorization: Bearer ${GITHUB_TOKEN}"
+          accept_header="Accept: application/vnd.github+json"
+          api_version_header="X-GitHub-Api-Version: 2022-11-28"
+          release_response_file="$(mktemp)"
 
-            for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-              echo "  Upload attempt ${attempt}/${max_attempts}" >&2
-              status=$(curl -sS -o "$response_file" -w '%{http_code}' \
-                -u "${registry_username}:${registry_password}" \
-                --upload-file "$package_file" \
-                "$upload_url")
+          status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
+            -H "${auth_header}" \
+            -H "${accept_header}" \
+            -H "${api_version_header}" \
+            "${api_base}/repos/${OWNER_REPO}/releases/tags/${TAG_NAME}")"
 
-              if [[ "$status" =~ ^5[0-9][0-9]$ && "$attempt" -lt "$max_attempts" ]]; then
-                echo "  ⚠ Registry returned HTTP $status; retrying in ${delay_seconds}s" >&2
-                sleep "$delay_seconds"
-                delay_seconds=$((delay_seconds * 2))
-                continue
-              fi
+          if [ "${status_code}" = "404" ]; then
+            create_payload="$(TAG_NAME="${TAG_NAME}" python3 - <<'PY'
+          import json
+          import os
 
-              printf '%s' "$status"
-              return 0
-            done
-          }
+          tag = os.environ["TAG_NAME"]
+          print(json.dumps({
+              "tag_name": tag,
+              "name": tag,
+              "draft": False,
+              "prerelease": "-" in tag,
+          }))
+          PY
+          )"
 
-          for deb_file in dist/packages/*.deb; do
-            [ -f "$deb_file" ] || continue
-            echo "Publishing $(basename "$deb_file") to Debian registry"
+            status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
+              -H "${auth_header}" \
+              -H "${accept_header}" \
+              -H "${api_version_header}" \
+              -H "Content-Type: application/json" \
+              -X POST \
+              -d "${create_payload}" \
+              "${api_base}/repos/${OWNER_REPO}/releases")"
 
-            upload_url="${GITEA_BASE_URL}/api/packages/${PACKAGE_NAMESPACE}/debian/pool/stable/main/upload"
-            status=$(upload_with_retry "$deb_file" "$upload_url" /tmp/deb-upload-response.txt)
+            if [ "${status_code}" = "422" ]; then
+              status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
+                -H "${auth_header}" \
+                -H "${accept_header}" \
+                -H "${api_version_header}" \
+                "${api_base}/repos/${OWNER_REPO}/releases/tags/${TAG_NAME}")"
+            fi
+          fi
 
-            case "$status" in
-              201) echo "  ✓ Published" ;;
-              409) echo "  ⚠ Already exists (skipped)" ;;
-              *) echo "  ✗ Failed (HTTP $status)"; cat /tmp/deb-upload-response.txt; exit 1 ;;
-            esac
-          done
+          case "${status_code}" in
+            200|201)
+              ;;
+            *)
+              echo "Failed to fetch or create release for tag ${TAG_NAME}"
+              cat "${release_response_file}"
+              exit 1
+              ;;
+          esac
 
-      - name: Publish RPM packages
-        shell: bash
-        env:
-          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
-          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR_NAME: ${{ github.actor }}
-          GITEA_BASE_URL: ${{ needs.metadata.outputs.gitea_base_url }}
-          PACKAGE_NAMESPACE: ${{ needs.metadata.outputs.namespace }}
-        run: |
-          set -euo pipefail
-          registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
-          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
+          release_id="$(python3 - "${release_response_file}" <<'PY'
+          import json
+          import sys
 
-          upload_with_retry() {
-            local package_file="$1"
-            local upload_url="$2"
-            local response_file="$3"
-            local status
-            local attempt
-            local max_attempts=5
-            local delay_seconds=2
+          with open(sys.argv[1], "r", encoding="utf-8") as fh:
+              data = json.load(fh)
+          print(data["id"])
+          PY
+          )"
 
-            for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-              echo "  Upload attempt ${attempt}/${max_attempts}" >&2
-              status=$(curl -sS -o "$response_file" -w '%{http_code}' \
-                -u "${registry_username}:${registry_password}" \
-                --upload-file "$package_file" \
-                "$upload_url")
+          for package_file in dist/packages/*; do
+            [ -f "${package_file}" ] || continue
+            asset_name="$(basename "${package_file}")"
+            release_response_file_with_assets="$(mktemp)"
+            curl -sS -o "${release_response_file_with_assets}" \
+              -H "${auth_header}" \
+              -H "${accept_header}" \
+              -H "${api_version_header}" \
+              "${api_base}/repos/${OWNER_REPO}/releases/${release_id}"
 
-              if [[ "$status" =~ ^5[0-9][0-9]$ && "$attempt" -lt "$max_attempts" ]]; then
-                echo "  ⚠ Registry returned HTTP $status; retrying in ${delay_seconds}s" >&2
-                sleep "$delay_seconds"
-                delay_seconds=$((delay_seconds * 2))
-                continue
-              fi
+            existing_asset_id="$(python3 - "${release_response_file_with_assets}" "${asset_name}" <<'PY'
+          import json
+          import sys
 
-              printf '%s' "$status"
-              return 0
-            done
-          }
+          with open(sys.argv[1], "r", encoding="utf-8") as fh:
+              data = json.load(fh)
+          name = sys.argv[2]
+          for asset in data.get("assets", []):
+              if asset.get("name") == name:
+                  print(asset["id"])
+                  break
+          PY
+          )"
 
-          for rpm_file in dist/packages/*.rpm; do
-            [ -f "$rpm_file" ] || continue
-            echo "Publishing $(basename "$rpm_file") to RPM registry"
+            if [ -n "${existing_asset_id}" ]; then
+              curl -sS \
+                -H "${auth_header}" \
+                -H "${accept_header}" \
+                -H "${api_version_header}" \
+                -X DELETE \
+                "${api_base}/repos/${OWNER_REPO}/releases/assets/${existing_asset_id}" \
+                >/dev/null
+            fi
 
-            upload_url="${GITEA_BASE_URL}/api/packages/${PACKAGE_NAMESPACE}/rpm/el9/upload"
-            status=$(upload_with_retry "$rpm_file" "$upload_url" /tmp/rpm-upload-response.txt)
+            encoded_asset_name="$(ASSET_NAME="${asset_name}" python3 - <<'PY'
+          import os
+          import urllib.parse
 
-            case "$status" in
-              201) echo "  ✓ Published" ;;
-              409) echo "  ⚠ Already exists (skipped)" ;;
-              *) echo "  ✗ Failed (HTTP $status)"; cat /tmp/rpm-upload-response.txt; exit 1 ;;
-            esac
-          done
+          print(urllib.parse.quote(os.environ["ASSET_NAME"], safe=""))
+          PY
+          )"
 
-      - name: Publish Arch packages
-        shell: bash
-        env:
-          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
-          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR_NAME: ${{ github.actor }}
-          GITEA_BASE_URL: ${{ needs.metadata.outputs.gitea_base_url }}
-          PACKAGE_NAMESPACE: ${{ needs.metadata.outputs.namespace }}
-        run: |
-          set -euo pipefail
-          registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
-          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
+            upload_response_file="$(mktemp)"
+            status_code="$(curl -sS -o "${upload_response_file}" -w '%{http_code}' \
+              -H "${auth_header}" \
+              -H "${accept_header}" \
+              -H "${api_version_header}" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@${package_file}" \
+              "https://uploads.github.com/repos/${OWNER_REPO}/releases/${release_id}/assets?name=${encoded_asset_name}")"
 
-          upload_with_retry() {
-            local package_file="$1"
-            local upload_url="$2"
-            local response_file="$3"
-            local status
-            local attempt
-            local max_attempts=5
-            local delay_seconds=2
-
-            for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-              echo "  Upload attempt ${attempt}/${max_attempts}" >&2
-              status=$(curl -sS -o "$response_file" -w '%{http_code}' \
-                -u "${registry_username}:${registry_password}" \
-                --upload-file "$package_file" \
-                "$upload_url")
-
-              if [[ "$status" =~ ^5[0-9][0-9]$ && "$attempt" -lt "$max_attempts" ]]; then
-                echo "  ⚠ Registry returned HTTP $status; retrying in ${delay_seconds}s" >&2
-                sleep "$delay_seconds"
-                delay_seconds=$((delay_seconds * 2))
-                continue
-              fi
-
-              printf '%s' "$status"
-              return 0
-            done
-          }
-
-          for pkg_file in dist/packages/*.pkg.tar.zst; do
-            [ -f "$pkg_file" ] || continue
-            echo "Publishing $(basename "$pkg_file") to Arch registry"
-
-            upload_url="${GITEA_BASE_URL}/api/packages/${PACKAGE_NAMESPACE}/arch/core"
-            status=$(upload_with_retry "$pkg_file" "$upload_url" /tmp/arch-upload-response.txt)
-
-            case "$status" in
-              201) echo "  ✓ Published" ;;
-              409) echo "  ⚠ Already exists (skipped)" ;;
-              *) echo "  ✗ Failed (HTTP $status)"; cat /tmp/arch-upload-response.txt; exit 1 ;;
+            case "${status_code}" in
+              201)
+                echo "Uploaded release asset ${asset_name}"
+                ;;
+              *)
+                echo "Failed to upload release asset ${asset_name}"
+                cat "${upload_response_file}"
+                exit 1
+                ;;
             esac
           done
 
   publish-docker-dist:
     name: Publish Docker Dist Bundle
-    runs-on: build-amd64
+    runs-on: ubuntu-24.04
     needs:
       - metadata
       - changes
@@ -768,76 +717,29 @@ jobs:
           set -euo pipefail
           bash scripts/package-docker-dist.sh docker/distributable artifacts/attune-docker-dist.tar.gz
 
-      - name: Publish docker dist generic package
-        shell: bash
-        env:
-          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
-          GITEA_BASE_URL: ${{ needs.metadata.outputs.gitea_base_url }}
-          OWNER_REPO: ${{ github.repository }}
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "${REGISTRY_USERNAME:-}" ] || [ -z "${REGISTRY_PASSWORD:-}" ]; then
-            echo "CONTAINER_REGISTRY_USERNAME and CONTAINER_REGISTRY_PASSWORD are required to publish the docker dist package"
-            exit 1
-          fi
-
-          owner="${{ needs.metadata.outputs.namespace }}"
-          package_name="attune-docker-dist"
-          package_version="${{ needs.metadata.outputs.image_tag }}"
-          file_name="attune-docker-dist.tar.gz"
-          api_base="${{ needs.metadata.outputs.gitea_base_url }}/api/packages"
-          package_url="${api_base}/${owner}/generic/${package_name}/${package_version}/${file_name}"
-
-          # Generic packages reject overwriting the same file name. Delete it first on reruns.
-          delete_status="$(curl -sS -o /tmp/docker-dist-delete-response.txt -w '%{http_code}' \
-            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
-            -X DELETE \
-            "${package_url}")"
-
-          case "${delete_status}" in
-            204|404)
-              ;;
-            *)
-              echo "Failed to prepare generic package upload target"
-              cat /tmp/docker-dist-delete-response.txt
-              exit 1
-              ;;
-          esac
-
-          upload_status="$(curl -sS -o /tmp/docker-dist-upload-response.txt -w '%{http_code}' \
-            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
-            --upload-file artifacts/attune-docker-dist.tar.gz \
-            -X PUT \
-            "${package_url}")"
-
-          case "${upload_status}" in
-            201)
-              ;;
-            *)
-              echo "Failed to publish docker dist generic package"
-              cat /tmp/docker-dist-upload-response.txt
-              exit 1
-              ;;
-          esac
+      - name: Upload docker dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: attune-docker-dist
+          path: artifacts/attune-docker-dist.tar.gz
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Attach docker dist archive to release
         if: github.ref_type == 'tag'
         shell: bash
         env:
-          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
-          if [ -z "${REGISTRY_USERNAME:-}" ] || [ -z "${REGISTRY_PASSWORD:-}" ]; then
-            echo "CONTAINER_REGISTRY_USERNAME and CONTAINER_REGISTRY_PASSWORD are required to attach the docker dist archive to a release"
-            exit 1
-          fi
-
-          api_base="${GITEA_BASE_URL}/api/v1"
+          api_base="https://api.github.com"
+          upload_api_base="https://uploads.github.com"
+          auth_header="Authorization: Bearer ${GITHUB_TOKEN}"
+          accept_header="Accept: application/vnd.github+json"
+          api_version_header="X-GitHub-Api-Version: 2022-11-28"
           owner_repo="${OWNER_REPO}"
           tag_name="${TAG_NAME}"
           archive_path="artifacts/attune-docker-dist.tar.gz"
@@ -845,30 +747,42 @@ jobs:
 
           release_response_file="$(mktemp)"
           status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
-            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
+            -H "${auth_header}" \
+            -H "${accept_header}" \
+            -H "${api_version_header}" \
             "${api_base}/repos/${owner_repo}/releases/tags/${tag_name}")"
 
           if [ "${status_code}" = "404" ]; then
             create_payload="$(TAG_NAME="${tag_name}" python3 - <<'PY'
-            import json
-            import os
+          import json
+          import os
 
-            tag = os.environ["TAG_NAME"]
-            print(json.dumps({
-                "tag_name": tag,
-                "name": tag,
-                "draft": False,
-                "prerelease": "-" in tag,
-            }))
-            PY
-            )"
+          tag = os.environ["TAG_NAME"]
+          print(json.dumps({
+              "tag_name": tag,
+              "name": tag,
+              "draft": False,
+              "prerelease": "-" in tag,
+          }))
+          PY
+          )"
 
             status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
-              -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
+              -H "${auth_header}" \
+              -H "${accept_header}" \
+              -H "${api_version_header}" \
               -H "Content-Type: application/json" \
               -X POST \
               -d "${create_payload}" \
               "${api_base}/repos/${owner_repo}/releases")"
+
+            if [ "${status_code}" = "422" ]; then
+              status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
+                -H "${auth_header}" \
+                -H "${accept_header}" \
+                -H "${api_version_header}" \
+                "${api_base}/repos/${owner_repo}/releases/tags/${tag_name}")"
+            fi
           fi
 
           case "${status_code}" in
@@ -907,9 +821,11 @@ jobs:
 
           if [ -n "${existing_asset_id}" ]; then
             curl -sS \
-              -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
+              -H "${auth_header}" \
+              -H "${accept_header}" \
+              -H "${api_version_header}" \
               -X DELETE \
-              "${api_base}/repos/${owner_repo}/releases/${release_id}/assets/${existing_asset_id}" \
+              "${api_base}/repos/${owner_repo}/releases/assets/${existing_asset_id}" \
               >/dev/null
           fi
 
@@ -923,10 +839,12 @@ jobs:
 
           upload_response_file="$(mktemp)"
           status_code="$(curl -sS -o "${upload_response_file}" -w '%{http_code}' \
-            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
+            -H "${auth_header}" \
+            -H "${accept_header}" \
+            -H "${api_version_header}" \
             -H "Content-Type: application/gzip" \
             --data-binary "@${archive_path}" \
-            "${api_base}/repos/${owner_repo}/releases/${release_id}/assets?name=${encoded_asset_name}")"
+            "${upload_api_base}/repos/${owner_repo}/releases/${release_id}/assets?name=${encoded_asset_name}")"
 
           case "${status_code}" in
             201)
@@ -940,7 +858,7 @@ jobs:
 
   publish-helm-chart:
     name: Publish Helm Chart
-    runs-on: build-amd64
+    runs-on: ubuntu-24.04
     needs:
       - metadata
       - changes
@@ -954,21 +872,21 @@ jobs:
         id: cache-helm
         uses: actions/cache@v4
         with:
-          path: /toolcache/helm/4.1.4
+          path: ~/.cache/attune/helm/4.1.4
           key: helm-v4.1.4-linux-amd64
 
       - name: Install Helm
         shell: bash
         run: |
           set -euo pipefail
-          helm_bin="/toolcache/helm/4.1.4/helm"
+          helm_bin="$HOME/.cache/attune/helm/4.1.4/helm"
 
           if [ ! -x "$helm_bin" ]; then
-            echo "Cache miss — downloading Helm v4.1.4 from Gitea"
-            mkdir -p /toolcache/helm/4.1.4
+            echo "Cache miss - downloading Helm v4.1.4"
+            mkdir -p "$HOME/.cache/attune/helm/4.1.4"
             curl -fsSL \
               -o /tmp/helm.tar.gz \
-              "https://git.rdrx.app/api/packages/mirrors/generic/helm-binary/4.1.4/helm-linux-amd64.tar.gz"
+              "https://get.helm.sh/helm-v4.1.4-linux-amd64.tar.gz"
             tar -xzf /tmp/helm.tar.gz -C /tmp
             mv /tmp/linux-amd64/helm "$helm_bin"
             chmod +x "$helm_bin"
@@ -994,38 +912,32 @@ jobs:
         env:
           REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR_NAME: ${{ github.actor }}
         run: |
           set -euo pipefail
+          registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
+          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
 
-          if [ -z "${REGISTRY_USERNAME:-}" ] || [ -z "${REGISTRY_PASSWORD:-}" ]; then
-            echo "CONTAINER_REGISTRY_USERNAME and CONTAINER_REGISTRY_PASSWORD are required to publish the Helm chart"
+          if [ -z "${registry_password}" ]; then
+            echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
             exit 1
           fi
 
           package_file="dist/helm/attune-${{ needs.metadata.outputs.chart_version }}.tgz"
-          upload_url="${{ needs.metadata.outputs.gitea_base_url }}/api/packages/${{ needs.metadata.outputs.namespace }}/helm/api/charts"
+          chart_repository="oci://${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/attune/charts"
 
-          echo "Publishing Helm chart"
+          echo "Publishing Helm chart to GHCR"
           echo "  chart_version: ${{ needs.metadata.outputs.chart_version }}"
           echo "  app_version: ${{ needs.metadata.outputs.image_tag }}"
-          echo "  upload_url: ${upload_url}"
+          echo "  chart_repository: ${chart_repository}"
           echo "  package_file: ${package_file}"
 
-          status_code="$(curl -sS -o /tmp/helm-chart-upload-response.txt -w '%{http_code}' \
-            -u "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" \
-            -X POST \
-            --upload-file "${package_file}" \
-            "${upload_url}")"
-
-          case "${status_code}" in
-            201|409)
-              ;;
-            *)
-              echo "Failed to publish Helm chart"
-              cat /tmp/helm-chart-upload-response.txt
-              exit 1
-              ;;
-          esac
+          printf '%s' "${registry_password}" \
+            | helm registry login "${{ needs.metadata.outputs.registry }}" \
+              --username "${registry_username}" \
+              --password-stdin
+          helm push "${package_file}" "${chart_repository}"
 
   publish-rust-images:
     name: Publish ${{ matrix.image.name }} (${{ matrix.arch }})
@@ -1035,158 +947,20 @@ jobs:
       - changes
       - build-rust-bundles
     if: |
-      needs.changes.outputs.rust == 'true' &&
-      (github.event_name != 'workflow_dispatch' ||
-      inputs.target_arch == 'all' ||
-      inputs.target_arch == matrix.arch)
+      needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: amd64
-            runner_label: build-amd64
-            platform: linux/amd64
-            image:
-              name: api
-              repository: attune/api
-              source_path: bin/attune-api
-              dockerfile: docker/Dockerfile.runtime
-          - arch: amd64
-            runner_label: build-amd64
-            platform: linux/amd64
-            image:
-              name: executor
-              repository: attune/executor
-              source_path: bin/attune-executor
-              dockerfile: docker/Dockerfile.runtime
-          - arch: amd64
-            runner_label: build-amd64
-            platform: linux/amd64
-            image:
-              name: notifier
-              repository: attune/notifier
-              source_path: bin/attune-notifier
-              dockerfile: docker/Dockerfile.runtime
-          - arch: amd64
-            runner_label: build-amd64
-            platform: linux/amd64
-            image:
-              name: supervisor
-              repository: attune/supervisor
-              source_path: bin/attune-supervisor
-              dockerfile: docker/Dockerfile.runtime
-          - arch: amd64
-            runner_label: build-amd64
-            platform: linux/amd64
-            image:
-              name: agent
-              repository: attune/agent
-              source_path: agent/attune-agent
-              dockerfile: docker/Dockerfile.agent-package
-          - arch: amd64
-            runner_label: build-amd64
-            platform: linux/amd64
-            image:
-              name: migrations
-              repository: attune/migrations
-              source_path: ""
-              dockerfile: docker/Dockerfile.migrations-package
-          - arch: amd64
-            runner_label: build-amd64
-            platform: linux/amd64
-            image:
-              name: init-user
-              repository: attune/init-user
-              source_path: ""
-              dockerfile: docker/Dockerfile.init-user-package
-          - arch: amd64
-            runner_label: build-amd64
-            platform: linux/amd64
-            image:
-              name: init-packs
-              repository: attune/init-packs
-              source_path: ""
-              dockerfile: docker/Dockerfile.init-packs-package
-          - arch: arm64
-            runner_label: build-arm64
-            platform: linux/arm64
-            image:
-              name: api
-              repository: attune/api
-              source_path: bin/attune-api
-              dockerfile: docker/Dockerfile.runtime
-          - arch: arm64
-            runner_label: build-arm64
-            platform: linux/arm64
-            image:
-              name: executor
-              repository: attune/executor
-              source_path: bin/attune-executor
-              dockerfile: docker/Dockerfile.runtime
-          - arch: arm64
-            runner_label: build-arm64
-            platform: linux/arm64
-            image:
-              name: notifier
-              repository: attune/notifier
-              source_path: bin/attune-notifier
-              dockerfile: docker/Dockerfile.runtime
-          - arch: arm64
-            runner_label: build-arm64
-            platform: linux/arm64
-            image:
-              name: supervisor
-              repository: attune/supervisor
-              source_path: bin/attune-supervisor
-              dockerfile: docker/Dockerfile.runtime
-          - arch: arm64
-            runner_label: build-arm64
-            platform: linux/arm64
-            image:
-              name: agent
-              repository: attune/agent
-              source_path: agent/attune-agent
-              dockerfile: docker/Dockerfile.agent-package
-          - arch: arm64
-            runner_label: build-arm64
-            platform: linux/arm64
-            image:
-              name: migrations
-              repository: attune/migrations
-              source_path: ""
-              dockerfile: docker/Dockerfile.migrations-package
-          - arch: arm64
-            runner_label: build-arm64
-            platform: linux/arm64
-            image:
-              name: init-user
-              repository: attune/init-user
-              source_path: ""
-              dockerfile: docker/Dockerfile.init-user-package
-          - arch: arm64
-            runner_label: build-arm64
-            platform: linux/arm64
-            image:
-              name: init-packs
-              repository: attune/init-packs
-              source_path: ""
-              dockerfile: docker/Dockerfile.init-packs-package
+        include: ${{ fromJSON(needs.metadata.outputs.rust_image_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Docker Buildx
-        if: needs.metadata.outputs.registry_plain_http != 'true'
-        uses: docker/setup-buildx-action@v3
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Setup Docker Buildx For Plain HTTP Registry
-        if: needs.metadata.outputs.registry_plain_http == 'true'
+      - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          buildkitd-config-inline: |
-            [registry."${{ needs.metadata.outputs.registry }}"]
-              http = true
-              insecure = true
 
       - name: Log in to registry
         shell: bash
@@ -1218,41 +992,17 @@ jobs:
           }
           EOF
 
-      - name: Pull binary bundle
+      - name: Download binary bundle artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: attune-binaries-${{ matrix.arch }}
+          path: dist/artifact
+
+      - name: Extract binary bundle
         shell: bash
-        env:
-          REGISTRY_USERNAME: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
-          GITHUB_TOKEN_FALLBACK: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR_NAME: ${{ github.actor }}
         run: |
           set -euo pipefail
-          registry_username="${REGISTRY_USERNAME:-${GITHUB_ACTOR_NAME}}"
-          registry_password="${REGISTRY_PASSWORD:-${GITHUB_TOKEN_FALLBACK:-}}"
-          artifact_file="attune-binaries-${{ matrix.arch }}.tar.gz"
-          package_name="$(basename "${ARTIFACT_REPOSITORY}")-${{ matrix.arch }}"
-          package_version="rust-binaries-${{ needs.metadata.outputs.image_tag }}"
-          package_url="${{ needs.metadata.outputs.gitea_base_url }}/api/packages/${{ needs.metadata.outputs.namespace }}/generic/${package_name}/${package_version}/${artifact_file}"
-
-          if [ -z "$registry_password" ]; then
-            echo "Set CONTAINER_REGISTRY_PASSWORD or enable GITHUB_TOKEN package writes"
-            exit 1
-          fi
-
-          echo "Downloading binary bundle generic package"
-          echo "  package_name: ${package_name}"
-          echo "  package_version: ${package_version}"
-          echo "  package_url: ${package_url}"
-          echo "  arch: ${{ matrix.arch }}"
-
-          mkdir -p dist/artifact
-          cd dist/artifact
-
-          curl -fL -u "${registry_username}:${registry_password}" \
-            -o "${artifact_file}" \
-            "${package_url}"
-
-          tar -xzf "${artifact_file}"
+          tar -xzf "dist/artifact/attune-binaries-${{ matrix.arch }}.tar.gz" -C dist/artifact
 
       - name: Prepare packaging context
         shell: bash
@@ -1324,11 +1074,7 @@ jobs:
             --sbom=false
           )
 
-          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
-            build_cmd+=(--output "type=image,\"name=${image_ref}\",push=true,registry.insecure=true")
-          else
-            build_cmd+=(--tag "$image_ref" --push)
-          fi
+          build_cmd+=(--tag "$image_ref" --push)
 
           echo "Publishing architecture image"
           echo "  image: ${{ matrix.image.name }}"
@@ -1336,7 +1082,6 @@ jobs:
           echo "  platform: ${{ matrix.platform }}"
           echo "  dockerfile: ${{ matrix.image.dockerfile }}"
           echo "  destination: ${image_ref}"
-          echo "  plain_http: ${{ needs.metadata.outputs.registry_plain_http }}"
 
           run_with_retries 3 5 "${build_cmd[@]}"
 
@@ -1347,36 +1092,20 @@ jobs:
       - metadata
       - changes
     if: |
-      needs.changes.outputs.web == 'true' &&
-      (github.event_name != 'workflow_dispatch' ||
-      inputs.target_arch == 'all' ||
-      inputs.target_arch == matrix.arch)
+      needs.changes.outputs.web == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: amd64
-            runner_label: build-amd64
-            platform: linux/amd64
-          - arch: arm64
-            runner_label: build-arm64
-            platform: linux/arm64
+        include: ${{ fromJSON(needs.metadata.outputs.web_image_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Docker Buildx
-        if: needs.metadata.outputs.registry_plain_http != 'true'
-        uses: docker/setup-buildx-action@v3
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Setup Docker Buildx For Plain HTTP Registry
-        if: needs.metadata.outputs.registry_plain_http == 'true'
+      - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          buildkitd-config-inline: |
-            [registry."${{ needs.metadata.outputs.registry }}"]
-              http = true
-              insecure = true
 
       - name: Configure OCI registry auth
         shell: bash
@@ -1447,11 +1176,7 @@ jobs:
             --sbom=false
           )
 
-          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
-            build_cmd+=(--output "type=image,\"name=${image_ref}\",push=true,registry.insecure=true")
-          else
-            build_cmd+=(--tag "$image_ref" --push)
-          fi
+          build_cmd+=(--tag "$image_ref" --push)
 
           echo "Publishing architecture image"
           echo "  image: web"
@@ -1459,13 +1184,12 @@ jobs:
           echo "  platform: ${{ matrix.platform }}"
           echo "  dockerfile: docker/Dockerfile.web"
           echo "  destination: ${image_ref}"
-          echo "  plain_http: ${{ needs.metadata.outputs.registry_plain_http }}"
 
           run_with_retries 3 5 "${build_cmd[@]}"
 
   publish-manifests:
     name: Publish manifest ${{ matrix.repository }}
-    runs-on: build-amd64
+    runs-on: ubuntu-24.04
     needs:
       - metadata
       - changes
@@ -1473,10 +1197,7 @@ jobs:
       - publish-web-images
     if: |
       !cancelled() &&
-      (
-        (matrix.repository == 'attune/web' && needs.publish-web-images.result == 'success') ||
-        (matrix.repository != 'attune/web' && needs.publish-rust-images.result == 'success')
-      ) &&
+      (needs.publish-web-images.result == 'success' || needs.publish-rust-images.result == 'success') &&
       (needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true') &&
       (github.event_name != 'workflow_dispatch' ||
       (inputs.target_arch == 'all' && inputs.target_image == 'all'))
@@ -1495,17 +1216,7 @@ jobs:
           - attune/web
     steps:
       - name: Setup Docker Buildx
-        if: needs.metadata.outputs.registry_plain_http != 'true'
         uses: docker/setup-buildx-action@v3
-
-      - name: Setup Docker Buildx For Plain HTTP Registry
-        if: needs.metadata.outputs.registry_plain_http == 'true'
-        uses: docker/setup-buildx-action@v3
-        with:
-          buildkitd-config-inline: |
-            [registry."${{ needs.metadata.outputs.registry }}"]
-              http = true
-              insecure = true
 
       - name: Configure OCI registry auth
         shell: bash
@@ -1541,6 +1252,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          rust_result="${{ needs.publish-rust-images.result }}"
+          web_result="${{ needs.publish-web-images.result }}"
+
+          if [ "${{ matrix.repository }}" = "attune/web" ] && [ "$web_result" != "success" ]; then
+            echo "Skipping web manifest because web image publishing result is ${web_result}"
+            exit 0
+          fi
+          if [ "${{ matrix.repository }}" != "attune/web" ] && [ "$rust_result" != "success" ]; then
+            echo "Skipping ${{ matrix.repository }} manifest because Rust image publishing result is ${rust_result}"
+            exit 0
+          fi
 
           run_with_retries() {
             local max_attempts="$1"
@@ -1566,13 +1288,6 @@ jobs:
           }
 
           image_base="${{ needs.metadata.outputs.registry }}/${{ needs.metadata.outputs.namespace }}/${{ matrix.repository }}"
-          create_args=()
-          push_args=()
-
-          if [ "${{ needs.metadata.outputs.registry_plain_http }}" = "true" ]; then
-            create_args+=(--insecure)
-            push_args+=(--insecure)
-          fi
 
           IFS=',' read -ra tags <<< "${{ needs.metadata.outputs.image_tags }}"
           for tag in "${tags[@]}"; do
@@ -1587,14 +1302,13 @@ jobs:
               echo "  manifest_ref: ${manifest_ref}"
               echo "  source_amd64: ${amd64_ref}"
               echo "  source_arm64: ${arm64_ref}"
-              echo "  plain_http: ${{ needs.metadata.outputs.registry_plain_http }}"
               docker manifest rm "$manifest_ref" >/dev/null 2>&1 || true
               run_with_retries 3 5 \
-                docker manifest create "${create_args[@]}" "$manifest_ref" "$amd64_ref" "$arm64_ref"
+                docker manifest create "$manifest_ref" "$amd64_ref" "$arm64_ref"
               docker manifest annotate "$manifest_ref" "$amd64_ref" --os linux --arch amd64
               docker manifest annotate "$manifest_ref" "$arm64_ref" --os linux --arch arm64
               run_with_retries 3 5 \
-                docker manifest push "${push_args[@]}" "$manifest_ref"
+                docker manifest push "$manifest_ref"
             else
               echo "Publishing multi-arch manifest with buildx imagetools"
               echo "  repository: ${{ matrix.repository }}"
@@ -1602,7 +1316,6 @@ jobs:
               echo "  manifest_ref: ${manifest_ref}"
               echo "  source_amd64: ${amd64_ref}"
               echo "  source_arm64: ${arm64_ref}"
-              echo "  plain_http: ${{ needs.metadata.outputs.registry_plain_http }}"
               run_with_retries 3 5 \
                 docker buildx imagetools create \
                 --tag "$manifest_ref" \

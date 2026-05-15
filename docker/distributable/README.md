@@ -12,20 +12,20 @@ It is designed to run Attune without building the Rust services locally:
 
 The compose file defaults to:
 
-- registry: `git.rdrx.app/attune-system`
+- registry: `ghcr.io/attune-system`
 - tag: `latest`
 
 Override them with env vars:
 
 ```bash
-export ATTUNE_IMAGE_REGISTRY=git.rdrx.app/attune-system
+export ATTUNE_IMAGE_REGISTRY=ghcr.io/attune-system
 export ATTUNE_IMAGE_TAG=latest
 ```
 
 If the registry requires auth:
 
 ```bash
-docker login git.rdrx.app
+docker login ghcr.io
 ```
 
 ## Run

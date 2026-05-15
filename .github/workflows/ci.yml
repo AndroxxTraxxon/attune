@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
     inputs:
@@ -47,13 +50,11 @@ env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
-  # Gitea Actions runner tool cache. Actions like setup-node/setup-python can reuse this.
-  RUNNER_TOOL_CACHE: /toolcache
 
 jobs:
   changes:
     name: Detect Changed Paths
-    runs-on: build-amd64
+    runs-on: ubuntu-24.04
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       web: ${{ steps.filter.outputs.web }}
@@ -104,7 +105,7 @@ jobs:
 
   rust-fmt:
     name: Rustfmt
-    runs-on: build-amd64
+    runs-on: ubuntu-24.04
     needs: changes
     if: |
       (github.event_name == 'workflow_dispatch' && inputs.run_rust_fmt) ||
@@ -134,7 +135,7 @@ jobs:
 
   rust-clippy:
     name: Clippy
-    runs-on: build-amd64
+    runs-on: ubuntu-24.04
     needs: changes
     if: |
       (github.event_name == 'workflow_dispatch' && inputs.run_rust_clippy) ||
@@ -184,7 +185,7 @@ jobs:
 
   rust-test:
     name: Tests
-    runs-on: build-amd64
+    runs-on: ubuntu-24.04
     needs: changes
     if: |
       (github.event_name == 'workflow_dispatch' && inputs.run_rust_test) ||
@@ -232,7 +233,7 @@ jobs:
 
   rust-audit:
     name: Cargo Audit & Deny
-    runs-on: build-amd64
+    runs-on: ubuntu-24.04
     needs: changes
     if: |
       (github.event_name == 'workflow_dispatch' && inputs.run_rust_audit) ||
@@ -289,7 +290,7 @@ jobs:
 
   web-blocking:
     name: Web Blocking Checks
-    runs-on: build-amd64
+    runs-on: ubuntu-24.04
     needs: changes
     if: |
       (github.event_name == 'workflow_dispatch' && inputs.run_web_blocking) ||
@@ -322,7 +323,7 @@ jobs:
 
   security-blocking:
     name: Security Blocking Checks
-    runs-on: build-amd64
+    runs-on: ubuntu-24.04
     if: |
       github.event_name != 'workflow_dispatch' ||
       inputs.run_security_blocking
@@ -358,7 +359,7 @@ jobs:
 
   web-advisory:
     name: Web Advisory Checks
-    runs-on: build-amd64
+    runs-on: ubuntu-24.04
     needs: changes
     if: |
       (github.event_name == 'workflow_dispatch' && inputs.run_web_advisory) ||
@@ -391,7 +392,7 @@ jobs:
 
   security-advisory:
     name: Security Advisory Checks
-    runs-on: build-amd64
+    runs-on: ubuntu-24.04
     if: |
       github.event_name != 'workflow_dispatch' ||
       inputs.run_security_advisory

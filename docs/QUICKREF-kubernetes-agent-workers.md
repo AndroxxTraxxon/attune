@@ -156,5 +156,5 @@ kubectl exec <pod> -c worker -- ls /opt/attune/packs/core/
 
 - [Agent Workers (Docker Compose)](QUICKREF-agent-workers.md)
 - [Universal Worker Agent Plan](plans/universal-worker-agent.md)
-- [Gitea Registry and Helm](deployment/gitea-registry-and-helm.md)
+- [GitHub Packages and Helm](deployment/github-packages-and-helm.md)
 - [Production Deployment](deployment/production-deployment.md)

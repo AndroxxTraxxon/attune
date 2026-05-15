@@ -12,7 +12,7 @@
 #   kubectl -n attune port-forward svc/attune-attune-web 3000:80
 
 global:
-  imageRegistry: git.rdrx.app
+  imageRegistry: ghcr.io
   imageNamespace: attune-system
   imageTag: sha-a86e4a29f275
   imagePullSecrets: []
