@@ -126,9 +126,14 @@ impl ApiClient {
     }
 
     /// Set the authentication token
-    #[cfg(test)]
     pub fn set_auth_token(&mut self, token: String) {
         self.auth_token = Some(token);
+    }
+
+    /// Replace both auth and refresh tokens (e.g. after re-login).
+    pub fn set_tokens(&mut self, access_token: String, refresh_token: String) {
+        self.auth_token = Some(access_token);
+        self.refresh_token = Some(refresh_token);
     }
 
     /// Clear the authentication token

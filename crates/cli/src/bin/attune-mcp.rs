@@ -76,13 +76,25 @@ struct ToolDef {
     input_schema: fn() -> Value,
 }
 
+#[derive(Clone)]
+struct LoginCredentials {
+    api_url: String,
+    login: String,
+    password: String,
+}
+
 struct McpServer {
     client: ApiClient,
+    /// Stored credentials for automatic re-login (None for execution token mode).
+    credentials: Option<LoginCredentials>,
 }
 
 impl McpServer {
-    fn new(client: ApiClient) -> Self {
-        Self { client }
+    fn new(client: ApiClient, credentials: Option<LoginCredentials>) -> Self {
+        Self {
+            client,
+            credentials,
+        }
     }
 
     async fn handle_request(&mut self, request: &Value) -> Result<Option<Value>> {
@@ -146,7 +158,7 @@ impl McpServer {
                     .cloned()
                     .unwrap_or_default();
 
-                let tool_result = match self.call_tool(tool_name, &args).await {
+                let tool_result = match self.call_tool_with_reauth(tool_name, &args).await {
                     Ok(value) => tool_success(value),
                     Err(error) => tool_error(error.to_string()),
                 };
@@ -157,6 +169,43 @@ impl McpServer {
             "prompts/list" => Ok(id.map(|id| success_response(id, json!({ "prompts": [] })))),
             other => Ok(id.map(|id| method_not_found_response(id, other))),
         }
+    }
+
+    /// Call a tool with automatic re-authentication on auth failures.
+    ///
+    /// The inner `ApiClient` already attempts a token refresh via the stored
+    /// refresh token.  This wrapper adds a second layer: if the call still fails
+    /// with an authentication error AND we have stored login credentials (i.e.
+    /// we're not running with an execution token), perform a full re-login and
+    /// retry the tool call once.
+    async fn call_tool_with_reauth(
+        &mut self,
+        tool_name: &str,
+        args: &Map<String, Value>,
+    ) -> Result<Value> {
+        match self.call_tool(tool_name, args).await {
+            Ok(value) => Ok(value),
+            Err(err) if Self::is_auth_error(&err) => {
+                if let Some(creds) = &self.credentials {
+                    tracing::info!("Tool call failed with auth error, attempting re-login");
+                    let tokens =
+                        login_with_password(&creds.api_url, &creds.login, &creds.password).await?;
+                    self.client
+                        .set_tokens(tokens.access_token, tokens.refresh_token);
+                    // Retry once with fresh tokens
+                    self.call_tool(tool_name, args).await
+                } else {
+                    Err(err)
+                }
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Check if an error looks like an authentication/authorization failure.
+    fn is_auth_error(err: &anyhow::Error) -> bool {
+        let msg = err.to_string();
+        msg.contains("401") || msg.contains("Unauthorized") || msg.contains("token expired")
     }
 
     async fn call_tool(&mut self, tool_name: &str, args: &Map<String, Value>) -> Result<Value> {
@@ -200,6 +249,7 @@ impl McpServer {
                 let id = required_i64(args, "id")?;
                 self.client.get::<Value>(&format!("/executions/{id}")).await
             }
+            "executions_list" => self.executions_list(args).await,
             "executions_cancel" => {
                 let id = required_i64(args, "id")?;
                 self.client
@@ -255,6 +305,36 @@ impl McpServer {
                     .get::<Value>(&format!("/workflows/{}", encode_path(workflow_ref)))
                     .await
             }
+            "packs_list" => self.list_path("/packs", args).await,
+            "packs_get" => {
+                let pack_ref = required_string(args, "ref")?;
+                self.client
+                    .get::<Value>(&format!("/packs/{}", encode_path(pack_ref)))
+                    .await
+            }
+            "packs_update_config" => {
+                let pack_ref = required_string(args, "ref")?;
+                let config = args
+                    .get("config")
+                    .cloned()
+                    .ok_or_else(|| anyhow!("Missing required argument 'config'"))?;
+                self.client
+                    .put::<Value, _>(
+                        &format!("/packs/{}", encode_path(pack_ref)),
+                        &json!({ "config": config }),
+                    )
+                    .await
+            }
+            "packs_get_actions" => {
+                let pack_ref = required_string(args, "ref")?;
+                self.client
+                    .get_paginated::<Value>(&format!(
+                        "/actions/search?packs={}&page=1&page_size=100",
+                        urlencoding::encode(pack_ref)
+                    ))
+                    .await
+                    .map(Value::Array)
+            }
             other => Err(anyhow!("Unknown tool '{other}'")),
         }
     }
@@ -307,6 +387,27 @@ impl McpServer {
             .join("&");
         self.client
             .get_paginated::<Value>(&format!("/actions/search?{qs}"))
+            .await
+            .map(Value::Array)
+    }
+
+    async fn executions_list(&mut self, args: &Map<String, Value>) -> Result<Value> {
+        let page = optional_i64(args, "page")?.unwrap_or(1);
+        let per_page = optional_i64(args, "per_page")?.unwrap_or(20);
+        let mut qs = format!("page={page}&per_page={per_page}");
+        if let Some(status) = optional_string(args, "status") {
+            qs.push_str(&format!("&status={}", urlencoding::encode(&status)));
+        }
+        if let Some(action_ref) = optional_string(args, "action_ref") {
+            qs.push_str(&format!("&action_ref={}", urlencoding::encode(&action_ref)));
+        }
+        if let Some(top_level) = args.get("top_level_only").and_then(|v| v.as_bool()) {
+            if top_level {
+                qs.push_str("&top_level_only=true");
+            }
+        }
+        self.client
+            .get_paginated::<Value>(&format!("/executions?{qs}"))
             .await
             .map(Value::Array)
     }
@@ -373,6 +474,12 @@ fn tool_defs() -> &'static [ToolDef] {
             input_schema: id_schema,
         },
         ToolDef {
+            name: "executions_list",
+            title: "List executions",
+            description: "List recent executions with optional filtering by status, action_ref, or top-level only. Useful for monitoring action runs and debugging.",
+            input_schema: executions_list_schema,
+        },
+        ToolDef {
             name: "executions_cancel",
             title: "Cancel execution",
             description: "Request cancellation for a queued or running execution.",
@@ -419,6 +526,30 @@ fn tool_defs() -> &'static [ToolDef] {
             name: "workflows_get",
             title: "Get workflow",
             description: "Fetch a single workflow definition by ref.",
+            input_schema: ref_schema,
+        },
+        ToolDef {
+            name: "packs_list",
+            title: "List packs",
+            description: "List installed Attune packs visible to the authenticated user.",
+            input_schema: pagination_schema,
+        },
+        ToolDef {
+            name: "packs_get",
+            title: "Get pack",
+            description: "Fetch detailed metadata for a single pack by ref, including its configuration schema and current configuration values.",
+            input_schema: ref_schema,
+        },
+        ToolDef {
+            name: "packs_update_config",
+            title: "Update pack configuration",
+            description: "Update the configuration values for a pack. The config object is merged with the pack's conf_schema. Requires packs:configure permission.",
+            input_schema: packs_update_config_schema,
+        },
+        ToolDef {
+            name: "packs_get_actions",
+            title: "List pack actions",
+            description: "List all actions belonging to a specific pack by ref.",
             input_schema: ref_schema,
         },
     ]
@@ -511,6 +642,36 @@ fn inquiry_respond_schema() -> Value {
             "response": { "description": "Structured inquiry response payload" }
         },
         "required": ["id", "response"],
+        "additionalProperties": false
+    })
+}
+
+fn packs_update_config_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "ref": { "type": "string", "description": "Pack reference identifier (e.g. \"slack\", \"core\")" },
+            "config": {
+                "type": "object",
+                "description": "Configuration values to set on the pack. Keys must match the pack's conf_schema. Pass an empty object {} to clear all config values.",
+                "additionalProperties": true
+            }
+        },
+        "required": ["ref", "config"],
+        "additionalProperties": false
+    })
+}
+
+fn executions_list_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "page": { "type": "integer", "minimum": 1, "description": "1-based page number" },
+            "per_page": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Page size (default 20)" },
+            "status": { "type": "string", "description": "Filter by execution status (e.g. running, completed, failed, timeout, cancelled)" },
+            "action_ref": { "type": "string", "description": "Filter by action ref (exact match)" },
+            "top_level_only": { "type": "boolean", "description": "If true, exclude workflow child executions" }
+        },
         "additionalProperties": false
     })
 }
@@ -685,7 +846,15 @@ async fn login_with_password(api_url: &str, login: &str, password: &str) -> Resu
 }
 
 fn build_config(cli: &Cli) -> Result<CliConfig> {
-    let mut config = CliConfig::load_with_profile(cli.profile.as_deref()).unwrap_or_default();
+    let mut config = if cli.profile.is_some() {
+        // A profile was explicitly requested (via --profile or ATTUNE_PROFILE).
+        // Propagate any error so that a missing profile is reported rather than
+        // silently falling back to defaults.
+        CliConfig::load_with_profile(cli.profile.as_deref())?
+    } else {
+        // No profile override — fall back to defaults on a fresh install.
+        CliConfig::load_with_profile(None).unwrap_or_default()
+    };
     ensure_current_profile_exists(&mut config);
 
     if let Some(auth_token) = &cli.auth_token {
@@ -740,6 +909,19 @@ async fn build_server(cli: &Cli) -> Result<McpServer> {
     let effective_api_url = config.effective_api_url(&cli.api_url);
     let auth_mode = selected_auth_mode(cli, &config)?;
 
+    // Store credentials for automatic re-login (only for login/password mode, not execution tokens)
+    let credentials = match &auth_mode {
+        AuthMode::ExecutionToken => None,
+        _ => match (cli.login.as_deref(), cli.password.as_deref()) {
+            (Some(login), Some(password)) => Some(LoginCredentials {
+                api_url: effective_api_url.clone(),
+                login: login.to_string(),
+                password: password.to_string(),
+            }),
+            _ => None,
+        },
+    };
+
     if config.auth_token()?.is_none() {
         match (cli.login.as_deref(), cli.password.as_deref()) {
             (Some(login), Some(password)) => {
@@ -770,10 +952,10 @@ async fn build_server(cli: &Cli) -> Result<McpServer> {
         "Starting Attune MCP server"
     );
 
-    Ok(McpServer::new(ApiClient::from_config(
-        &config,
-        &cli.api_url,
-    )))
+    Ok(McpServer::new(
+        ApiClient::from_config(&config, &cli.api_url),
+        credentials,
+    ))
 }
 
 async fn run_stdio(server: &mut McpServer) -> Result<()> {
@@ -895,7 +1077,7 @@ mod tests {
     #[test]
     fn initialize_uses_requested_protocol_version() {
         let config = CliConfig::default();
-        let mut server = McpServer::new(ApiClient::from_config(&config, &None));
+        let mut server = McpServer::new(ApiClient::from_config(&config, &None), None);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

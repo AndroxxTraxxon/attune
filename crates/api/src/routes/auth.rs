@@ -898,6 +898,8 @@ pub struct LdapLoginRequest {
 #[derive(Debug, Deserialize)]
 pub struct OidcLoginParams {
     pub redirect_to: Option<String>,
+    /// Optional local callback URI for CLI SSO login (must be http://localhost or http://127.0.0.1).
+    pub cli_redirect_uri: Option<String>,
 }
 
 /// Begin browser OIDC login by redirecting to the provider.
@@ -905,7 +907,12 @@ pub async fn oidc_login(
     State(state): State<SharedState>,
     Query(params): Query<OidcLoginParams>,
 ) -> Result<Response, ApiError> {
-    let login_redirect = build_login_redirect(&state, params.redirect_to.as_deref()).await?;
+    let login_redirect = build_login_redirect(
+        &state,
+        params.redirect_to.as_deref(),
+        params.cli_redirect_uri.as_deref(),
+    )
+    .await?;
     let mut response = Redirect::temporary(&login_redirect.authorization_url).into_response();
     apply_cookies_to_headers(response.headers_mut(), &login_redirect.cookies)?;
     Ok(response)
@@ -918,12 +925,15 @@ pub async fn oidc_callback(
     Query(query): Query<OidcCallbackQuery>,
 ) -> Result<Response, ApiError> {
     let redirect_to = get_cookie_value(&headers, crate::auth::oidc::OIDC_REDIRECT_COOKIE_NAME);
+    let cli_redirect_uri =
+        get_cookie_value(&headers, crate::auth::oidc::OIDC_CLI_REDIRECT_COOKIE_NAME);
     let authenticated = crate::auth::oidc::handle_callback(&state, &headers, &query).await?;
     oidc_callback_redirect_response(
         &state,
         &authenticated.token_response,
         redirect_to,
         &authenticated.id_token,
+        cli_redirect_uri,
     )
 }
 

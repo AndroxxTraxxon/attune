@@ -258,7 +258,7 @@ Completion listener advances workflow → Schedules successor tasks → Complete
 
 ### Database Layer
 - **Schema**: All tables use unqualified names; schema determined by PostgreSQL `search_path`
-- **Production**: Always uses `public` schema (configured explicitly in `config.production.yaml`)
+- **Production/Docker**: Uses the dedicated `attune` schema (configured via `database.schema: "attune"` or `ATTUNE__DATABASE__SCHEMA=attune`)
 - **Tests**: Each test uses isolated schema (e.g., `test_a1b2c3d4`) for true parallel execution
 - **Schema Resolution**: PostgreSQL `search_path` mechanism, NO hardcoded schema prefixes in queries
 - **Models**: Defined in `common/src/models.rs` with `#[derive(FromRow)]` for SQLx
@@ -573,7 +573,7 @@ make db-reset           # Drop & recreate DB
 ### Database Operations
 - **Migrations**: Located in `migrations/`, applied via `sqlx migrate run`
 - **Test DB**: Separate `attune_test` database, setup with `make db-test-setup`
-- **Schema**: All tables in `public` schema with auto-updating timestamps
+- **Schema**: All tables live in the configured application schema (normally `attune`) with auto-updating timestamps
 - **Core Pack**: Load with `./scripts/load-core-pack.sh` after DB setup
 
 ### Testing
@@ -773,7 +773,7 @@ When reporting, ask: "Should I fix this first or continue with [original task]?"
 11. **ALWAYS** convert runtime names to lowercase for comparison (database may store capitalized)
 12. **ALWAYS** use optimized Dockerfiles for new services (selective crate copying)
 13. **REMEMBER** IDs are `i64`, not `i32` or `uuid`
-14. **REMEMBER** schema is determined by `search_path`, not hardcoded in queries (production uses `attune`, development uses `public`)
+14. **REMEMBER** schema is determined by `search_path`, not hardcoded in queries (Docker/development/production configs use the `attune` schema; tests use isolated `test_*` schemas)
 15. **REMEMBER** to regenerate SQLx metadata after schema-related changes: `cargo sqlx prepare`
 16. **REMEMBER** packs are volumes - update with restart, not rebuild
 17. **REMEMBER** pack binaries are automatically built by `init-pack-binaries` in Docker Compose. For manual builds use `make docker-build-pack-binaries` or `./scripts/build-pack-binaries.sh`.

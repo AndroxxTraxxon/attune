@@ -43,8 +43,27 @@ pub const OIDC_STATE_COOKIE_NAME: &str = "attune_oidc_state";
 pub const OIDC_NONCE_COOKIE_NAME: &str = "attune_oidc_nonce";
 pub const OIDC_PKCE_COOKIE_NAME: &str = "attune_oidc_pkce_verifier";
 pub const OIDC_REDIRECT_COOKIE_NAME: &str = "attune_oidc_redirect_to";
+/// Cookie that carries the CLI's local callback URI (http://localhost:{port}/callback).
+/// When present, the OIDC callback redirects to this URI with tokens as query params
+/// instead of the usual web-app fragment redirect.
+pub const OIDC_CLI_REDIRECT_COOKIE_NAME: &str = "attune_oidc_cli_redirect";
 
 const LOGIN_CALLBACK_PATH: &str = "/login/callback";
+
+/// Validate that a CLI redirect URI is a localhost HTTP URL (security guard against
+/// open redirect abuse — only loopback addresses are accepted).
+pub fn validate_cli_redirect_uri(uri: &str) -> Result<(), ApiError> {
+    let url = Url::parse(uri)
+        .map_err(|_| ApiError::BadRequest("Invalid CLI redirect URI".to_string()))?;
+    let host = url.host_str().unwrap_or("");
+    if url.scheme() != "http" || !matches!(host, "localhost" | "127.0.0.1" | "[::1]") {
+        return Err(ApiError::BadRequest(
+            "CLI redirect URI must use http://localhost, http://127.0.0.1, or http://[::1]"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Debug, thiserror::Error)]
 enum OidcHttpClientError {
@@ -124,6 +143,7 @@ pub struct OidcCallbackQuery {
 pub async fn build_login_redirect(
     state: &SharedState,
     redirect_to: Option<&str>,
+    cli_redirect_uri: Option<&str>,
 ) -> Result<OidcLoginRedirect, ApiError> {
     let oidc = oidc_config(state)?;
     let discovery = fetch_discovery_document(&oidc).await?;
@@ -165,36 +185,49 @@ pub async fn build_login_redirect(
 
     Ok(OidcLoginRedirect {
         authorization_url: auth_url.to_string(),
-        cookies: vec![
-            build_cookie(
-                state,
-                OIDC_STATE_COOKIE_NAME,
-                csrf_state.secret().to_string(),
-                600,
-                true,
-            ),
-            build_cookie(
-                state,
-                OIDC_NONCE_COOKIE_NAME,
-                nonce.secret().to_string(),
-                600,
-                true,
-            ),
-            build_cookie(
-                state,
-                OIDC_PKCE_COOKIE_NAME,
-                pkce.1.secret().to_string(),
-                600,
-                true,
-            ),
-            build_cookie(
-                state,
-                OIDC_REDIRECT_COOKIE_NAME,
-                redirect_target,
-                600,
-                false,
-            ),
-        ],
+        cookies: {
+            let mut cookies = vec![
+                build_cookie(
+                    state,
+                    OIDC_STATE_COOKIE_NAME,
+                    csrf_state.secret().to_string(),
+                    600,
+                    true,
+                ),
+                build_cookie(
+                    state,
+                    OIDC_NONCE_COOKIE_NAME,
+                    nonce.secret().to_string(),
+                    600,
+                    true,
+                ),
+                build_cookie(
+                    state,
+                    OIDC_PKCE_COOKIE_NAME,
+                    pkce.1.secret().to_string(),
+                    600,
+                    true,
+                ),
+                build_cookie(
+                    state,
+                    OIDC_REDIRECT_COOKIE_NAME,
+                    redirect_target,
+                    600,
+                    false,
+                ),
+            ];
+            if let Some(cli_uri) = cli_redirect_uri {
+                validate_cli_redirect_uri(cli_uri)?;
+                cookies.push(build_cookie(
+                    state,
+                    OIDC_CLI_REDIRECT_COOKIE_NAME,
+                    cli_uri.to_string(),
+                    600,
+                    false,
+                ));
+            }
+            cookies
+        },
     })
 }
 
@@ -426,7 +459,45 @@ pub fn oidc_callback_redirect_response(
     token_response: &TokenResponse,
     redirect_to: Option<String>,
     id_token: &str,
+    cli_redirect_uri: Option<String>,
 ) -> Result<Response, ApiError> {
+    // Always clear OIDC flow cookies regardless of redirect mode.
+    let clear_cookies = [
+        remove_cookie(state, OIDC_STATE_COOKIE_NAME),
+        remove_cookie(state, OIDC_NONCE_COOKIE_NAME),
+        remove_cookie(state, OIDC_PKCE_COOKIE_NAME),
+        remove_cookie(state, OIDC_REDIRECT_COOKIE_NAME),
+        remove_cookie(state, OIDC_CLI_REDIRECT_COOKIE_NAME),
+    ];
+
+    if let Some(cli_uri) = cli_redirect_uri {
+        // CLI mode: serve an auto-submitting form that POSTs tokens to the local
+        // callback server. This keeps tokens out of the browser URL bar and history
+        // (unlike a 302 redirect with query params). Per RFC 8252 §7.3, browsers
+        // correctly follow HTTPS → HTTP loopback redirects/form posts for native apps.
+        let html = format!(
+            r#"<!DOCTYPE html>
+<html><head><title>Attune SSO</title></head>
+<body>
+<form id="f" method="POST" action="{}">
+<input type="hidden" name="access_token" value="{}">
+<input type="hidden" name="refresh_token" value="{}">
+<input type="hidden" name="expires_in" value="{}">
+</form>
+<script>document.getElementById("f").submit();</script>
+<noscript><p>JavaScript is required. Please enable it and try again.</p></noscript>
+</body></html>"#,
+            cli_uri,
+            html_escape(&token_response.access_token),
+            html_escape(&token_response.refresh_token),
+            token_response.expires_in,
+        );
+        let mut response = (StatusCode::OK, axum::response::Html(html)).into_response();
+        apply_cookies_to_headers(response.headers_mut(), &clear_cookies)?;
+        return Ok(response);
+    }
+
+    // Web mode: redirect to the SPA callback page with tokens in the URL fragment.
     let redirect_target = sanitize_redirect_target(redirect_to.as_deref());
     let redirect_url = format!(
         "{LOGIN_CALLBACK_PATH}#access_token={}&refresh_token={}&expires_in={}&redirect_to={}",
@@ -442,6 +513,7 @@ pub fn oidc_callback_redirect_response(
     cookies.push(remove_cookie(state, OIDC_NONCE_COOKIE_NAME));
     cookies.push(remove_cookie(state, OIDC_PKCE_COOKIE_NAME));
     cookies.push(remove_cookie(state, OIDC_REDIRECT_COOKIE_NAME));
+    cookies.push(remove_cookie(state, OIDC_CLI_REDIRECT_COOKIE_NAME));
     apply_cookies_to_headers(response.headers_mut(), &cookies)?;
     Ok(response)
 }
@@ -797,6 +869,15 @@ pub fn unauthorized_redirect(location: &str) -> Response {
 
 fn encode_fragment_value(value: &str) -> String {
     byte_serialize(value.as_bytes()).collect()
+}
+
+/// Minimal HTML attribute escaping for token values embedded in hidden form fields.
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[cfg(test)]

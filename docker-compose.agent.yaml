@@ -53,6 +53,7 @@ services:
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
+      ATTUNE__DATABASE__SCHEMA: attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE_API_URL: http://attune-api:8080
       # ATTUNE_WORKER_RUNTIMES omitted — auto-detected as ruby,shell

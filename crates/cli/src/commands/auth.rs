@@ -1,6 +1,10 @@
 use anyhow::Result;
+use axum::{extract::State, response::Html, routing::post, Form, Router};
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::{oneshot, Mutex};
+use urlencoding;
 
 use crate::client::ApiClient;
 use crate::config::CliConfig;
@@ -25,6 +29,24 @@ pub enum AuthCommands {
         /// Save credentials into a named profile (creates it if it doesn't exist)
         #[arg(long)]
         save_profile: Option<String>,
+    },
+    /// Log in using SSO (OIDC) — opens a browser window for authentication
+    SsoLogin {
+        /// API URL to log in to (saved into the profile for future use)
+        #[arg(long)]
+        url: Option<String>,
+
+        /// Save credentials into a named profile (creates it if it doesn't exist)
+        #[arg(long)]
+        save_profile: Option<String>,
+
+        /// Local port for the OAuth callback server (default: random available port)
+        #[arg(long)]
+        port: Option<u16>,
+
+        /// Print the login URL instead of opening a browser (useful for headless environments)
+        #[arg(long)]
+        no_browser: bool,
     },
     /// Log in with a revokable integration token
     TokenLogin {
@@ -180,6 +202,22 @@ pub async fn handle_auth_command(
     output_format: OutputFormat,
 ) -> Result<()> {
     match command {
+        AuthCommands::SsoLogin {
+            url,
+            save_profile,
+            port,
+            no_browser,
+        } => {
+            let effective_api_url = url.or_else(|| api_url.clone());
+            handle_sso_login(
+                save_profile.as_ref().or(profile.as_ref()),
+                &effective_api_url,
+                port,
+                no_browser,
+                output_format,
+            )
+            .await
+        }
         AuthCommands::Login {
             username,
             password,
@@ -220,22 +258,19 @@ pub async fn handle_auth_command(
     }
 }
 
-async fn handle_login(
-    username: String,
-    password: Option<String>,
+async fn handle_sso_login(
     profile: Option<&String>,
     api_url: &Option<String>,
+    port: Option<u16>,
+    no_browser: bool,
     output_format: OutputFormat,
 ) -> Result<()> {
-    // Determine which profile name will own these credentials.
-    // If --save-profile / --profile was given, use that; otherwise use the
-    // currently-active profile.
     let mut config = CliConfig::load()?;
     let target_profile_name = profile
         .cloned()
         .unwrap_or_else(|| config.current_profile.clone());
 
-    // If a URL was provided and the target profile doesn't exist yet, create it.
+    // Resolve / create the target profile so we know the base API URL.
     if !config.profiles.contains_key(&target_profile_name) {
         let url = api_url
             .clone()
@@ -252,47 +287,261 @@ async fn handle_login(
             },
         )?;
     } else if let Some(url) = api_url {
-        // Profile exists — update its api_url if an explicit URL was provided.
         if let Some(p) = config.profiles.get_mut(&target_profile_name) {
             p.api_url = url.clone();
         }
         config.save()?;
     }
 
-    // Build a temporary config view that points at the target profile so
-    // ApiClient uses the right base URL.
+    let config = CliConfig::load()?;
+    let base_api_url = api_url
+        .clone()
+        .unwrap_or_else(|| config.effective_api_url(api_url));
+
+    // Bind the local callback server to a random (or explicit) port.
+    let listener = {
+        let addr = format!(
+            "127.0.0.1:{}",
+            port.unwrap_or(0) // 0 → OS picks a free port
+        );
+        tokio::net::TcpListener::bind(&addr)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to bind local callback server: {e}"))?
+    };
+    let local_port = listener.local_addr()?.port();
+    let callback_uri = format!("http://localhost:{local_port}/callback");
+
+    // Channel: the callback route sends the received tokens back to this task.
+    let (tx, rx) = oneshot::channel::<SsoCallbackTokens>();
+    let tx = Arc::new(Mutex::new(Some(tx)));
+
+    // Build a minimal Axum router for the local callback server.
+    // Accepts POST from the API's auto-submitting form (tokens in body, not URL).
+    let app = Router::new()
+        .route("/callback", post(sso_callback_handler))
+        .with_state(tx.clone());
+
+    let server = axum::serve(listener, app);
+    // Wrap in a cancellable future so we can shut the server down after receiving tokens.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let server_handle = tokio::spawn(async move {
+        let _ = server
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await;
+    });
+
+    // Build the login URL pointing at the API's OIDC entry point.
+    let login_url = format!(
+        "{}/auth/oidc/login?cli_redirect_uri={}",
+        base_api_url.trim_end_matches('/'),
+        urlencoding::encode(&callback_uri),
+    );
+
+    if no_browser {
+        output::print_info("Open the following URL in your browser to complete SSO login:");
+        println!("{login_url}");
+    } else {
+        output::print_info("Opening browser for SSO login...");
+        if let Err(e) = open_browser(&login_url) {
+            output::print_warning(&format!(
+                "Could not open browser automatically: {e}\nOpen this URL manually: {login_url}"
+            ));
+        }
+    }
+    output::print_info("Waiting for authentication (press Ctrl+C to cancel)...");
+
+    // Wait for the callback with a 5-minute timeout.
+    let tokens = tokio::time::timeout(std::time::Duration::from_secs(300), rx)
+        .await
+        .map_err(|_| anyhow::anyhow!("SSO login timed out after 5 minutes"))?
+        .map_err(|_| anyhow::anyhow!("SSO callback server shut down unexpectedly"))?;
+
+    // Shut down the local server gracefully (allow response to be sent to browser).
+    let _ = shutdown_tx.send(());
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), server_handle).await;
+
+    // Persist tokens.
+    let mut config = CliConfig::load()?;
+    if let Some(p) = config.profiles.get_mut(&target_profile_name) {
+        p.auth_token = Some(tokens.access_token.clone());
+        p.refresh_token = Some(tokens.refresh_token.clone());
+        config.save()?;
+    } else {
+        config.set_auth(tokens.access_token.clone(), tokens.refresh_token.clone())?;
+    }
+
+    match output_format {
+        OutputFormat::Json | OutputFormat::Yaml => {
+            output::print_output(
+                &serde_json::json!({
+                    "access_token": tokens.access_token,
+                    "refresh_token": tokens.refresh_token,
+                    "expires_in": tokens.expires_in,
+                }),
+                output_format,
+            )?;
+        }
+        OutputFormat::Table => {
+            output::print_success("SSO login successful");
+            output::print_info(&format!("Token expires in {} seconds", tokens.expires_in));
+            if target_profile_name != config.current_profile {
+                output::print_info(&format!(
+                    "Credentials saved to profile '{target_profile_name}'"
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SsoCallbackTokens {
+    access_token: String,
+    refresh_token: String,
+    #[serde(default)]
+    expires_in: i64,
+}
+
+type SsoCallbackState = Arc<Mutex<Option<oneshot::Sender<SsoCallbackTokens>>>>;
+
+async fn sso_callback_handler(
+    State(tx): State<SsoCallbackState>,
+    Form(params): Form<SsoCallbackTokens>,
+) -> Html<String> {
+    // Forward tokens to the waiting handle_sso_login call.
+    if let Some(sender) = tx.lock().await.take() {
+        let _ = sender.send(params);
+    }
+
+    Html(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Attune SSO Login</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 80px auto; text-align: center; color: #222; }
+    h1 { color: #16a34a; }
+    p  { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>Login successful!</h1>
+  <p>You are now authenticated with Attune. You can close this tab.</p>
+  <script>setTimeout(() => window.close(), 2000);</script>
+</body>
+</html>"#
+        .to_string(),
+    )
+}
+
+/// Open a URL in the system default browser.
+fn open_browser(url: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(url).spawn()?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open").arg(url).spawn()?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()?;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        anyhow::bail!("Automatic browser opening is not supported on this platform");
+    }
+    Ok(())
+}
+
+async fn handle_login(
+    username: String,
+    password: Option<String>,
+    profile: Option<&String>,
+    api_url: &Option<String>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let mut config = CliConfig::load()?;
+    let target_profile_name = profile
+        .cloned()
+        .unwrap_or_else(|| config.current_profile.clone());
+
+    if !config.profiles.contains_key(&target_profile_name) {
+        let url = api_url
+            .clone()
+            .unwrap_or_else(|| "http://localhost:8080".to_string());
+        use crate::config::Profile;
+        config.set_profile(
+            target_profile_name.clone(),
+            Profile {
+                api_url: url,
+                auth_token: None,
+                refresh_token: None,
+                output_format: None,
+                description: None,
+            },
+        )?;
+    } else if let Some(url) = api_url {
+        if let Some(p) = config.profiles.get_mut(&target_profile_name) {
+            p.api_url = url.clone();
+        }
+        config.save()?;
+    }
+
     let mut login_config = CliConfig::load()?;
     login_config.current_profile = target_profile_name.clone();
 
-    // Prompt for password if not provided
     let password = match password {
         Some(p) => p,
-        None => {
-            let pw = dialoguer::Password::new()
-                .with_prompt("Password")
-                .interact()?;
-            pw
-        }
+        None => dialoguer::Password::new()
+            .with_prompt("Password")
+            .interact()?,
     };
 
     let mut client = ApiClient::from_config(&login_config, api_url);
+
+    // Auto-detect: query /auth/settings to determine whether to use local or LDAP login.
+    let login_path = match client.get::<serde_json::Value>("/auth/settings").await {
+        Ok(settings) => {
+            let data = settings.get("data").unwrap_or(&settings);
+            let local_enabled = data
+                .get("local_password_enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let ldap_enabled = data
+                .get("ldap_enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !local_enabled && ldap_enabled {
+                "/auth/ldap/login"
+            } else {
+                "/auth/login"
+            }
+        }
+        // If settings endpoint is unreachable, default to local login.
+        Err(_) => "/auth/login",
+    };
 
     let login_req = LoginRequest {
         login: username,
         password,
     };
 
-    let response: LoginResponse = client.post("/auth/login", &login_req).await?;
+    let response: LoginResponse = client.post(login_path, &login_req).await?;
 
-    // Persist tokens into the target profile.
     let mut config = CliConfig::load()?;
-    // Ensure the profile exists (it may have just been created above and saved).
     if let Some(p) = config.profiles.get_mut(&target_profile_name) {
         p.auth_token = Some(response.access_token.clone());
         p.refresh_token = Some(response.refresh_token.clone());
         config.save()?;
     } else {
-        // Fallback: set_auth writes to the current profile.
         config.set_auth(
             response.access_token.clone(),
             response.refresh_token.clone(),

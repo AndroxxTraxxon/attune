@@ -19,6 +19,7 @@ config.*.yaml
 # IDE
 .vscode/
 .idea/
+.zed/
 *.swp
 *.swo
 *~

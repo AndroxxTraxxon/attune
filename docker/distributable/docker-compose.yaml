@@ -167,7 +167,7 @@ services:
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
-      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__DATABASE__SCHEMA: attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE__WORKER__WORKER_TYPE: container
     ports:
@@ -211,7 +211,7 @@ services:
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
-      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__DATABASE__SCHEMA: attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE__WORKER__WORKER_TYPE: container
     volumes:
@@ -282,7 +282,7 @@ services:
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
-      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__DATABASE__SCHEMA: attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE_API_URL: http://attune-api:8080
     volumes:
@@ -328,7 +328,7 @@ services:
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
-      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__DATABASE__SCHEMA: attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE_API_URL: http://attune-api:8080
     volumes:
@@ -374,7 +374,7 @@ services:
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
-      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__DATABASE__SCHEMA: attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE_API_URL: http://attune-api:8080
     volumes:
@@ -421,7 +421,7 @@ services:
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
-      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__DATABASE__SCHEMA: attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE_API_URL: http://attune-api:8080
     volumes:
@@ -466,7 +466,7 @@ services:
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
-      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__DATABASE__SCHEMA: attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE__WORKER__WORKER_TYPE: container
       ATTUNE_API_URL: http://attune-api:8080
@@ -511,7 +511,7 @@ services:
       ATTUNE__SECURITY__JWT_SECRET: ${JWT_SECRET:-docker-dev-secret-change-in-production}
       ATTUNE__SECURITY__ENCRYPTION_KEY: ${ENCRYPTION_KEY:-docker-dev-encryption-key-please-change-in-production-32plus}
       ATTUNE__DATABASE__URL: postgresql://attune:attune@postgres:5432/attune
-      ATTUNE__DATABASE__SCHEMA: public
+      ATTUNE__DATABASE__SCHEMA: attune
       ATTUNE__MESSAGE_QUEUE__URL: amqp://attune:attune@rabbitmq:5672
       ATTUNE__WORKER__WORKER_TYPE: container
     ports:
