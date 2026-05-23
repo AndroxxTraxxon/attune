@@ -37,7 +37,6 @@ CREATE TRIGGER update_runtime_retention_config_updated
 
 CREATE TABLE runtime_retention_target_config (
     target TEXT PRIMARY KEY,
-    enabled BOOLEAN NOT NULL DEFAULT TRUE,
     max_age_seconds BIGINT,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -75,25 +74,25 @@ INSERT INTO runtime_retention_config (id, enabled, check_interval_seconds, batch
 VALUES (TRUE, TRUE, 3600, 1000, FALSE, 7821001)
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO runtime_retention_target_config (target, enabled, max_age_seconds)
+INSERT INTO runtime_retention_target_config (target, max_age_seconds)
 VALUES
-    ('events', TRUE, 2592000),
-    ('enforcements', TRUE, 2592000),
-    ('executions', TRUE, 2592000),
-    ('execution_history', TRUE, 2592000),
-    ('worker_history', TRUE, 2592000),
-    ('sensor_process_history', TRUE, 2592000),
-    ('audit_events', TRUE, 7776000),
-    ('continuous_aggregates', TRUE, 2592000),
-    ('notifications', TRUE, 2592000),
-    ('webhook_event_logs', TRUE, 2592000),
-    ('inquiries', TRUE, 2592000),
-    ('work_queue_items', TRUE, 2592000),
-    ('work_queue_dispatches', TRUE, 2592000),
-    ('pack_test_executions', TRUE, 2592000),
-    ('execution_admission', TRUE, 2592000),
-    ('workers', TRUE, 2592000),
-    ('sensor_processes', TRUE, 2592000)
+    ('events', 2592000),
+    ('enforcements', 2592000),
+    ('executions', 2592000),
+    ('execution_history', 2592000),
+    ('worker_history', 2592000),
+    ('sensor_process_history', 2592000),
+    ('audit_events', 7776000),
+    ('continuous_aggregates', 2592000),
+    ('notifications', 2592000),
+    ('webhook_event_logs', 2592000),
+    ('inquiries', 2592000),
+    ('work_queue_items', 2592000),
+    ('work_queue_dispatches', 2592000),
+    ('pack_test_executions', 2592000),
+    ('execution_admission', 2592000),
+    ('workers', 2592000),
+    ('sensor_processes', 2592000)
 ON CONFLICT (target) DO NOTHING;
 
 COMMENT ON TABLE event IS

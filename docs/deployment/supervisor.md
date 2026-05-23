@@ -100,9 +100,9 @@ Example API payload:
   "dry_run": false,
   "advisory_lock_key": 7821001,
   "targets": {
-    "events": { "enabled": true, "max_age_seconds": 2592000 },
-    "executions": { "enabled": true, "max_age_seconds": 2592000 },
-    "audit_events": { "enabled": true, "max_age_seconds": 7776000 }
+    "events": { "max_age_seconds": 2592000 },
+    "executions": { "max_age_seconds": 2592000 },
+    "audit_events": { "max_age_seconds": 7776000 }
   }
 }
 ```
@@ -114,8 +114,7 @@ Example API payload:
 | `batch_size` | `1000` | Maximum rows deleted per regular-table target per cycle. Hypertable targets drop chunks instead. |
 | `dry_run` | `false` | Counts candidates and emits audit/log output without deleting rows or chunks. |
 | `advisory_lock_key` | `7821001` | PostgreSQL advisory lock key used to make multiple supervisors safe. |
-| `targets.<target>.enabled` | `true` | Whether a target is processed. |
-| `targets.<target>.max_age_seconds` | target default | Maximum retained age. Use `null` to keep forever. Must not be `0`. |
+| `targets.<target>.max_age_seconds` | target default | Maximum retained age. Use `null` to keep forever (purging disabled for that target). Must not be `0`. |
 
 ### Maintenance configuration
 

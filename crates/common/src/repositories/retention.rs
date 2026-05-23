@@ -94,7 +94,6 @@ struct RuntimeRetentionConfigRow {
 #[derive(Debug, Clone, FromRow)]
 struct RuntimeRetentionTargetConfigRow {
     target: String,
-    enabled: bool,
     max_age_seconds: Option<i64>,
 }
 
@@ -140,12 +139,11 @@ impl RetentionRepository {
 
         for (target, config) in Self::target_config_pairs(&defaults.targets) {
             sqlx::query(
-                "INSERT INTO runtime_retention_target_config (target, enabled, max_age_seconds)
-                 VALUES ($1, $2, $3)
+                "INSERT INTO runtime_retention_target_config (target, max_age_seconds)
+                 VALUES ($1, $2)
                  ON CONFLICT (target) DO NOTHING",
             )
             .bind(target.name())
-            .bind(config.enabled)
             .bind(config.max_age_seconds.map(|value| value as i64))
             .execute(pool)
             .await?;
@@ -167,7 +165,7 @@ impl RetentionRepository {
         .await?;
 
         let target_rows = sqlx::query_as::<_, RuntimeRetentionTargetConfigRow>(
-            "SELECT target, enabled, max_age_seconds
+            "SELECT target, max_age_seconds
              FROM runtime_retention_target_config
              ORDER BY target ASC",
         )
@@ -183,7 +181,6 @@ impl RetentionRepository {
                 &mut targets,
                 target,
                 RetentionTargetConfig {
-                    enabled: target_row.enabled,
                     max_age_seconds: target_row.max_age_seconds.map(|value| value as u64),
                 },
             );
@@ -225,14 +222,12 @@ impl RetentionRepository {
 
         for (target, target_config) in Self::target_config_pairs(&config.targets) {
             sqlx::query(
-                "INSERT INTO runtime_retention_target_config (target, enabled, max_age_seconds)
-                 VALUES ($1, $2, $3)
+                "INSERT INTO runtime_retention_target_config (target, max_age_seconds)
+                 VALUES ($1, $2)
                  ON CONFLICT (target) DO UPDATE SET
-                    enabled = EXCLUDED.enabled,
                     max_age_seconds = EXCLUDED.max_age_seconds",
             )
             .bind(target.name())
-            .bind(target_config.enabled)
             .bind(target_config.max_age_seconds.map(|value| value as i64))
             .execute(&mut *tx)
             .await?;
@@ -242,15 +237,16 @@ impl RetentionRepository {
         Self::load_config(pool).await
     }
 
-    /// Build the enabled target list from configuration.
+    /// Build the target list from configuration.
+    ///
+    /// All targets are returned. Targets with `max_age_seconds: None` are skipped
+    /// by the supervisor at runtime (keep forever).
     pub fn configured_targets(targets: &RetentionTargetsConfig) -> Vec<RetentionTargetRunConfig> {
         Self::target_config_pairs(targets)
             .into_iter()
-            .filter_map(|(target, config)| {
-                config.enabled.then_some(RetentionTargetRunConfig {
-                    target,
-                    max_age_seconds: config.max_age_seconds,
-                })
+            .map(|(target, config)| RetentionTargetRunConfig {
+                target,
+                max_age_seconds: config.max_age_seconds,
             })
             .collect()
     }
@@ -840,16 +836,15 @@ mod tests {
     use crate::config::RetentionTargetsConfig;
 
     #[test]
-    fn configured_targets_excludes_disabled_targets() {
+    fn configured_targets_includes_all_targets() {
         let mut targets = RetentionTargetsConfig::default();
-        targets.events.enabled = false;
         targets.audit_events.max_age_seconds = None;
 
         let configured = RetentionRepository::configured_targets(&targets);
 
-        assert!(!configured
-            .iter()
-            .any(|target| target.target == RetentionTarget::Events));
+        // All 17 targets are returned regardless of max_age_seconds
+        assert_eq!(configured.len(), 17);
+        // Target with max_age_seconds = None is included (supervisor skips it at runtime)
         assert!(configured.iter().any(|target| {
             target.target == RetentionTarget::AuditEvents && target.max_age_seconds.is_none()
         }));

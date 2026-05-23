@@ -8,7 +8,6 @@ export interface ApiResponse<T> {
 }
 
 export interface RetentionTargetConfig {
-  enabled: boolean;
   max_age_seconds?: number | null;
 }
 

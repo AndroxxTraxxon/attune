@@ -183,7 +183,7 @@ function RetentionConfigEditor({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="p-6 space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
@@ -335,8 +335,7 @@ function RetentionConfigEditor({
             Retention targets
           </h2>
           <p className="mt-1 text-sm text-gray-500">
-            Blank retention days keeps that target forever. Disabled targets are
-            skipped even when a max age is set.
+            Blank retention days keeps that target forever (no purging).
           </p>
         </div>
         <div className="overflow-x-auto">
@@ -345,9 +344,6 @@ function RetentionConfigEditor({
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                   Target
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  Enabled
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                   Retention days
@@ -362,17 +358,6 @@ function RetentionConfigEditor({
                 <tr key={key}>
                   <td className="whitespace-nowrap px-6 py-4 text-sm font-medium text-gray-900">
                     {retentionTargetLabels[key]}
-                  </td>
-                  <td className="px-6 py-4">
-                    <input
-                      type="checkbox"
-                      checked={draft.targets[key].enabled}
-                      disabled={!canUpdate}
-                      onChange={(event) =>
-                        setTargetField(key, "enabled", event.target.checked)
-                      }
-                      className="h-4 w-4 rounded border-gray-300 text-blue-600"
-                    />
                   </td>
                   <td className="px-6 py-4">
                     <input
@@ -398,9 +383,7 @@ function RetentionConfigEditor({
                     />
                   </td>
                   <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-600">
-                    {draft.targets[key].enabled
-                      ? formatRetention(draft.targets[key].max_age_seconds)
-                      : "Disabled"}
+                    {formatRetention(draft.targets[key].max_age_seconds)}
                   </td>
                 </tr>
               ))}

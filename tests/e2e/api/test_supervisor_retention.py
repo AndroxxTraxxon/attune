@@ -124,7 +124,6 @@ def _write_supervisor_config(
 ) -> Path:
     targets = {
         target: {
-            "enabled": target in enabled_targets,
             "max_age_seconds": max_age_seconds if target in enabled_targets else None,
         }
         for target in ALL_RETENTION_TARGETS
@@ -173,7 +172,7 @@ def _snapshot_runtime_retention_config(cur) -> dict[str, object]:
     config = cur.fetchone()
     cur.execute(
         """
-        SELECT target, enabled, max_age_seconds
+        SELECT target, max_age_seconds
         FROM runtime_retention_target_config
         ORDER BY target ASC
         """
@@ -203,8 +202,8 @@ def _restore_runtime_retention_config(snapshot: dict[str, object] | None):
                 )
             cur.executemany(
                 """
-                INSERT INTO runtime_retention_target_config (target, enabled, max_age_seconds)
-                VALUES (%s, %s, %s)
+                INSERT INTO runtime_retention_target_config (target, max_age_seconds)
+                VALUES (%s, %s)
                 """,
                 snapshot["targets"],
             )
@@ -240,15 +239,13 @@ def _configure_runtime_retention(
     for target in ALL_RETENTION_TARGETS:
         cur.execute(
             """
-            INSERT INTO runtime_retention_target_config (target, enabled, max_age_seconds)
-            VALUES (%s, %s, %s)
+            INSERT INTO runtime_retention_target_config (target, max_age_seconds)
+            VALUES (%s, %s)
             ON CONFLICT (target) DO UPDATE SET
-                enabled = EXCLUDED.enabled,
                 max_age_seconds = EXCLUDED.max_age_seconds
             """,
             (
                 target,
-                target in enabled_targets,
                 max_age_seconds if target in enabled_targets else None,
             ),
         )
