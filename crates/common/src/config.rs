@@ -774,28 +774,25 @@ fn default_sensor_log_max_files() -> u32 {
 }
 
 /// Runtime database row retention settings.
+///
+/// A target with `max_age_seconds: None` keeps rows forever (purging disabled).
+/// A target with `max_age_seconds: Some(n)` purges rows older than `n` seconds.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct RetentionTargetConfig {
-    /// Whether this retention target is processed.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
-    /// Maximum row age in seconds. `None` means keep forever.
+    /// Maximum row age in seconds. `None` means keep forever (no purging).
     #[serde(default)]
     pub max_age_seconds: Option<u64>,
 }
 
 impl RetentionTargetConfig {
-    pub fn enabled_with_days(days: u64) -> Self {
+    pub fn with_days(days: u64) -> Self {
         Self {
-            enabled: true,
             max_age_seconds: Some(days * 24 * 60 * 60),
         }
     }
 
-    pub fn disabled() -> Self {
+    pub fn keep_forever() -> Self {
         Self {
-            enabled: false,
             max_age_seconds: None,
         }
     }
@@ -865,7 +862,7 @@ impl Default for RetentionTargetsConfig {
 }
 
 fn retention_days(days: u64) -> RetentionTargetConfig {
-    RetentionTargetConfig::enabled_with_days(days)
+    RetentionTargetConfig::with_days(days)
 }
 
 fn default_retention_events() -> RetentionTargetConfig {
@@ -1822,23 +1819,20 @@ mod tests {
     }
 
     #[test]
-    fn retention_target_can_be_disabled_or_kept_forever() {
+    fn retention_target_keep_forever() {
         let retention: RetentionConfig = serde_json::from_value(serde_json::json!({
             "targets": {
                 "events": {
-                    "enabled": false
+                    "max_age_seconds": null
                 },
                 "audit_events": {
-                    "enabled": true,
                     "max_age_seconds": null
                 }
             }
         }))
         .unwrap();
 
-        assert!(!retention.targets.events.enabled);
         assert_eq!(retention.targets.events.max_age_seconds, None);
-        assert!(retention.targets.audit_events.enabled);
         assert_eq!(retention.targets.audit_events.max_age_seconds, None);
     }
 
