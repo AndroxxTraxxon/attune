@@ -44,6 +44,10 @@ export type PaginatedResponse_RuleSummary = {
          */
         pack_ref: string;
         /**
+         * Optional execution permission-set override for executions created by this rule.
+         */
+        permission_set_refs?: Array<string> | null;
+        /**
          * Unique reference identifier
          */
         ref: string;
@@ -65,4 +69,3 @@ export type PaginatedResponse_RuleSummary = {
      */
     pagination: PaginationMeta;
 };
-

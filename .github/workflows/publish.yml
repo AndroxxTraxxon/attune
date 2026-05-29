@@ -133,8 +133,20 @@ jobs:
               },
           }
           linux_packages = {
-              "amd64": {"arch": "amd64", "runner_label": "ubuntu-24.04", "nfpm_arch": "amd64"},
-              "arm64": {"arch": "arm64", "runner_label": "ubuntu-24.04", "nfpm_arch": "arm64"},
+              "amd64": {
+                  "arch": "amd64",
+                  "runner_label": "ubuntu-24.04",
+                  "nfpm_arch": "amd64",
+                  "rpm_arch": "x86_64",
+                  "pacman_arch": "x86_64",
+              },
+              "arm64": {
+                  "arch": "arm64",
+                  "runner_label": "ubuntu-24.04",
+                  "nfpm_arch": "arm64",
+                  "rpm_arch": "aarch64",
+                  "pacman_arch": "aarch64",
+              },
           }
           web_images = {
               "amd64": {"arch": "amd64", "runner_label": "ubuntu-24.04", "platform": "linux/amd64"},
@@ -475,6 +487,30 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Attach binary bundle to GitHub release
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          BUNDLE_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          asset_path="dist/attune-binaries-${BUNDLE_ARCH}.tar.gz"
+
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            release_args=(--title "$TAG_NAME" --verify-tag)
+            if [[ "$TAG_NAME" == *-* ]]; then
+              release_args+=(--prerelease)
+            fi
+            if ! gh release create "$TAG_NAME" "${release_args[@]}"; then
+              gh release view "$TAG_NAME" >/dev/null 2>&1
+            fi
+          fi
+
+          gh release upload "$TAG_NAME" "$asset_path" --clobber
+
   publish-linux-packages:
     name: Publish Linux Packages (${{ matrix.arch }})
     runs-on: ${{ matrix.runner_label }}
@@ -488,6 +524,9 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.metadata.outputs.linux_package_matrix) }}
+    concurrency:
+      group: linux-package-repo-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -511,6 +550,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           NFPM_VERSION="2.41.1"
           case "$(uname -m)" in
             x86_64) NFPM_ARCH="x86_64" ;;
@@ -555,151 +595,65 @@ jobs:
           set -euo pipefail
           ./scripts/build-linux-packages.sh "$BUNDLE_DIR" "$ARCH" "$VERSION"
 
-      - name: Upload Linux package artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: attune-linux-packages-${{ matrix.arch }}
-          path: dist/packages/*
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Attach Linux packages to GitHub release
-        if: github.ref_type == 'tag'
+      - name: Publish Linux packages to Nexus
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OWNER_REPO: ${{ github.repository }}
-          TAG_NAME: ${{ github.ref_name }}
+          DEB_ARCH: ${{ matrix.nfpm_arch }}
+          RPM_ARCH: ${{ matrix.rpm_arch }}
+          PACMAN_ARCH: ${{ matrix.pacman_arch }}
+          NEXUS_URL: ${{ vars.NEXUS_URL }}
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          NEXUS_APT_REPOSITORY: ${{ vars.NEXUS_APT_REPOSITORY }}
+          NEXUS_YUM_REPOSITORY: ${{ vars.NEXUS_YUM_REPOSITORY }}
+          NEXUS_RAW_REPOSITORY: ${{ vars.NEXUS_RAW_REPOSITORY }}
+          NEXUS_APT_COMPONENT: ${{ vars.NEXUS_APT_COMPONENT }}
         run: |
           set -euo pipefail
 
-          api_base="https://api.github.com"
-          auth_header="Authorization: Bearer ${GITHUB_TOKEN}"
-          accept_header="Accept: application/vnd.github+json"
-          api_version_header="X-GitHub-Api-Version: 2022-11-28"
-          release_response_file="$(mktemp)"
+          : "${NEXUS_URL:?Set repository variable NEXUS_URL}"
+          : "${NEXUS_USERNAME:?Set secret NEXUS_USERNAME}"
+          : "${NEXUS_PASSWORD:?Set secret NEXUS_PASSWORD}"
 
-          status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
-            -H "${auth_header}" \
-            -H "${accept_header}" \
-            -H "${api_version_header}" \
-            "${api_base}/repos/${OWNER_REPO}/releases/tags/${TAG_NAME}")"
+          nexus_base="${NEXUS_URL%/}"
+          apt_repo="${NEXUS_APT_REPOSITORY:-attune-apt}"
+          yum_repo="${NEXUS_YUM_REPOSITORY:-attune-yum}"
+          raw_repo="${NEXUS_RAW_REPOSITORY:-}"
+          apt_component="${NEXUS_APT_COMPONENT:-main}"
 
-          if [ "${status_code}" = "404" ]; then
-            create_payload="$(TAG_NAME="${TAG_NAME}" python3 - <<'PY'
-          import json
-          import os
+          upload_package() {
+            local repository="$1"
+            local destination_path="$2"
+            local package_file="$3"
 
-          tag = os.environ["TAG_NAME"]
-          print(json.dumps({
-              "tag_name": tag,
-              "name": tag,
-              "draft": False,
-              "prerelease": "-" in tag,
-          }))
-          PY
-          )"
+            echo "Uploading $(basename "$package_file") to Nexus repository ${repository}/${destination_path}"
+            curl --fail --show-error --silent \
+              --retry 5 \
+              --retry-delay 2 \
+              --retry-all-errors \
+              --user "${NEXUS_USERNAME}:${NEXUS_PASSWORD}" \
+              --upload-file "$package_file" \
+              "${nexus_base}/repository/${repository}/${destination_path}"
+          }
 
-            status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
-              -H "${auth_header}" \
-              -H "${accept_header}" \
-              -H "${api_version_header}" \
-              -H "Content-Type: application/json" \
-              -X POST \
-              -d "${create_payload}" \
-              "${api_base}/repos/${OWNER_REPO}/releases")"
-
-            if [ "${status_code}" = "422" ]; then
-              status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
-                -H "${auth_header}" \
-                -H "${accept_header}" \
-                -H "${api_version_header}" \
-                "${api_base}/repos/${OWNER_REPO}/releases/tags/${TAG_NAME}")"
-            fi
-          fi
-
-          case "${status_code}" in
-            200|201)
-              ;;
-            *)
-              echo "Failed to fetch or create release for tag ${TAG_NAME}"
-              cat "${release_response_file}"
-              exit 1
-              ;;
-          esac
-
-          release_id="$(python3 - "${release_response_file}" <<'PY'
-          import json
-          import sys
-
-          with open(sys.argv[1], "r", encoding="utf-8") as fh:
-              data = json.load(fh)
-          print(data["id"])
-          PY
-          )"
-
-          for package_file in dist/packages/*; do
-            [ -f "${package_file}" ] || continue
-            asset_name="$(basename "${package_file}")"
-            release_response_file_with_assets="$(mktemp)"
-            curl -sS -o "${release_response_file_with_assets}" \
-              -H "${auth_header}" \
-              -H "${accept_header}" \
-              -H "${api_version_header}" \
-              "${api_base}/repos/${OWNER_REPO}/releases/${release_id}"
-
-            existing_asset_id="$(python3 - "${release_response_file_with_assets}" "${asset_name}" <<'PY'
-          import json
-          import sys
-
-          with open(sys.argv[1], "r", encoding="utf-8") as fh:
-              data = json.load(fh)
-          name = sys.argv[2]
-          for asset in data.get("assets", []):
-              if asset.get("name") == name:
-                  print(asset["id"])
-                  break
-          PY
-          )"
-
-            if [ -n "${existing_asset_id}" ]; then
-              curl -sS \
-                -H "${auth_header}" \
-                -H "${accept_header}" \
-                -H "${api_version_header}" \
-                -X DELETE \
-                "${api_base}/repos/${OWNER_REPO}/releases/assets/${existing_asset_id}" \
-                >/dev/null
-            fi
-
-            encoded_asset_name="$(ASSET_NAME="${asset_name}" python3 - <<'PY'
-          import os
-          import urllib.parse
-
-          print(urllib.parse.quote(os.environ["ASSET_NAME"], safe=""))
-          PY
-          )"
-
-            upload_response_file="$(mktemp)"
-            status_code="$(curl -sS -o "${upload_response_file}" -w '%{http_code}' \
-              -H "${auth_header}" \
-              -H "${accept_header}" \
-              -H "${api_version_header}" \
-              -H "Content-Type: application/octet-stream" \
-              --data-binary "@${package_file}" \
-              "https://uploads.github.com/repos/${OWNER_REPO}/releases/${release_id}/assets?name=${encoded_asset_name}")"
-
-            case "${status_code}" in
-              201)
-                echo "Uploaded release asset ${asset_name}"
-                ;;
-              *)
-                echo "Failed to upload release asset ${asset_name}"
-                cat "${upload_response_file}"
-                exit 1
-                ;;
-            esac
+          for package_file in dist/packages/*.deb; do
+            [ -f "$package_file" ] || continue
+            upload_package "$apt_repo" "pool/${apt_component}/${DEB_ARCH}/$(basename "$package_file")" "$package_file"
           done
+
+          for package_file in dist/packages/*.rpm; do
+            [ -f "$package_file" ] || continue
+            upload_package "$yum_repo" "${RPM_ARCH}/$(basename "$package_file")" "$package_file"
+          done
+
+          if [ -n "$raw_repo" ]; then
+            for package_file in dist/packages/*.pkg.tar.zst; do
+              [ -f "$package_file" ] || continue
+              upload_package "$raw_repo" "archlinux/${PACMAN_ARCH}/$(basename "$package_file")" "$package_file"
+            done
+          else
+            echo "NEXUS_RAW_REPOSITORY is not set; skipping Arch Linux package upload"
+          fi
 
   publish-docker-dist:
     name: Publish Docker Dist Bundle
@@ -947,212 +901,6 @@ jobs:
               --username "${registry_username}" \
               --password-stdin
           helm push "${package_file}" "${chart_repository}"
-
-  publish-artifact-archive:
-    name: Publish Combined Artifact Archive
-    runs-on: ubuntu-24.04
-    needs:
-      - metadata
-      - build-rust-bundles
-      - publish-linux-packages
-      - publish-docker-dist
-      - publish-helm-chart
-    if: |
-      !cancelled() &&
-      (
-        needs.build-rust-bundles.result == 'success' ||
-        needs.publish-linux-packages.result == 'success' ||
-        needs.publish-docker-dist.result == 'success' ||
-        needs.publish-helm-chart.result == 'success'
-      )
-    steps:
-      - name: Download workflow artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: dist/all-artifacts
-
-      - name: Create combined artifact archive
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p dist/archive
-          archive_name="attune-build-artifacts-${{ needs.metadata.outputs.image_tag }}.zip"
-
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          from zipfile import ZIP_DEFLATED, ZipFile
-
-          artifact_root = Path("dist/all-artifacts")
-          archive_path = Path("dist/archive") / os.environ["ARCHIVE_NAME"]
-
-          metadata = {
-              "git_sha": os.environ["GITHUB_SHA"],
-              "ref": os.environ["GITHUB_REF"],
-              "image_tag": os.environ["IMAGE_TAG"],
-              "image_tags": os.environ["IMAGE_TAGS"],
-              "chart_version": os.environ["CHART_VERSION"],
-              "registry": os.environ["REGISTRY"],
-              "namespace": os.environ["NAMESPACE"],
-          }
-
-          with ZipFile(archive_path, "w", ZIP_DEFLATED) as zf:
-              zf.writestr("metadata.json", json.dumps(metadata, indent=2, sort_keys=True) + "\n")
-              for path in sorted(artifact_root.rglob("*")):
-                  if path.is_file():
-                      zf.write(path, path.relative_to(artifact_root))
-          PY
-
-          echo "archive_name=${archive_name}" >> "$GITHUB_ENV"
-          echo "Created dist/archive/${archive_name}"
-        env:
-          ARCHIVE_NAME: attune-build-artifacts-${{ needs.metadata.outputs.image_tag }}.zip
-          IMAGE_TAG: ${{ needs.metadata.outputs.image_tag }}
-          IMAGE_TAGS: ${{ needs.metadata.outputs.image_tags }}
-          CHART_VERSION: ${{ needs.metadata.outputs.chart_version }}
-          REGISTRY: ${{ needs.metadata.outputs.registry }}
-          NAMESPACE: ${{ needs.metadata.outputs.namespace }}
-
-      - name: Upload combined artifact archive
-        uses: actions/upload-artifact@v7
-        with:
-          name: attune-build-artifacts
-          path: dist/archive/${{ env.archive_name }}
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Attach combined archive to GitHub release
-        if: github.ref_type == 'tag'
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OWNER_REPO: ${{ github.repository }}
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-
-          api_base="https://api.github.com"
-          upload_api_base="https://uploads.github.com"
-          auth_header="Authorization: Bearer ${GITHUB_TOKEN}"
-          accept_header="Accept: application/vnd.github+json"
-          api_version_header="X-GitHub-Api-Version: 2022-11-28"
-          owner_repo="${OWNER_REPO}"
-          tag_name="${TAG_NAME}"
-          archive_path="dist/archive/${archive_name}"
-          asset_name="${archive_name}"
-
-          release_response_file="$(mktemp)"
-          status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
-            -H "${auth_header}" \
-            -H "${accept_header}" \
-            -H "${api_version_header}" \
-            "${api_base}/repos/${owner_repo}/releases/tags/${tag_name}")"
-
-          if [ "${status_code}" = "404" ]; then
-            create_payload="$(TAG_NAME="${tag_name}" python3 - <<'PY'
-          import json
-          import os
-
-          tag = os.environ["TAG_NAME"]
-          print(json.dumps({
-              "tag_name": tag,
-              "name": tag,
-              "draft": False,
-              "prerelease": "-" in tag,
-          }))
-          PY
-          )"
-
-            status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
-              -H "${auth_header}" \
-              -H "${accept_header}" \
-              -H "${api_version_header}" \
-              -H "Content-Type: application/json" \
-              -X POST \
-              -d "${create_payload}" \
-              "${api_base}/repos/${owner_repo}/releases")"
-
-            if [ "${status_code}" = "422" ]; then
-              status_code="$(curl -sS -o "${release_response_file}" -w '%{http_code}' \
-                -H "${auth_header}" \
-                -H "${accept_header}" \
-                -H "${api_version_header}" \
-                "${api_base}/repos/${owner_repo}/releases/tags/${tag_name}")"
-            fi
-          fi
-
-          case "${status_code}" in
-            200|201)
-              ;;
-            *)
-              echo "Failed to fetch or create release for tag ${tag_name}"
-              cat "${release_response_file}"
-              exit 1
-              ;;
-          esac
-
-          release_id="$(python3 - "${release_response_file}" <<'PY'
-          import json
-          import sys
-
-          with open(sys.argv[1], "r", encoding="utf-8") as fh:
-              data = json.load(fh)
-          print(data["id"])
-          PY
-          )"
-
-          existing_asset_id="$(python3 - "${release_response_file}" "${asset_name}" <<'PY'
-          import json
-          import sys
-
-          with open(sys.argv[1], "r", encoding="utf-8") as fh:
-              data = json.load(fh)
-          name = sys.argv[2]
-          for asset in data.get("assets", []):
-              if asset.get("name") == name:
-                  print(asset["id"])
-                  break
-          PY
-          )"
-
-          if [ -n "${existing_asset_id}" ]; then
-            curl -sS \
-              -H "${auth_header}" \
-              -H "${accept_header}" \
-              -H "${api_version_header}" \
-              -X DELETE \
-              "${api_base}/repos/${owner_repo}/releases/assets/${existing_asset_id}" \
-              >/dev/null
-          fi
-
-          encoded_asset_name="$(ASSET_NAME="${asset_name}" python3 - <<'PY'
-          import os
-          import urllib.parse
-
-          print(urllib.parse.quote(os.environ["ASSET_NAME"], safe=""))
-          PY
-          )"
-
-          upload_response_file="$(mktemp)"
-          status_code="$(curl -sS -o "${upload_response_file}" -w '%{http_code}' \
-            -H "${auth_header}" \
-            -H "${accept_header}" \
-            -H "${api_version_header}" \
-            -H "Content-Type: application/zip" \
-            --data-binary "@${archive_path}" \
-            "${upload_api_base}/repos/${owner_repo}/releases/${release_id}/assets?name=${encoded_asset_name}")"
-
-          case "${status_code}" in
-            201)
-              ;;
-            *)
-              echo "Failed to upload release asset ${asset_name}"
-              cat "${upload_response_file}"
-              exit 1
-              ;;
-          esac
 
   publish-rust-images:
     name: Publish ${{ matrix.image.name }} (${{ matrix.arch }})

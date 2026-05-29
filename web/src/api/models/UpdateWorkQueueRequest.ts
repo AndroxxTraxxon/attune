@@ -18,6 +18,11 @@ export type UpdateWorkQueueRequest = {
     item_schema: any | null;
     label?: string | null;
     pack_ref?: (null | NullableStringPatch);
+    /**
+     * Permission set refs to apply to executions dispatched by this queue. Omit
+     * to keep the current value. Provide null to inherit the dispatch action
+     * default, or an empty array to force no API token.
+     */
+    permission_set_refs?: Array<string> | null;
     update_strategy?: (null | WorkQueueUpdateStrategy);
 };
-

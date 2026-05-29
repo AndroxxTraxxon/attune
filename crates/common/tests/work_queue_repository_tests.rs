@@ -56,6 +56,7 @@ async fn create_queue_fixture() -> (sqlx::PgPool, attune_common::models::work_qu
                 "items": "{{ items }}",
                 "queue": "{{ queue }}"
             }),
+            permission_set_refs: None,
             config: json!({
                 "dispatch": {
                     "batch_size": { "source": "literal", "value": 2 }

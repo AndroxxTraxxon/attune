@@ -59,6 +59,11 @@ export type RuleResponse = {
      */
     pack_ref: string;
     /**
+     * Optional execution permission override. Null means inherit action default;
+     * empty array means force no execution API token.
+     */
+    permission_set_refs?: Array<string> | null;
+    /**
      * Unique reference identifier
      */
     ref: string;
@@ -79,4 +84,3 @@ export type RuleResponse = {
      */
     updated: string;
 };
-

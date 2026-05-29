@@ -16,7 +16,9 @@
 
 use attune_common::error::{Error, Result};
 use attune_common::models::{key::Key, Action, OwnerType};
+use attune_common::repositories::execution_secret_value::ExecutionSecretValueRepository;
 use attune_common::repositories::key::KeyRepository;
+use attune_common::secret_values::{restore_secret_values, ENTITY_EXECUTION_CONFIG};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -91,6 +93,34 @@ impl SecretManager {
         debug!("Total secrets loaded: {}", secrets.len());
 
         Ok(secrets)
+    }
+
+    pub async fn restore_execution_parameters(
+        &self,
+        execution_id: i64,
+        redacted_config: JsonValue,
+    ) -> Result<JsonValue> {
+        let secrets = ExecutionSecretValueRepository::find_stored_by_entity(
+            &self.pool,
+            ENTITY_EXECUTION_CONFIG,
+            execution_id,
+        )
+        .await?;
+        if secrets.is_empty() {
+            return Ok(redacted_config);
+        }
+
+        let encryption_key = self
+            .encryption_key
+            .as_ref()
+            .ok_or_else(|| Error::Internal("No encryption key configured".to_string()))?;
+
+        restore_secret_values(redacted_config, &secrets, encryption_key).map_err(|e| {
+            Error::Internal(format!(
+                "Failed to restore secret parameters for execution {}: {}",
+                execution_id, e
+            ))
+        })
     }
 
     /// Fetch secrets by owner type
@@ -173,6 +203,10 @@ impl SecretManager {
         } else {
             String::new()
         }
+    }
+
+    pub fn encryption_key(&self) -> Option<&str> {
+        self.encryption_key.as_deref()
     }
 
     /// Prepare secrets as environment variables.

@@ -1277,6 +1277,10 @@ impl<'a> PackComponentLoader<'a> {
                     batch_mode: Some(definition.batch_mode),
                     item_schema: Some(definition.item_schema.clone()),
                     action_params: Some(definition.action_params.clone()),
+                    permission_set_refs: Some(match definition.permission_set_refs.clone() {
+                        Some(refs) => Patch::Set(refs),
+                        None => Patch::Clear,
+                    }),
                     config: Some(definition.config.clone()),
                 };
 
@@ -1319,6 +1323,7 @@ impl<'a> PackComponentLoader<'a> {
                     batch_mode: definition.batch_mode,
                     item_schema: definition.item_schema.clone(),
                     action_params: definition.action_params.clone(),
+                    permission_set_refs: definition.permission_set_refs.clone(),
                     config: definition.config.clone(),
                 },
             )
@@ -1475,6 +1480,10 @@ impl<'a> PackComponentLoader<'a> {
                 .get("trigger_params")
                 .and_then(|v| serde_json::to_value(v).ok())
                 .unwrap_or_else(|| serde_json::json!({}));
+            let permission_set_refs = parse_optional_permission_set_refs(
+                data.get("permission_set_refs")
+                    .or_else(|| data.get("permission_set_ref")),
+            )?;
 
             if let Some(existing) = RuleRepository::find_by_ref(self.pool, &rule_ref).await? {
                 let update_input = UpdateRuleInput {
@@ -1492,6 +1501,10 @@ impl<'a> PackComponentLoader<'a> {
                     conditions: Some(conditions),
                     action_params: Some(action_params),
                     trigger_params: Some(trigger_params),
+                    permission_set_refs: Some(match permission_set_refs.clone() {
+                        Some(refs) => Patch::Set(refs),
+                        None => Patch::Clear,
+                    }),
                     enabled: Some(enabled),
                     is_adhoc: Some(false),
                     owner_identity: Some(Patch::Clear),
@@ -1528,6 +1541,7 @@ impl<'a> PackComponentLoader<'a> {
                     conditions,
                     action_params,
                     trigger_params,
+                    permission_set_refs,
                     enabled,
                     is_adhoc: false,
                     owner_identity: None,
@@ -2383,6 +2397,47 @@ fn parse_log_retention_limit(value: Option<&serde_yaml_ng::Value>) -> Result<Opt
         .transpose()
 }
 
+fn parse_optional_permission_set_refs(
+    value: Option<&serde_yaml_ng::Value>,
+) -> Result<Option<Vec<String>>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let refs = match value {
+        serde_yaml_ng::Value::String(permission_set_ref) => {
+            vec![permission_set_ref.trim().to_string()]
+        }
+        serde_yaml_ng::Value::Sequence(values) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::trim)
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| Error::validation("permission_set_refs entries must be strings"))
+            })
+            .collect::<Result<Vec<_>>>()?,
+        serde_yaml_ng::Value::Null => return Ok(None),
+        _ => {
+            return Err(Error::validation(
+                "permission_set_refs must be a string, an array of strings, or null",
+            ))
+        }
+    };
+
+    if refs
+        .iter()
+        .any(|permission_set_ref| permission_set_ref.is_empty())
+    {
+        return Err(Error::validation(
+            "permission_set_refs cannot contain empty refs",
+        ));
+    }
+
+    Ok(Some(refs))
+}
+
 /// Generate a human-readable label from a snake_case name.
 ///
 /// Examples:
@@ -2423,5 +2478,42 @@ mod tests {
         assert_eq!(generate_label("http_request"), "Http Request");
         assert_eq!(generate_label("datetime_timer"), "Datetime Timer");
         assert_eq!(generate_label("a_b_c"), "A B C");
+    }
+
+    #[test]
+    fn test_parse_optional_permission_set_refs() {
+        assert_eq!(parse_optional_permission_set_refs(None).unwrap(), None);
+
+        let single = serde_yaml_ng::Value::String(" standard ".to_string());
+        assert_eq!(
+            parse_optional_permission_set_refs(Some(&single)).unwrap(),
+            Some(vec!["standard".to_string()])
+        );
+
+        let many: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str("- standard\n- elevated\n").unwrap();
+        assert_eq!(
+            parse_optional_permission_set_refs(Some(&many)).unwrap(),
+            Some(vec!["standard".to_string(), "elevated".to_string()])
+        );
+
+        let null = serde_yaml_ng::Value::Null;
+        assert_eq!(
+            parse_optional_permission_set_refs(Some(&null)).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_parse_optional_permission_set_refs_rejects_invalid_values() {
+        let empty = serde_yaml_ng::Value::String(" ".to_string());
+        assert!(parse_optional_permission_set_refs(Some(&empty)).is_err());
+
+        let non_string_entry: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str("- standard\n- 42\n").unwrap();
+        assert!(parse_optional_permission_set_refs(Some(&non_string_entry)).is_err());
+
+        let invalid = serde_yaml_ng::Value::Bool(true);
+        assert!(parse_optional_permission_set_refs(Some(&invalid)).is_err());
     }
 }

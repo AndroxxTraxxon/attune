@@ -1,8 +1,10 @@
 -- Migration: Supporting Systems
--- Description: Creates keys, artifacts, queue_stats, execution_admission,
---              pack_environment, pack_testing, and webhook function tables.
---              Consolidates former migrations: 000009 (keys_artifacts), 000010 (webhook_system),
---              000011 (pack_environments), and 000012 (pack_testing).
+-- Description: Creates keys, artifacts, artifact_version, queue_stats,
+--              execution_admission, pack_environment, pack_testing,
+--              and webhook function tables.
+--              Consolidates former keys/artifacts, webhook helper,
+--              pack environment, pack testing, artifact content,
+--              and key JSONB migrations.
 -- Version: 20250101000007
 
 -- Set search_path for schema isolation
@@ -27,7 +29,7 @@ CREATE TABLE key (
     name TEXT NOT NULL,
     encrypted BOOLEAN NOT NULL,
     encryption_key_hash TEXT,
-    value TEXT NOT NULL,
+    value JSONB NOT NULL,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -124,7 +126,7 @@ COMMENT ON COLUMN key.owner_sensor IS 'Sensor owner (if owner_type=sensor)';
 COMMENT ON COLUMN key.name IS 'Key name within owner scope';
 COMMENT ON COLUMN key.encrypted IS 'Whether the value is encrypted';
 COMMENT ON COLUMN key.encryption_key_hash IS 'Hash of encryption key used';
-COMMENT ON COLUMN key.value IS 'The actual value (encrypted if encrypted=true)';
+COMMENT ON COLUMN key.value IS 'The actual JSON value (encrypted if encrypted=true); supports strings, objects, arrays, numbers, and booleans';
 
 
 -- Add foreign key constraints for action and sensor references
@@ -147,6 +149,11 @@ CREATE TABLE artifact (
     owner TEXT NOT NULL DEFAULT '',
     type artifact_type_enum NOT NULL,
     visibility artifact_visibility_enum NOT NULL DEFAULT 'private',
+    name TEXT,
+    description TEXT,
+    content_type TEXT,
+    size_bytes BIGINT,
+    data JSONB,
     retention_policy artifact_retention_enum NOT NULL DEFAULT 'versions',
     retention_limit INTEGER NOT NULL DEFAULT 1,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -177,8 +184,198 @@ COMMENT ON COLUMN artifact.scope IS 'Owner type (system, identity, pack, action,
 COMMENT ON COLUMN artifact.owner IS 'Owner identifier';
 COMMENT ON COLUMN artifact.type IS 'Artifact type (file, url, progress, etc.)';
 COMMENT ON COLUMN artifact.visibility IS 'Visibility level: public (all users) or private (scoped by scope/owner)';
+COMMENT ON COLUMN artifact.name IS 'Human-readable artifact name';
+COMMENT ON COLUMN artifact.description IS 'Optional description of the artifact';
+COMMENT ON COLUMN artifact.content_type IS 'MIME content type (e.g. application/json, text/plain)';
+COMMENT ON COLUMN artifact.size_bytes IS 'Size of latest version content in bytes';
+COMMENT ON COLUMN artifact.data IS 'Structured JSONB data for progress artifacts or metadata';
 COMMENT ON COLUMN artifact.retention_policy IS 'How to retain artifacts (versions, days, hours, minutes)';
 COMMENT ON COLUMN artifact.retention_limit IS 'Numeric limit for retention policy';
+
+-- ============================================================================
+-- ARTIFACT_VERSION TABLE
+-- ============================================================================
+
+CREATE TABLE artifact_version (
+    id BIGSERIAL PRIMARY KEY,
+    artifact BIGINT NOT NULL REFERENCES artifact(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    execution BIGINT,
+    content_type TEXT,
+    size_bytes BIGINT,
+    content BYTEA,
+    content_json JSONB,
+    file_path TEXT,
+    meta JSONB,
+    created_by TEXT,
+    created TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE artifact_version
+    ADD CONSTRAINT uq_artifact_version_artifact_version UNIQUE (artifact, version);
+
+CREATE INDEX idx_artifact_name ON artifact(name);
+CREATE INDEX idx_artifact_version_artifact ON artifact_version(artifact);
+CREATE INDEX idx_artifact_version_artifact_version ON artifact_version(artifact, version DESC);
+CREATE INDEX idx_artifact_version_created ON artifact_version(created DESC);
+CREATE INDEX idx_artifact_version_file_path ON artifact_version(file_path) WHERE file_path IS NOT NULL;
+CREATE INDEX idx_artifact_version_execution ON artifact_version(execution) WHERE execution IS NOT NULL;
+CREATE INDEX idx_artifact_version_artifact_execution ON artifact_version(artifact, execution) WHERE execution IS NOT NULL;
+
+COMMENT ON TABLE artifact_version IS 'Immutable content snapshots for artifacts (file uploads, structured data)';
+COMMENT ON COLUMN artifact_version.artifact IS 'Parent artifact this version belongs to';
+COMMENT ON COLUMN artifact_version.version IS 'Version number (1-based, monotonically increasing per artifact)';
+COMMENT ON COLUMN artifact_version.content_type IS 'MIME content type for this version';
+COMMENT ON COLUMN artifact_version.size_bytes IS 'Size of content in bytes';
+COMMENT ON COLUMN artifact_version.content IS 'Binary content (file data)';
+COMMENT ON COLUMN artifact_version.content_json IS 'Structured JSON content';
+COMMENT ON COLUMN artifact_version.meta IS 'Free-form metadata about this version';
+COMMENT ON COLUMN artifact_version.created_by IS 'Who created this version (identity ref, action ref, system)';
+COMMENT ON COLUMN artifact_version.file_path IS 'Relative path from artifacts_dir root for disk-stored content. When set, content BYTEA is NULL.';
+
+CREATE OR REPLACE FUNCTION next_artifact_version(p_artifact_id BIGINT)
+RETURNS INTEGER AS $$
+DECLARE
+    v_next INTEGER;
+BEGIN
+    SELECT COALESCE(MAX(version), 0) + 1
+    INTO v_next
+    FROM artifact_version
+    WHERE artifact = p_artifact_id;
+
+    RETURN v_next;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION next_artifact_version IS 'Returns the next version number for the given artifact';
+
+CREATE OR REPLACE FUNCTION enforce_artifact_retention()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_policy artifact_retention_enum;
+    v_limit INTEGER;
+    v_count INTEGER;
+BEGIN
+    SELECT retention_policy, retention_limit
+    INTO v_policy, v_limit
+    FROM artifact
+    WHERE id = NEW.artifact;
+
+    IF v_policy = 'versions' AND v_limit > 0 THEN
+        SELECT COUNT(*) INTO v_count
+        FROM artifact_version
+        WHERE artifact = NEW.artifact;
+
+        IF v_count > v_limit THEN
+            DELETE FROM artifact_version
+            WHERE id IN (
+                SELECT id
+                FROM artifact_version
+                WHERE artifact = NEW.artifact
+                ORDER BY version ASC
+                LIMIT (v_count - v_limit)
+            );
+        END IF;
+    END IF;
+
+    UPDATE artifact
+    SET size_bytes = NEW.size_bytes,
+        content_type = COALESCE(NEW.content_type, content_type)
+    WHERE id = NEW.artifact;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_enforce_artifact_retention
+    AFTER INSERT ON artifact_version
+    FOR EACH ROW
+    EXECUTE FUNCTION enforce_artifact_retention();
+
+COMMENT ON FUNCTION enforce_artifact_retention IS 'Enforces version-count retention policy and syncs size to parent artifact';
+
+CREATE OR REPLACE FUNCTION notify_artifact_created()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    payload := json_build_object(
+        'entity_type', 'artifact',
+        'entity_id', NEW.id,
+        'id', NEW.id,
+        'ref', NEW.ref,
+        'type', NEW.type,
+        'visibility', NEW.visibility,
+        'name', NEW.name,
+        'scope', NEW.scope,
+        'owner', NEW.owner,
+        'content_type', NEW.content_type,
+        'size_bytes', NEW.size_bytes,
+        'created', NEW.created
+    );
+
+    PERFORM pg_notify('artifact_created', payload::text);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER artifact_created_notify
+    AFTER INSERT ON artifact
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_artifact_created();
+
+COMMENT ON FUNCTION notify_artifact_created() IS 'Sends artifact creation notifications via PostgreSQL LISTEN/NOTIFY';
+
+CREATE OR REPLACE FUNCTION notify_artifact_updated()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+    latest_percent DOUBLE PRECISION;
+    latest_message TEXT;
+    entry_count INTEGER;
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.type = 'progress' AND NEW.data IS NOT NULL AND jsonb_typeof(NEW.data) = 'array' THEN
+            entry_count := jsonb_array_length(NEW.data);
+            IF entry_count > 0 THEN
+                latest_percent := (NEW.data -> (entry_count - 1) ->> 'percent')::DOUBLE PRECISION;
+                latest_message := NEW.data -> (entry_count - 1) ->> 'message';
+            END IF;
+        END IF;
+
+        payload := json_build_object(
+            'entity_type', 'artifact',
+            'entity_id', NEW.id,
+            'id', NEW.id,
+            'ref', NEW.ref,
+            'type', NEW.type,
+            'visibility', NEW.visibility,
+            'name', NEW.name,
+            'scope', NEW.scope,
+            'owner', NEW.owner,
+            'content_type', NEW.content_type,
+            'size_bytes', NEW.size_bytes,
+            'progress_percent', latest_percent,
+            'progress_message', latest_message,
+            'progress_entries', entry_count,
+            'created', NEW.created,
+            'updated', NEW.updated
+        );
+
+        PERFORM pg_notify('artifact_updated', payload::text);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER artifact_updated_notify
+    AFTER UPDATE ON artifact
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_artifact_updated();
+
+COMMENT ON FUNCTION notify_artifact_updated() IS 'Sends artifact update notifications via PostgreSQL LISTEN/NOTIFY (includes progress summary for progress-type artifacts)';
 
 -- ============================================================================
 -- QUEUE_STATS TABLE

@@ -11,7 +11,7 @@ use crate::models::{
     Id, JsonDict,
 };
 use crate::Result;
-use sqlx::{Executor, Postgres, QueryBuilder};
+use sqlx::{Executor, Postgres, QueryBuilder, Row};
 
 use super::{ref_filter_like_pattern, Create, Delete, FindById, List, Repository, Update};
 
@@ -517,12 +517,26 @@ impl Delete for EnforcementRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let result = sqlx::query("DELETE FROM enforcement WHERE id = $1")
-            .bind(id)
-            .execute(executor)
-            .await?;
-
-        Ok(result.rows_affected() > 0)
+        let result = sqlx::query(
+            r#"
+            WITH deleted_enforcement AS (
+                DELETE FROM enforcement
+                WHERE id = $1
+                RETURNING id
+            ),
+            deleted_enforcement_secrets AS (
+                DELETE FROM execution_secret_value
+                WHERE entity_type = 'enforcement_config'
+                  AND entity_id IN (SELECT id FROM deleted_enforcement)
+            )
+            SELECT COUNT(*) AS deleted_count FROM deleted_enforcement
+            "#,
+        )
+        .bind(id)
+        .fetch_one(executor)
+        .await?;
+        let deleted_count: i64 = result.get("deleted_count");
+        Ok(deleted_count > 0)
     }
 }
 

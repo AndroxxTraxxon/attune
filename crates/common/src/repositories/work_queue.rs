@@ -105,6 +105,7 @@ pub struct CreateWorkQueueInput {
     pub batch_mode: WorkQueueBatchMode,
     pub item_schema: JsonDict,
     pub action_params: JsonDict,
+    pub permission_set_refs: Option<Vec<String>>,
     pub config: JsonDict,
 }
 
@@ -125,6 +126,7 @@ pub struct UpdateWorkQueueInput {
     pub batch_mode: Option<WorkQueueBatchMode>,
     pub item_schema: Option<JsonDict>,
     pub action_params: Option<JsonDict>,
+    pub permission_set_refs: Option<Patch<Vec<String>>>,
     pub config: Option<JsonDict>,
 }
 
@@ -198,9 +200,9 @@ impl Create for WorkQueueRepository {
         let query = format!(
             "INSERT INTO work_queue \
              (ref, pack, pack_ref, is_adhoc, label, description, enabled, accepting_new_items, \
-                dispatch_action, dispatch_action_ref, default_priority, allow_pending_update, update_strategy, \
-                batch_mode, item_schema, action_params, config) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
+                 dispatch_action, dispatch_action_ref, default_priority, allow_pending_update, update_strategy, \
+                 batch_mode, item_schema, action_params, permission_set_refs, config) \
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
              RETURNING {}",
             WORK_QUEUE_SELECT_COLUMNS
         );
@@ -222,6 +224,7 @@ impl Create for WorkQueueRepository {
             .bind(input.batch_mode)
             .bind(&input.item_schema)
             .bind(&input.action_params)
+            .bind(&input.permission_set_refs)
             .bind(&input.config)
             .fetch_one(executor)
             .await
@@ -402,6 +405,18 @@ impl Update for WorkQueueRepository {
                 query.push(", ");
             }
             query.push("action_params = ").push_bind(action_params);
+            has_updates = true;
+        }
+
+        if let Some(permission_set_refs) = &input.permission_set_refs {
+            if has_updates {
+                query.push(", ");
+            }
+            query.push("permission_set_refs = ");
+            match permission_set_refs {
+                Patch::Set(value) => query.push_bind(value),
+                Patch::Clear => query.push_bind(Option::<Vec<String>>::None),
+            };
             has_updates = true;
         }
 

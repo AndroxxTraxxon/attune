@@ -86,6 +86,7 @@ export interface WorkQueueResponse extends WorkQueueSummary {
   batch_mode: WorkQueueBatchMode;
   item_schema: JsonValue;
   action_params: JsonValue;
+  permission_set_refs?: string[] | null;
   config: JsonValue;
   resolved_dispatch_tuning?: {
     concurrency?: number | null;
@@ -129,6 +130,7 @@ export interface CreateWorkQueueRequest {
   batch_mode?: WorkQueueBatchMode;
   item_schema?: JsonValue;
   action_params?: JsonValue;
+  permission_set_refs?: string[] | null;
   config?: JsonValue;
 }
 
@@ -144,6 +146,7 @@ export interface UpdateWorkQueueRequest {
   batch_mode?: WorkQueueBatchMode;
   item_schema?: JsonValue;
   action_params?: JsonValue;
+  permission_set_refs?: string[] | null;
   config?: JsonValue;
 }
 

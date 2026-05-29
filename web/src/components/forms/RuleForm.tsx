@@ -21,6 +21,7 @@ import { labelToRef, extractLocalRef, combineRefs } from "@/lib/format-utils";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type JsonValue = any;
+type PermissionOverrideMode = "inherit" | "none" | "custom";
 
 interface RuleFormProps {
   rule?: RuleResponse;
@@ -62,6 +63,17 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
   const [actionParameters, setActionParameters] = useState<
     Record<string, JsonValue>
   >(rule?.action_params || {});
+  const initialPermissionSetRefs = rule?.permission_set_refs ?? null;
+  const [permissionMode, setPermissionMode] = useState<PermissionOverrideMode>(
+    initialPermissionSetRefs === null
+      ? "inherit"
+      : initialPermissionSetRefs.length === 0
+        ? "none"
+        : "custom",
+  );
+  const [permissionSetRefsInput, setPermissionSetRefsInput] = useState(
+    () => initialPermissionSetRefs?.join(", ") ?? "",
+  );
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [triggerParamErrors, setTriggerParamErrors] = useState<
@@ -241,6 +253,17 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
 
     if (isEditing || Object.keys(actionParameters).length > 0) {
       formData.action_params = actionParameters;
+    }
+
+    if (permissionMode === "custom") {
+      formData.permission_set_refs = permissionSetRefsInput
+        .split(",")
+        .map((ref) => ref.trim())
+        .filter(Boolean);
+    } else if (permissionMode === "none") {
+      formData.permission_set_refs = [];
+    } else if (isEditing) {
+      formData.permission_set_refs = null;
     }
 
     try {
@@ -514,18 +537,49 @@ export default function RuleForm({ rule, onSuccess, onCancel }: RuleFormProps) {
 
               {/* Action Parameters - Dynamic Form */}
               {selectedAction && (
-                <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-3">
-                    Action Parameters
-                  </h4>
-                  <ParamSchemaForm
-                    schema={actionParamSchema}
-                    values={actionParameters}
-                    onChange={setActionParameters}
-                    errors={actionParamErrors}
-                    allowTemplates
-                  />
-                </div>
+                <>
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-700 mb-3">
+                      Action Parameters
+                    </h4>
+                    <ParamSchemaForm
+                      schema={actionParamSchema}
+                      values={actionParameters}
+                      onChange={setActionParameters}
+                      errors={actionParamErrors}
+                      allowTemplates
+                    />
+                  </div>
+                  <div className="rounded-lg border border-gray-200 p-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Execution API token permissions
+                    </label>
+                    <select
+                      value={permissionMode}
+                      onChange={(e) =>
+                        setPermissionMode(e.target.value as PermissionOverrideMode)
+                      }
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                    >
+                      <option value="inherit">Inherit action default</option>
+                      <option value="none">No execution API token</option>
+                      <option value="custom">Custom permission set refs</option>
+                    </select>
+                    {permissionMode === "custom" && (
+                      <input
+                        value={permissionSetRefsInput}
+                        onChange={(e) => setPermissionSetRefsInput(e.target.value)}
+                        className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                        placeholder="standard, core.agent_reader"
+                      />
+                    )}
+                    <p className="mt-2 text-xs text-gray-500">
+                      Applies to executions created by this rule. Custom refs are
+                      comma-separated; use <span className="font-mono">standard</span> for
+                      action/pack-scoped keys and artifacts.
+                    </p>
+                  </div>
+                </>
               )}
             </>
           )}

@@ -16,12 +16,18 @@ use attune_common::{
         Publisher,
     },
     repositories::{
+        action::ActionRepository,
         event::{CreateEnforcementInput, EnforcementRepository, EventRepository},
+        execution_secret_value::ExecutionSecretValueRepository,
         pack::PackRepository,
         rule::RuleRepository,
-        FindById, List,
+        FindById, FindByRef, List,
     },
-    template_resolver::{resolve_templates, TemplateContext},
+    secret_values::{
+        merge_schema_secret_redactions, prepare_secret_values, secret_paths_from_schema,
+        validate_secret_destination_paths, RenderedJson, ENTITY_ENFORCEMENT_CONFIG,
+    },
+    template_resolver::{resolve_templates_with_sensitivity, TemplateContext},
     workflow::expression::{eval_expression, is_truthy, EvalContext, EvalResult},
 };
 
@@ -53,15 +59,22 @@ pub struct EventProcessor {
     pool: PgPool,
     publisher: Arc<Publisher>,
     consumer: Arc<Consumer>,
+    encryption_key: Option<String>,
 }
 
 impl EventProcessor {
     /// Create a new event processor
-    pub fn new(pool: PgPool, publisher: Arc<Publisher>, consumer: Arc<Consumer>) -> Self {
+    pub fn new(
+        pool: PgPool,
+        publisher: Arc<Publisher>,
+        consumer: Arc<Consumer>,
+        encryption_key: Option<String>,
+    ) -> Self {
         Self {
             pool,
             publisher,
             consumer,
+            encryption_key,
         }
     }
 
@@ -71,15 +84,19 @@ impl EventProcessor {
 
         let pool = self.pool.clone();
         let publisher = self.publisher.clone();
+        let encryption_key = self.encryption_key.clone();
 
         // Use the handler pattern to consume messages
         self.consumer
             .consume_with_handler(move |envelope: MessageEnvelope<EventCreatedPayload>| {
                 let pool = pool.clone();
                 let publisher = publisher.clone();
+                let encryption_key = encryption_key.clone();
 
                 async move {
-                    if let Err(e) = Self::process_event_created(&pool, &publisher, &envelope).await
+                    if let Err(e) =
+                        Self::process_event_created(&pool, &publisher, &encryption_key, &envelope)
+                            .await
                     {
                         error!("Error processing event: {}", e);
                         // Return error to trigger nack with requeue
@@ -97,6 +114,7 @@ impl EventProcessor {
     async fn process_event_created(
         pool: &PgPool,
         publisher: &Publisher,
+        encryption_key: &Option<String>,
         envelope: &MessageEnvelope<EventCreatedPayload>,
     ) -> Result<()> {
         let payload = &envelope.payload;
@@ -130,7 +148,9 @@ impl EventProcessor {
 
         // Create enforcements for each matching rule
         for rule in matching_rules {
-            if let Err(e) = Self::create_enforcement(pool, publisher, &rule, &event).await {
+            if let Err(e) =
+                Self::create_enforcement(pool, publisher, encryption_key, &rule, &event).await
+            {
                 error!(
                     "Failed to create enforcement for rule {} and event {}: {}",
                     rule.r#ref, event.id, e
@@ -184,6 +204,7 @@ impl EventProcessor {
     async fn create_enforcement(
         pool: &PgPool,
         publisher: &Publisher,
+        encryption_key: &Option<String>,
         rule: &Rule,
         event: &Event,
     ) -> Result<()> {
@@ -215,14 +236,43 @@ impl EventProcessor {
             .cloned()
             .unwrap_or_else(serde_json::Map::new);
 
-        // Resolve action parameters using the template resolver
-        let resolved_params = Self::resolve_action_params(pool, rule, event, &payload).await?;
+        // Resolve action parameters using the template resolver, then move
+        // parameters marked `secret: true` into encrypted per-enforcement rows.
+        let rendered_params = Self::resolve_action_params(pool, rule, event, &payload).await?;
+        let action = match rule.action {
+            Some(action_id) => ActionRepository::find_by_id(pool, action_id).await?,
+            None => ActionRepository::find_by_ref(pool, &rule.action_ref).await?,
+        }
+        .ok_or_else(|| anyhow::anyhow!("Action '{}' not found", rule.action_ref))?;
+        validate_secret_destination_paths(
+            action.param_schema.as_ref(),
+            &rendered_params.secret_paths,
+        )?;
+        let (redacted_params, secret_inputs) = merge_schema_secret_redactions(
+            rendered_params.value,
+            &rendered_params.secret_path_sources,
+            action.param_schema.as_ref(),
+        );
+        let redacted_params = redacted_params
+            .as_object()
+            .cloned()
+            .unwrap_or_else(serde_json::Map::new);
+        let prepared_secrets = if secret_inputs.is_empty() {
+            Vec::new()
+        } else {
+            let encryption_key = encryption_key.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Cannot store secret enforcement parameters without security.encryption_key"
+                )
+            })?;
+            prepare_secret_values(secret_inputs, encryption_key)?
+        };
 
         let create_input = CreateEnforcementInput {
             rule: Some(rule.id),
             rule_ref: rule.r#ref.clone(),
             trigger_ref: rule.trigger_ref.clone(),
-            config: Some(serde_json::Value::Object(resolved_params)),
+            config: Some(serde_json::Value::Object(redacted_params)),
             event: Some(event.id),
             status: EnforcementStatus::Created,
             payload: serde_json::Value::Object(payload_dict),
@@ -233,6 +283,15 @@ impl EventProcessor {
         let enforcement_result =
             EnforcementRepository::create_or_get_by_rule_event(pool, create_input).await?;
         let enforcement = enforcement_result.enforcement;
+        if enforcement_result.created && !prepared_secrets.is_empty() {
+            ExecutionSecretValueRepository::upsert_many(
+                pool,
+                ENTITY_ENFORCEMENT_CONFIG,
+                enforcement.id,
+                &prepared_secrets,
+            )
+            .await?;
+        }
 
         if enforcement_result.created {
             info!(
@@ -434,27 +493,35 @@ impl EventProcessor {
         rule: &Rule,
         event: &Event,
         event_payload: &serde_json::Value,
-    ) -> Result<serde_json::Map<String, serde_json::Value>> {
+    ) -> Result<RenderedJson> {
         let action_params = &rule.action_params;
 
         // If there are no action params, return empty
         if action_params.is_null() || action_params.as_object().is_none_or(|o| o.is_empty()) {
-            return Ok(serde_json::Map::new());
+            return Ok(RenderedJson::plain(serde_json::json!({})));
         }
 
         // Load pack config from database for pack.config.* resolution
-        let pack_config = match PackRepository::find_by_id(pool, rule.pack).await {
-            Ok(Some(pack)) => pack.config,
+        let (pack_ref, pack_config, pack_secret_paths) = match PackRepository::find_by_id(
+            pool, rule.pack,
+        )
+        .await
+        {
+            Ok(Some(pack)) => (
+                Some(pack.r#ref),
+                pack.config,
+                secret_paths_from_schema(Some(&pack.conf_schema)),
+            ),
             Ok(None) => {
                 warn!(
                     "Pack {} not found for rule {} — pack.config.* templates will resolve to null",
                     rule.pack, rule.r#ref
                 );
-                serde_json::json!({})
+                (None, serde_json::json!({}), Vec::new())
             }
             Err(e) => {
                 warn!("Failed to load pack {} for rule {}: {} — pack.config.* templates will resolve to null", rule.pack, rule.r#ref, e);
-                serde_json::json!({})
+                (None, serde_json::json!({}), Vec::new())
             }
         };
 
@@ -472,14 +539,15 @@ impl EventProcessor {
         )
         .with_event_id(event.id)
         .with_event_trigger(&event.trigger_ref)
-        .with_event_created(&event.created.to_rfc3339());
+        .with_event_created(&event.created.to_rfc3339())
+        .with_pack_config_secret_paths(pack_ref, pack_secret_paths);
 
-        let resolved = resolve_templates(action_params, &context)?;
+        let rendered = resolve_templates_with_sensitivity(action_params, &context)?;
 
-        if let Some(obj) = resolved.as_object() {
-            Ok(obj.clone())
+        if rendered.value.as_object().is_some() {
+            Ok(rendered)
         } else {
-            Ok(serde_json::Map::new())
+            Ok(RenderedJson::plain(serde_json::json!({})))
         }
     }
 }

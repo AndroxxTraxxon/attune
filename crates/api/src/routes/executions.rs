@@ -29,11 +29,16 @@ use attune_common::repositories::{
     execution::{
         CreateExecutionInput, ExecutionRepository, ExecutionSearchFilters, UpdateExecutionInput,
     },
+    execution_secret_value::ExecutionSecretValueRepository,
     workflow::{WorkflowDefinitionRepository, WorkflowExecutionRepository},
     Create, FindById, FindByRef, Update,
 };
 use attune_common::scheduling::{
     parse_worker_affinity, parse_worker_selector, parse_worker_tolerations,
+};
+use attune_common::secret_values::{
+    prepare_secret_values, redact_secret_parameters, redacted_paths, restore_secret_values,
+    ENTITY_EXECUTION_CONFIG, ENTITY_EXECUTION_RESULT,
 };
 use attune_common::workflow::{CancellationPolicy, WorkflowDefinition};
 use sqlx::Row;
@@ -47,7 +52,8 @@ use crate::{
     dto::{
         common::{PaginatedResponse, PaginationParams},
         execution::{
-            CreateExecutionRequest, ExecutionQueryParams, ExecutionResponse, ExecutionSummary,
+            CreateExecutionRequest, ExecutionDetailQueryParams, ExecutionQueryParams,
+            ExecutionResponse, ExecutionSummary,
         },
         ApiResponse,
     },
@@ -197,14 +203,47 @@ pub async fn create_execution(
         .or(action.artifact_retention_limit)
         .or(Some(5));
 
+    let raw_config = request
+        .parameters
+        .clone()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let (redacted_config, secret_inputs) =
+        redact_secret_parameters(raw_config, action.param_schema.as_ref());
+    let config_for_storage = if redacted_config.is_null()
+        || redacted_config
+            .as_object()
+            .is_some_and(|obj| obj.is_empty())
+    {
+        None
+    } else {
+        Some(redacted_config.clone())
+    };
+    let prepared_secrets = if secret_inputs.is_empty() {
+        Vec::new()
+    } else {
+        let encryption_key = state
+            .config
+            .security
+            .encryption_key
+            .as_ref()
+            .ok_or_else(|| {
+                ApiError::InternalServerError(
+                    "Cannot store secret execution parameters without security.encryption_key"
+                        .to_string(),
+                )
+            })?;
+        prepare_secret_values(secret_inputs, encryption_key).map_err(|e| {
+            ApiError::InternalServerError(format!(
+                "Failed to encrypt secret execution parameters: {e}"
+            ))
+        })?
+    };
+
     // Create execution input
     let execution_input = CreateExecutionInput {
         action: Some(action.id),
         action_ref: action.r#ref.clone(),
-        config: request
-            .parameters
-            .as_ref()
-            .and_then(|p| serde_json::from_value(p.clone()).ok()),
+        config: config_for_storage,
         env_vars: request
             .env_vars
             .as_ref()
@@ -226,6 +265,13 @@ pub async fn create_execution(
 
     // Insert into database
     let created_execution = ExecutionRepository::create(&state.db, execution_input).await?;
+    ExecutionSecretValueRepository::upsert_many(
+        &state.db,
+        ENTITY_EXECUTION_CONFIG,
+        created_execution.id,
+        &prepared_secrets,
+    )
+    .await?;
 
     // Publish ExecutionRequested message to queue
     let payload = ExecutionRequestedPayload {
@@ -234,7 +280,7 @@ pub async fn create_execution(
         action_ref: action.r#ref.clone(),
         parent_id: parent_from_token,
         enforcement_id: None,
-        config: request.parameters,
+        config: created_execution.config.clone(),
     };
 
     let message = MessageEnvelope::new(MessageType::ExecutionRequested, payload)
@@ -352,14 +398,43 @@ pub async fn list_executions(
 )]
 pub async fn get_execution(
     State(state): State<Arc<AppState>>,
-    RequireAuth(_user): RequireAuth,
+    RequireAuth(user): RequireAuth,
     Path(id): Path<i64>,
+    Query(query): Query<ExecutionDetailQueryParams>,
 ) -> ApiResult<impl IntoResponse> {
     let execution = ExecutionRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Execution with ID {} not found", id)))?;
 
-    let response = ApiResponse::new(ExecutionResponse::from(execution));
+    authorize_execution_access(&state, &user, &execution, Action::Read).await?;
+
+    let reveal_paths = if query.include_secret_values {
+        authorize_execution_access(&state, &user, &execution, Action::Decrypt).await?;
+        redacted_paths(&execution.config.clone().unwrap_or(serde_json::Value::Null))
+    } else {
+        Vec::new()
+    };
+
+    let mut response = ExecutionResponse::from(execution.clone());
+    if query.include_secret_values {
+        response.config = reveal_execution_secret_entity(
+            &state,
+            response.config,
+            ENTITY_EXECUTION_CONFIG,
+            execution.id,
+        )
+        .await?;
+        response.result = reveal_execution_secret_entity(
+            &state,
+            response.result,
+            ENTITY_EXECUTION_RESULT,
+            execution.id,
+        )
+        .await?;
+        emit_execution_secret_disclosure_audit(&state, &user, &execution, reveal_paths);
+    }
+
+    let response = ApiResponse::new(response);
 
     Ok((StatusCode::OK, Json(response)))
 }
@@ -1409,6 +1484,121 @@ async fn authorize_execution_log_stream(
             },
         )
         .await
+}
+
+async fn authorize_execution_access(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    execution: &attune_common::models::Execution,
+    action: Action,
+) -> Result<(), ApiError> {
+    let identity_id = user
+        .identity_id()
+        .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+    let mut ctx = AuthorizationContext::new(identity_id);
+    ctx.target_id = Some(execution.id);
+    ctx.target_ref = Some(execution.action_ref.clone());
+    ctx.pack_ref = execution
+        .action_ref
+        .split_once('.')
+        .map(|(pack, _)| pack.to_string());
+    ctx.owner_identity_id = execution.executor;
+    ctx.execution_owner_identity_id = execution.executor;
+    ctx.execution_ancestor_identity_ids =
+        execution_ancestor_identity_ids(&state.db, execution.parent).await?;
+
+    AuthorizationService::new(state.db.clone())
+        .authorize(
+            user,
+            AuthorizationCheck {
+                resource: Resource::Executions,
+                action,
+                context: ctx,
+            },
+        )
+        .await
+}
+
+async fn execution_ancestor_identity_ids(
+    db: &sqlx::PgPool,
+    mut parent_id: Option<i64>,
+) -> Result<Vec<i64>, ApiError> {
+    let mut identities = Vec::new();
+    let mut guard = 0;
+    while let Some(id) = parent_id {
+        guard += 1;
+        if guard > 64 {
+            break;
+        }
+        let Some(parent) = ExecutionRepository::find_by_id(db, id).await? else {
+            break;
+        };
+        if let Some(executor) = parent.executor {
+            identities.push(executor);
+        }
+        parent_id = parent.parent;
+    }
+    identities.sort_unstable();
+    identities.dedup();
+    Ok(identities)
+}
+
+async fn reveal_execution_secret_entity(
+    state: &Arc<AppState>,
+    redacted: Option<serde_json::Value>,
+    entity_type: &str,
+    entity_id: i64,
+) -> Result<Option<serde_json::Value>, ApiError> {
+    let Some(redacted) = redacted else {
+        return Ok(None);
+    };
+    let secrets =
+        ExecutionSecretValueRepository::find_stored_by_entity(&state.db, entity_type, entity_id)
+            .await?;
+    if secrets.is_empty() {
+        return Ok(Some(redacted));
+    }
+    let encryption_key = state
+        .config
+        .security
+        .encryption_key
+        .as_ref()
+        .ok_or_else(|| {
+            ApiError::InternalServerError(
+                "Cannot reveal secret execution values without security.encryption_key".to_string(),
+            )
+        })?;
+    restore_secret_values(redacted, &secrets, encryption_key)
+        .map(Some)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to decrypt secret values: {e}")))
+}
+
+fn emit_execution_secret_disclosure_audit(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    execution: &attune_common::models::Execution,
+    paths: Vec<String>,
+) {
+    use attune_common::audit::{event_type, AuditCategory, AuditEventBuilder, AuditOutcome};
+    let mut builder = AuditEventBuilder::new(
+        AuditCategory::Secret,
+        event_type::secret::EXECUTION_VALUES_DECRYPTED,
+        AuditOutcome::Success,
+    )
+    .resource("executions")
+    .resource_id(execution.id)
+    .resource_ref(execution.action_ref.clone())
+    .actor_login(user.login().to_string())
+    .actor_token_type(format!("{:?}", user.claims.token_type).to_lowercase())
+    .with_details(serde_json::json!({
+        "execution_id": execution.id,
+        "action_ref": execution.action_ref,
+        "paths": paths,
+    }));
+    if let Ok(id) = user.identity_id() {
+        builder = builder.actor_identity(id);
+    }
+    state.audit_emitter.emit(builder.build());
 }
 
 fn authenticate_execution_stream_user(

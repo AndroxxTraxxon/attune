@@ -44,8 +44,14 @@
 use anyhow::Result;
 use regex::Regex;
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 use std::sync::LazyLock;
 use tracing::{debug, warn};
+
+use crate::secret_values::{
+    pointer_from_dot_path, pointer_join, pointer_suffix, JsonPointer, RenderedJson,
+    SecretPathSource, SecretSource,
+};
 
 /// Template context containing all available data sources for template resolution.
 ///
@@ -61,6 +67,14 @@ pub struct TemplateContext {
     pub pack_config: JsonValue,
     /// System-provided variables — accessed as `system.*`
     pub system_vars: JsonValue,
+    secret_sources: Vec<ContextSecretSource>,
+}
+
+#[derive(Debug, Clone)]
+struct ContextSecretSource {
+    path: String,
+    pointer: JsonPointer,
+    source: SecretSource,
 }
 
 impl TemplateContext {
@@ -76,6 +90,7 @@ impl TemplateContext {
             event,
             pack_config,
             system_vars,
+            secret_sources: Vec::new(),
         }
     }
 
@@ -99,6 +114,30 @@ impl TemplateContext {
     pub fn with_event_created(mut self, created: &str) -> Self {
         if let Some(obj) = self.event.as_object_mut() {
             obj.insert("created".to_string(), serde_json::json!(created));
+        }
+        self
+    }
+
+    pub fn with_pack_config_secret_paths(
+        mut self,
+        pack_ref: Option<String>,
+        secret_paths: Vec<JsonPointer>,
+    ) -> Self {
+        for path in secret_paths {
+            let dotted_suffix = pointer_to_dot_path(&path);
+            let source_path = if dotted_suffix.is_empty() {
+                "pack.config".to_string()
+            } else {
+                format!("pack.config.{dotted_suffix}")
+            };
+            self.secret_sources.push(ContextSecretSource {
+                path: source_path,
+                pointer: path.clone(),
+                source: SecretSource::PackConfig {
+                    pack_ref: pack_ref.clone(),
+                    path,
+                },
+            });
         }
         self
     }
@@ -143,6 +182,43 @@ impl TemplateContext {
 
         extract_nested_value(root, &parts[skip_count..])
     }
+
+    fn secret_path_sources_for_expression(
+        &self,
+        expr: &str,
+        dest_pointer: &str,
+        pure_expression: bool,
+    ) -> Vec<SecretPathSource> {
+        let expr = normalize_expression_path(expr);
+        let mut sources = Vec::new();
+
+        for source in &self.secret_sources {
+            if source.path == expr || expr.starts_with(&format!("{}.", source.path)) {
+                sources.push(SecretPathSource {
+                    path: dest_pointer.to_string(),
+                    source: source.source.clone(),
+                });
+                continue;
+            }
+
+            if pure_expression && source.path.starts_with(&format!("{expr}.")) {
+                let expr_pointer = template_source_pointer(&expr);
+                if let Some(suffix) = pointer_suffix(&source.pointer, &expr_pointer) {
+                    sources.push(SecretPathSource {
+                        path: pointer_join(dest_pointer, &suffix),
+                        source: source.source.clone(),
+                    });
+                }
+            } else if !pure_expression && source.path.starts_with(&format!("{expr}.")) {
+                sources.push(SecretPathSource {
+                    path: dest_pointer.to_string(),
+                    source: source.source.clone(),
+                });
+            }
+        }
+
+        sources
+    }
 }
 
 /// Regex pattern to match template variables: {{ ... }}
@@ -171,6 +247,52 @@ pub fn resolve_templates(value: &JsonValue, context: &TemplateContext) -> Result
         }
         // Pass through other types unchanged
         other => Ok(other.clone()),
+    }
+}
+
+pub fn resolve_templates_with_sensitivity(
+    value: &JsonValue,
+    context: &TemplateContext,
+) -> Result<RenderedJson> {
+    resolve_templates_with_sensitivity_at(value, context, "")
+}
+
+fn resolve_templates_with_sensitivity_at(
+    value: &JsonValue,
+    context: &TemplateContext,
+    pointer: &str,
+) -> Result<RenderedJson> {
+    match value {
+        JsonValue::String(s) => resolve_string_template_with_sensitivity(s, context, pointer),
+        JsonValue::Object(map) => {
+            let mut resolved = serde_json::Map::new();
+            let mut path_sources = Vec::new();
+            for (key, val) in map {
+                let child_pointer = format!("{}/{}", pointer, escape_pointer_segment(key));
+                let rendered = resolve_templates_with_sensitivity_at(val, context, &child_pointer)?;
+                resolved.insert(key.clone(), rendered.value);
+                path_sources.extend(rendered.secret_path_sources);
+            }
+            Ok(rendered_from_path_sources(
+                JsonValue::Object(resolved),
+                path_sources,
+            ))
+        }
+        JsonValue::Array(arr) => {
+            let mut resolved = Vec::new();
+            let mut path_sources = Vec::new();
+            for (idx, val) in arr.iter().enumerate() {
+                let child_pointer = format!("{pointer}/{idx}");
+                let rendered = resolve_templates_with_sensitivity_at(val, context, &child_pointer)?;
+                resolved.push(rendered.value);
+                path_sources.extend(rendered.secret_path_sources);
+            }
+            Ok(rendered_from_path_sources(
+                JsonValue::Array(resolved),
+                path_sources,
+            ))
+        }
+        other => Ok(RenderedJson::plain(other.clone())),
     }
 }
 
@@ -234,6 +356,31 @@ fn resolve_string_template(s: &str, context: &TemplateContext) -> Result<JsonVal
     Ok(JsonValue::String(result))
 }
 
+fn resolve_string_template_with_sensitivity(
+    s: &str,
+    context: &TemplateContext,
+    pointer: &str,
+) -> Result<RenderedJson> {
+    if let Some(captures) = TEMPLATE_REGEX.captures(s) {
+        let full_match = captures.get(0).unwrap();
+        if full_match.start() == 0 && full_match.end() == s.len() {
+            let path = captures.get(1).unwrap().as_str().trim();
+            let value = context.get_value(path).unwrap_or(JsonValue::Null);
+            let path_sources = context.secret_path_sources_for_expression(path, pointer, true);
+            return Ok(rendered_from_path_sources(value, path_sources));
+        }
+    }
+
+    let value = resolve_string_template(s, context)?;
+    let mut path_sources = Vec::new();
+    for captures in TEMPLATE_REGEX.captures_iter(s) {
+        let path = captures.get(1).unwrap().as_str().trim();
+        path_sources.extend(context.secret_path_sources_for_expression(path, pointer, false));
+    }
+
+    Ok(rendered_from_path_sources(value, path_sources))
+}
+
 /// Extract a nested value from JSON using a path.
 fn extract_nested_value(root: &JsonValue, path: &[&str]) -> Option<JsonValue> {
     if path.is_empty() {
@@ -274,6 +421,80 @@ fn value_to_string(value: &JsonValue) -> String {
             serde_json::to_string(value).unwrap_or_default()
         }
     }
+}
+
+fn rendered_from_path_sources(
+    value: JsonValue,
+    path_sources: Vec<SecretPathSource>,
+) -> RenderedJson {
+    let mut unique_by_path_source = HashMap::new();
+    for path_source in path_sources {
+        unique_by_path_source
+            .entry((path_source.path.clone(), path_source.source.clone()))
+            .or_insert(path_source);
+    }
+    let mut secret_path_sources = unique_by_path_source.into_values().collect::<Vec<_>>();
+    secret_path_sources.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let mut secret_paths = secret_path_sources
+        .iter()
+        .map(|source| source.path.clone())
+        .collect::<Vec<_>>();
+    secret_paths.sort();
+    secret_paths.dedup();
+
+    let mut sources = secret_path_sources
+        .iter()
+        .map(|source| source.source.clone())
+        .collect::<Vec<_>>();
+    sources.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    sources.dedup();
+
+    RenderedJson {
+        value,
+        secret_paths,
+        sources,
+        secret_path_sources,
+    }
+}
+
+fn normalize_expression_path(expr: &str) -> String {
+    expr.trim()
+        .replace("result()", "result")
+        .replace("[\"", ".")
+        .replace("']", "")
+        .replace("[\'", ".")
+        .replace("\"]", "")
+}
+
+fn pointer_to_dot_path(pointer: &str) -> String {
+    pointer
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(unescape_pointer_segment)
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+fn template_source_pointer(expr: &str) -> String {
+    for root in ["pack.config", "event", "system"] {
+        if expr == root {
+            return String::new();
+        }
+        if let Some(suffix) = expr.strip_prefix(&format!("{root}.")) {
+            return pointer_from_dot_path(suffix);
+        }
+    }
+    pointer_from_dot_path(expr)
+}
+
+fn escape_pointer_segment(segment: &str) -> String {
+    segment.replace('~', "~0").replace('/', "~1")
+}
+
+fn unescape_pointer_segment(segment: &str) -> String {
+    segment.replace("~1", "/").replace("~0", "~")
 }
 
 #[cfg(test)]
@@ -363,6 +584,23 @@ mod tests {
         let result = resolve_templates(&template, &context).unwrap();
         assert_eq!(result["first_tag"], "production");
         assert_eq!(result["second_tag"], "backend");
+    }
+
+    #[test]
+    fn secret_pack_config_source_marks_rendered_destination() {
+        let context = TemplateContext::new(
+            json!({}),
+            json!({"api": {"token": "secret-token"}}),
+            json!({}),
+        )
+        .with_pack_config_secret_paths(Some("demo".to_string()), vec!["/api/token".to_string()]);
+        let template = json!({"password": "{{ pack.config.api.token }}"});
+
+        let rendered = resolve_templates_with_sensitivity(&template, &context).unwrap();
+
+        assert_eq!(rendered.value["password"], "secret-token");
+        assert_eq!(rendered.secret_paths, vec!["/password"]);
+        assert_eq!(rendered.secret_path_sources[0].path, "/password");
     }
 
     #[test]

@@ -1297,9 +1297,14 @@ fn validate_grant_actions(grant: &attune_common::rbac::Grant) -> ApiResult<()> {
         Resource::Queues => &[Action::Read, Action::Create, Action::Update, Action::Delete][..],
         Resource::Rules => &[Action::Read, Action::Create, Action::Update, Action::Delete][..],
         Resource::Triggers => &[Action::Read, Action::Create, Action::Update, Action::Delete][..],
-        Resource::Executions => &[Action::Read, Action::Update, Action::Cancel][..],
+        Resource::Executions => &[
+            Action::Read,
+            Action::Update,
+            Action::Cancel,
+            Action::Decrypt,
+        ][..],
         Resource::Events => &[Action::Read][..],
-        Resource::Enforcements => &[Action::Read][..],
+        Resource::Enforcements => &[Action::Read, Action::Decrypt][..],
         Resource::Inquiries => &[
             Action::Read,
             Action::Create,
@@ -1345,6 +1350,8 @@ fn validate_grant_constraints(
                 | Resource::Queues
                 | Resource::Rules
                 | Resource::Triggers
+                | Resource::Executions
+                | Resource::Enforcements
                 | Resource::Artifacts
         )
     {
@@ -1363,6 +1370,7 @@ fn validate_grant_constraints(
                 | Resource::Rules
                 | Resource::Triggers
                 | Resource::Executions
+                | Resource::Enforcements
                 | Resource::Keys
                 | Resource::Artifacts
         )

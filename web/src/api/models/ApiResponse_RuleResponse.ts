@@ -63,6 +63,10 @@ export type ApiResponse_RuleResponse = {
          */
         pack_ref: string;
         /**
+         * Optional execution permission-set override for executions created by this rule.
+         */
+        permission_set_refs?: Array<string> | null;
+        /**
          * Unique reference identifier
          */
         ref: string;
@@ -88,4 +92,3 @@ export type ApiResponse_RuleResponse = {
      */
     message?: string | null;
 };
-

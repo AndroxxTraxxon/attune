@@ -19,9 +19,11 @@ use attune_common::{
         action::ActionRepository,
         event::{EnforcementRepository, EventRepository, UpdateEnforcementInput},
         execution::{CreateExecutionInput, ExecutionRepository},
+        execution_secret_value::ExecutionSecretValueRepository,
         rule::RuleRepository,
         FindById,
     },
+    secret_values::{ENTITY_ENFORCEMENT_CONFIG, ENTITY_EXECUTION_CONFIG},
 };
 
 use sqlx::PgPool;
@@ -280,10 +282,14 @@ impl EnforcementProcessor {
 
         let action_ref = &rule.action_ref;
         let action = ActionRepository::find_by_id(pool, action_id).await?;
-        let permission_set_refs = action
+        let action_default_permission_set_refs = action
             .as_ref()
             .map(|action| action.default_execution_permission_set_refs.clone())
             .unwrap_or_default();
+        let permission_set_refs = rule
+            .permission_set_refs
+            .clone()
+            .unwrap_or(action_default_permission_set_refs);
         let artifact_retention_policy = action
             .as_ref()
             .and_then(|action| action.artifact_retention_policy);
@@ -330,6 +336,16 @@ impl EnforcementProcessor {
         )
         .await?;
         let execution = execution_result.execution;
+        if execution_result.created {
+            ExecutionSecretValueRepository::copy_entity(
+                pool,
+                ENTITY_ENFORCEMENT_CONFIG,
+                enforcement.id,
+                ENTITY_EXECUTION_CONFIG,
+                execution.id,
+            )
+            .await?;
+        }
 
         if execution_result.created {
             info!(
@@ -418,6 +434,7 @@ mod tests {
             conditions: json!({}),
             action_params: json!({}),
             trigger_params: json!({}),
+            permission_set_refs: None,
             is_adhoc: false,
             owner_identity: None,
             created: chrono::Utc::now(),

@@ -517,6 +517,7 @@ async fn test_pack_scoped_queue_permissions_cover_definitions_and_items() {
             action_params: json!({
                 "item": "{{ item }}"
             }),
+            permission_set_refs: None,
             config: json!({}),
         },
     )

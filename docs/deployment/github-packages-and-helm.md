@@ -1,11 +1,11 @@
-# GitHub Packages And Helm Publishing
+# GitHub Publishing And Nexus Linux Packages
 
 This repository now includes:
 
 - A GitHub Actions publish workflow at `.github/workflows/publish.yml`
 - OCI-published container images for the Kubernetes deployment path
 - A Helm chart at `charts/attune`
-- Linux package, Docker distribution, Helm chart, binary bundle, and combined build-artifact archives
+- Nexus-published Linux packages plus Docker distribution, Helm chart, and binary bundle archives
 
 ## What Gets Published
 
@@ -25,16 +25,13 @@ The Helm chart is pushed as an OCI chart:
 
 - `oci://ghcr.io/<namespace>/attune/charts`
 
-Linux packages are uploaded as workflow artifacts for branch builds and attached
-to GitHub Releases for tag builds. GitHub Packages does not provide native
-Debian/RPM/Arch repository hosting, so the workflow no longer publishes apt,
-dnf, or pacman repositories.
+Linux packages are published to Nexus Repository Manager 3. GitHub Packages
+supports ecosystems such as OCI containers, npm, Maven, NuGet, RubyGems, and
+Cargo, but it does not provide native Debian/RPM/Arch repository hosting.
 
-Every publish run that produces downloadable artifacts also creates a combined
-`attune-build-artifacts-<image_tag>.zip` workflow artifact. The zip contains the
-binary bundles, Linux packages, Docker distribution bundle, Helm chart package,
-and a `metadata.json` file for the run. Tag builds attach that combined zip to
-the GitHub Release.
+Binary bundles are uploaded as per-architecture workflow artifacts named
+`attune-binaries-amd64` and `attune-binaries-arm64`. Tag builds attach those
+`attune-binaries-{arch}.tar.gz` files directly to the GitHub Release.
 
 ## Required GitHub Repository Configuration
 
@@ -42,11 +39,21 @@ Set these variables:
 
 - `CONTAINER_REGISTRY_HOST`: Optional registry hostname override. If omitted, the workflow uses `ghcr.io`.
 - `CONTAINER_REGISTRY_NAMESPACE`: Optional override for the registry namespace. If omitted, the workflow uses the repository owner lowercased. GHCR publishes with a lowercased namespace.
+- `NEXUS_URL`: Base URL for Nexus, for example `https://nexus.example.com`.
+- `NEXUS_APT_REPOSITORY`: Optional hosted apt repository name. Defaults to `attune-apt`.
+- `NEXUS_YUM_REPOSITORY`: Optional hosted yum/RPM repository name. Defaults to `attune-yum`.
+- `NEXUS_RAW_REPOSITORY`: Optional raw repository for Arch `.pkg.tar.zst` packages. If omitted, Arch package upload is skipped.
+- `NEXUS_APT_COMPONENT`: Optional Debian component path segment. Defaults to `main`.
 
-Set one of these authentication options:
+Set one of these container registry authentication options:
 
 - Preferred: `CONTAINER_REGISTRY_USERNAME` and `CONTAINER_REGISTRY_PASSWORD`
 - Fallback: allow the workflow `GITHUB_TOKEN` to push packages and release assets
+
+Set these Nexus credentials as repository secrets:
+
+- `NEXUS_USERNAME`
+- `NEXUS_PASSWORD`
 
 ## Publish Behavior
 

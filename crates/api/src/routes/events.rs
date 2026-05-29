@@ -15,23 +15,27 @@ use validator::Validate;
 
 use attune_common::{
     mq::{EventCreatedPayload, MessageEnvelope, MessageType},
+    rbac::{Action as RbacAction, AuthorizationContext, Resource},
     repositories::{
         event::{
             CreateEventInput, EnforcementRepository, EnforcementSearchFilters, EventRepository,
             EventSearchFilters,
         },
+        execution_secret_value::ExecutionSecretValueRepository,
         trigger::TriggerRepository,
         Create, FindById, FindByRef,
     },
+    secret_values::{redacted_paths, restore_secret_values, ENTITY_ENFORCEMENT_CONFIG},
 };
 
-use crate::auth::RequireAuth;
+use crate::auth::{middleware::AuthenticatedUser, RequireAuth};
 use crate::{
+    authz::{AuthorizationCheck, AuthorizationService},
     dto::{
         common::{PaginatedResponse, PaginationParams},
         event::{
-            EnforcementQueryParams, EnforcementResponse, EnforcementSummary, EventQueryParams,
-            EventResponse, EventSummary,
+            EnforcementDetailQueryParams, EnforcementQueryParams, EnforcementResponse,
+            EnforcementSummary, EventQueryParams, EventResponse, EventSummary,
         },
         ApiResponse,
     },
@@ -367,17 +371,129 @@ pub async fn list_enforcements(
     )
 )]
 pub async fn get_enforcement(
-    _user: RequireAuth,
+    RequireAuth(user): RequireAuth,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
+    Query(query): Query<EnforcementDetailQueryParams>,
 ) -> ApiResult<impl IntoResponse> {
     let enforcement = EnforcementRepository::find_by_id(&state.db, id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Enforcement with ID {} not found", id)))?;
 
-    let response = ApiResponse::new(EnforcementResponse::from(enforcement));
+    authorize_enforcement_access(&state, &user, &enforcement, RbacAction::Read).await?;
+
+    let reveal_paths = if query.include_secret_values {
+        authorize_enforcement_access(&state, &user, &enforcement, RbacAction::Decrypt).await?;
+        redacted_paths(
+            &enforcement
+                .config
+                .clone()
+                .unwrap_or(serde_json::Value::Null),
+        )
+    } else {
+        Vec::new()
+    };
+
+    let mut response = EnforcementResponse::from(enforcement.clone());
+    if query.include_secret_values {
+        response.config =
+            reveal_enforcement_secret_config(&state, response.config, enforcement.id).await?;
+        emit_enforcement_secret_disclosure_audit(&state, &user, &enforcement, reveal_paths);
+    }
+
+    let response = ApiResponse::new(response);
 
     Ok((StatusCode::OK, Json(response)))
+}
+
+async fn authorize_enforcement_access(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    enforcement: &attune_common::models::event::Enforcement,
+    action: RbacAction,
+) -> Result<(), ApiError> {
+    let identity_id = user
+        .identity_id()
+        .map_err(|_| ApiError::Unauthorized("Invalid user identity".to_string()))?;
+    let mut ctx = AuthorizationContext::new(identity_id);
+    ctx.target_id = Some(enforcement.id);
+    ctx.target_ref = Some(enforcement.rule_ref.clone());
+    ctx.pack_ref = enforcement
+        .rule_ref
+        .split_once('.')
+        .map(|(pack, _)| pack.to_string());
+
+    AuthorizationService::new(state.db.clone())
+        .authorize(
+            user,
+            AuthorizationCheck {
+                resource: Resource::Enforcements,
+                action,
+                context: ctx,
+            },
+        )
+        .await
+}
+
+async fn reveal_enforcement_secret_config(
+    state: &Arc<AppState>,
+    redacted: Option<serde_json::Value>,
+    enforcement_id: i64,
+) -> Result<Option<serde_json::Value>, ApiError> {
+    let Some(redacted) = redacted else {
+        return Ok(None);
+    };
+    let secrets = ExecutionSecretValueRepository::find_stored_by_entity(
+        &state.db,
+        ENTITY_ENFORCEMENT_CONFIG,
+        enforcement_id,
+    )
+    .await?;
+    if secrets.is_empty() {
+        return Ok(Some(redacted));
+    }
+    let encryption_key = state
+        .config
+        .security
+        .encryption_key
+        .as_ref()
+        .ok_or_else(|| {
+            ApiError::InternalServerError(
+                "Cannot reveal secret enforcement values without security.encryption_key"
+                    .to_string(),
+            )
+        })?;
+    restore_secret_values(redacted, &secrets, encryption_key)
+        .map(Some)
+        .map_err(|e| ApiError::InternalServerError(format!("Failed to decrypt secret values: {e}")))
+}
+
+fn emit_enforcement_secret_disclosure_audit(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    enforcement: &attune_common::models::event::Enforcement,
+    paths: Vec<String>,
+) {
+    use attune_common::audit::{event_type, AuditCategory, AuditEventBuilder, AuditOutcome};
+    let mut builder = AuditEventBuilder::new(
+        AuditCategory::Secret,
+        event_type::secret::ENFORCEMENT_VALUES_DECRYPTED,
+        AuditOutcome::Success,
+    )
+    .resource("enforcements")
+    .resource_id(enforcement.id)
+    .resource_ref(enforcement.rule_ref.clone())
+    .actor_login(user.login().to_string())
+    .actor_token_type(format!("{:?}", user.claims.token_type).to_lowercase())
+    .with_details(serde_json::json!({
+        "enforcement_id": enforcement.id,
+        "rule_ref": enforcement.rule_ref,
+        "paths": paths,
+    }));
+    if let Ok(id) = user.identity_id() {
+        builder = builder.actor_identity(id);
+    }
+    state.audit_emitter.emit(builder.build());
 }
 
 /// Register event and enforcement routes

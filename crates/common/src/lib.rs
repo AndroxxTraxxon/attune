@@ -26,6 +26,7 @@ pub mod repositories;
 pub mod runtime_detection;
 pub mod scheduling;
 pub mod schema;
+pub mod secret_values;
 pub mod system_alert;
 pub mod template_resolver;
 pub mod test_executor;

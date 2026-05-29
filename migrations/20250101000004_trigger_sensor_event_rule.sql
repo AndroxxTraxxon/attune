@@ -361,3 +361,106 @@ ALTER TABLE policy
 
 -- Note: Rule table will be created in migration 000005 after execution table exists
 -- Note: Foreign key constraints for enforcement.rule and event.rule will be added there
+
+-- ============================================================================
+-- EVENT / ENFORCEMENT NOTIFICATIONS
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION notify_event_created()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    payload := json_build_object(
+        'entity_type', 'event',
+        'entity_id', NEW.id,
+        'id', NEW.id,
+        'trigger', NEW.trigger,
+        'trigger_ref', NEW.trigger_ref,
+        'source', NEW.source,
+        'source_ref', NEW.source_ref,
+        'rule', NEW.rule,
+        'rule_ref', NEW.rule_ref,
+        'has_payload', NEW.payload IS NOT NULL,
+        'created', NEW.created
+    );
+
+    PERFORM pg_notify('event_created', payload::text);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER event_created_notify
+    AFTER INSERT ON event
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_event_created();
+
+COMMENT ON FUNCTION notify_event_created() IS 'Sends event creation notifications via PostgreSQL LISTEN/NOTIFY';
+
+CREATE OR REPLACE FUNCTION notify_enforcement_created()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    payload := json_build_object(
+        'entity_type', 'enforcement',
+        'entity_id', NEW.id,
+        'id', NEW.id,
+        'rule', NEW.rule,
+        'rule_ref', NEW.rule_ref,
+        'trigger_ref', NEW.trigger_ref,
+        'event', NEW.event,
+        'status', NEW.status,
+        'condition', NEW.condition,
+        'created', NEW.created,
+        'resolved_at', NEW.resolved_at
+    );
+
+    PERFORM pg_notify('enforcement_created', payload::text);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER enforcement_created_notify
+    AFTER INSERT ON enforcement
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_enforcement_created();
+
+COMMENT ON FUNCTION notify_enforcement_created() IS 'Sends enforcement creation notifications via PostgreSQL LISTEN/NOTIFY';
+
+CREATE OR REPLACE FUNCTION notify_enforcement_status_changed()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
+        payload := json_build_object(
+            'entity_type', 'enforcement',
+            'entity_id', NEW.id,
+            'id', NEW.id,
+            'rule', NEW.rule,
+            'rule_ref', NEW.rule_ref,
+            'trigger_ref', NEW.trigger_ref,
+            'event', NEW.event,
+            'status', NEW.status,
+            'old_status', OLD.status,
+            'condition', NEW.condition,
+            'created', NEW.created,
+            'resolved_at', NEW.resolved_at
+        );
+
+        PERFORM pg_notify('enforcement_status_changed', payload::text);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER enforcement_status_changed_notify
+    AFTER UPDATE ON enforcement
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_enforcement_status_changed();
+
+COMMENT ON FUNCTION notify_enforcement_status_changed() IS 'Sends enforcement status change notifications via PostgreSQL LISTEN/NOTIFY';

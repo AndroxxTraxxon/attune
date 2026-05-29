@@ -20,6 +20,7 @@ use attune_common::{
     schema::RefValidator,
 };
 
+use crate::dto::common::deserialize_double_option;
 use crate::dto::runtime::NullableStringPatch;
 
 #[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
@@ -78,6 +79,13 @@ pub struct CreateWorkQueueRequest {
     #[serde(default = "default_json_object")]
     pub action_params: JsonValue,
 
+    /// Permission set refs to apply to executions dispatched by this queue. Omit
+    /// to inherit the dispatch action default. Provide an empty array to force no
+    /// API token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = json!(["core.agent_reader"]), nullable = true)]
+    pub permission_set_refs: Option<Vec<String>>,
+
     #[validate(custom(function = "validate_queue_config_field"))]
     #[schema(value_type = Object, example = json!({"dispatch": {"concurrency": {"source": "literal", "value": 5}}}))]
     #[serde(default = "default_json_object")]
@@ -122,6 +130,17 @@ pub struct UpdateWorkQueueRequest {
     #[validate(custom(function = "validate_action_params_field"))]
     #[schema(value_type = Object, nullable = true)]
     pub action_params: Option<JsonValue>,
+
+    /// Permission set refs to apply to executions dispatched by this queue. Omit
+    /// to keep the current value. Provide null to inherit the dispatch action
+    /// default, or an empty array to force no API token.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_double_option"
+    )]
+    #[schema(example = json!(["core.agent_reader"]), nullable = true)]
+    pub permission_set_refs: Option<Option<Vec<String>>>,
 
     #[validate(custom(function = "validate_queue_config_field"))]
     #[schema(value_type = Object, nullable = true)]
@@ -173,6 +192,8 @@ pub struct WorkQueueResponse {
     pub item_schema: JsonValue,
     #[schema(value_type = Object)]
     pub action_params: JsonValue,
+    #[schema(example = json!(["core.agent_reader"]), nullable = true)]
+    pub permission_set_refs: Option<Vec<String>>,
     #[schema(value_type = Object)]
     pub config: JsonValue,
     #[schema(nullable = true)]
@@ -369,6 +390,7 @@ impl From<WorkQueue> for WorkQueueResponse {
             batch_mode: queue.batch_mode,
             item_schema: queue.item_schema,
             action_params: queue.action_params,
+            permission_set_refs: queue.permission_set_refs,
             config: queue.config,
             resolved_dispatch_tuning: None,
             created: queue.created,

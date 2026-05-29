@@ -117,6 +117,36 @@ COMMENT ON COLUMN execution.original_execution IS 'ID of the original execution 
 
 -- ============================================================================
 
+-- Store per-entity execution/enforcement secret values outside general-purpose
+-- JSON fields. Public response JSON keeps redaction markers at these paths.
+
+CREATE TABLE execution_secret_value (
+    id BIGSERIAL PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id BIGINT NOT NULL,
+    json_path TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_ref TEXT,
+    encrypted_value JSONB NOT NULL,
+    encryption_key_hash TEXT,
+    created TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (entity_type, entity_id, json_path)
+);
+
+CREATE INDEX idx_execution_secret_value_entity
+    ON execution_secret_value (entity_type, entity_id);
+
+COMMENT ON TABLE execution_secret_value IS 'Encrypted secret-backed parameter values associated with executions and enforcements';
+COMMENT ON COLUMN execution_secret_value.entity_type IS 'Owning entity type for this secret value record (for example execution or enforcement)';
+COMMENT ON COLUMN execution_secret_value.entity_id IS 'Owning entity ID for this secret value record';
+COMMENT ON COLUMN execution_secret_value.json_path IS 'JSON path within the public payload where a redaction marker is exposed';
+COMMENT ON COLUMN execution_secret_value.source_kind IS 'Origin of the secret value (for example key, literal, or inherited)';
+COMMENT ON COLUMN execution_secret_value.source_ref IS 'Optional source reference identifying the originating secret record';
+COMMENT ON COLUMN execution_secret_value.encrypted_value IS 'Encrypted JSON value used to restore the original secret-backed parameter';
+COMMENT ON COLUMN execution_secret_value.encryption_key_hash IS 'Hash of the encryption key used for the stored encrypted value';
+
+-- ============================================================================
+
 -- ============================================================================
 -- INQUIRY TABLE
 -- ============================================================================
@@ -188,6 +218,185 @@ COMMENT ON COLUMN inquiry.timeout_at IS 'When this inquiry expires';
 COMMENT ON COLUMN inquiry.responded_at IS 'When the response was received';
 
 -- ============================================================================
+-- EXECUTION / INQUIRY NOTIFICATIONS
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION notify_execution_created()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+    enforcement_rule_ref TEXT;
+    enforcement_trigger_ref TEXT;
+BEGIN
+    IF NEW.enforcement IS NOT NULL THEN
+        SELECT rule_ref, trigger_ref
+        INTO enforcement_rule_ref, enforcement_trigger_ref
+        FROM enforcement
+        WHERE id = NEW.enforcement;
+    END IF;
+
+    payload := json_build_object(
+        'entity_type', 'execution',
+        'entity_id', NEW.id,
+        'id', NEW.id,
+        'action_id', NEW.action,
+        'action_ref', NEW.action_ref,
+        'status', NEW.status,
+        'enforcement', NEW.enforcement,
+        'rule_ref', enforcement_rule_ref,
+        'trigger_ref', enforcement_trigger_ref,
+        'parent', NEW.parent,
+        'started_at', NEW.started_at,
+        'workflow_task', NEW.workflow_task,
+        'created', NEW.created,
+        'updated', NEW.updated
+    );
+
+    PERFORM pg_notify('execution_created', payload::text);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION notify_execution_status_changed()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+    enforcement_rule_ref TEXT;
+    enforcement_trigger_ref TEXT;
+BEGIN
+    IF TG_OP = 'UPDATE' AND OLD.status IS DISTINCT FROM NEW.status THEN
+        IF NEW.enforcement IS NOT NULL THEN
+            SELECT rule_ref, trigger_ref
+            INTO enforcement_rule_ref, enforcement_trigger_ref
+            FROM enforcement
+            WHERE id = NEW.enforcement;
+        END IF;
+
+        payload := json_build_object(
+            'entity_type', 'execution',
+            'entity_id', NEW.id,
+            'id', NEW.id,
+            'action_id', NEW.action,
+            'action_ref', NEW.action_ref,
+            'status', NEW.status,
+            'old_status', OLD.status,
+            'enforcement', NEW.enforcement,
+            'rule_ref', enforcement_rule_ref,
+            'trigger_ref', enforcement_trigger_ref,
+            'parent', NEW.parent,
+            'started_at', NEW.started_at,
+            'workflow_task', NEW.workflow_task,
+            'created', NEW.created,
+            'updated', NEW.updated
+        );
+
+        PERFORM pg_notify('execution_status_changed', payload::text);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER execution_created_notify
+    AFTER INSERT ON execution
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_execution_created();
+
+CREATE TRIGGER execution_status_changed_notify
+    AFTER UPDATE ON execution
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_execution_status_changed();
+
+COMMENT ON FUNCTION notify_execution_created() IS 'Sends execution creation notifications via PostgreSQL LISTEN/NOTIFY';
+COMMENT ON FUNCTION notify_execution_status_changed() IS 'Sends execution status change notifications via PostgreSQL LISTEN/NOTIFY';
+
+CREATE OR REPLACE FUNCTION notify_inquiry_created()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    payload := json_build_object(
+        'entity_type', 'inquiry',
+        'entity_id', NEW.id,
+        'id', NEW.id,
+        'execution', NEW.execution,
+        'status', NEW.status,
+        'timeout_at', NEW.timeout_at,
+        'created', NEW.created
+    );
+
+    PERFORM pg_notify('inquiry_created', payload::text);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION notify_inquiry_responded()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    IF TG_OP = 'UPDATE' AND NEW.status = 'responded' AND OLD.status != 'responded' THEN
+        payload := json_build_object(
+            'entity_type', 'inquiry',
+            'entity_id', NEW.id,
+            'id', NEW.id,
+            'execution', NEW.execution,
+            'status', NEW.status,
+            'updated', NEW.updated
+        );
+
+        PERFORM pg_notify('inquiry_responded', payload::text);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION notify_inquiry_timeout()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    IF TG_OP = 'UPDATE' AND NEW.status = 'timeout' AND OLD.status != 'timeout' THEN
+        payload := json_build_object(
+            'entity_type', 'inquiry',
+            'entity_id', NEW.id,
+            'id', NEW.id,
+            'execution', NEW.execution,
+            'status', NEW.status,
+            'timeout_at', NEW.timeout_at,
+            'updated', NEW.updated
+        );
+
+        PERFORM pg_notify('inquiry_timeout', payload::text);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER inquiry_created_notify
+    AFTER INSERT ON inquiry
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_inquiry_created();
+
+CREATE TRIGGER inquiry_responded_notify
+    AFTER UPDATE ON inquiry
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_inquiry_responded();
+
+CREATE TRIGGER inquiry_timeout_notify
+    AFTER UPDATE ON inquiry
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_inquiry_timeout();
+
+COMMENT ON FUNCTION notify_inquiry_created() IS 'Sends inquiry creation notifications via PostgreSQL LISTEN/NOTIFY';
+COMMENT ON FUNCTION notify_inquiry_responded() IS 'Sends inquiry response notifications via PostgreSQL LISTEN/NOTIFY';
+COMMENT ON FUNCTION notify_inquiry_timeout() IS 'Sends inquiry timeout notifications via PostgreSQL LISTEN/NOTIFY';
+
+-- ============================================================================
 
 -- ============================================================================
 -- RULE TABLE
@@ -207,6 +416,7 @@ CREATE TABLE rule (
     conditions JSONB NOT NULL DEFAULT '[]'::jsonb,
     action_params JSONB DEFAULT '{}'::jsonb,
     trigger_params JSONB DEFAULT '{}'::jsonb,
+    permission_set_refs TEXT[],
     enabled BOOLEAN NOT NULL,
     is_adhoc BOOLEAN NOT NULL DEFAULT FALSE,
     owner_identity BIGINT REFERENCES identity(id) ON DELETE SET NULL,
@@ -231,6 +441,7 @@ CREATE INDEX idx_rule_action_enabled ON rule(action, enabled);
 CREATE INDEX idx_rule_pack_enabled ON rule(pack, enabled);
 CREATE INDEX idx_rule_action_params_gin ON rule USING GIN (action_params);
 CREATE INDEX idx_rule_trigger_params_gin ON rule USING GIN (trigger_params);
+CREATE INDEX idx_rule_permission_set_refs ON rule USING GIN (permission_set_refs) WHERE permission_set_refs IS NOT NULL;
 CREATE INDEX idx_rule_owner_identity ON rule(owner_identity);
 
 -- Trigger
@@ -248,6 +459,7 @@ COMMENT ON COLUMN rule.trigger IS 'Trigger that activates this rule (null if tri
 COMMENT ON COLUMN rule.conditions IS 'Condition expressions to evaluate before executing action';
 COMMENT ON COLUMN rule.action_params IS 'Parameter overrides for the action';
 COMMENT ON COLUMN rule.trigger_params IS 'Parameter overrides for the trigger';
+COMMENT ON COLUMN rule.permission_set_refs IS 'Optional override for execution-scoped API token permission sets. NULL inherits the action default; empty array forces no token.';
 COMMENT ON COLUMN rule.enabled IS 'Whether this rule is active';
 COMMENT ON COLUMN rule.is_adhoc IS 'True if rule was manually created (ad-hoc), false if installed from pack';
 COMMENT ON COLUMN rule.owner_identity IS 'Identity that registered the rule. Used to attribute rule-triggered executions. NULL for system-loaded rules (init pack loader).';

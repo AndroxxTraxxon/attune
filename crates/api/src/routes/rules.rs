@@ -345,6 +345,20 @@ pub async fn create_rule(
     // Validate action parameters against schema
     validate_action_params(&action, &request.action_params)?;
 
+    let effective_permission_set_refs = request
+        .permission_set_refs
+        .clone()
+        .unwrap_or_else(|| action.default_execution_permission_set_refs.clone());
+    if !effective_permission_set_refs.is_empty()
+        && !AuthorizationService::new(state.db.clone())
+            .can_delegate_permission_sets(&user, &effective_permission_set_refs)
+            .await?
+    {
+        return Err(ApiError::Forbidden(
+            "Cannot create rule with execution permission sets beyond current access".to_string(),
+        ));
+    }
+
     // Capture the authenticated identity to attribute rule-triggered
     // executions back to the user who registered the rule. For service-account
     // / token flows where `identity_id()` is not available we fall back to
@@ -365,6 +379,7 @@ pub async fn create_rule(
         conditions: request.conditions,
         action_params: request.action_params,
         trigger_params: request.trigger_params,
+        permission_set_refs: request.permission_set_refs,
         enabled: request.enabled,
         is_adhoc: true, // Rules created via API are ad-hoc (not from pack installation)
         owner_identity,
@@ -490,6 +505,35 @@ pub async fn update_rule(
         )?;
     }
 
+    let permission_refs_to_validate = match &request.permission_set_refs {
+        Some(Some(refs)) => Some(refs.clone()),
+        Some(None) => Some(action.default_execution_permission_set_refs.clone()),
+        None if request.action_ref.is_some() => {
+            // Action is changing — re-validate the effective permissions (either the
+            // rule's explicit override or the new action's defaults) to prevent a user
+            // from redirecting privileged permissions to an action they control.
+            Some(
+                existing_rule
+                    .permission_set_refs
+                    .clone()
+                    .unwrap_or_else(|| action.default_execution_permission_set_refs.clone()),
+            )
+        }
+        None => None,
+    };
+    if let Some(permission_refs_to_validate) = permission_refs_to_validate {
+        if !permission_refs_to_validate.is_empty()
+            && !AuthorizationService::new(state.db.clone())
+                .can_delegate_permission_sets(&user, &permission_refs_to_validate)
+                .await?
+        {
+            return Err(ApiError::Forbidden(
+                "Cannot update rule with execution permission sets beyond current access"
+                    .to_string(),
+            ));
+        }
+    }
+
     let trigger_ref_changed = request
         .trigger_ref
         .as_ref()
@@ -515,6 +559,10 @@ pub async fn update_rule(
         conditions: request.conditions,
         action_params: request.action_params,
         trigger_params: request.trigger_params,
+        permission_set_refs: request.permission_set_refs.map(|refs| match refs {
+            Some(refs) => Patch::Set(refs),
+            None => Patch::Clear,
+        }),
         enabled: request.enabled,
         ..Default::default()
     };

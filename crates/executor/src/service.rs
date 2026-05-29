@@ -208,6 +208,7 @@ impl ExecutorService {
             self.inner.pool.clone(),
             self.inner.publisher.clone(),
             Arc::new(event_consumer),
+            self.inner.config.security.encryption_key.clone(),
         );
         handles.push(tokio::spawn(async move { event_processor.start().await }));
 
@@ -238,6 +239,7 @@ impl ExecutorService {
             self.inner.publisher.clone(),
             self.inner.queue_manager.clone(),
             self.inner.config.artifacts_dir.clone(),
+            self.inner.config.security.encryption_key.clone(),
         );
         handles.push(tokio::spawn(
             async move { completion_listener.start().await },
@@ -302,6 +304,7 @@ impl ExecutorService {
             Arc::new(scheduler_consumer),
             self.inner.policy_enforcer.clone(),
             self.inner.config.artifacts_dir.clone(),
+            self.inner.config.security.encryption_key.clone(),
         );
         handles.push(tokio::spawn(async move { scheduler.start().await }));
 

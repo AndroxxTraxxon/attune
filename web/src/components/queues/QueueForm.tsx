@@ -19,6 +19,8 @@ interface QueueFormProps {
   isEditing?: boolean;
 }
 
+type PermissionOverrideMode = "inherit" | "none" | "custom";
+
 function getErrorMessage(error: unknown, fallback: string): string {
   const maybeAxios = error as { response?: { data?: { message?: string } } };
   return maybeAxios.response?.data?.message ||
@@ -63,6 +65,17 @@ export default function QueueForm({
   );
   const [actionParams, setActionParams] = useState(
     () => prettyJson(initialData?.action_params),
+  );
+  const initialPermissionSetRefs = initialData?.permission_set_refs ?? null;
+  const [permissionMode, setPermissionMode] = useState<PermissionOverrideMode>(
+    initialPermissionSetRefs === null
+      ? "inherit"
+      : initialPermissionSetRefs.length === 0
+        ? "none"
+        : "custom",
+  );
+  const [permissionSetRefsInput, setPermissionSetRefsInput] = useState(
+    () => initialPermissionSetRefs?.join(", ") ?? "",
   );
   const [config, setConfig] = useState(() => prettyJson(initialData?.config));
   const initialQueueConfig = parseQueueConfig(initialData?.config);
@@ -286,6 +299,16 @@ export default function QueueForm({
     }
 
     try {
+      const permissionSetRefs =
+        permissionMode === "custom"
+          ? permissionSetRefsInput
+              .split(",")
+              .map((permissionSetRef) => permissionSetRef.trim())
+              .filter(Boolean)
+          : permissionMode === "none"
+            ? []
+            : null;
+
       if (isEditing && initialData) {
         await updateQueue.mutateAsync({
           ref: initialData.ref,
@@ -303,6 +326,7 @@ export default function QueueForm({
             batch_mode: batchMode,
             item_schema: parsedItemSchema,
             action_params: parsedActionParams,
+            permission_set_refs: permissionSetRefs,
             config: parsedConfig,
           },
         });
@@ -323,6 +347,9 @@ export default function QueueForm({
         batch_mode: batchMode,
         item_schema: parsedItemSchema,
         action_params: parsedActionParams,
+        ...(permissionSetRefs === null
+          ? {}
+          : { permission_set_refs: permissionSetRefs }),
         config: parsedConfig,
       });
       navigate(`/queues/${encodeURIComponent(response.data.ref)}`);
@@ -708,6 +735,36 @@ export default function QueueForm({
             {errors.action_params && (
               <p className="mt-1 text-sm text-red-600">{errors.action_params}</p>
             )}
+          </div>
+
+          <div className="rounded-lg border border-gray-200 p-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Execution API token permissions
+            </label>
+            <select
+              value={permissionMode}
+              onChange={(e) =>
+                setPermissionMode(e.target.value as PermissionOverrideMode)
+              }
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+            >
+              <option value="inherit">Inherit dispatch action default</option>
+              <option value="none">No execution API token</option>
+              <option value="custom">Custom permission set refs</option>
+            </select>
+            {permissionMode === "custom" && (
+              <input
+                value={permissionSetRefsInput}
+                onChange={(e) => setPermissionSetRefsInput(e.target.value)}
+                className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                placeholder="standard, core.queue_worker"
+              />
+            )}
+            <p className="mt-2 text-xs text-gray-500">
+              Applies to executions dispatched from this queue. Custom refs are
+              comma-separated; use <span className="font-mono">standard</span> for
+              action/pack-scoped keys and artifacts.
+            </p>
           </div>
 
           <div>

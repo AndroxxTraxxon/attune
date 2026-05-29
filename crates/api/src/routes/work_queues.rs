@@ -242,6 +242,19 @@ pub async fn create_queue(
 
     let is_adhoc = pack_id.is_none();
     let action = resolve_dispatch_action(&state, &request.dispatch_action_ref).await?;
+    let effective_permission_set_refs = request
+        .permission_set_refs
+        .clone()
+        .unwrap_or_else(|| action.default_execution_permission_set_refs.clone());
+    if !effective_permission_set_refs.is_empty()
+        && !AuthorizationService::new(state.db.clone())
+            .can_delegate_permission_sets(&user, &effective_permission_set_refs)
+            .await?
+    {
+        return Err(ApiError::Forbidden(
+            "Cannot create queue with execution permission sets beyond current access".to_string(),
+        ));
+    }
 
     let queue = WorkQueueRepository::create(
         &state.db,
@@ -262,6 +275,7 @@ pub async fn create_queue(
             batch_mode: request.batch_mode,
             item_schema: request.item_schema,
             action_params: request.action_params,
+            permission_set_refs: request.permission_set_refs,
             config: request.config,
         },
     )
@@ -316,6 +330,7 @@ pub async fn update_queue(
         has_non_operational_changes |= request.batch_mode.is_some();
         has_non_operational_changes |= request.item_schema.is_some();
         has_non_operational_changes |= request.action_params.is_some();
+        has_non_operational_changes |= request.permission_set_refs.is_some();
         has_non_operational_changes |= request.config.is_some();
 
         if has_non_operational_changes {
@@ -349,13 +364,54 @@ pub async fn update_queue(
         }
     }
 
-    let (dispatch_action_patch, dispatch_action_ref) =
+    let (dispatch_action_patch, dispatch_action_ref, loaded_dispatch_action) =
         if let Some(dispatch_action_ref) = request.dispatch_action_ref {
             let action = resolve_dispatch_action(&state, &dispatch_action_ref).await?;
-            (Some(Patch::Set(action.id)), Some(action.r#ref))
+            let r = action.r#ref.clone();
+            (Some(Patch::Set(action.id)), Some(r), Some(action))
         } else {
-            (None, None)
+            (None, None, None)
         };
+
+    let permission_refs_to_validate = match &request.permission_set_refs {
+        Some(Some(refs)) => Some(refs.clone()),
+        Some(None) | None
+            if request.permission_set_refs.is_some() || dispatch_action_ref.is_some() =>
+        {
+            // Need the effective action's defaults — reuse already-loaded action or fetch
+            let effective_action = match &loaded_dispatch_action {
+                Some(action) => action.clone(),
+                None => resolve_effective_dispatch_action(&state, &queue, None).await?,
+            };
+            if request.permission_set_refs == Some(None) {
+                // Explicit null = inherit from action
+                Some(effective_action.default_execution_permission_set_refs)
+            } else {
+                // Dispatch action is changing — re-validate the effective permissions (either
+                // the queue's explicit override or the new action's defaults) to prevent a user
+                // from redirecting privileged permissions to an action they control.
+                Some(
+                    queue
+                        .permission_set_refs
+                        .clone()
+                        .unwrap_or(effective_action.default_execution_permission_set_refs),
+                )
+            }
+        }
+        _ => None,
+    };
+    if let Some(permission_refs_to_validate) = permission_refs_to_validate {
+        if !permission_refs_to_validate.is_empty()
+            && !AuthorizationService::new(state.db.clone())
+                .can_delegate_permission_sets(&user, &permission_refs_to_validate)
+                .await?
+        {
+            return Err(ApiError::Forbidden(
+                "Cannot update queue with execution permission sets beyond current access"
+                    .to_string(),
+            ));
+        }
+    }
 
     let effective_batch_mode = request.batch_mode.unwrap_or(queue.batch_mode);
     let effective_config = request.config.as_ref().unwrap_or(&queue.config);
@@ -385,6 +441,10 @@ pub async fn update_queue(
             batch_mode: request.batch_mode,
             item_schema: request.item_schema,
             action_params: request.action_params,
+            permission_set_refs: request.permission_set_refs.map(|refs| match refs {
+                Some(refs) => Patch::Set(refs),
+                None => Patch::Clear,
+            }),
             config: request.config,
             ..Default::default()
         },
@@ -821,6 +881,24 @@ async fn resolve_dispatch_action(
     ActionRepository::find_by_ref(&state.db, action_ref)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Action '{}' not found", action_ref)))
+}
+
+async fn resolve_effective_dispatch_action(
+    state: &Arc<AppState>,
+    queue: &attune_common::models::WorkQueue,
+    updated_action_ref: Option<&str>,
+) -> ApiResult<attune_common::models::action::Action> {
+    if let Some(updated_action_ref) = updated_action_ref {
+        return resolve_dispatch_action(state, updated_action_ref).await;
+    }
+
+    if let Some(action_id) = queue.dispatch_action {
+        if let Some(action) = ActionRepository::find_by_id(&state.db, action_id).await? {
+            return Ok(action);
+        }
+    }
+
+    resolve_dispatch_action(state, &queue.dispatch_action_ref).await
 }
 
 async fn resolve_queue_dispatch_tuning(

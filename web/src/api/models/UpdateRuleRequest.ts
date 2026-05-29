@@ -31,6 +31,12 @@ export type UpdateRuleRequest = {
      */
     label?: string | null;
     /**
+     * Permission set refs to apply to executions created by this rule. Omit to
+     * keep the current value. Provide null to inherit the action default, or an
+     * empty array to force no API token.
+     */
+    permission_set_refs?: Array<string> | null;
+    /**
      * Parameters for trigger configuration and event filtering
      */
     trigger_params: any | null;
@@ -39,4 +45,3 @@ export type UpdateRuleRequest = {
      */
     trigger_ref?: string | null;
 };
-

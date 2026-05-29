@@ -281,6 +281,15 @@ pub struct ExecutionQueryParams {
     pub per_page: u32,
 }
 
+/// Query parameters for fetching one execution.
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+pub struct ExecutionDetailQueryParams {
+    /// Include decrypted secret parameter/result values. Requires executions:decrypt.
+    #[serde(default)]
+    #[param(example = false)]
+    pub include_secret_values: bool,
+}
+
 impl ExecutionQueryParams {
     /// Get the SQL offset value
     pub fn offset(&self) -> u32 {

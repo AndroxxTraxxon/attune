@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use crate::models::{enums::ExecutionStatus, execution::*, Id, JsonDict};
 use crate::scheduling::{parse_worker_affinity, parse_worker_selector, parse_worker_tolerations};
 use crate::Result;
-use sqlx::{Executor, PgConnection, PgPool, Postgres, QueryBuilder};
+use sqlx::{Executor, PgConnection, PgPool, Postgres, QueryBuilder, Row};
 use tokio::time::{sleep, Duration};
 
 use super::{ref_filter_like_pattern, Create, Delete, FindById, List, Repository, Update};
@@ -1061,11 +1061,31 @@ impl Delete for ExecutionRepository {
     where
         E: Executor<'e, Database = Postgres> + 'e,
     {
-        let result = sqlx::query("DELETE FROM execution WHERE id = $1")
-            .bind(id)
-            .execute(executor)
-            .await?;
-        Ok(result.rows_affected() > 0)
+        let result = sqlx::query(
+            r#"
+            WITH deleted_execution AS (
+                DELETE FROM execution
+                WHERE id = $1
+                RETURNING id
+            ),
+            deleted_config_secrets AS (
+                DELETE FROM execution_secret_value
+                WHERE entity_type = 'execution_config'
+                  AND entity_id IN (SELECT id FROM deleted_execution)
+            ),
+            deleted_result_secrets AS (
+                DELETE FROM execution_secret_value
+                WHERE entity_type = 'execution_result'
+                  AND entity_id IN (SELECT id FROM deleted_execution)
+            )
+            SELECT COUNT(*) AS deleted_count FROM deleted_execution
+            "#,
+        )
+        .bind(id)
+        .fetch_one(executor)
+        .await?;
+        let deleted_count: i64 = result.get("deleted_count");
+        Ok(deleted_count > 0)
     }
 }
 

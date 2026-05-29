@@ -1252,6 +1252,7 @@ pub mod rule {
         pub conditions: JsonValue,
         pub action_params: JsonValue,
         pub trigger_params: JsonValue,
+        pub permission_set_refs: Option<Vec<String>>,
         pub enabled: bool,
         pub is_adhoc: bool,
         /// Identity that registered the rule. Used to attribute rule-triggered
@@ -1730,6 +1731,7 @@ pub mod work_queue {
         pub batch_mode: WorkQueueBatchMode,
         pub item_schema: JsonDict,
         pub action_params: JsonDict,
+        pub permission_set_refs: Option<Vec<String>>,
         pub config: JsonDict,
         pub created: DateTime<Utc>,
         pub updated: DateTime<Utc>,
@@ -1737,7 +1739,7 @@ pub mod work_queue {
 
     pub const WORK_QUEUE_SELECT_COLUMNS: &str = "id, ref, pack, pack_ref, is_adhoc, label, \
          description, enabled, accepting_new_items, dispatch_action, dispatch_action_ref, default_priority, \
-         allow_pending_update, update_strategy, batch_mode, item_schema, action_params, config, created, updated";
+         allow_pending_update, update_strategy, batch_mode, item_schema, action_params, permission_set_refs, config, created, updated";
 
     #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
     pub struct WorkQueueItem {

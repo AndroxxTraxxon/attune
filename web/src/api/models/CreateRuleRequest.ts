@@ -35,6 +35,11 @@ export type CreateRuleRequest = {
      */
     pack_ref: string;
     /**
+     * Permission set refs to apply to executions created by this rule. Omit to
+     * inherit the action default. Provide an empty array to force no API token.
+     */
+    permission_set_refs?: Array<string> | null;
+    /**
      * Unique reference identifier (e.g., "mypack.notify_on_error")
      */
     ref: string;
@@ -47,4 +52,3 @@ export type CreateRuleRequest = {
      */
     trigger_ref: string;
 };
-

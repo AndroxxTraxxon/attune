@@ -16,8 +16,10 @@ use attune_common::{
     models::{Execution, ExecutionStatus, Id},
     repositories::{
         execution::{CreateExecutionInput, UpdateExecutionInput},
+        execution_secret_value::ExecutionSecretValueRepository,
         Create, ExecutionRepository, FindById, Update,
     },
+    secret_values::ENTITY_EXECUTION_CONFIG,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -314,6 +316,14 @@ impl RetryManager {
         };
 
         let created = ExecutionRepository::create(&self.pool, retry_execution).await?;
+        ExecutionSecretValueRepository::copy_entity(
+            &self.pool,
+            ENTITY_EXECUTION_CONFIG,
+            original.id,
+            ENTITY_EXECUTION_CONFIG,
+            created.id,
+        )
+        .await?;
 
         info!(
             "Created retry execution {} for original {} (attempt {}/{})",

@@ -22,6 +22,7 @@ use attune_common::{
     repositories::{
         action::ActionRepository,
         execution::{CreateExecutionInput, ExecutionRepository},
+        execution_secret_value::ExecutionSecretValueRepository,
         key::KeyRepository,
         pack::PackRepository,
         work_queue::{
@@ -31,6 +32,11 @@ use attune_common::{
             WorkQueueRepository, WorkQueueSearchFilters,
         },
         Create, FindById, FindByRef, Update,
+    },
+    secret_values::{
+        merge_schema_secret_redactions, prepare_secret_values, secret_paths_from_schema,
+        validate_secret_destination_paths, JsonPointer, RenderedJson, SecretPathSource,
+        SecretSource, ENTITY_EXECUTION_CONFIG,
     },
 };
 use chrono::Utc;
@@ -67,6 +73,8 @@ struct ResolvedQueueContext {
     action: Action,
     parsed_config: WorkQueueConfig,
     pack_config: JsonValue,
+    pack_ref: Option<String>,
+    pack_secret_paths: Vec<JsonPointer>,
     concurrency: u32,
     batch_size: u32,
     inter_execution_delay_seconds: u32,
@@ -346,6 +354,7 @@ impl WorkQueueDispatcher {
         for _ in 0..open_slots {
             let Some(dispatch) = Self::prepare_next_dispatch(
                 &self.pool,
+                self.encryption_key.as_deref(),
                 queue,
                 &context,
                 self.config.lease_duration,
@@ -436,8 +445,14 @@ impl WorkQueueDispatcher {
             action,
             parsed_config,
             pack_config: pack
+                .as_ref()
                 .map(|pack| pack.config.clone())
                 .unwrap_or(JsonValue::Null),
+            pack_ref: pack.as_ref().map(|pack| pack.r#ref.clone()),
+            pack_secret_paths: pack
+                .as_ref()
+                .map(|pack| secret_paths_from_schema(Some(&pack.conf_schema)))
+                .unwrap_or_default(),
             concurrency,
             batch_size,
             inter_execution_delay_seconds,
@@ -560,6 +575,7 @@ impl WorkQueueDispatcher {
 
     async fn prepare_next_dispatch(
         pool: &PgPool,
+        encryption_key: Option<&str>,
         queue: &WorkQueue,
         context: &ResolvedQueueContext,
         lease_duration: Duration,
@@ -599,12 +615,33 @@ impl WorkQueueDispatcher {
             return Ok(None);
         }
 
-        let execution_config = Self::build_execution_config(
+        let rendered_config = Self::build_execution_config(
             queue,
             &context.parsed_config,
             &context.pack_config,
+            context.pack_ref.clone(),
+            &context.pack_secret_paths,
             &items,
         )?;
+        validate_secret_destination_paths(
+            context.action.param_schema.as_ref(),
+            &rendered_config.secret_paths,
+        )?;
+        let (execution_config, secret_inputs) = merge_schema_secret_redactions(
+            rendered_config.value,
+            &rendered_config.secret_path_sources,
+            context.action.param_schema.as_ref(),
+        );
+        let prepared_secrets = if secret_inputs.is_empty() {
+            Vec::new()
+        } else {
+            let encryption_key = encryption_key.ok_or_else(|| {
+                anyhow!(
+                    "Cannot store secret queue execution parameters without security.encryption_key"
+                )
+            })?;
+            prepare_secret_values(secret_inputs, encryption_key)?
+        };
         // SECURITY: Inherit the triggering identity from the queue items'
         // `requested_by_identity` field if all leased items share the same
         // initiator. Otherwise fall back to the system identity so the worker
@@ -642,7 +679,9 @@ impl WorkQueueDispatcher {
                 parent: None,
                 enforcement: None,
                 executor: executor_identity,
-                permission_set_refs: context.action.default_execution_permission_set_refs.clone(),
+                permission_set_refs: queue.permission_set_refs.clone().unwrap_or_else(|| {
+                    context.action.default_execution_permission_set_refs.clone()
+                }),
                 artifact_retention_policy: context.action.artifact_retention_policy,
                 artifact_retention_limit: context.action.artifact_retention_limit,
                 worker_selector: None,
@@ -655,6 +694,15 @@ impl WorkQueueDispatcher {
             },
         )
         .await?;
+        if !prepared_secrets.is_empty() {
+            ExecutionSecretValueRepository::upsert_many_with_conn(
+                &mut tx,
+                ENTITY_EXECUTION_CONFIG,
+                execution.id,
+                &prepared_secrets,
+            )
+            .await?;
+        }
 
         WorkQueueItemRepository::attach_execution_to_lease(&mut *tx, lease_token, execution.id)
             .await?;
@@ -688,8 +736,10 @@ impl WorkQueueDispatcher {
         queue: &WorkQueue,
         parsed_config: &WorkQueueConfig,
         pack_config: &JsonValue,
+        pack_ref: Option<String>,
+        pack_secret_paths: &[JsonPointer],
         items: &[WorkQueueItem],
-    ) -> Result<JsonValue> {
+    ) -> Result<RenderedJson> {
         if items.is_empty() {
             return Err(anyhow!(
                 "cannot build execution config for queue '{}' without leased items",
@@ -706,15 +756,20 @@ impl WorkQueueDispatcher {
         }
 
         let context = Self::build_action_params_context(queue, parsed_config, pack_config, items);
-        let rendered = context.render_json(&queue.action_params).map_err(|error| {
-            anyhow!(
-                "failed to render action_params for queue '{}': {}",
-                queue.r#ref,
-                error
-            )
-        })?;
+        let mut context = context;
+        context.set_pack_config_with_secret_paths(pack_config.clone(), pack_ref, pack_secret_paths);
+        Self::mark_queue_item_secret_paths(&context, queue, items);
+        let rendered = context
+            .render_json_with_sensitivity(&queue.action_params)
+            .map_err(|error| {
+                anyhow!(
+                    "failed to render action_params for queue '{}': {}",
+                    queue.r#ref,
+                    error
+                )
+            })?;
 
-        if !rendered.is_object() {
+        if !rendered.value.is_object() {
             return Err(anyhow!(
                 "queue '{}' action_params must render to a JSON object",
                 queue.r#ref
@@ -727,21 +782,60 @@ impl WorkQueueDispatcher {
     fn build_default_execution_config(
         queue: &WorkQueue,
         items: &[WorkQueueItem],
-    ) -> Result<JsonValue> {
+    ) -> Result<RenderedJson> {
+        let item_secret_paths = secret_paths_from_schema(Some(&queue.item_schema));
         match queue.batch_mode {
             attune_common::models::WorkQueueBatchMode::Single => {
                 let item = items
                     .first()
                     .ok_or_else(|| anyhow!("single-item queue dispatch had no leased item"))?;
-                if item.payload.is_object() {
-                    Ok(item.payload.clone())
+                let value = if item.payload.is_object() {
+                    item.payload.clone()
                 } else {
-                    Ok(json!({ "item": item.payload.clone() }))
-                }
+                    json!({ "item": item.payload.clone() })
+                };
+                let secret_path_sources = item_secret_paths
+                    .iter()
+                    .map(|path| SecretPathSource {
+                        path: if item.payload.is_object() {
+                            path.clone()
+                        } else {
+                            format!("/item{path}")
+                        },
+                        source: SecretSource::QueueItem {
+                            queue_ref: Some(queue.r#ref.clone()),
+                            item_id: Some(item.id),
+                            path: path.clone(),
+                        },
+                    })
+                    .collect::<Vec<_>>();
+                Ok(Self::rendered_from_queue_path_sources(
+                    value,
+                    secret_path_sources,
+                ))
             }
-            attune_common::models::WorkQueueBatchMode::Batch => Ok(json!({
-                "items": items.iter().map(|item| item.payload.clone()).collect::<Vec<_>>()
-            })),
+            attune_common::models::WorkQueueBatchMode::Batch => {
+                let value = json!({
+                    "items": items.iter().map(|item| item.payload.clone()).collect::<Vec<_>>()
+                });
+                let mut secret_path_sources = Vec::new();
+                for (idx, item) in items.iter().enumerate() {
+                    for path in &item_secret_paths {
+                        secret_path_sources.push(SecretPathSource {
+                            path: format!("/items/{idx}{path}"),
+                            source: SecretSource::QueueItem {
+                                queue_ref: Some(queue.r#ref.clone()),
+                                item_id: Some(item.id),
+                                path: path.clone(),
+                            },
+                        });
+                    }
+                }
+                Ok(Self::rendered_from_queue_path_sources(
+                    value,
+                    secret_path_sources,
+                ))
+            }
         }
     }
 
@@ -767,11 +861,68 @@ impl WorkQueueDispatcher {
         );
         if queue.batch_mode == attune_common::models::WorkQueueBatchMode::Single {
             if let Some(item) = items.first() {
-                context.set_current_item(item.payload.clone(), 0);
+                let item_secret_paths = secret_paths_from_schema(Some(&queue.item_schema));
+                if item_secret_paths.is_empty() {
+                    context.set_current_item(item.payload.clone(), 0);
+                } else {
+                    context.set_current_item_with_secret_paths(
+                        item.payload.clone(),
+                        0,
+                        &item_secret_paths,
+                        |path| SecretSource::QueueItem {
+                            queue_ref: Some(queue.r#ref.clone()),
+                            item_id: Some(item.id),
+                            path: path.clone(),
+                        },
+                    );
+                }
                 context.set_var("queue_item", Self::build_queue_item_context(item));
             }
         }
         context
+    }
+
+    fn mark_queue_item_secret_paths(
+        context: &WorkflowContext,
+        queue: &WorkQueue,
+        items: &[WorkQueueItem],
+    ) {
+        let item_secret_paths = secret_paths_from_schema(Some(&queue.item_schema));
+        if item_secret_paths.is_empty() {
+            return;
+        }
+
+        for (idx, item) in items.iter().enumerate() {
+            context.mark_secret_pointer_paths(
+                &format!("items.{idx}"),
+                &item_secret_paths,
+                |path| SecretSource::QueueItem {
+                    queue_ref: Some(queue.r#ref.clone()),
+                    item_id: Some(item.id),
+                    path: path.clone(),
+                },
+            );
+            context.mark_secret_pointer_paths(
+                &format!("queue_items.{idx}.payload"),
+                &item_secret_paths,
+                |path| SecretSource::QueueItem {
+                    queue_ref: Some(queue.r#ref.clone()),
+                    item_id: Some(item.id),
+                    path: path.clone(),
+                },
+            );
+            if idx == 0 && queue.batch_mode == attune_common::models::WorkQueueBatchMode::Single {
+                context.mark_secret_pointer_paths(
+                    "queue_item.payload",
+                    &item_secret_paths,
+                    |path| SecretSource::QueueItem {
+                        queue_ref: Some(queue.r#ref.clone()),
+                        item_id: Some(item.id),
+                        path: path.clone(),
+                    },
+                );
+            }
+        }
     }
 
     fn build_queue_item_context(item: &WorkQueueItem) -> JsonValue {
@@ -807,6 +958,33 @@ impl WorkQueueDispatcher {
             "leased_item_count": items.len(),
             "ack_contract_version": ack_version,
         })
+    }
+
+    fn rendered_from_queue_path_sources(
+        value: JsonValue,
+        mut secret_path_sources: Vec<SecretPathSource>,
+    ) -> RenderedJson {
+        secret_path_sources.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+        secret_path_sources.dedup_by(|a, b| a.path == b.path && a.source == b.source);
+        let mut secret_paths = secret_path_sources
+            .iter()
+            .map(|source| source.path.clone())
+            .collect::<Vec<_>>();
+        secret_paths.sort();
+        secret_paths.dedup();
+        let mut sources = secret_path_sources
+            .iter()
+            .map(|source| source.source.clone())
+            .collect::<Vec<_>>();
+        sources.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+        sources.dedup();
+
+        RenderedJson {
+            value,
+            secret_paths,
+            sources,
+            secret_path_sources,
+        }
     }
 
     fn json_path_get<'a>(value: &'a JsonValue, path: &str) -> Option<&'a JsonValue> {
@@ -908,6 +1086,7 @@ mod tests {
             batch_mode,
             item_schema: json!({}),
             action_params,
+            permission_set_refs: None,
             config,
             created: Utc::now(),
             updated: Utc::now(),
@@ -982,20 +1161,25 @@ mod tests {
             &queue,
             &parsed_config,
             &JsonValue::Null,
+            None,
+            &[],
             &items,
         )
         .expect("config should build");
 
         assert_eq!(
-            config["payload"]["items"],
+            config.value["payload"]["items"],
             json!([{"order_id": 1001}, {"order_id": 1002}])
         );
-        assert_eq!(config["queue"]["ack_contract_version"].as_i64(), Some(2));
-        assert_eq!(config["queue"]["leased_item_count"].as_i64(), Some(2));
-        assert!(config["queue"].get("items").is_none());
-        assert_eq!(config["queue_items"][0]["id"].as_i64(), Some(1001));
         assert_eq!(
-            config["queue_items"][0]["payload"]["order_id"].as_i64(),
+            config.value["queue"]["ack_contract_version"].as_i64(),
+            Some(2)
+        );
+        assert_eq!(config.value["queue"]["leased_item_count"].as_i64(), Some(2));
+        assert!(config.value["queue"].get("items").is_none());
+        assert_eq!(config.value["queue_items"][0]["id"].as_i64(), Some(1001));
+        assert_eq!(
+            config.value["queue_items"][0]["payload"]["order_id"].as_i64(),
             Some(1001)
         );
     }
@@ -1010,12 +1194,14 @@ mod tests {
             &queue,
             &parsed_config,
             &JsonValue::Null,
+            None,
+            &[],
             &[item],
         )
         .unwrap();
 
         assert_eq!(
-            config,
+            config.value,
             json!({
                 "customer": "alice",
                 "order_id": 42
@@ -1041,12 +1227,14 @@ mod tests {
             &queue,
             &parsed_config,
             &json!({"region": "us-east-1"}),
+            None,
+            &[],
             &[item],
         )
         .expect("config should build");
 
         assert_eq!(
-            config,
+            config.value,
             json!({
                 "customer": "alice",
                 "priority": 7,
@@ -1165,12 +1353,14 @@ mod tests {
             &queue,
             &parsed_config,
             &JsonValue::Null,
+            None,
+            &[],
             &items,
         )
         .expect("config should build");
 
         assert_eq!(
-            config,
+            config.value,
             json!({
                 "items": [
                     {"order_id": 1},

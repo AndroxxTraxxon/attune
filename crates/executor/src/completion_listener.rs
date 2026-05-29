@@ -50,6 +50,7 @@ pub struct CompletionListener {
     round_robin_counter: Arc<AtomicUsize>,
     /// Root directory for file-backed artifacts (workflow logs).
     artifacts_dir: Arc<String>,
+    encryption_key: Option<String>,
 }
 
 struct QueueDispatchCompletionFailure {
@@ -79,6 +80,7 @@ impl CompletionListener {
         publisher: Arc<Publisher>,
         queue_manager: Arc<ExecutionQueueManager>,
         artifacts_dir: impl Into<String>,
+        encryption_key: Option<String>,
     ) -> Self {
         Self {
             pool,
@@ -87,6 +89,7 @@ impl CompletionListener {
             queue_manager,
             round_robin_counter: Arc::new(AtomicUsize::new(0)),
             artifacts_dir: Arc::new(artifacts_dir.into()),
+            encryption_key,
         }
     }
 
@@ -99,6 +102,7 @@ impl CompletionListener {
         let queue_manager = self.queue_manager.clone();
         let round_robin_counter = self.round_robin_counter.clone();
         let artifacts_dir = self.artifacts_dir.clone();
+        let encryption_key = self.encryption_key.clone();
 
         // Use the handler pattern to consume messages
         self.consumer
@@ -109,6 +113,7 @@ impl CompletionListener {
                     let queue_manager = queue_manager.clone();
                     let round_robin_counter = round_robin_counter.clone();
                     let artifacts_dir = artifacts_dir.clone();
+                    let encryption_key = encryption_key.clone();
 
                     async move {
                         if let Err(e) = Self::process_execution_completed(
@@ -117,6 +122,7 @@ impl CompletionListener {
                             &queue_manager,
                             &round_robin_counter,
                             artifacts_dir.as_str(),
+                            encryption_key.as_deref(),
                             &envelope,
                         )
                         .await
@@ -146,6 +152,7 @@ impl CompletionListener {
         queue_manager: &ExecutionQueueManager,
         round_robin_counter: &AtomicUsize,
         artifacts_dir: &str,
+        encryption_key: Option<&str>,
         envelope: &MessageEnvelope<ExecutionCompletedPayload>,
     ) -> Result<()> {
         debug!("Processing execution completed message: {:?}", envelope);
@@ -203,6 +210,7 @@ impl CompletionListener {
                     publisher,
                     round_robin_counter,
                     artifacts_dir,
+                    encryption_key,
                     exec,
                 )
                 .await

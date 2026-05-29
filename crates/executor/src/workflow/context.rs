@@ -46,6 +46,10 @@
 //! expression instead of stringifying it. This means `"{{ item }}"` resolving
 //! to integer `5` stays as `5`, not the string `"5"`.
 
+use attune_common::secret_values::{
+    pointer_from_dot_path, pointer_join, pointer_suffix, JsonPointer, RenderedJson,
+    SecretPathSource, SecretSource,
+};
 use attune_common::workflow::expression::{
     self, is_truthy, EvalContext, EvalError, EvalResult as ExprResult,
 };
@@ -120,6 +124,12 @@ pub struct WorkflowContext {
 
     /// The outcome of the last completed task (for `succeeded()` / `failed()`)
     last_task_outcome: Option<TaskOutcome>,
+
+    /// Secret source paths keyed by canonical expression path.
+    secret_sources: Arc<DashMap<String, Vec<SecretSource>>>,
+
+    /// Secret source paths for the per-clone `item` namespace.
+    current_item_secret_sources: Vec<(String, SecretSource)>,
 }
 
 impl WorkflowContext {
@@ -148,6 +158,8 @@ impl WorkflowContext {
             current_index: None,
             last_task_result: None,
             last_task_outcome: None,
+            secret_sources: Arc::new(DashMap::new()),
+            current_item_secret_sources: Vec::new(),
         }
     }
 
@@ -188,6 +200,8 @@ impl WorkflowContext {
             current_index: None,
             last_task_result: None,
             last_task_outcome: None,
+            secret_sources: Arc::new(DashMap::new()),
+            current_item_secret_sources: Vec::new(),
         }
     }
 
@@ -222,6 +236,24 @@ impl WorkflowContext {
         self.pack_config = Arc::new(config);
     }
 
+    pub fn set_pack_config_with_secret_paths(
+        &mut self,
+        config: JsonValue,
+        pack_ref: Option<String>,
+        secret_paths: &[JsonPointer],
+    ) {
+        self.set_pack_config(config);
+        for path in secret_paths {
+            self.mark_secret_source_path(
+                &format!("config{}", pointer_to_expression_suffix(path)),
+                SecretSource::PackConfig {
+                    pack_ref: pack_ref.clone(),
+                    path: path.clone(),
+                },
+            );
+        }
+    }
+
     /// Set the keystore secrets (accessible as `keystore.<key>`).
     #[allow(dead_code)] // Part of complete context API; used in tests
     pub fn set_keystore(&mut self, secrets: JsonValue) {
@@ -232,6 +264,27 @@ impl WorkflowContext {
     pub fn set_current_item(&mut self, item: JsonValue, index: usize) {
         self.current_item = Some(item);
         self.current_index = Some(index);
+        self.current_item_secret_sources.clear();
+    }
+
+    pub fn set_current_item_with_secret_paths(
+        &mut self,
+        item: JsonValue,
+        index: usize,
+        secret_paths: &[JsonPointer],
+        source_for_path: impl Fn(&JsonPointer) -> SecretSource,
+    ) {
+        self.current_item = Some(item);
+        self.current_index = Some(index);
+        self.current_item_secret_sources = secret_paths
+            .iter()
+            .map(|path| {
+                (
+                    format!("item{}", pointer_to_expression_suffix(path)),
+                    source_for_path(path),
+                )
+            })
+            .collect();
     }
 
     /// Clear current item
@@ -239,6 +292,7 @@ impl WorkflowContext {
     pub fn clear_current_item(&mut self) {
         self.current_item = None;
         self.current_index = None;
+        self.current_item_secret_sources.clear();
     }
 
     /// Record the outcome of the last completed task so that `result()`,
@@ -247,6 +301,43 @@ impl WorkflowContext {
     pub fn set_last_task_outcome(&mut self, result: JsonValue, outcome: TaskOutcome) {
         self.last_task_result = Some(result);
         self.last_task_outcome = Some(outcome);
+    }
+
+    pub fn set_last_task_outcome_with_secret_paths(
+        &mut self,
+        result: JsonValue,
+        outcome: TaskOutcome,
+        secret_paths: &[JsonPointer],
+        source_for_path: impl Fn(&JsonPointer) -> SecretSource,
+    ) {
+        self.set_last_task_outcome(result, outcome);
+        for path in secret_paths {
+            self.mark_secret_source_path(
+                &format!("result{}", pointer_to_expression_suffix(path)),
+                source_for_path(path),
+            );
+        }
+    }
+
+    pub fn mark_secret_source_path(&self, expression_path: &str, source: SecretSource) {
+        self.secret_sources
+            .entry(expression_path.to_string())
+            .or_default()
+            .push(source);
+    }
+
+    pub fn mark_secret_pointer_paths(
+        &self,
+        expression_root: &str,
+        secret_paths: &[JsonPointer],
+        source_for_path: impl Fn(&JsonPointer) -> SecretSource,
+    ) {
+        for path in secret_paths {
+            self.mark_secret_source_path(
+                &format!("{expression_root}{}", pointer_to_expression_suffix(path)),
+                source_for_path(path),
+            );
+        }
     }
 
     /// Export workflow variables as a JSON object suitable for persisting
@@ -355,6 +446,102 @@ impl WorkflowContext {
             }
             other => Ok(other.clone()),
         }
+    }
+
+    pub fn render_json_with_sensitivity(&self, value: &JsonValue) -> ContextResult<RenderedJson> {
+        self.render_json_with_sensitivity_at(value, "")
+    }
+
+    fn render_json_with_sensitivity_at(
+        &self,
+        value: &JsonValue,
+        pointer: &str,
+    ) -> ContextResult<RenderedJson> {
+        match value {
+            JsonValue::String(s) => {
+                if let Some(result) = self.try_evaluate_pure_expression(s) {
+                    let trimmed = s.trim();
+                    let expr = trimmed[2..trimmed.len() - 2].trim();
+                    let value = result?;
+                    let path_sources = self.secret_path_sources_for_expression(expr, pointer, true);
+                    return Ok(rendered_from_path_sources(value, path_sources));
+                }
+
+                let rendered = self.render_template(s)?;
+                let mut path_sources = Vec::new();
+                for expr in template_expressions(s) {
+                    path_sources
+                        .extend(self.secret_path_sources_for_expression(&expr, pointer, false));
+                }
+                Ok(rendered_from_path_sources(
+                    JsonValue::String(rendered),
+                    path_sources,
+                ))
+            }
+            JsonValue::Array(arr) => {
+                let mut result = Vec::new();
+                let mut path_sources = Vec::new();
+                for (idx, item) in arr.iter().enumerate() {
+                    let child_pointer = format!("{pointer}/{idx}");
+                    let rendered = self.render_json_with_sensitivity_at(item, &child_pointer)?;
+                    result.push(rendered.value);
+                    path_sources.extend(rendered.secret_path_sources);
+                }
+                Ok(rendered_from_path_sources(
+                    JsonValue::Array(result),
+                    path_sources,
+                ))
+            }
+            JsonValue::Object(obj) => {
+                let mut result = serde_json::Map::new();
+                let mut path_sources = Vec::new();
+                for (key, val) in obj {
+                    let child_pointer = format!("{}/{}", pointer, escape_pointer_segment(key));
+                    let rendered = self.render_json_with_sensitivity_at(val, &child_pointer)?;
+                    result.insert(key.clone(), rendered.value);
+                    path_sources.extend(rendered.secret_path_sources);
+                }
+                Ok(rendered_from_path_sources(
+                    JsonValue::Object(result),
+                    path_sources,
+                ))
+            }
+            other => Ok(RenderedJson::plain(other.clone())),
+        }
+    }
+
+    fn secret_path_sources_for_expression(
+        &self,
+        expr: &str,
+        dest_pointer: &str,
+        pure_expression: bool,
+    ) -> Vec<SecretPathSource> {
+        let expr = normalize_expression_path(expr);
+        let mut sources = Vec::new();
+
+        for entry in self.secret_sources.iter() {
+            collect_matching_sources(
+                &expr,
+                dest_pointer,
+                pure_expression,
+                entry.key(),
+                entry.value(),
+                &mut sources,
+            );
+        }
+
+        for (path, source) in &self.current_item_secret_sources {
+            collect_matching_sources(
+                &expr,
+                dest_pointer,
+                pure_expression,
+                path,
+                std::slice::from_ref(source),
+                &mut sources,
+            );
+        }
+
+        sources
     }
 
     /// Evaluate a template expression using the expression engine.
@@ -515,6 +702,8 @@ impl WorkflowContext {
             current_index: None,
             last_task_result: None,
             last_task_outcome: None,
+            secret_sources: Arc::new(DashMap::new()),
+            current_item_secret_sources: Vec::new(),
         })
     }
 }
@@ -528,6 +717,128 @@ fn value_to_string(value: &JsonValue) -> String {
         JsonValue::Null => String::new(),
         other => serde_json::to_string(other).unwrap_or_default(),
     }
+}
+
+fn rendered_from_path_sources(
+    value: JsonValue,
+    path_sources: Vec<SecretPathSource>,
+) -> RenderedJson {
+    let mut secret_path_sources = path_sources;
+    secret_path_sources.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    secret_path_sources.dedup_by(|a, b| a.path == b.path && a.source == b.source);
+
+    let mut secret_paths = secret_path_sources
+        .iter()
+        .map(|source| source.path.clone())
+        .collect::<Vec<_>>();
+    secret_paths.sort();
+    secret_paths.dedup();
+
+    let mut sources = secret_path_sources
+        .iter()
+        .map(|source| source.source.clone())
+        .collect::<Vec<_>>();
+    sources.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    sources.dedup();
+
+    RenderedJson {
+        value,
+        secret_paths,
+        sources,
+        secret_path_sources,
+    }
+}
+
+fn collect_matching_sources(
+    expr: &str,
+    dest_pointer: &str,
+    pure_expression: bool,
+    source_expr_path: &str,
+    source_values: &[SecretSource],
+    output: &mut Vec<SecretPathSource>,
+) {
+    if source_expr_path == expr || expr.starts_with(&format!("{source_expr_path}.")) {
+        output.extend(
+            source_values
+                .iter()
+                .cloned()
+                .map(|source| SecretPathSource {
+                    path: dest_pointer.to_string(),
+                    source,
+                }),
+        );
+        return;
+    }
+
+    if source_expr_path.starts_with(&format!("{expr}.")) {
+        let path = if pure_expression {
+            let source_pointer = pointer_from_dot_path(source_expr_path);
+            let expr_pointer = pointer_from_dot_path(expr);
+            pointer_suffix(&source_pointer, &expr_pointer)
+                .map(|suffix| pointer_join(dest_pointer, &suffix))
+                .unwrap_or_else(|| dest_pointer.to_string())
+        } else {
+            dest_pointer.to_string()
+        };
+
+        output.extend(
+            source_values
+                .iter()
+                .cloned()
+                .map(|source| SecretPathSource {
+                    path: path.clone(),
+                    source,
+                }),
+        );
+    }
+}
+
+fn template_expressions(s: &str) -> Vec<String> {
+    let mut expressions = Vec::new();
+    let mut start = 0;
+    while let Some(open_pos) = s[start..].find("{{") {
+        let open_pos = start + open_pos;
+        if let Some(close_pos) = s[open_pos..].find("}}") {
+            let close_pos = open_pos + close_pos;
+            expressions.push(s[open_pos + 2..close_pos].trim().to_string());
+            start = close_pos + 2;
+        } else {
+            break;
+        }
+    }
+    expressions
+}
+
+fn normalize_expression_path(expr: &str) -> String {
+    expr.trim()
+        .replace("result()", "result")
+        .replace("[\"", ".")
+        .replace("\"]", "")
+        .replace("[\'", ".")
+        .replace("']", "")
+}
+
+fn pointer_to_expression_suffix(pointer: &str) -> String {
+    let suffix = pointer
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(unescape_pointer_segment)
+        .collect::<Vec<_>>()
+        .join(".");
+    if suffix.is_empty() {
+        String::new()
+    } else {
+        format!(".{suffix}")
+    }
+}
+
+fn escape_pointer_segment(segment: &str) -> String {
+    segment.replace('~', "~0").replace('/', "~1")
+}
+
+fn unescape_pointer_segment(segment: &str) -> String {
+    segment.replace("~1", "/").replace("~0", "~")
 }
 
 // ---------------------------------------------------------------
@@ -1285,6 +1596,24 @@ mod tests {
         let input = json!({"auth": "Bearer {{ keystore.api_key }}"});
         let result = ctx.render_json(&input).unwrap();
         assert_eq!(result["auth"], json!("Bearer abc-123"));
+    }
+
+    #[test]
+    fn render_json_with_sensitivity_tracks_parameter_source() {
+        let ctx = WorkflowContext::new(json!({"token": "secret-token"}), HashMap::new());
+        ctx.mark_secret_pointer_paths("parameters", &["/token".to_string()], |path| {
+            SecretSource::WorkflowParameter {
+                execution_id: 42,
+                path: path.clone(),
+            }
+        });
+
+        let rendered = ctx
+            .render_json_with_sensitivity(&json!({"password": "{{ parameters.token }}"}))
+            .unwrap();
+
+        assert_eq!(rendered.value["password"], "secret-token");
+        assert_eq!(rendered.secret_paths, vec!["/password"]);
     }
 
     #[test]

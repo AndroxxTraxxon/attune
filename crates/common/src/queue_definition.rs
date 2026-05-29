@@ -37,6 +37,8 @@ pub struct WorkQueueDefinition {
     pub item_schema: JsonValue,
     #[serde(default = "default_action_params")]
     pub action_params: JsonValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_set_refs: Option<Vec<String>>,
     #[serde(default = "default_config")]
     pub config: JsonValue,
 }
@@ -70,6 +72,7 @@ pub fn validate_work_queue_definition(definition: &WorkQueueDefinition) -> Resul
     RefValidator::validate_component_ref(&definition.dispatch_action)?;
     validate_work_queue_item_schema(&definition.item_schema)?;
     validate_work_queue_action_params(&definition.action_params)?;
+    validate_permission_set_refs(definition.permission_set_refs.as_deref())?;
 
     if definition.label.trim().is_empty() {
         return Err(Error::validation("Work queue label cannot be empty"));
@@ -86,6 +89,21 @@ pub fn validate_work_queue_definition(definition: &WorkQueueDefinition) -> Resul
     }
 
     validate_work_queue_config_for_batch_mode(definition.batch_mode, &definition.config)
+}
+
+fn validate_permission_set_refs(permission_set_refs: Option<&[String]>) -> Result<()> {
+    let Some(permission_set_refs) = permission_set_refs else {
+        return Ok(());
+    };
+
+    for permission_set_ref in permission_set_refs {
+        if permission_set_ref.trim().is_empty() {
+            return Err(Error::validation(
+                "permission_set_refs cannot contain empty refs",
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn validate_work_queue_item_schema(item_schema: &JsonValue) -> Result<()> {
@@ -280,6 +298,9 @@ dispatch_action: core.process_item
 allow_pending_update: true
 update_strategy: merge_patch
 batch_mode: batch
+permission_set_refs:
+  - standard
+  - queue_dispatch
 item_schema:
   order_id:
     type: integer
@@ -305,10 +326,30 @@ config:
             WorkQueueUpdateStrategy::MergePatch
         );
         assert_eq!(
+            definition.permission_set_refs,
+            Some(vec!["standard".to_string(), "queue_dispatch".to_string()])
+        );
+        assert_eq!(
             definition.action_params,
             json!({"items": "{{ items }}", "queue": "{{ queue }}"})
         );
         assert_eq!(definition.item_schema["order_id"]["type"], "integer");
+    }
+
+    #[test]
+    fn rejects_empty_work_queue_permission_set_refs() {
+        let error = parse_work_queue_definition_yaml(
+            r#"
+ref: core.inbox
+label: Core Inbox
+dispatch_action: core.process_item
+permission_set_refs:
+  - ""
+"#,
+        )
+        .expect_err("empty permission set refs should be rejected");
+
+        assert!(error.to_string().contains("permission_set_refs"));
     }
 
     #[test]

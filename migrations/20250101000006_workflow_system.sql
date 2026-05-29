@@ -195,3 +195,39 @@ FROM workflow_definition wd
 LEFT JOIN action a ON a.workflow_def = wd.id;
 
 COMMENT ON VIEW workflow_action_link IS 'Links workflow definitions to their corresponding action records';
+
+-- ============================================================================
+-- WORKFLOW EXECUTION NOTIFICATIONS
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION notify_workflow_execution_status_changed()
+RETURNS TRIGGER AS $$
+DECLARE
+    payload JSON;
+BEGIN
+    payload := json_build_object(
+        'entity_type', 'execution',
+        'entity_id', NEW.id,
+        'id', NEW.id,
+        'action_ref', NEW.action_ref,
+        'status', NEW.status,
+        'old_status', OLD.status,
+        'workflow_def', NEW.workflow_def,
+        'parent', NEW.parent,
+        'created', NEW.created,
+        'updated', NEW.updated
+    );
+
+    PERFORM pg_notify('workflow_execution_status_changed', payload::text);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER workflow_execution_status_changed_notify
+    AFTER UPDATE ON execution
+    FOR EACH ROW
+    WHEN (OLD.status IS DISTINCT FROM NEW.status AND NEW.workflow_def IS NOT NULL)
+    EXECUTE FUNCTION notify_workflow_execution_status_changed();
+
+COMMENT ON FUNCTION notify_workflow_execution_status_changed() IS 'Sends workflow execution status change notifications via PostgreSQL LISTEN/NOTIFY';

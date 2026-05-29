@@ -41,11 +41,12 @@ pub use common::{
     ApiResponse, PaginatedResponse, PaginationMeta, PaginationParams, SuccessResponse,
 };
 pub use event::{
-    EnforcementQueryParams, EnforcementResponse, EnforcementSummary, EventQueryParams,
-    EventResponse, EventSummary,
+    EnforcementDetailQueryParams, EnforcementQueryParams, EnforcementResponse, EnforcementSummary,
+    EventQueryParams, EventResponse, EventSummary,
 };
 pub use execution::{
-    CreateExecutionRequest, ExecutionQueryParams, ExecutionResponse, ExecutionSummary,
+    CreateExecutionRequest, ExecutionDetailQueryParams, ExecutionQueryParams, ExecutionResponse,
+    ExecutionSummary,
 };
 pub use history::{HistoryEntityTypePath, HistoryQueryParams, HistoryRecordResponse};
 pub use inquiry::{

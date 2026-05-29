@@ -6,6 +6,8 @@ use serde_json::Value as JsonValue;
 use utoipa::ToSchema;
 use validator::Validate;
 
+use crate::dto::common::deserialize_double_option;
+
 /// Request DTO for creating a new rule
 #[derive(Debug, Clone, Deserialize, Validate, ToSchema)]
 pub struct CreateRuleRequest {
@@ -53,6 +55,12 @@ pub struct CreateRuleRequest {
     #[schema(value_type = Object, example = json!({"severity": "high"}))]
     pub trigger_params: JsonValue,
 
+    /// Permission set refs to apply to executions created by this rule. Omit to
+    /// inherit the action default. Provide an empty array to force no API token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = json!(["core.agent_reader"]), nullable = true)]
+    pub permission_set_refs: Option<Vec<String>>,
+
     /// Whether the rule is enabled
     #[serde(default = "default_true")]
     #[schema(example = true)]
@@ -92,6 +100,17 @@ pub struct UpdateRuleRequest {
     /// Parameters for trigger configuration and event filtering
     #[schema(value_type = Object, nullable = true)]
     pub trigger_params: Option<JsonValue>,
+
+    /// Permission set refs to apply to executions created by this rule. Omit to
+    /// keep the current value. Provide null to inherit the action default, or an
+    /// empty array to force no API token.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_double_option"
+    )]
+    #[schema(example = json!(["core.agent_reader"]), nullable = true)]
+    pub permission_set_refs: Option<Option<Vec<String>>>,
 
     /// Whether the rule is enabled
     #[schema(example = false)]
@@ -153,6 +172,11 @@ pub struct RuleResponse {
     #[schema(value_type = Object)]
     pub trigger_params: JsonValue,
 
+    /// Optional execution permission override. Null means inherit action default;
+    /// empty array means force no execution API token.
+    #[schema(example = json!(["core.agent_reader"]), nullable = true)]
+    pub permission_set_refs: Option<Vec<String>>,
+
     /// Whether the rule is enabled
     #[schema(example = true)]
     pub enabled: bool,
@@ -213,6 +237,11 @@ pub struct RuleSummary {
     #[schema(value_type = Object)]
     pub trigger_params: JsonValue,
 
+    /// Optional execution permission override. Null means inherit action default;
+    /// empty array means force no execution API token.
+    #[schema(example = json!(["core.agent_reader"]), nullable = true)]
+    pub permission_set_refs: Option<Vec<String>>,
+
     /// Whether the rule is enabled
     #[schema(example = true)]
     pub enabled: bool,
@@ -243,6 +272,7 @@ impl From<attune_common::models::rule::Rule> for RuleResponse {
             conditions: rule.conditions,
             action_params: rule.action_params,
             trigger_params: rule.trigger_params,
+            permission_set_refs: rule.permission_set_refs,
             enabled: rule.enabled,
             is_adhoc: rule.is_adhoc,
             owner_identity: rule.owner_identity,
@@ -265,6 +295,7 @@ impl From<attune_common::models::rule::Rule> for RuleSummary {
             trigger_ref: rule.trigger_ref,
             action_params: rule.action_params,
             trigger_params: rule.trigger_params,
+            permission_set_refs: rule.permission_set_refs,
             enabled: rule.enabled,
             created: rule.created,
             updated: rule.updated,
@@ -316,6 +347,7 @@ mod tests {
             conditions: default_empty_object(),
             action_params: default_empty_object(),
             trigger_params: default_empty_object(),
+            permission_set_refs: None,
             enabled: true,
         };
 
@@ -339,6 +371,7 @@ mod tests {
             }),
             action_params: default_empty_object(),
             trigger_params: default_empty_object(),
+            permission_set_refs: None,
             enabled: true,
         };
 
@@ -355,6 +388,7 @@ mod tests {
             conditions: None,
             action_params: None,
             trigger_params: None,
+            permission_set_refs: None,
             enabled: None,
         };
 
@@ -372,6 +406,7 @@ mod tests {
             conditions: Some(serde_json::json!({"var": "status", "==": "ok"})),
             action_params: None,
             trigger_params: None,
+            permission_set_refs: None,
             enabled: Some(false),
         };
 

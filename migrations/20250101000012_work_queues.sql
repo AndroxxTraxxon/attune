@@ -89,6 +89,7 @@ CREATE TABLE work_queue (
     batch_mode work_queue_batch_mode_enum NOT NULL DEFAULT 'single',
     item_schema JSONB NOT NULL DEFAULT '{}'::jsonb,
     action_params JSONB NOT NULL DEFAULT '{}'::jsonb,
+    permission_set_refs TEXT[],
     config JSONB NOT NULL DEFAULT '{}'::jsonb,
     created TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -107,6 +108,7 @@ CREATE INDEX idx_work_queue_enabled ON work_queue(enabled) WHERE enabled = TRUE;
 CREATE INDEX idx_work_queue_is_adhoc ON work_queue(is_adhoc);
 CREATE INDEX idx_work_queue_created ON work_queue(created DESC);
 CREATE INDEX idx_work_queue_config_gin ON work_queue USING GIN (config);
+CREATE INDEX idx_work_queue_permission_set_refs ON work_queue USING GIN (permission_set_refs) WHERE permission_set_refs IS NOT NULL;
 
 CREATE TRIGGER update_work_queue_updated
     BEFORE UPDATE ON work_queue
@@ -141,6 +143,8 @@ COMMENT ON COLUMN work_queue.item_schema IS
     'Flat trigger-style schema describing the payload shape accepted for queue items. Enforced on queue item enqueue/update writes.';
 COMMENT ON COLUMN work_queue.action_params IS
     'Declarative action parameter mappings resolved at dispatch time using queue template expressions';
+COMMENT ON COLUMN work_queue.permission_set_refs IS
+    'Optional override for execution-scoped API token permission sets. NULL inherits the dispatch action default; empty array forces no token.';
 COMMENT ON COLUMN work_queue.config IS
     'Typed JSON configuration for queue tunables and ack contract';
 

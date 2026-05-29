@@ -1,6 +1,6 @@
 //! Common DTO types used across all API endpoints
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 /// Pagination parameters for list endpoints
@@ -187,9 +187,18 @@ impl SuccessResponse {
     }
 }
 
+pub fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Some(Option::<T>::deserialize(deserializer)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
 
     #[test]
     fn test_pagination_params_offset() {
@@ -276,5 +285,23 @@ mod tests {
         assert_eq!(response.pagination.total_items, None);
         assert_eq!(response.pagination.total_pages, None);
         assert!(!response.pagination.has_next);
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct DoubleOptionHolder {
+        #[serde(default, deserialize_with = "deserialize_double_option")]
+        value: Option<Option<Vec<String>>>,
+    }
+
+    #[test]
+    fn deserialize_double_option_preserves_missing_null_and_value() {
+        let missing: DoubleOptionHolder = serde_json::from_str("{}").unwrap();
+        assert_eq!(missing.value, None);
+
+        let null_value: DoubleOptionHolder = serde_json::from_str(r#"{"value":null}"#).unwrap();
+        assert_eq!(null_value.value, Some(None));
+
+        let set_value: DoubleOptionHolder = serde_json::from_str(r#"{"value":["a","b"]}"#).unwrap();
+        assert_eq!(set_value.value, Some(Some(vec!["a".into(), "b".into()])));
     }
 }

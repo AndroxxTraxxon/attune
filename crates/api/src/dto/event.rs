@@ -344,6 +344,15 @@ pub struct EnforcementQueryParams {
     pub per_page: u32,
 }
 
+/// Query parameters for fetching one enforcement.
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+pub struct EnforcementDetailQueryParams {
+    /// Include decrypted secret resolved parameter values. Requires enforcements:decrypt.
+    #[serde(default)]
+    #[param(example = false)]
+    pub include_secret_values: bool,
+}
+
 impl EnforcementQueryParams {
     /// Get the offset for pagination
     pub fn offset(&self) -> u32 {

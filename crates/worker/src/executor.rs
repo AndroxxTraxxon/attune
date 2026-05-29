@@ -30,11 +30,15 @@ use attune_common::repositories::artifact::{
     CreateArtifactInput, UpdateArtifactInput,
 };
 use attune_common::repositories::execution::{ExecutionRepository, UpdateExecutionInput};
+use attune_common::repositories::execution_secret_value::ExecutionSecretValueRepository;
 use attune_common::repositories::runtime::WorkerRepository;
 use attune_common::repositories::runtime::SELECT_COLUMNS as RUNTIME_SELECT_COLUMNS;
 use attune_common::repositories::runtime_version::RuntimeVersionRepository;
 use attune_common::repositories::{Create, FindById, FindByRef, Update};
 use attune_common::runtime_detection::normalize_runtime_name;
+use attune_common::secret_values::{
+    prepare_secret_values, redact_secret_parameters, ENTITY_EXECUTION_RESULT,
+};
 use attune_common::version_matching::{matches_constraint, select_best_version};
 use std::path::PathBuf as StdPathBuf;
 
@@ -225,6 +229,7 @@ impl ActionExecutor {
                 error!("Failed to prepare execution context: {}", e);
                 self.handle_execution_failure(
                     execution_id,
+                    Some(&action),
                     None,
                     Some(&format!("Failed to prepare execution context: {}", e)),
                 )
@@ -295,6 +300,7 @@ impl ActionExecutor {
                 // This should only happen for unrecoverable errors like runtime not found
                 self.handle_execution_failure(
                     execution_id,
+                    Some(&action),
                     None,
                     Some(&format!("Action execution failed: {}", e)),
                 )
@@ -357,12 +363,13 @@ impl ActionExecutor {
                 .is_some_and(|e| e.contains("cancelled"));
 
         if was_cancelled {
-            self.handle_execution_cancelled(execution_id, &result)
+            self.handle_execution_cancelled(execution_id, &action, &result)
                 .await?;
         } else if is_success {
-            self.handle_execution_success(execution_id, &result).await?;
+            self.handle_execution_success(execution_id, &action, &result)
+                .await?;
         } else {
-            self.handle_execution_failure(execution_id, Some(&result), None)
+            self.handle_execution_failure(execution_id, Some(&action), Some(&result), None)
                 .await?;
         }
 
@@ -440,7 +447,17 @@ impl ActionExecutor {
         // is the parameters map (e.g. {"url": "...", "method": "GET"}).
         let mut parameters = HashMap::new();
 
-        if let Some(config) = &execution.config {
+        let restored_config = if let Some(config) = &execution.config {
+            Some(
+                self.secret_manager
+                    .restore_execution_parameters(execution.id, config.clone())
+                    .await?,
+            )
+        } else {
+            None
+        };
+
+        if let Some(config) = &restored_config {
             debug!("Execution config present: {:?}", config);
 
             if let JsonValue::Object(map) = config {
@@ -554,7 +571,7 @@ impl ActionExecutor {
         }
 
         // Add context data as environment variables from config
-        if let Some(config) = &execution.config {
+        if let Some(config) = &restored_config {
             if let Some(JsonValue::Object(map)) = config.get("context") {
                 for (key, value) in map {
                     let env_key = format!("ATTUNE_CONTEXT_{}", key.to_uppercase());
@@ -569,7 +586,10 @@ impl ActionExecutor {
             }
         }
 
-        // Fetch secrets (passed securely via stdin, not environment variables)
+        // Pack/action/system keys are still delivered through the dedicated
+        // stdin secret channel. Execution-specific redacted parameters are
+        // restored into `parameters` above and remain separate from these
+        // ambient execution secrets.
         let secrets = match self.secret_manager.fetch_secrets_for_action(action).await {
             Ok(secrets) => {
                 debug!(
@@ -581,8 +601,8 @@ impl ActionExecutor {
             }
             Err(e) => {
                 warn!("Failed to fetch secrets for action {}: {}", action.r#ref, e);
-                // Don't fail the execution if secrets can't be fetched
-                // Some actions may not require secrets
+                // Don't fail execution if ambient secret lookup fails; some
+                // actions do not require pack/action secrets.
                 HashMap::new()
             }
         };
@@ -1570,6 +1590,7 @@ impl ActionExecutor {
     async fn handle_execution_success(
         &self,
         execution_id: i64,
+        action: &Action,
         result: &ExecutionResult,
     ) -> Result<()> {
         info!(
@@ -1605,6 +1626,10 @@ impl ActionExecutor {
             Self::copy_reserved_queue_ack(&mut result_data, parsed_result);
         }
 
+        result_data = self
+            .redact_execution_result_data(execution_id, action, result_data)
+            .await?;
+
         let input = UpdateExecutionInput {
             status: Some(ExecutionStatus::Completed),
             result: Some(result_data),
@@ -1628,10 +1653,48 @@ impl ActionExecutor {
         }
     }
 
+    async fn redact_execution_result_data(
+        &self,
+        execution_id: i64,
+        action: &Action,
+        mut result_data: JsonValue,
+    ) -> Result<JsonValue> {
+        let Some(parsed_result) = result_data.get("data").cloned() else {
+            return Ok(result_data);
+        };
+
+        let (redacted_data, mut secret_inputs) =
+            redact_secret_parameters(parsed_result, action.out_schema.as_ref());
+        if secret_inputs.is_empty() {
+            return Ok(result_data);
+        }
+
+        for input in &mut secret_inputs {
+            input.json_path = format!("/data{}", input.json_path);
+        }
+        result_data["data"] = redacted_data;
+
+        let encryption_key = self
+            .secret_manager
+            .encryption_key()
+            .ok_or_else(|| Error::Internal("No encryption key configured".to_string()))?;
+        let prepared = prepare_secret_values(secret_inputs, encryption_key)?;
+        ExecutionSecretValueRepository::upsert_many(
+            &self.pool,
+            ENTITY_EXECUTION_RESULT,
+            execution_id,
+            &prepared,
+        )
+        .await?;
+
+        Ok(result_data)
+    }
+
     /// Handle failed execution
     async fn handle_execution_failure(
         &self,
         execution_id: i64,
+        action: Option<&Action>,
         result: Option<&ExecutionResult>,
         error_message: Option<&str>,
     ) -> Result<()> {
@@ -1689,6 +1752,7 @@ impl ActionExecutor {
             }
 
             if let Some(parsed_result) = &exec_result.result {
+                result_data["data"] = parsed_result.clone();
                 Self::copy_reserved_queue_ack(&mut result_data, parsed_result);
             }
         } else {
@@ -1730,6 +1794,12 @@ impl ActionExecutor {
             }
         }
 
+        if let Some(action) = action {
+            result_data = self
+                .redact_execution_result_data(execution_id, action, result_data)
+                .await?;
+        }
+
         let input = UpdateExecutionInput {
             status: Some(ExecutionStatus::Failed),
             result: Some(result_data),
@@ -1744,6 +1814,7 @@ impl ActionExecutor {
     async fn handle_execution_cancelled(
         &self,
         execution_id: i64,
+        action: &Action,
         result: &ExecutionResult,
     ) -> Result<()> {
         let mut result_data = serde_json::json!({
@@ -1779,8 +1850,13 @@ impl ActionExecutor {
         }
 
         if let Some(parsed_result) = &result.result {
+            result_data["data"] = parsed_result.clone();
             Self::copy_reserved_queue_ack(&mut result_data, parsed_result);
         }
+
+        result_data = self
+            .redact_execution_result_data(execution_id, action, result_data)
+            .await?;
 
         let input = UpdateExecutionInput {
             status: Some(ExecutionStatus::Cancelled),

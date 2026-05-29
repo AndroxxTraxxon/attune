@@ -85,7 +85,7 @@ docs/
 1. Browse [API Documentation](api/)
 2. Check [OpenAPI Spec](api/openapi-spec-completion.md)
 3. Learn [Authentication](authentication/auth-quick-reference.md)
-4. Review endpoint-specific guides (e.g., [Actions](api/api-actions.md))
+4. Review endpoint-specific guides (e.g., [Actions](api/api-actions.md), [Work Queues](api/api-work-queues.md))
 
 ### By Topic
 

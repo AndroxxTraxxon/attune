@@ -261,6 +261,7 @@ async fn queue_api_blocks_pack_managed_queue_mutations_but_lists_pack_queues() {
             action_params: json!({
                 "item": "{{ item }}"
             }),
+            permission_set_refs: None,
             config: json!({}),
         },
     )
