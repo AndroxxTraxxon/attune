@@ -14,7 +14,7 @@ use std::process::Stdio;
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::time::Duration;
+use tokio::time::{sleep, Duration};
 use tracing::{debug, info, warn};
 
 /// Native runtime for executing compiled binaries
@@ -23,6 +23,9 @@ pub struct NativeRuntime {
 }
 
 impl NativeRuntime {
+    const ETXTBSY_RETRY_ATTEMPTS: usize = 5;
+    const ETXTBSY_RETRY_DELAY_MS: u64 = 25;
+
     /// Create a new native runtime
     pub fn new() -> Self {
         Self { work_dir: None }
@@ -94,10 +97,45 @@ impl NativeRuntime {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        // Spawn process
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| RuntimeError::ExecutionFailed(format!("Failed to spawn binary: {}", e)))?;
+        // Some filesystems can transiently return ETXTBSY immediately after an
+        // executable is written and chmod'd. Treat that as a short-lived spawn
+        // race and retry a few times before failing hard.
+        let mut last_spawn_error = None;
+        let mut child = None;
+        for attempt in 0..Self::ETXTBSY_RETRY_ATTEMPTS {
+            match cmd.spawn() {
+                Ok(process) => {
+                    child = Some(process);
+                    break;
+                }
+                Err(e) if e.raw_os_error() == Some(26) => {
+                    debug!(
+                        "Native binary temporarily busy on spawn attempt {}/{} for {}",
+                        attempt + 1,
+                        Self::ETXTBSY_RETRY_ATTEMPTS,
+                        binary_path.display()
+                    );
+                    last_spawn_error = Some(e);
+                    sleep(Duration::from_millis(Self::ETXTBSY_RETRY_DELAY_MS)).await;
+                }
+                Err(e) => {
+                    return Err(RuntimeError::ExecutionFailed(format!(
+                        "Failed to spawn binary: {}",
+                        e
+                    )));
+                }
+            }
+        }
+
+        let mut child = child.ok_or_else(|| {
+            let error = last_spawn_error
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "unknown error".to_string());
+            RuntimeError::ExecutionFailed(format!(
+                "Failed to spawn binary after retrying ETXTBSY: {}",
+                error
+            ))
+        })?;
 
         // Write parameters to stdin as a single JSON line.
         // Secrets are merged into the parameters map by the caller, so the
