@@ -284,6 +284,8 @@ async fn handle_sso_login(
                 refresh_token: None,
                 output_format: None,
                 description: None,
+                auth_method: None,
+                username: None,
             },
         )?;
     } else if let Some(url) = api_url {
@@ -367,6 +369,8 @@ async fn handle_sso_login(
     if let Some(p) = config.profiles.get_mut(&target_profile_name) {
         p.auth_token = Some(tokens.access_token.clone());
         p.refresh_token = Some(tokens.refresh_token.clone());
+        p.auth_method = Some("sso".to_string());
+        p.username = None;
         config.save()?;
     } else {
         config.set_auth(tokens.access_token.clone(), tokens.refresh_token.clone())?;
@@ -486,6 +490,8 @@ async fn handle_login(
                 refresh_token: None,
                 output_format: None,
                 description: None,
+                auth_method: None,
+                username: None,
             },
         )?;
     } else if let Some(url) = api_url {
@@ -529,8 +535,14 @@ async fn handle_login(
         Err(_) => "/auth/login",
     };
 
+    let auth_method = if login_path == "/auth/ldap/login" {
+        "ldap"
+    } else {
+        "direct"
+    };
+
     let login_req = LoginRequest {
-        login: username,
+        login: username.clone(),
         password,
     };
 
@@ -540,6 +552,8 @@ async fn handle_login(
     if let Some(p) = config.profiles.get_mut(&target_profile_name) {
         p.auth_token = Some(response.access_token.clone());
         p.refresh_token = Some(response.refresh_token.clone());
+        p.auth_method = Some(auth_method.to_string());
+        p.username = Some(username);
         config.save()?;
     } else {
         config.set_auth(
@@ -591,6 +605,8 @@ async fn handle_token_login(
                 refresh_token: None,
                 output_format: None,
                 description: None,
+                auth_method: None,
+                username: None,
             },
         )?;
     } else if let Some(url) = api_url {
@@ -619,6 +635,8 @@ async fn handle_token_login(
     if let Some(p) = config.profiles.get_mut(&target_profile_name) {
         p.auth_token = Some(response.access_token.clone());
         p.refresh_token = Some(response.refresh_token.clone());
+        p.auth_method = Some("token".to_string());
+        p.username = None;
         config.save()?;
     } else {
         config.set_auth(
@@ -867,30 +885,89 @@ async fn handle_refresh(
         refresh_token: String,
     }
 
-    // Call the refresh endpoint
-    let response: LoginResponse = client
+    // Attempt the refresh
+    let refresh_result: Result<LoginResponse> = client
         .post("/auth/refresh", &RefreshRequest { refresh_token })
-        .await?;
+        .await;
 
-    // Save new tokens to config
-    let mut config = CliConfig::load()?;
-    config.set_auth(
-        response.access_token.clone(),
-        response.refresh_token.clone(),
-    )?;
+    match refresh_result {
+        Ok(response) => {
+            // Save new tokens to config
+            let mut config = CliConfig::load()?;
+            config.set_auth(
+                response.access_token.clone(),
+                response.refresh_token.clone(),
+            )?;
 
-    match output_format {
-        OutputFormat::Json | OutputFormat::Yaml => {
-            output::print_output(&response, output_format)?;
+            match output_format {
+                OutputFormat::Json | OutputFormat::Yaml => {
+                    output::print_output(&response, output_format)?;
+                }
+                OutputFormat::Table => {
+                    output::print_success("Token refreshed successfully");
+                    output::print_info(&format!(
+                        "New token expires in {} seconds",
+                        response.expires_in
+                    ));
+                }
+            }
+
+            Ok(())
         }
-        OutputFormat::Table => {
-            output::print_success("Token refreshed successfully");
-            output::print_info(&format!(
-                "New token expires in {} seconds",
-                response.expires_in
-            ));
+        Err(_) => {
+            // Refresh failed (likely expired) — re-initiate authentication
+            let current_profile = config.current_profile()?;
+            let auth_method = current_profile.auth_method.clone();
+            let username = current_profile.username.clone();
+
+            match auth_method.as_deref() {
+                Some("sso") => {
+                    output::print_warning(
+                        "Session expired. Re-initiating SSO login in your browser...",
+                    );
+                    handle_sso_login(
+                        profile.as_ref(),
+                        api_url,
+                        None,    // port: random
+                        false,   // no_browser: open browser
+                        output_format,
+                    )
+                    .await
+                }
+                Some("direct") | Some("ldap") => {
+                    let login_username = match &username {
+                        Some(u) => u.clone(),
+                        None => {
+                            anyhow::bail!(
+                                "Session expired and no stored username. Please log in again with: attune auth login -u <username>"
+                            );
+                        }
+                    };
+                    output::print_warning(&format!(
+                        "Session expired. Re-authenticating as '{login_username}'..."
+                    ));
+                    handle_login(
+                        login_username,
+                        None, // prompt for password
+                        profile.as_ref(),
+                        api_url,
+                        output_format,
+                    )
+                    .await
+                }
+                Some("token") => {
+                    anyhow::bail!(
+                        "Session expired. Integration token sessions cannot be refreshed automatically.\n\
+                         Please log in again with: attune auth token-login"
+                    );
+                }
+                _ => {
+                    // Unknown or no stored auth method — fall back to generic error
+                    anyhow::bail!(
+                        "Session expired and could not be refreshed. Please log in again."
+                    );
+                }
+            }
         }
     }
-
-    Ok(())
 }

@@ -2,20 +2,13 @@ import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
-  BarChart3,
-  Bot,
   Edit3,
-  Globe,
-  History,
-  Key,
-  MessageSquare,
   Package,
   Plus,
   Save,
   Shield,
   Tag,
   Trash2,
-  Users,
   X,
 } from "lucide-react";
 import {
@@ -24,9 +17,16 @@ import {
   useDeletePermissionSetRoleAssignment,
   useUpdatePermissionSet,
 } from "@/hooks/usePermissions";
+import {
+  ACTION_STYLE,
+  type GrantConstraints,
+  GrantsView,
+  parseGrants,
+  RESOURCE_META,
+  type ParsedGrant,
+} from "@/components/access-control/GrantsView";
 import { useAuth } from "@/contexts/AuthContext";
 import { hasPermission } from "@/lib/permissions";
-import { navIcons } from "@/components/layout/navIcons";
 
 // ── Domain interfaces ──────────────────────────────────────────────────────────
 
@@ -47,129 +47,6 @@ interface PermissionSetWithRoles {
   grants: unknown;
   roles?: PermissionSetRoleAssignment[];
 }
-
-// ── Grants model ───────────────────────────────────────────────────────────────
-
-interface GrantConstraints {
-  pack_refs?: string[];
-  owner?: string; // "self" | "any" | "none"
-  owner_types?: string[];
-  visibility?: string[];
-  execution_scope?: string; // "self" | "descendants" | "any"
-  refs?: string[];
-  encrypted?: boolean;
-  attributes?: Record<string, unknown>;
-}
-
-interface ParsedGrant {
-  resource: string;
-  actions: string[];
-  constraints?: GrantConstraints;
-}
-
-function parseGrants(raw: unknown): ParsedGrant[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.filter(
-    (g): g is ParsedGrant =>
-      typeof g === "object" &&
-      g !== null &&
-      typeof (g as ParsedGrant).resource === "string" &&
-      Array.isArray((g as ParsedGrant).actions),
-  );
-}
-
-// ── Display metadata ───────────────────────────────────────────────────────────
-
-type ResourceMeta = {
-  icon: React.ComponentType<{ className?: string }>;
-  color: string;
-  label: string;
-};
-
-const RESOURCE_META: Record<string, ResourceMeta> = {
-  packs: { icon: navIcons.packs, color: "text-green-600", label: "Packs" },
-  actions: {
-    icon: navIcons.actions,
-    color: "text-yellow-500",
-    label: "Actions",
-  },
-  rules: { icon: navIcons.rules, color: "text-blue-600", label: "Rules" },
-  triggers: {
-    icon: navIcons.triggers,
-    color: "text-orange-500",
-    label: "Triggers",
-  },
-  executions: {
-    icon: navIcons.executions,
-    color: "text-purple-600",
-    label: "Executions",
-  },
-  events: { icon: navIcons.events, color: "text-cyan-600", label: "Events" },
-  enforcements: {
-    icon: navIcons.enforcements,
-    color: "text-red-500",
-    label: "Enforcements",
-  },
-  inquiries: {
-    icon: MessageSquare,
-    color: "text-teal-600",
-    label: "Inquiries",
-  },
-  keys: { icon: navIcons.keys, color: "text-amber-600", label: "Keys" },
-  artifacts: {
-    icon: navIcons.artifacts,
-    color: "text-indigo-500",
-    label: "Artifacts",
-  },
-  webhooks: { icon: Globe, color: "text-sky-600", label: "Webhooks" },
-  analytics: { icon: BarChart3, color: "text-rose-500", label: "Analytics" },
-  history: { icon: History, color: "text-gray-500", label: "History" },
-  identities: { icon: Users, color: "text-blue-700", label: "Identities" },
-  permissions: {
-    icon: navIcons.accessControl,
-    color: "text-indigo-600",
-    label: "Permissions",
-  },
-  runtimes: {
-    icon: navIcons.runtimes,
-    color: "text-blue-600",
-    label: "Runtimes",
-  },
-  workers: {
-    icon: Bot,
-    color: "text-blue-700",
-    label: "Workers",
-  },
-  sensors: {
-    icon: navIcons.sensors,
-    color: "text-purple-600",
-    label: "Sensors",
-  },
-  queues: {
-    icon: navIcons.queues,
-    color: "text-emerald-600",
-    label: "Queues",
-  },
-  audit_log: {
-    icon: navIcons.auditLog,
-    color: "text-slate-600",
-    label: "Audit Log",
-  },
-};
-
-const ACTION_STYLE: Record<string, string> = {
-  read: "bg-slate-100 text-slate-700",
-  create: "bg-emerald-100 text-emerald-800",
-  install: "bg-blue-100 text-blue-800",
-  configure: "bg-amber-100 text-amber-800",
-  update: "bg-amber-100 text-amber-800",
-  delete: "bg-red-100 text-red-800",
-  execute: "bg-violet-100 text-violet-800",
-  cancel: "bg-orange-100 text-orange-800",
-  respond: "bg-cyan-100 text-cyan-800",
-  manage: "bg-indigo-100 text-indigo-800",
-  decrypt: "bg-pink-100 text-pink-800",
-};
 
 const ALL_ACTIONS = [
   "read",
@@ -399,207 +276,6 @@ function normalizeDraft(draft: GrantDraft): GrantDraft {
 }
 
 // ── Constraint chips ───────────────────────────────────────────────────────────
-
-function ConstraintChips({ c }: { c: GrantConstraints }) {
-  const chips: React.ReactNode[] = [];
-
-  if (c.pack_refs?.length) {
-    chips.push(
-      <span
-        key="pack_refs"
-        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-green-50 text-green-700 border border-green-200"
-      >
-        <Package className="w-3 h-3 shrink-0" />
-        {c.pack_refs.join(", ")}
-      </span>,
-    );
-  }
-
-  if (c.owner) {
-    const labels: Record<string, string> = {
-      self: "Own resources",
-      any: "Any owner",
-      none: "No owner",
-    };
-    chips.push(
-      <span
-        key="owner"
-        className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-blue-50 text-blue-700 border border-blue-200"
-      >
-        Owner: {labels[c.owner] ?? c.owner}
-      </span>,
-    );
-  }
-
-  if (c.owner_types?.length) {
-    chips.push(
-      <span
-        key="owner_types"
-        className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-slate-100 text-slate-600 border border-slate-200"
-      >
-        Type: {c.owner_types.join(", ")}
-      </span>,
-    );
-  }
-
-  if (c.visibility?.length) {
-    chips.push(
-      <span
-        key="visibility"
-        className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-sky-50 text-sky-700 border border-sky-200"
-      >
-        Visibility: {c.visibility.join(", ")}
-      </span>,
-    );
-  }
-
-  if (c.execution_scope) {
-    const labels: Record<string, string> = {
-      self: "Own executions",
-      descendants: "Own + children",
-      any: "All executions",
-    };
-    chips.push(
-      <span
-        key="execution_scope"
-        className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-purple-50 text-purple-700 border border-purple-200"
-      >
-        Scope: {labels[c.execution_scope] ?? c.execution_scope}
-      </span>,
-    );
-  }
-
-  if (c.refs?.length) {
-    chips.push(
-      <span
-        key="refs"
-        className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-slate-100 text-slate-600 border border-slate-200 font-mono"
-      >
-        {c.refs.join(", ")}
-      </span>,
-    );
-  }
-
-  if (c.encrypted !== undefined) {
-    chips.push(
-      <span
-        key="encrypted"
-        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-amber-50 text-amber-700 border border-amber-200"
-      >
-        <Key className="w-3 h-3 shrink-0" />
-        {c.encrypted ? "Encrypted only" : "Unencrypted only"}
-      </span>,
-    );
-  }
-
-  if (c.attributes && Object.keys(c.attributes).length > 0) {
-    const text = Object.entries(c.attributes)
-      .map(([k, v]) => `${k} = ${JSON.stringify(v)}`)
-      .join(", ");
-    chips.push(
-      <span
-        key="attributes"
-        className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-rose-50 text-rose-700 border border-rose-200 font-mono"
-      >
-        {text}
-      </span>,
-    );
-  }
-
-  if (chips.length === 0) {
-    return <span className="text-xs text-gray-300">—</span>;
-  }
-
-  return <div className="flex flex-col gap-1">{chips}</div>;
-}
-
-// ── Grants table ───────────────────────────────────────────────────────────────
-
-function GrantsView({ grants }: { grants: ParsedGrant[] }) {
-  if (grants.length === 0) {
-    return (
-      <div className="p-8 text-center">
-        <Shield className="mx-auto h-8 w-8 text-gray-300" />
-        <p className="mt-2 text-sm text-gray-500">No grants defined</p>
-      </div>
-    );
-  }
-
-  const hasConstraints = grants.some(
-    (g) => g.constraints && Object.keys(g.constraints).length > 0,
-  );
-
-  return (
-    <div className="overflow-y-auto max-h-[28rem]">
-      <table className="min-w-full">
-        <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
-          <tr>
-            <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-36">
-              Resource
-            </th>
-            <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Permissions
-            </th>
-            {hasConstraints && (
-              <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Conditions
-              </th>
-            )}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-100">
-          {grants.map((grant, i) => {
-            const meta = RESOURCE_META[grant.resource];
-            const Icon = meta?.icon ?? Shield;
-            const iconColor = meta?.color ?? "text-gray-400";
-            const label =
-              meta?.label ??
-              grant.resource.charAt(0).toUpperCase() + grant.resource.slice(1);
-
-            return (
-              <tr key={i} className="hover:bg-gray-50">
-                <td className="px-4 py-2.5 whitespace-nowrap">
-                  <div className="flex items-center gap-1.5">
-                    <Icon className={`w-3.5 h-3.5 shrink-0 ${iconColor}`} />
-                    <span className="text-sm font-medium text-gray-800">
-                      {label}
-                    </span>
-                  </div>
-                </td>
-
-                <td className="px-4 py-2.5">
-                  <div className="flex flex-wrap gap-1">
-                    {grant.actions.map((action) => (
-                      <span
-                        key={action}
-                        className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
-                          ACTION_STYLE[action] ?? "bg-gray-100 text-gray-700"
-                        }`}
-                      >
-                        {action}
-                      </span>
-                    ))}
-                  </div>
-                </td>
-
-                {hasConstraints && (
-                  <td className="px-4 py-2.5">
-                    {grant.constraints &&
-                    Object.keys(grant.constraints).length > 0 ? (
-                      <ConstraintChips c={grant.constraints} />
-                    ) : (
-                      <span className="text-xs text-gray-300">—</span>
-                    )}
-                  </td>
-                )}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
 
 function GrantsEditor({
   drafts,

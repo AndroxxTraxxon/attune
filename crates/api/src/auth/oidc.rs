@@ -19,7 +19,7 @@ use jsonwebtoken::{
 };
 use openidconnect::{
     core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata, CoreUserInfoClaims},
-    AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpRequest, HttpResponse,
+    AuthType, AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpRequest, HttpResponse,
     LocalizedClaim, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl,
     Scope, TokenResponse as OidcTokenResponse,
 };
@@ -151,16 +151,24 @@ pub async fn build_login_redirect(
     let redirect_uri = RedirectUrl::new(redirect_uri_str).map_err(|err| {
         ApiError::InternalServerError(format!("Invalid OIDC redirect URI: {err}"))
     })?;
-    let client_secret = oidc.client_secret.clone().ok_or_else(|| {
-        ApiError::InternalServerError("OIDC client secret is missing".to_string())
-    })?;
+    let client_secret = oidc
+        .client_secret
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .map(ClientSecret::new);
+    let is_public_client = client_secret.is_none();
     let client_id = oidc.client_id.clone().unwrap_or_default();
     let client = CoreClient::from_provider_metadata(
         discovery.metadata.clone(),
         ClientId::new(client_id),
-        Some(ClientSecret::new(client_secret)),
+        client_secret,
     )
-    .set_redirect_uri(redirect_uri);
+    .set_redirect_uri(redirect_uri)
+    .set_auth_type(if is_public_client {
+        AuthType::RequestBody
+    } else {
+        AuthType::BasicAuth
+    });
 
     let redirect_target = sanitize_redirect_target(redirect_to);
     let pkce = PkceCodeChallenge::new_random_sha256();
@@ -272,16 +280,24 @@ pub async fn handle_callback(
     let redirect_uri = RedirectUrl::new(redirect_uri_str).map_err(|err| {
         ApiError::InternalServerError(format!("Invalid OIDC redirect URI: {err}"))
     })?;
-    let client_secret = oidc.client_secret.clone().ok_or_else(|| {
-        ApiError::InternalServerError("OIDC client secret is missing".to_string())
-    })?;
+    let client_secret = oidc
+        .client_secret
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .map(ClientSecret::new);
+    let is_public_client = client_secret.is_none();
     let client_id = oidc.client_id.clone().unwrap_or_default();
     let client = CoreClient::from_provider_metadata(
         discovery.metadata.clone(),
         ClientId::new(client_id),
-        Some(ClientSecret::new(client_secret)),
+        client_secret,
     )
-    .set_redirect_uri(redirect_uri);
+    .set_redirect_uri(redirect_uri)
+    .set_auth_type(if is_public_client {
+        AuthType::RequestBody
+    } else {
+        AuthType::BasicAuth
+    });
 
     let token_response = client
         .exchange_code(AuthorizationCode::new(code.clone()))
@@ -560,6 +576,7 @@ fn oidc_config(state: &SharedState) -> Result<OidcConfig, ApiError> {
             ApiError::NotImplemented("OIDC authentication is not configured".to_string())
         })
 }
+
 
 fn oidc_http_client() -> &'static reqwest::Client {
     static OIDC_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {

@@ -223,6 +223,8 @@ async fn handle_add_profile(
         refresh_token: None,
         output_format: None,
         description,
+        auth_method: None,
+        username: None,
     };
 
     config.set_profile(name.clone(), profile)?;

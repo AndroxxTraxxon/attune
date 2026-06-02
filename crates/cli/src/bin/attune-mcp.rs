@@ -701,6 +701,13 @@ fn method_not_found_response(id: Value, method: &str) -> Value {
 
 fn tool_success(value: Value) -> Value {
     let text = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
+    // structuredContent must be a JSON object per MCP spec.
+    // Wrap arrays in {"items": [...]} so the schema is always satisfied.
+    let structured = match &value {
+        Value::Object(_) => value,
+        Value::Array(_) => json!({ "items": value }),
+        _ => json!({ "value": value }),
+    };
     json!({
         "content": [
             {
@@ -708,7 +715,7 @@ fn tool_success(value: Value) -> Value {
                 "text": text
             }
         ],
-        "structuredContent": value,
+        "structuredContent": structured,
         "isError": false
     })
 }

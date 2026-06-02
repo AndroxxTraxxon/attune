@@ -55,6 +55,12 @@ pub struct Profile {
     /// Optional description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Authentication method used for the last login ("direct", "sso", "ldap", "token")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_method: Option<String>,
+    /// Username/login from the last direct or LDAP login
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
 }
 
 impl Default for CliConfig {
@@ -68,6 +74,8 @@ impl Default for CliConfig {
                 refresh_token: None,
                 output_format: None,
                 description: Some("Default local server".to_string()),
+                auth_method: None,
+                username: None,
             },
         );
 
@@ -484,6 +492,8 @@ mod tests {
             refresh_token: None,
             output_format: None,
             description: Some("Staging environment".to_string()),
+            auth_method: None,
+            username: None,
         };
         config
             .set_profile("staging".to_string(), staging_profile)
@@ -521,6 +531,8 @@ mod tests {
             refresh_token: None,
             output_format: None,
             description: None,
+            auth_method: None,
+            username: None,
         };
         config
             .set_profile("test".to_string(), test_profile)

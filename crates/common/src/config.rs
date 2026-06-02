@@ -340,7 +340,7 @@ pub struct OidcConfig {
     #[serde(default)]
     pub discovery_url: Option<String>,
 
-    /// Confidential client ID.
+    /// Client ID registered with the provider.
     /// Required when `enabled` is true; ignored otherwise.
     #[serde(default)]
     pub client_id: Option<String>,
@@ -355,7 +355,8 @@ pub struct OidcConfig {
     /// Optional icon URL shown beside the provider label on the login page.
     pub provider_icon_url: Option<String>,
 
-    /// Confidential client secret.
+    /// Client secret. Required for confidential clients; omit for public clients
+    /// that use PKCE-only (e.g., Okta browser-type apps with `pkce_required=true`).
     pub client_secret: Option<String>,
 
     /// Redirect URI registered with the provider.
@@ -1464,17 +1465,6 @@ impl Config {
                 if oidc.client_id.as_deref().unwrap_or("").trim().is_empty() {
                     return Err(crate::Error::validation(
                         "OIDC client ID is required when OIDC is enabled",
-                    ));
-                }
-                if oidc
-                    .client_secret
-                    .as_deref()
-                    .unwrap_or("")
-                    .trim()
-                    .is_empty()
-                {
-                    return Err(crate::Error::validation(
-                        "OIDC client secret is required when OIDC is enabled",
                     ));
                 }
                 if oidc.redirect_uri.as_deref().unwrap_or("").trim().is_empty() {
